@@ -563,18 +563,24 @@ class _MehrfacherStrom:
     """Answers httpx.stream with a different payload per URL, so the main
     package and the cudart runtime archive can be told apart."""
 
-    def __init__(self, daten_je_url: dict[str, bytes]):
+    def __init__(self, daten_je_url: dict[str, bytes], pause: float = 0.0):
         self._daten_je_url = daten_je_url
+        # Seconds each file waits before its bytes come. A test that
+        # samples the bar WHILE the download runs needs the moment between
+        # two files to last long enough to be seen; without it the worker
+        # thread may run both files through before the sampler looks once.
+        self._pause = pause
         self.aufrufe: list[str] = []
 
     def __call__(self, methode, url, **kwargs):
         self.aufrufe.append(url)
-        return _EinzelnerStrom(self._daten_je_url[url])
+        return _EinzelnerStrom(self._daten_je_url[url], self._pause)
 
 
 class _EinzelnerStrom:
-    def __init__(self, daten: bytes):
+    def __init__(self, daten: bytes, pause: float = 0.0):
         self._daten = daten
+        self._pause = pause
         self.headers = {"content-length": str(len(daten))}
 
     def __enter__(self):
@@ -587,6 +593,8 @@ class _EinzelnerStrom:
         pass
 
     def iter_bytes(self, groesse):
+        if self._pause:
+            time.sleep(self._pause)
         yield self._daten
 
 
@@ -713,7 +721,7 @@ def test_cuda12_balken_faellt_nie_zurueck(tmp_path, monkeypatch):
     strom = _MehrfacherStrom({
         f"{sddownload._BASIS}/{haupt_name}": haupt_daten,
         f"{sddownload._BASIS}/{cudart_name}": cudart_daten,
-    })
+    }, pause=0.05)
     monkeypatch.setattr(sddownload.httpx, "stream", strom)
 
     download = Sddownload(tmp_path)

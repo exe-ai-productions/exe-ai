@@ -18,6 +18,7 @@ from app.config import EndpointConfig
 from app.providers import provider_bauen
 from app.providers.anthropic import API_VERSION, AnthropicProvider
 from app.providers.base import ChatNachricht, Generierungsanfrage, Werkzeugaufruf
+from tests.conftest import CLOCK_SLACK
 
 
 def endpunkt(**felder) -> EndpointConfig:
@@ -1019,7 +1020,7 @@ async def test_das_tempo_meint_die_antwort_nicht_die_promptverarbeitung():
         _LANGER_PROMPT, *_SECHS_WORTE, _NUTZUNG_SECHS, pause_vor=_PAUSEN
     )
 
-    assert werte["erstes_token_nach_sekunden"] >= 0.6
+    assert werte["erstes_token_nach_sekunden"] >= 0.6 - CLOCK_SLACK
     # Everything after the first token of the answer, and nothing before it.
     assert werte["erzeugungs_sekunden"] < werte["dauer_sekunden"] / 2
     assert werte["tokens_pro_sekunde"] == round(
@@ -1076,7 +1077,7 @@ async def test_gedachte_tokens_ohne_aufteilung_lassen_die_stufe_fallen():
     )
     assert werte["tempo_quelle"] == "geschaetzt"
     assert werte["erzeugte_tokens"] == 6      # the six words, not the 900
-    assert werte["erstes_token_nach_sekunden"] >= 0.5  # the thinking is outside
+    assert werte["erstes_token_nach_sekunden"] >= 0.5 - CLOCK_SLACK  # the thinking is outside
 
 
 @pytest.mark.asyncio

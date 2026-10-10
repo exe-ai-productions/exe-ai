@@ -22,11 +22,26 @@ URL = "http://%s:%d/v1/models" % ABSENT_ENDPOINT
 
 @pytest.fixture
 def no_network(monkeypatch):
-    def asked(*args, **kwargs):
-        raise AssertionError("the network was asked")
+    """Fails the test the moment a socket asks for the absent endpoint.
+    Every other address passes: on Windows the event loop connects a pair
+    of sockets to itself when it starts and when it ends."""
+    connect = socket.socket.connect
+    connect_ex = socket.socket.connect_ex
 
-    monkeypatch.setattr(socket.socket, "connect", asked)
-    monkeypatch.setattr(socket.socket, "connect_ex", asked)
+    def refuse(address) -> None:
+        if isinstance(address, tuple) and tuple(address[:2]) == ABSENT_ENDPOINT:
+            raise AssertionError("the network was asked")
+
+    def watched_connect(self, address):
+        refuse(address)
+        return connect(self, address)
+
+    def watched_connect_ex(self, address):
+        refuse(address)
+        return connect_ex(self, address)
+
+    monkeypatch.setattr(socket.socket, "connect", watched_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", watched_connect_ex)
 
 
 def test_the_absent_endpoint_refuses_without_asking_the_network(no_network):

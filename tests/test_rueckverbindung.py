@@ -19,7 +19,9 @@ opened up behind it, and all three end the same way — in silence.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
+import time
 
 import pytest
 
@@ -41,6 +43,16 @@ from tests.test_kettenband import (
 
 NOTIZ = "zuletzt gesehen: Mail 5"
 NOTIZ_AM = "2026-09-01T06:00:00.000000+00:00"
+
+
+async def _until(condition, seconds: float = 5.0) -> None:
+    """Waits for what a run still does on its way out. An announcement
+    leaves on a worker thread (``cronablauf.mitteilen``), a moment after
+    the run's row reads as ended; reading the list at once asks the
+    system which of the two threads it ran first."""
+    deadline = time.monotonic() + seconds
+    while not condition() and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
 
 
 @pytest.fixture
@@ -92,6 +104,7 @@ async def test_die_ausfallkette_bucht_ihr_ende_auf_den_ursprung(
     # with nothing behind it, which is a real ending and rightly announces
     # (``melde_wenn_faellig``). The origin, one failed run into three, is
     # silent — and that is the sentence this list pins down.
+    await _until(lambda: gemeldet)
     assert gemeldet == [(cronmeldung.mit_grund(AUFGABE, "anbieter_ausfall"), False)]
 
 
@@ -123,6 +136,7 @@ async def test_ein_dauerhaft_toter_anbieter_wird_genau_einmal_gemeldet(
     # ending with nothing behind it and rightly announces its own — that is
     # what ``melde_wenn_faellig`` says it does, and it is not what this test
     # is about.
+    await _until(lambda: any("stopped after" in t for t, _ in gemeldet))
     assert [t for t, _ in gemeldet if "stopped after" in t] == [
         f"{AUFGABE} — stopped after 2 failed runs"
     ]

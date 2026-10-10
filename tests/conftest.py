@@ -94,6 +94,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 ABSENT_ENDPOINT = ("127.0.0.1", 9)
 
+# A pause may end a little before its time against the monotonic clock:
+# Windows counts time in steps of about 16 ms, and a pause of 0.6 s was
+# measured there as 0.593 s. A test that asserts "at least the pause" allows
+# this much.
+CLOCK_SLACK = 0.05
+
 
 def _is_absent(request: httpx.Request) -> bool:
     return (request.url.host, request.url.port) == ABSENT_ENDPOINT

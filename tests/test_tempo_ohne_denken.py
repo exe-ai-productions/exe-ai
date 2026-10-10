@@ -38,6 +38,7 @@ from fastapi.responses import StreamingResponse
 from app.config import EndpointConfig
 from app.providers import ChatNachricht, Generierungsanfrage
 from app.providers.openai_kompatibel import OpenAIKompatiblerProvider
+from tests.conftest import CLOCK_SLACK
 
 
 class ModellServerAttrappe:
@@ -190,7 +191,7 @@ async def test_erstes_token_ist_der_beginn_der_antwort(modellserver):
     werte = await _messwerte(_provider(modellserver.basis, reasoning_format="native"))
 
     assert werte["haeppchen"] == 2
-    assert werte["erstes_token_nach_sekunden"] >= 0.5
+    assert werte["erstes_token_nach_sekunden"] >= 0.5 - CLOCK_SLACK
     # Everything after the first token of the ANSWER — the thinking is out.
     # Two chunks back to back can take less than the millisecond the window
     # rounds to, and then there is no generation time at all to report.
@@ -294,12 +295,14 @@ async def test_erstes_token_bei_markern_ist_auch_die_antwort(modellserver):
     werte = await _messwerte(_provider(modellserver.basis, reasoning_format="think"))
 
     assert werte["haeppchen"] == 1
-    assert werte["erstes_token_nach_sekunden"] >= 0.5
-    # One chunk of answer is written in well under a millisecond, so the
-    # generation time is either a hair above zero or — rounded to the three
-    # places the window shows — nothing at all. What it must not be is the
-    # half second spent thinking.
-    assert (werte["erzeugungs_sekunden"] or 0) < 0.3
+    assert werte["erstes_token_nach_sekunden"] >= 0.5 - CLOCK_SLACK
+    # One chunk of answer is written in well under a millisecond. What the
+    # generation time must not hold is the half second spent thinking: it
+    # is what is left of the run once that pause is taken off. Measured
+    # against the run rather than against a fixed bound, because the run
+    # ends when the connection has closed, and how long that takes is the
+    # system's business — close to a second on Windows.
+    assert (werte["erzeugungs_sekunden"] or 0) <= werte["dauer_sekunden"] - 0.5 + CLOCK_SLACK
 
 
 # --- What deliberately keeps counting ------------------------------------
@@ -346,7 +349,7 @@ async def test_stiller_server_faellt_im_strom_auf_die_haeppchen_zurueck(modellse
     assert werte["tempo_quelle"] == "geschaetzt"
     assert werte["erzeugte_tokens"] == 2
     # The thinking stays out of the divisor exactly as before.
-    assert werte["erstes_token_nach_sekunden"] >= 0.3
+    assert werte["erstes_token_nach_sekunden"] >= 0.3 - CLOCK_SLACK
 
 
 async def test_marker_denken_faellt_im_strom_ebenso_zurueck(modellserver):
