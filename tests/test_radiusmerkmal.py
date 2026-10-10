@@ -56,7 +56,7 @@ def _deklarationen(name: str) -> list[str]:
         re.compile(rf"setProperty\(\s*['\"]{re.escape(name)}['\"]"),
     )
     return [
-        str(datei.relative_to(WURZEL))
+        datei.relative_to(WURZEL).as_posix()
         for datei in _stilquellen()
         if any(m.search(datei.read_text(encoding="utf-8", errors="ignore")) for m in muster)
     ]
@@ -72,7 +72,7 @@ def _verbraucher(name: str) -> list[str]:
     """
     muster = re.compile(rf"var\(\s*{re.escape(name)}(?![\w-])")
     return [
-        str(datei.relative_to(WURZEL))
+        datei.relative_to(WURZEL).as_posix()
         for datei in _stilquellen()
         if muster.search(datei.read_text(encoding="utf-8", errors="ignore"))
     ]

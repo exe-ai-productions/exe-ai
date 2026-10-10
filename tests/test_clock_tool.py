@@ -89,7 +89,7 @@ def test_ohne_eingestellte_zone_kommt_ein_name_keine_abkuerzung(uhr_steht, monke
     """``CEST`` is a name nothing can be computed with — an hour from now is
     not derivable from it. The zone database's name is what travels, also
     when the machine's own zone answers."""
-    monkeypatch.setattr("app.wecker.zone_name", lambda name: "Europe/Berlin")
+    monkeypatch.setattr("app.tools.uhr.zone_name", lambda name: "Europe/Berlin")
     assert json.loads(uhr.clock_reading(None))["timezone"] == "Europe/Berlin"
 
 

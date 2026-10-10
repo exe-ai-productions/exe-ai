@@ -3933,6 +3933,24 @@ def test_what_the_service_delivers_from_static_is_still_there(client):
     assert client.get("/zeichen/").status_code == 404
 
 
+@pytest.mark.parametrize("page", ("static/hilfe/index.html", "static/hilfe/de/index.html"))
+def test_no_section_the_manual_moves_the_focus_onto_draws_a_focus_ring(page):
+    """The manual puts the focus on the section it shows, the overview or a
+    chapter, so that a screen reader starts there. Such a section is no
+    control: the browser's own focus ring around it would frame the whole
+    page, as it did around the overview after a change of language."""
+    text = (WURZEL / page).read_text(encoding="utf-8")
+    focused = set(re.findall(r'<section class="([^"]+)"[^>]*\btabindex="-1"', text))
+    assert {"home", "chapter"} <= {name for names in focused for name in names.split()}, (page, focused)
+    silenced = {
+        selector.strip()
+        for selectors in re.findall(r"([^{}]+)\{outline:none\}", text)
+        for selector in selectors.split(",")
+    }
+    for names in sorted(focused):
+        assert any(f".{name}:focus" in silenced for name in names.split()), (page, names)
+
+
 def test_a_start_makes_the_folder_of_the_prompt_files(config, client):
     """A fresh copy of the program carries no prompts folder. The service
     makes it at its start and puts nothing into it: the prompt files are the

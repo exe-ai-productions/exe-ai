@@ -69,7 +69,7 @@ def _child_starts() -> dict[str, list[ast.Call]]:
         tree = ast.parse(file.read_text(encoding="utf-8"))
         calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and _starts_a_child(n)]
         if calls:
-            found[str(file.relative_to(APP))] = calls
+            found[file.relative_to(APP).as_posix()] = calls
     return found
 
 

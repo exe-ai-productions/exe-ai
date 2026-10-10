@@ -504,7 +504,7 @@ def test_only_the_file_card_wears_the_card_shadow():
     """The silence probe: a tile, a menu card, a model card are not cards
     standing in the chat, and none of them picks the value up."""
     carriers = sorted(
-        str(path.relative_to(SOURCE))
+        path.relative_to(SOURCE).as_posix()
         for path in SOURCE.rglob("*")
         if path.suffix in {".svelte", ".css", ".js"} and "var(--karten-schatten)" in path.read_text(encoding="utf-8")
     )

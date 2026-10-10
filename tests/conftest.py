@@ -18,6 +18,7 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -78,6 +79,45 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         where = ", ".join(PLATFORM_NAMES[name] for name in sorted(wanted))
         reason = mark.kwargs.get("reason", "")
         item.add_marker(pytest.mark.skip(reason=f"only on {where}" + (f": {reason}" if reason else "")))
+
+
+# --- The endpoint that is not there -------------------------------------------
+#
+# The test configuration names an endpoint at port 9 of this machine, where
+# nothing listens. How long a system takes to say so is its own business: at
+# once on macOS and Linux, a second or two on Windows, which asks several times
+# before it gives up. Nearly every test starts the service against that
+# address, so on Windows the suite spent hours waiting for an answer that is
+# known beforehand. The refusal therefore comes from the HTTP transport itself:
+# the error the client raises for a refused connection, without the wait and
+# without touching the network. Every other address goes out as before.
+
+ABSENT_ENDPOINT = ("127.0.0.1", 9)
+
+
+def _is_absent(request: httpx.Request) -> bool:
+    return (request.url.host, request.url.port) == ABSENT_ENDPOINT
+
+
+@pytest.fixture(autouse=True, scope="session")
+def the_absent_endpoint_refuses_at_once():
+    send = httpx.HTTPTransport.handle_request
+    send_async = httpx.AsyncHTTPTransport.handle_async_request
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        if _is_absent(request):
+            raise httpx.ConnectError("Connection refused", request=request)
+        return send(self, request)
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if _is_absent(request):
+            raise httpx.ConnectError("All connection attempts failed", request=request)
+        return await send_async(self, request)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(httpx.HTTPTransport, "handle_request", handle_request)
+        patch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", handle_async_request)
+        yield
 
 
 @pytest.fixture(autouse=True)
