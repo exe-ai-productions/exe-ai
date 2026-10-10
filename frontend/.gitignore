@@ -1,0 +1,7 @@
+node_modules/
+dist/
+# Test drivers node writes beside the sources (tests/test_hausregeln.py, tests/test_fensterstroeme.py, tests/test_werkzeugreiter.py); cleaned up after each run, left behind only by a killed run. They carry absolute paths of this installation into their text, so none of them may ever reach the history.
+p662.*
+p751.*
+/reiter-*
+/ansicht-*

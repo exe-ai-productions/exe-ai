@@ -1,0 +1,18 @@
+{
+  "hinweis": "\"fragen\" is the cautious answer: the program asks first — Run \"tool\"?",
+
+  "standard": { "chat": "ja", "agent": "ja" },
+
+  "nur_was_der_agent_nennt": true,
+
+  "regeln": {
+  },
+
+  "dateien": {
+    "werkzeuge": ["read_file", "search_files", "write_file", "edit_file", "list_dir", "run_command", "create_folder"],
+    "innerhalb_der_ordner": { "chat": "ja", "agent": "ja" },
+    "ausserhalb_der_ordner": { "chat": "fragen", "agent": "nein" }
+  },
+
+  "niemals": []
+}

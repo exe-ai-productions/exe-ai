@@ -1,0 +1,377 @@
+"""The structured server routes of the tile gallery.
+
+GET reads the entries including live state, PUT creates and makes targeted
+changes, DELETE cleans up — all through mcp_servers.json as the single
+source of truth that the raw text field uses too.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+import pytest
+
+from app import paketierung
+from app.tools.registry import konfiguration_pruefen
+
+
+@pytest.fixture(autouse=True)
+def eigene_serverdatei(config):
+    """Never touch the project's real file."""
+    config.mcp.servers_file = str(Path(config.app.data_dir) / "mcp_servers.json")
+
+
+@pytest.fixture
+def eigener_ordner(tmp_path, monkeypatch):
+    """Redirects the writable data root, so a key never reaches the
+    project's own .env — the same isolation test_anbieter.py already uses
+    for the provider window's key."""
+    monkeypatch.setattr(paketierung, "daten", lambda: tmp_path)
+    return tmp_path
+
+
+def _datei(config) -> dict:
+    pfad = config.pfad(config.mcp.servers_file)
+    return json.loads(pfad.read_text(encoding="utf-8"))
+
+
+def test_leere_welt_ist_eine_leere_liste(client):
+    assert client.get("/api/v1/tools/servers").json() == []
+
+
+def test_anlegen_und_lesen(client, config, monkeypatch):
+    monkeypatch.setenv("GALERIE_TEST_TOKEN", "geheim")
+    antwort = client.put(
+        "/api/v1/tools/servers/github",
+        json={
+            "type": "http",
+            "url": "https://beispiel.invalid/mcp",
+            "api_key_env": "GALERIE_TEST_TOKEN",
+            "enabled": True,
+        },
+    )
+    assert antwort.status_code == 200
+    assert antwort.json()["kaputt"] is None
+
+    (eintrag,) = client.get("/api/v1/tools/servers").json()
+    assert eintrag["name"] == "github"
+    assert eintrag["type"] == "http"
+    assert eintrag["enabled"] is True
+    assert eintrag["schluessel_gesetzt"] is True
+    assert eintrag["laeuft"] is False  # features.mcp is off in tests
+    assert eintrag["alle_werkzeuge"] == []
+
+    # The file is the same truth the text field sees.
+    assert _datei(config)["mcpServers"]["github"]["url"] == "https://beispiel.invalid/mcp"
+
+
+def test_gezieltes_aendern_laesst_den_rest_stehen(client, config):
+    client.put(
+        "/api/v1/tools/servers/recraft",
+        json={"type": "http", "url": "https://beispiel.invalid/mcp", "enabled": True,
+              "allowed_tools": ["bild_erzeugen"]},
+    )
+    antwort = client.put("/api/v1/tools/servers/recraft", json={"enabled": False})
+    assert antwort.status_code == 200
+
+    eintrag = _datei(config)["mcpServers"]["recraft"]
+    assert eintrag["enabled"] is False
+    assert eintrag["url"] == "https://beispiel.invalid/mcp"
+    assert eintrag["allowed_tools"] == ["bild_erzeugen"]
+
+
+def test_null_loescht_die_positivliste(client, config):
+    client.put(
+        "/api/v1/tools/servers/recraft",
+        json={"type": "http", "url": "https://beispiel.invalid/mcp",
+              "allowed_tools": ["eins"]},
+    )
+    client.put("/api/v1/tools/servers/recraft", json={"allowed_tools": None})
+    assert "allowed_tools" not in _datei(config)["mcpServers"]["recraft"]
+
+
+def test_kaputtes_wird_nicht_geschrieben(client, config):
+    antwort = client.put("/api/v1/tools/servers/kaputt", json={"type": "http"})
+    assert antwort.status_code == 400
+    assert "url" in antwort.json()["detail"]
+    assert not config.pfad(config.mcp.servers_file).exists()
+
+
+def test_fehlender_schluessel_zeigt_rot(client, monkeypatch):
+    monkeypatch.delenv("GALERIE_TEST_TOKEN", raising=False)
+    client.put(
+        "/api/v1/tools/servers/github",
+        json={"type": "http", "url": "https://beispiel.invalid/mcp",
+              "api_key_env": "GALERIE_TEST_TOKEN"},
+    )
+    (eintrag,) = client.get("/api/v1/tools/servers").json()
+    assert eintrag["schluessel_gesetzt"] is False
+
+
+def test_entfernen_samt_zugang(client, config):
+    client.put(
+        "/api/v1/tools/servers/recraft",
+        json={"type": "http", "url": "https://beispiel.invalid/mcp"},
+    )
+    # A remembered credential must disappear along with the entry.
+    client.app.state.mcp_oauth.speicher.setzen("recraft", access_token="zugang-1")
+
+    antwort = client.delete("/api/v1/tools/servers/recraft")
+    assert antwort.status_code == 204
+    assert _datei(config)["mcpServers"] == {}
+    assert client.app.state.mcp_oauth.speicher.eintrag("recraft") is None
+
+
+def test_entfernen_ohne_eintrag_ist_404(client):
+    assert client.delete("/api/v1/tools/servers/nie-da").status_code == 404
+
+
+def test_api_key_geht_in_die_env_nicht_in_die_datei(client, config, eigener_ordner, monkeypatch):
+    """The MCP sheet's own key field: it lands in .env, and only the name
+    of the variable — never the key itself — stands in mcp_servers.json."""
+    monkeypatch.delenv("GITHUB_TEST_TOKEN", raising=False)
+    antwort = client.put(
+        "/api/v1/tools/servers/github",
+        json={
+            "type": "http", "url": "https://beispiel.invalid/mcp", "enabled": True,
+            "api_key_env": "GITHUB_TEST_TOKEN", "api_key": "ghp_geheim",
+        },
+    )
+    assert antwort.status_code == 200
+
+    eintrag = _datei(config)["mcpServers"]["github"]
+    assert eintrag["api_key_env"] == "GITHUB_TEST_TOKEN"
+    assert "api_key" not in eintrag
+    assert "ghp_geheim" not in json.dumps(eintrag)
+
+    assert os.environ["GITHUB_TEST_TOKEN"] == "ghp_geheim"
+    assert "GITHUB_TEST_TOKEN=ghp_geheim" in (eigener_ordner / ".env").read_text()
+
+
+def test_api_key_ohne_umgebungsnamen_wird_nicht_geschrieben(client, eigener_ordner):
+    """A key with nothing to name it would land nowhere sensible — so it is
+    simply not written, rather than guessing a variable name."""
+    client.put(
+        "/api/v1/tools/servers/namenlos",
+        json={"type": "http", "url": "https://beispiel.invalid/mcp", "api_key": "geheim"},
+    )
+    assert not (eigener_ordner / ".env").exists()
+
+
+@pytest.mark.parametrize("name", ["FOO\nEVIL_VAR", "FOO BAR", "1FOO", "FOO=BAR"])
+def test_ein_falscher_umgebungsname_wird_abgewiesen(client, config, eigener_ordner, name):
+    """The name lands in .env as `NAME=value`, one per line. A line break in
+    it would write a second, foreign variable into the shared file."""
+    (eigener_ordner / ".env").write_text("SCHON_DA=1\n", encoding="utf-8")
+    antwort = client.put(
+        "/api/v1/tools/servers/github",
+        json={
+            "type": "http", "url": "https://beispiel.invalid/mcp",
+            "api_key_env": name, "api_key": "geheim",
+        },
+    )
+    assert antwort.status_code == 400
+    assert "api_key_env" in antwort.json()["detail"]
+    # Silent case: the .env is exactly what it was, and no entry was written.
+    assert (eigener_ordner / ".env").read_text(encoding="utf-8") == "SCHON_DA=1\n"
+    assert not config.pfad(config.mcp.servers_file).exists()
+
+
+def test_ein_schluessel_mit_zeilenumbruch_wird_abgewiesen(client, config, eigener_ordner):
+    """The key goes into the same line: a break inside it would write a
+    foreign variable just the same."""
+    (eigener_ordner / ".env").write_text("SCHON_DA=1\n", encoding="utf-8")
+    antwort = client.put(
+        "/api/v1/tools/servers/github",
+        json={
+            "type": "http", "url": "https://beispiel.invalid/mcp",
+            "api_key_env": "GITHUB_TOKEN", "api_key": "abc\nEVIL_VAR=x",
+        },
+    )
+    assert antwort.status_code == 422
+    assert (eigener_ordner / ".env").read_text(encoding="utf-8") == "SCHON_DA=1\n"
+    assert not config.pfad(config.mcp.servers_file).exists()
+
+
+def test_ein_richtiger_umgebungsname_kommt_durch(client, eigener_ordner, monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    antwort = client.put(
+        "/api/v1/tools/servers/github",
+        json={
+            "type": "http", "url": "https://beispiel.invalid/mcp",
+            "api_key_env": "GITHUB_TOKEN", "api_key": "geheim",
+        },
+    )
+    assert antwort.status_code == 200
+    assert "GITHUB_TOKEN=geheim" in (eigener_ordner / ".env").read_text(encoding="utf-8")
+
+
+def test_ein_neuer_server_ueberschreibt_keinen_vorhandenen(client, config):
+    """"GitHub" becomes `github` and meets the entry already on file. Added
+    as new, it is refused and the old entry stands as it was."""
+    client.put(
+        "/api/v1/tools/servers/github",
+        json={"type": "http", "url": "https://alt.invalid/mcp", "api_key_env": "ALT_TOKEN"},
+    )
+    vorher = _datei(config)["mcpServers"]["github"]
+    antwort = client.put(
+        "/api/v1/tools/servers/github?neu=true",
+        json={"type": "http", "url": "https://neu.invalid/mcp", "api_key_env": "NEU_TOKEN"},
+    )
+    assert antwort.status_code == 409
+    assert "github" in antwort.json()["detail"]
+    assert _datei(config)["mcpServers"]["github"] == vorher
+
+
+def test_ein_bestehender_server_laesst_sich_weiter_aendern(client, config):
+    """Silent case: without `neu` the same route changes the entry."""
+    client.put("/api/v1/tools/servers/github", json={"type": "http", "url": "https://alt.invalid/mcp"})
+    antwort = client.put("/api/v1/tools/servers/github", json={"url": "https://neu.invalid/mcp"})
+    assert antwort.status_code == 200
+    assert _datei(config)["mcpServers"]["github"]["url"] == "https://neu.invalid/mcp"
+
+
+def test_ein_neuer_server_mit_freier_kennung_wird_angelegt(client, config):
+    antwort = client.put(
+        "/api/v1/tools/servers/frei?neu=true", json={"type": "http", "url": "https://x.invalid/mcp"}
+    )
+    assert antwort.status_code == 200
+    assert "frei" in _datei(config)["mcpServers"]
+
+
+def test_stdio_server_traegt_befehl_und_argumente(client, config):
+    """The raw file editor's escape hatch, not the sheet: the sheet no
+    longer asks for a kind at all, but a typed command line still splits
+    into `command` and `args`, the two fields the registry's
+    ServerEintrag dataclass actually reads."""
+    antwort = client.put(
+        "/api/v1/tools/servers/eigenbau",
+        json={"type": "stdio", "command": "npx", "args": ["-y", "@beispiel/server"], "enabled": True},
+    )
+    assert antwort.status_code == 200
+
+    eintrag = _datei(config)["mcpServers"]["eigenbau"]
+    assert eintrag["command"] == "npx"
+    assert eintrag["args"] == ["-y", "@beispiel/server"]
+
+
+def test_sondieren_gibt_das_ergebnis_weiter(client, monkeypatch):
+    """The route is a thin pass-through — the real protocol logic is
+    test_mcp_sondierung.py's job. What this checks is the wiring: the
+    URL reaches `sondieren()`, and its answer reaches the response."""
+    gesehen = {}
+
+    async def fake_sondieren(url):
+        gesehen["url"] = url
+        return {"verlangt": "anmeldung", "name": None}
+
+    monkeypatch.setattr("app.api.v1.werkzeuge.sondieren", fake_sondieren)
+    antwort = client.post(
+        "/api/v1/tools/mcp/sondieren", json={"url": "https://mcp.beispiel.invalid/mcp"}
+    )
+    assert antwort.status_code == 200
+    assert antwort.json() == {"verlangt": "anmeldung", "name": None}
+    assert gesehen["url"] == "https://mcp.beispiel.invalid/mcp"
+
+
+def test_sondieren_meldet_einen_fehler_als_400(client, monkeypatch):
+    """Schweigeprobe's other half: a server that cannot be reached at all
+    must not look like 200 with an empty answer."""
+    from app.tools.mcp_client import MCPFehler
+
+    async def fake_sondieren(url):
+        raise MCPFehler("Der Server ist nicht erreichbar")
+
+    monkeypatch.setattr("app.api.v1.werkzeuge.sondieren", fake_sondieren)
+    antwort = client.post(
+        "/api/v1/tools/mcp/sondieren", json={"url": "https://tot.beispiel.invalid/mcp"}
+    )
+    assert antwort.status_code == 400
+    assert "nicht erreichbar" in antwort.json()["detail"]
+
+
+# --- Names on file, an unreadable file, the page's language ---
+
+
+def test_a_name_with_a_hyphen_on_file_stays_readable_and_writable(client, config, eigener_ordner):
+    """An entry already on file names its key `github-token`: the gallery
+    reads it and can still change it."""
+    path = config.pfad(config.mcp.servers_file)
+    path.write_text(json.dumps({"mcpServers": {"github": {
+        "type": "http", "url": "https://beispiel.invalid/mcp", "api_key_env": "github-token",
+    }}}), encoding="utf-8")
+    assert [e["api_key_env"] for e in client.get("/api/v1/tools/servers").json()] == ["github-token"]
+    answer = client.put("/api/v1/tools/servers/github", json={"enabled": False})
+    assert answer.status_code == 200
+    assert _datei(config)["mcpServers"]["github"]["enabled"] is False
+    assert _datei(config)["mcpServers"]["github"]["api_key_env"] == "github-token"
+
+
+@pytest.mark.parametrize("broken", ["{ kaputt", '{"servers": {}}', "[]"])
+@pytest.mark.parametrize("new", [True, False])
+def test_an_unreadable_file_is_never_written_over(client, config, eigener_ordner, broken, new):
+    """No JSON, or no object `mcpServers`: the gallery refuses with the
+    check's own reason in the page's language, and the file stays byte for
+    byte as it was."""
+    path = config.pfad(config.mcp.servers_file)
+    path.write_text(broken, encoding="utf-8")
+    answer = client.put(
+        f"/api/v1/tools/servers/github{'?neu=true' if new else ''}",
+        json={"type": "http", "url": "https://beispiel.invalid/mcp"},
+        headers={"X-Ui-Language": "en"},
+    )
+    assert answer.status_code == 409
+    assert answer.json()["detail"] == konfiguration_pruefen(broken, "en")
+    assert path.read_text(encoding="utf-8") == broken
+    # Removing an entry from it is refused the same way, in German here.
+    removed = client.delete("/api/v1/tools/servers/github", headers={"X-Ui-Language": "de"})
+    assert removed.status_code == 409
+    assert removed.json()["detail"] == konfiguration_pruefen(broken, "de")
+    # A translated sentence, not a bare catalogue key, and not the same in both.
+    for detail in (answer.json()["detail"], removed.json()["detail"]):
+        assert not detail.startswith("mcp_datei.")
+    assert removed.json()["detail"] != answer.json()["detail"]
+    english = {"{ kaputt": "not valid JSON", '{"servers": {}}': "'mcpServers' is missing",
+               "[]": "the top level must be an object"}[broken]
+    german = {"{ kaputt": "kein gültiges JSON", '{"servers": {}}': "'mcpServers' fehlt",
+              "[]": "die oberste Ebene muss ein Objekt sein"}[broken]
+    assert english in answer.json()["detail"]
+    assert german in removed.json()["detail"]
+    assert path.read_text(encoding="utf-8") == broken
+
+
+@pytest.mark.parametrize("empty", ["", "\n", "  \n  "])
+def test_an_empty_file_takes_the_first_server(client, config, eigener_ordner, empty):
+    """Silence probe: an empty file holds nothing that could be lost, so the
+    gallery writes the first server into it."""
+    path = config.pfad(config.mcp.servers_file)
+    path.write_text(empty, encoding="utf-8")
+    answer = client.put(
+        "/api/v1/tools/servers/github?neu=true",
+        json={"type": "http", "url": "https://beispiel.invalid/mcp"},
+    )
+    assert answer.status_code == 200
+    assert list(_datei(config)["mcpServers"]) == ["github"]
+
+
+def test_the_messages_come_in_the_language_of_the_page(client, config, eigener_ordner):
+    """The 409 of a taken name and a check message, English and German."""
+    path = config.pfad(config.mcp.servers_file)
+    path.write_text(json.dumps({"mcpServers": {"github": {
+        "type": "http", "url": "https://beispiel.invalid/mcp",
+    }}}), encoding="utf-8")
+    for language, taken, wrong in (
+        ("en", "'github' is already added", "'api_key_env' must be a name"),
+        ("de", "'github' ist schon eingetragen", "'api_key_env' muss ein Name sein"),
+    ):
+        headers = {"X-Ui-Language": language}
+        answer = client.put("/api/v1/tools/servers/github?neu=true", json={}, headers=headers)
+        assert answer.status_code == 409
+        assert answer.json()["detail"] == taken
+        answer = client.put(
+            "/api/v1/tools/servers/github", json={"api_key_env": "1FOO"}, headers=headers
+        )
+        assert answer.status_code == 400
+        assert wrong in answer.json()["detail"]

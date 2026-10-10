@@ -1,0 +1,865 @@
+/*
+  Colors, spacing, and foundations in one place.
+
+  Every color appears once and is used via a variable. Dark mode only
+  overrides the variables — no component has to know which mode it is
+  currently running in.
+*/
+
+:root {
+  /* Light mode is the mirror of dark, not its absence: the raised surface is
+     LIGHTER than the ground, but no longer a cold pure white. The skin is
+     pearl/cream — a warm ground, soft pearl tiles, warm-greige lines and
+     warm-dark ink — so the light mode reads soft instead of blinding. The
+     tile still carries its own surface (lighter than the ground); it just
+     stops at pearl rather than paper-white. */
+  --bg: #e0d7c3;
+  --bg-leiste: #d9cfba;
+  --bg-seite: #d9cfba;
+  /* The frame — the ground the sidebar, the margin round the surfaces and
+     a menu page's left column lie on — wears the appearance's gradient.
+     Everything that stands on it (the chat, the tool surface, cards,
+     fields) keeps a solid ground. --bg-seite stays the frame's solid tone
+     for whatever needs one colour rather than a picture. */
+  /* Pearl's gradient: fixed colours and angle. It turns about the middle of
+     the window and keeps its length whatever the angle: the stops sit on a
+     line as long as the window's diagonal, centred on the gradient line —
+     the same picture as a 0deg gradient on a centred square of that side,
+     turned by the angle. */
+  --diagonale: hypot(100vw, 100vh);
+  /* Pearl is the one flat look: its frame is the plain mother-of-pearl
+     ground, no gradient and no angle. The four stops still exist, because
+     the frame rule and the rotation read them, and they all carry the
+     ground so that nothing but the ground can show through. */
+  --rahmen-vorgabe-1: #e0d7c3;
+  --rahmen-vorgabe-2: #e0d7c3;
+  --rahmen-vorgabe-3: #e0d7c3;
+  --rahmen-vorgabe-4: #e0d7c3;
+  /* The ink of Pearl's two drawings on the frame: a dark sepia, the hue of
+     the ground, taken down to the depth of the quiet text. */
+  --vek: #4a3f31;
+  --rahmen-winkel-vorgabe: 135deg;
+  --frame: linear-gradient(var(--rahmen-winkel-vorgabe), var(--rahmen-vorgabe-1) calc(50% - 0.5 * var(--diagonale)), var(--rahmen-vorgabe-2) calc(50% - 0.1 * var(--diagonale)), var(--rahmen-vorgabe-3) calc(50% + 0.25 * var(--diagonale)), var(--rahmen-vorgabe-4) calc(50% + 0.5 * var(--diagonale)));
+  --bg-erhoben: #ece4d3;
+  --bg-hoch: #f3ecdc;
+  --linie: #cabfa6;
+  --linie-stark: #b1a687;
+  /* The outline of a field: the one line that tells a field or a quiet
+     button from whatever it stands on. On the light grounds the field
+     (--bg-hoch) and the card lie too close to tell apart (about 1.07 : 1),
+     and the line colour (--linie) is a divider, not an outline — it reaches
+     only 1.1 to 1.8 : 1 on the grounds a field stands on. The outline keeps
+     the hue of the line colour and is darkened until it holds 3 : 1 (the
+     non-text minimum) on every one of them: the plain field, the pop-up
+     glass and the card glass over each stop of the frame. The dark grounds
+     part field and card by their surfaces and draw the same fine edge the
+     glass buttons carry. */
+  --feldstrich: #928057;
+  /* The unified contrast accent: one warm taupe for every NEUTRAL emphasis —
+     the selected chat, the active tab, the input frame. NOT the status colours
+     (green/yellow/blue/red stay status-only) and NOT the primary send button
+     (that keeps its strong dark). Its own token, per theme, so light and dark
+     are tuned apart. */
+  --kontrast: #b1a687;
+  /* Glass: a see-through ground with a fine edge for chosen rows, active
+     and filled buttons, and a dense, blurred one for drop-down lists. One
+     light set for the light looks, one dark set for the dark ones. */
+  --glass-button: rgba(255, 255, 255, 0.5);
+  --glass-button-edge: rgba(0, 0, 0, 0.1);
+  --glass-hover: rgba(255, 255, 255, 0.32);
+  --glass-dropdown: rgba(255, 255, 255, 0.92);
+  /* The chat tile is glass: a see-through ground over the frame, and clear
+     glass in every look, never frosted. Where a look carries drawings they
+     lie behind it and have to stay sharp; where it carries only a gradient
+     a blur would smooth away the fine grain the gradient is drawn with and
+     leave bands one grey level apart. See-through glass over a gradient
+     leaves such bands as well, fewer of them: so a look whose frame is a
+     gradient names `--kachel-verlauf` beside its `--frame` — the frame's
+     own gradient, same angle and same stops, every colour already mixed
+     with the glass. The tile and the menu page draw that themselves,
+     fixed to the window, and it runs on from the frame without a seam.
+     Dark Matter names one flat colour there instead: mixed with glass as
+     dark as its own, its gradient breaks into stripes.
+     The flat look and the looks with drawings behind the glass name none
+     and keep the see-through ground; there a menu page stays frosted, it
+     carries text (`--page-frost`, Seitenrahmen.svelte), and a look that
+     mixes its gradient turns that frost off, a blur would only smooth its
+     grain away again. In every look the tile and the menu page carry the
+     same drop shadow the input bar wears, so they stand off the ground —
+     one shadow for all six looks; only the edge follows the look: a fine
+     bright rim on the light ones, a fine line in a fifth of the green on
+     Exe, and nothing inside the edge on Dark Matter and on a dark
+     gradient of the user's own. */
+  --kachel-chat: rgba(255, 255, 255, 0.3);
+  --kachel-frost: blur(14px);
+  --page-frost: var(--kachel-frost);
+  --chat-edge: inset 0 0 0 1px rgba(255, 255, 255, 0.85), 0 14px 34px -14px rgba(0, 0, 0, 0.55), 0 2px 6px -2px rgba(0, 0, 0, 0.25);
+  --kachel-eingabe: rgba(255, 255, 255, 0.6);
+  /* The shadow under a card that stands IN the chat. The small half of
+     `--chat-edge` above, and one value for every look: a card's ground sits
+     on the chat's glass almost without a difference in tone, so the fine
+     line and this shadow are what make it a card. Deliberately not the
+     large half — that one lifts a whole tile, and a card is not a tile. */
+  --karten-schatten: 0 2px 6px -2px rgba(0, 0, 0, 0.25);
+  /* Cards on a menu page are glass of their own, lighter than a button. */
+  --glass-card: rgba(255, 255, 255, 0.4);
+  --glass-card-line: rgba(0, 0, 0, 0.07);
+  --text: #201c14;
+  --text-leise: #484135;
+  /* The quiet ink is the second one: a third, lighter step fell under the
+     contrast text needs on every ground it was measured on. Each look's
+     quiet ink sits just far enough towards its main ink that it keeps 4.5:1
+     on the glass it lands on — the ground nearest to it decides. */
+  --text-still: var(--text-leise);
+  /* Everything the two columns write on the frame — names, headings,
+     signs — wears the look's one ink: the lighter steps fall under the
+     contrast text and signs need on a coloured ground. The own gradient
+     writes its ink inline (zustand.svelte.js, rahmenNeuZeichnen). */
+  --rahmen-text: var(--text);
+  /* Two more steps on the same ladder, for the panel lists: the reading
+     beside a name (date, task, "4 tools") and the heading over a section.
+
+     Mixed from --text and --bg rather than written out per appearance, and
+     that is the whole point: each appearance keeps its own tint without
+     four more lines to keep in step, and the LIGHT one comes out darker
+     instead of lighter, which is what "brighter than the text around it"
+     means on a cream ground. The numbers are chosen so the dark
+     appearances land on 60 % and 80 % of white, where they were asked for.
+
+     Defined once here and never overridden: --text and --bg are redefined
+     per appearance on this same element, and a custom property resolves
+     where it is USED, so both of these follow along on their own. */
+  --text-neben: color-mix(in srgb, var(--text) 62%, var(--bg));
+  --text-kopf: color-mix(in srgb, var(--text) 85%, var(--bg));
+  --blase: #dbd2bd;
+  /* Watermark opacity. Dark ink on the cream ground needs more than the 2 %
+     a light mark gets on a dark ground, or it disappears — the dark modes
+     reset it to 0.02 below. */
+  --wz-blass: 0.05;
+  /* The four colours mean STATE, never decoration. That rule was already
+     lived everywhere; writing it down makes it arguable.
+
+       gruen  fertig, bereit, verbunden
+       gelb   wartet — and its second meaning, caution: a job waiting for a
+              decision, the context meter running low, a command reaching
+              beyond the shared folders
+       blau   läuft, aktiv, angeschaltet
+       rot    gescheitert, gefährlich, löscht
+
+     Everything that is a fact rather than a state — a shared folder, an
+     attachment, a command about to run — works with brightness alone, from
+     --text down to --text-still. A pill in blue claims something is running
+     when nothing is.
+
+     For surfaces the quiet form: color-mix(in srgb, var(--gelb) 12%, var(--bg)).
+     Never the full colour behind text. */
+  --gruen: #6b8e6f;
+  --gelb: #c9a227;
+  /* A shade darker than the dots it was picked for: the light own gradient
+     puts a denser ground behind the input bar, and a sign needs 3:1 there. */
+  --blau: #477eb3;
+  --rot: #b4544c;
+  /* The fifth colour, and the only one that is not a state.
+
+     Green, yellow, blue and red say what SOMETHING IS DOING — done,
+     waiting, running, broken. This one says what something IS: a tool call.
+     It belongs to the same word wherever that word appears — the mark in a
+     chat row, the name in the terminal, the icon in a notice — because a
+     tool is one thing, and one thing looks like itself everywhere.
+
+     Blue used to do this job in three places, and it collided with its own
+     state meaning: a notice about a running tool and a notice about a
+     running job wore the same colour and meant two different things.
+
+     A warm sand, quiet on purpose: a bright orange held this place, and
+     over a chat full of calls it shouted. Every look mixes one warm tone
+     (#c98a5a) into its own quiet ink, 45 parts to 55, so the colour stays
+     the tool's own and sits as calmly as the text beside it. A fixed value
+     per look, like every colour here. Measured as text on the raised
+     ground of each look: 4.53 here (43 parts — at 45 it came to 4.39,
+     under the 4.5 a line of type needs), Exe 7.53, Dark Matter 6.63,
+     Heaven 5.48, Moune 5.25. */
+  --werkzeug: #7f6045;
+  /* The same four meanings, in the form that survives being SET AS TEXT.
+     A filled dot and a written sentence do not need the same contrast: a
+     shape reads at 3:1, a line of type needs 4.5:1. Measured on this ground
+     the shape forms above land between 1.69 and 3.40 — fine for the dots
+     they were picked for, too pale for a sentence like "stopped after five
+     failed runs", which is the one line somebody has to be able to read.
+     Same hue, same meaning, only carried far enough to be legible. */
+  --gruen-text: #4b644e;
+  --gelb-text: #725c16;
+  --blau-text: #3e6183;
+  --rot-text: #95453f;
+  /* Vision. One capability, one colour, everywhere — the violet eye in the
+     input bar, on the catalogue's mmproj cards, in every future table.
+     Both are dark enough to hold 3:1 as a sign on the light glass. */
+  --violett: #846db8;
+  /* Tool use. Same rule: the olive wrench, wherever it appears. */
+  --oliv: #7a7e4a;
+  /* The empty part of a gauge — the track of the context ring, a thinking
+     stage not chosen. Neutral, and just strong enough (3:1) that the scale
+     itself can be seen, not only the filled part. */
+  --indicator-empty: #817776;
+
+  /* Code design: muted instead of glowing. */
+  --code-bg: #eae1cf;
+  --code-vordergrund: #2a2620;
+  --sx-schl: #8a5a2b;
+  --sx-text: #3f6b4a;
+  /* One step more distinct than
+     the quiet first take — readable without competing with the code. */
+  --sx-komm: #7d7a71;
+  --sx-zahl: #7a5c8f;
+  --sx-ruf: #2f5d80;
+
+  --schrift: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui,
+    sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';
+  --schrift-fest: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* The four sizes of the page frame: body text, the quiet hint under a
+     field, a section heading, a page title. One place, so a size is a
+     decision here and not a number in a scoped rule. */
+  --schrift-text: 14.5px;
+  --schrift-hinweis: 12.5px;
+  --schrift-abschnitt: 15px;
+  --schrift-seitentitel: 22px;
+  /* The row of every menu list: one height wherever a list is built. */
+  --menuezeile: 52px;
+
+  /* The run-up: in an empty chat the input sits centered and glides down
+     on send. Timing and curve live here because two components share
+     them — App (mark, space below) and Eingabeleiste (footer line). */
+  --anlauf-dauer: 800ms;
+  --anlauf-schwung: cubic-bezier(0.32, 0.72, 0.2, 1);
+}
+
+/* The own gradient wears Exe's whole set while its gradient is dark
+   (zustand.svelte.js sets data-eigen from the gradient's brightness), and
+   Pearl's — the root block — while it is light. */
+:root[data-eigen='dunkel'],
+:root[data-modus='dunkel'] {
+  /* Green, yellow and blue already carry as text on this ground (5.07,
+     7.69, 5.31 measured); red does not (3.82) and is lifted. */
+  --gruen-text: #6b8e6f;
+  --gelb-text: #c9a227;
+  --blau-text: #5b8dbe;
+  --rot-text: #bb655d;
+  /* As signs on the dark glass of the input bar the root's red, blue and
+     violet sink below 3:1; lifted here, same hue. Olive keeps the value
+     it already held there, which the root has since darkened. */
+  --rot: #c8817b;
+  --blau: #6a97c4;
+  --violett: #9b8ac4;
+  --oliv: #9aa05e;
+  --indicator-empty: #94938e;
+  --werkzeug: #cdaf96;
+  --bg: #1c1c1a;
+  --bg-leiste: #151514;
+  --bg-seite: #151514;
+  --rahmen-vorgabe-1: #232323;
+  --rahmen-vorgabe-2: #4a4a4a;
+  --rahmen-vorgabe-3: #121212;
+  /* This look carries three colours: declaring the fourth absent keeps the
+     root block's fourth from leaking in (the field count reads the sheet). */
+  --rahmen-vorgabe-4: initial;
+  --rahmen-winkel-vorgabe: 180deg;
+  --frame: linear-gradient(var(--rahmen-winkel-vorgabe), var(--rahmen-vorgabe-1) calc(50% - 0.5 * var(--diagonale)), var(--rahmen-vorgabe-2) calc(50% + 0.05 * var(--diagonale)), var(--rahmen-vorgabe-3) calc(50% + 0.5 * var(--diagonale)));
+  --kachel-verlauf: linear-gradient(var(--rahmen-winkel-vorgabe), color-mix(in srgb, #1c1c1a 58%, var(--rahmen-vorgabe-1)) calc(50% - 0.5 * var(--diagonale)), color-mix(in srgb, #1c1c1a 58%, var(--rahmen-vorgabe-2)) calc(50% + 0.05 * var(--diagonale)), color-mix(in srgb, #1c1c1a 58%, var(--rahmen-vorgabe-3)) calc(50% + 0.5 * var(--diagonale)));
+  --page-frost: none;
+  --bg-erhoben: #242422;
+  --bg-hoch: #2d2d2a;
+  --linie: #2f2f2b;
+  --linie-stark: #3b3a36;
+  --feldstrich: var(--glass-button-edge);
+  --kontrast: #3b3a36;
+  --glass-button: rgba(236, 235, 230, 0.09);
+  --glass-button-edge: rgba(236, 235, 230, 0.16);
+  --glass-hover: rgba(236, 235, 230, 0.06);
+  --glass-dropdown: rgba(21, 21, 20, 0.86);
+  --kachel-chat: rgba(28, 28, 26, 0.58);
+  /* The edge of the tile is one sharp pixel in a fifth of the green,
+     faint enough not to read as a tile let into the frame the way a
+     bright rim does. It has to be sharp: a glow that fades inwards must
+     be weak to stay soft, and a blurred shadow is stored in whole steps
+     of brightness — at a few percent only three of them are left, each
+     ten pixels wide and more, and they show as rectangles lying inside
+     one another. A line without blur has no steps to draw. */
+  --chat-edge: inset 0 0 0 1px color-mix(in srgb, var(--gruen) 20%, transparent), 0 14px 34px -14px rgba(0, 0, 0, 0.55), 0 2px 6px -2px rgba(0, 0, 0, 0.25);
+  --kachel-eingabe: rgba(236, 235, 230, 0.07);
+  --glass-card: rgba(28, 28, 26, 0.34);
+  --glass-card-line: rgba(236, 235, 230, 0.08);
+  --text: #ecebe6;
+  --text-leise: #d0cec7;
+  --text-still: var(--text-leise);
+  --rahmen-text: var(--text);
+  --blase: #2a2a27;
+  --wz-blass: 0.02;
+  --code-bg: #181817;
+  --code-vordergrund: #dedbd3;
+  --sx-schl: #d9a05b;
+  --sx-text: #8fc099;
+  --sx-komm: #8a877c;
+  --sx-zahl: #c1a3d8;
+  --sx-ruf: #8ab4d8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-modus='hell'], [data-eigen='hell']) {
+    --gruen-text: #6b8e6f;
+    --gelb-text: #c9a227;
+    --blau-text: #5b8dbe;
+    --rot-text: #bb655d;
+    /* As signs on the dark glass of the input bar the root's red, blue and
+       violet sink below 3:1; lifted here, same hue. Olive keeps the value
+       it already held there, which the root has since darkened. */
+    --rot: #c8817b;
+    --blau: #6a97c4;
+    --violett: #9b8ac4;
+    --oliv: #9aa05e;
+    --indicator-empty: #94938e;
+  --werkzeug: #cdaf96;
+    --bg: #1c1c1a;
+    --bg-leiste: #151514;
+    --bg-seite: #151514;
+    --rahmen-vorgabe-1: #232323;
+    --rahmen-vorgabe-2: #4a4a4a;
+    --rahmen-vorgabe-3: #121212;
+    --rahmen-vorgabe-4: initial;
+    --rahmen-winkel-vorgabe: 180deg;
+    --frame: linear-gradient(var(--rahmen-winkel-vorgabe), var(--rahmen-vorgabe-1) calc(50% - 0.5 * var(--diagonale)), var(--rahmen-vorgabe-2) calc(50% + 0.05 * var(--diagonale)), var(--rahmen-vorgabe-3) calc(50% + 0.5 * var(--diagonale)));
+    --kachel-verlauf: linear-gradient(var(--rahmen-winkel-vorgabe), color-mix(in srgb, #1c1c1a 58%, var(--rahmen-vorgabe-1)) calc(50% - 0.5 * var(--diagonale)), color-mix(in srgb, #1c1c1a 58%, var(--rahmen-vorgabe-2)) calc(50% + 0.05 * var(--diagonale)), color-mix(in srgb, #1c1c1a 58%, var(--rahmen-vorgabe-3)) calc(50% + 0.5 * var(--diagonale)));
+    --page-frost: none;
+    --bg-erhoben: #242422;
+    --bg-hoch: #2d2d2a;
+    --linie: #2f2f2b;
+    --linie-stark: #3b3a36;
+    --feldstrich: var(--glass-button-edge);
+    --kontrast: #3b3a36;
+    --glass-button: rgba(236, 235, 230, 0.09);
+    --glass-button-edge: rgba(236, 235, 230, 0.16);
+    --glass-hover: rgba(236, 235, 230, 0.06);
+    --glass-dropdown: rgba(21, 21, 20, 0.86);
+    --kachel-chat: rgba(28, 28, 26, 0.58);
+    --chat-edge: inset 0 0 0 1px color-mix(in srgb, var(--gruen) 20%, transparent), 0 14px 34px -14px rgba(0, 0, 0, 0.55), 0 2px 6px -2px rgba(0, 0, 0, 0.25);
+    --kachel-eingabe: rgba(236, 235, 230, 0.07);
+    --glass-card: rgba(28, 28, 26, 0.34);
+    --glass-card-line: rgba(236, 235, 230, 0.08);
+    --text: #ecebe6;
+    --text-leise: #d0cec7;
+    --text-still: var(--text-leise);
+    --rahmen-text: var(--text);
+    --blase: #2a2a27;
+    --wz-blass: 0.02;
+    --code-bg: #181817;
+    --code-vordergrund: #dedbd3;
+    --sx-schl: #d9a05b;
+    --sx-text: #8fc099;
+    --sx-komm: #8a877c;
+    --sx-zahl: #c1a3d8;
+    --sx-ruf: #8ab4d8;
+  }
+}
+
+/* The own gradient: the one look whose colours, hue and angle the user
+   sets. Every other value comes from Exe or Pearl (above), whichever its
+   brightness asks for. Placed after both on purpose — at equal specificity
+   the later rule wins, so its gradient holds over theirs. Like Pearl and
+   Exe it turns about the middle of the window and keeps its length. */
+:root[data-modus='eigen'] {
+  --rahmen-vorgabe-1: #3b1280;
+  --rahmen-vorgabe-2: #7a1f8f;
+  --rahmen-vorgabe-3: #1a0b3a;
+  --rahmen-vorgabe-4: #07050f;
+  --rahmen-winkel-vorgabe: 0deg;
+  /* The hue the start turns its colours by, in degrees (read by the
+     painter, which writes the turned colours). */
+  --rahmen-ton-vorgabe: -85;
+  --frame: linear-gradient(var(--rahmen-winkel, var(--rahmen-winkel-vorgabe)), var(--rahmen-farbe-1, var(--rahmen-vorgabe-1)) calc(50% - 0.5 * var(--diagonale)), var(--rahmen-farbe-2, var(--rahmen-vorgabe-2)) calc(50% - 0.05 * var(--diagonale)), var(--rahmen-farbe-3, var(--rahmen-vorgabe-3)) calc(50% + 0.3 * var(--diagonale)), var(--rahmen-farbe-4, var(--rahmen-vorgabe-4)) calc(50% + 0.5 * var(--diagonale)));
+  /* Which glass the own gradient is mixed with follows its brightness
+     (below); until that is known the tile keeps the see-through ground
+     and the menu page its frost, whatever the system's dark set names. */
+  --kachel-verlauf: initial;
+  --page-frost: var(--kachel-frost);
+}
+/* The own gradient's glass is denser than Pearl's and Exe's, whose values it
+   otherwise takes: a gradient the user paints can run as bright or as dark
+   as it likes behind the chat and the menu page, and the thin glass let it
+   through. Light as dense as Heaven's, dark as dense as Moune's. */
+:root[data-modus='eigen'][data-eigen='hell'] {
+  --kachel-chat: rgba(255, 255, 255, 0.55);
+  --kachel-verlauf: linear-gradient(var(--rahmen-winkel, var(--rahmen-winkel-vorgabe)), color-mix(in srgb, #ffffff 55%, var(--rahmen-farbe-1, var(--rahmen-vorgabe-1))) calc(50% - 0.5 * var(--diagonale)), color-mix(in srgb, #ffffff 55%, var(--rahmen-farbe-2, var(--rahmen-vorgabe-2))) calc(50% - 0.05 * var(--diagonale)), color-mix(in srgb, #ffffff 55%, var(--rahmen-farbe-3, var(--rahmen-vorgabe-3))) calc(50% + 0.3 * var(--diagonale)), color-mix(in srgb, #ffffff 55%, var(--rahmen-farbe-4, var(--rahmen-vorgabe-4))) calc(50% + 0.5 * var(--diagonale)));
+  --page-frost: none;
+}
+:root[data-modus='eigen'][data-eigen='dunkel'] {
+  --kachel-chat: rgba(28, 28, 26, 0.72);
+  /* Exe's values, but not its green line: the colours around this tile
+     are the user's, and the drop shadow alone sets it off them. */
+  --chat-edge: 0 14px 34px -14px rgba(0, 0, 0, 0.55), 0 2px 6px -2px rgba(0, 0, 0, 0.25);
+  --kachel-verlauf: linear-gradient(var(--rahmen-winkel, var(--rahmen-winkel-vorgabe)), color-mix(in srgb, #1c1c1a 72%, var(--rahmen-farbe-1, var(--rahmen-vorgabe-1))) calc(50% - 0.5 * var(--diagonale)), color-mix(in srgb, #1c1c1a 72%, var(--rahmen-farbe-2, var(--rahmen-vorgabe-2))) calc(50% - 0.05 * var(--diagonale)), color-mix(in srgb, #1c1c1a 72%, var(--rahmen-farbe-3, var(--rahmen-vorgabe-3))) calc(50% + 0.3 * var(--diagonale)), color-mix(in srgb, #1c1c1a 72%, var(--rahmen-farbe-4, var(--rahmen-vorgabe-4))) calc(50% + 0.5 * var(--diagonale)));
+  --page-frost: none;
+}
+
+/* Dark Matter: a deep violet running down into black — the nebula look, not
+   a flat violet wash. The gradient rides on the frame (--frame); --bg stays
+   a SOLID dark point so color-mix and every component that reads it as a
+   colour keep working. Placed AFTER the
+   auto-dark block on purpose — at equal specificity the later rule wins, so
+   Dark Matter holds whether the system sits in light or dark. Its tokens
+   carry the tint into every surface, line, bubble and code block through the
+   same variables the other modes use, so no component has to know it exists.
+   The four state colours and the two capability colours are lifted a touch
+   brighter than the neutral modes' — on a coloured ground the muted forms
+   would sink into it, and blau/violett have to stay legible against violet. */
+:root[data-modus='darkmatter'] {
+  --bg: #0b0817;
+  /* The header band sits darker than the nebula it caps — a near-black violet
+     for the menu bar (--bg-leiste), the wordmark row (--kopf-bg) and a soft
+     shadow (--kopf-schatten) that gives it a hard lower edge. Only Dark Matter
+     sets the two --kopf- tokens; the other modes leave the header transparent
+     as before. */
+  --bg-leiste: #120e26;
+  --kopf-bg: #120e26;
+  /* A soft, diffuse fall instead of a hard step — the header lifts gently off
+     the field rather than cutting a line across it. */
+  --kopf-schatten: 0 10px 26px -10px rgba(0, 0, 0, 0.45);
+  /* The sidebar joins the header and the right rail as ONE calm, dark frame
+     (all the same deep tone) around the luminous nebula in the middle. It used
+     to sit lighter than the content's lower half, which made it float instead
+     of frame. */
+  --bg-seite: #1a1538;
+  --rahmen-vorgabe-1: #3b1280;
+  --rahmen-vorgabe-2: #7a1f8f;
+  --rahmen-vorgabe-3: #1a0b3a;
+  --rahmen-vorgabe-4: #07050f;
+  --rahmen-winkel-vorgabe: 160deg;
+  --frame: linear-gradient(var(--rahmen-winkel, var(--rahmen-winkel-vorgabe)), var(--rahmen-farbe-1, var(--rahmen-vorgabe-1)) 0%, var(--rahmen-farbe-2, var(--rahmen-vorgabe-2)) 45%, var(--rahmen-farbe-3, var(--rahmen-vorgabe-3)) 80%, var(--rahmen-farbe-4, var(--rahmen-vorgabe-4)) 100%);
+  /* The tile and the menu page carry one flat colour here, not the
+     frame's gradient mixed with the glass: mixed that dark, every colour
+     channel is left with a handful of steps, and the three change at
+     different places — slanted stripes and blotches of colour across
+     the tile. The gradient stays where it is bright enough to run
+     smoothly, in the frame. The frost stays off: the colour is solid,
+     nothing shows through it. */
+  --kachel-verlauf: rgb(42, 15, 70);
+  --page-frost: none;
+  /* Raised surfaces (input field, cards, tiles, popovers) sit clearly LIGHTER
+     than the nebula ground so they step out of it instead of dissolving into
+     it — the third brightness between the dark frame and the glowing middle. */
+  --bg-erhoben: #241d46;
+  --bg-hoch: #2d2556;
+  /* Lines run a touch brighter than the surfaces here on purpose: on the
+     lilac shimmer a near-black hairline vanishes, and the header would lose
+     its lower edge — the "missing top boundary". Lifted, every frame (header,
+     sidebar, fields, cards) keeps a clean edge against the nebula. */
+  --linie: #2f2858;
+  --linie-stark: #443a76;
+  --feldstrich: var(--glass-button-edge);
+  --kontrast: #4a4176;
+  --glass-button: rgba(236, 235, 230, 0.09);
+  --glass-button-edge: rgba(236, 235, 230, 0.16);
+  --glass-hover: rgba(236, 235, 230, 0.06);
+  --glass-dropdown: rgba(12, 16, 22, 0.86);
+  --chat-edge: 0 14px 34px -14px rgba(0, 0, 0, 0.55), 0 2px 6px -2px rgba(0, 0, 0, 0.25);
+  --kachel-eingabe: rgba(236, 235, 230, 0.07);
+  --glass-card: rgba(8, 6, 20, 0.34);
+  --glass-card-line: rgba(236, 235, 230, 0.08);
+  /* The window ring is violet here, not the near-white --text — otherwise a
+     modal frame reads like the neutral dark theme's. Dimmed a touch so it
+     glows lilac instead of glaring. */
+  --fensterring: #7d6cba;
+  --text: #e9e6f7;
+  --text-leise: #bbb3d9;
+  --text-still: var(--text-leise);
+  --rahmen-text: var(--text);
+  --blase: #201a3a;
+  --wz-blass: 0.02;
+  /* The user's own chat bubble ships in a calm lavender here (deliberately
+     NOT the vision violet #b18cff — that colour means "sees images"). Only
+     this one surface; a user's own pick in the settings still overrides it. */
+  --blase-eigen-standard: #cbbcee;
+  --blase-eigen-text-standard: #1a1a18;
+  --gruen: #5fbe86;
+  --gelb: #d6b13f;
+  /* The active accent runs brighter here so the send button, the "running"
+     dots and the model status truly glow against the violet ground instead of
+     sinking into it. Still the same blau that means "active" everywhere — just
+     lifted for the darker skin, not a new decorative colour. */
+  --blau: #8bb8ff;
+  --rot: #e0687e;
+  --werkzeug: #c1a1a0;
+  /* All four carry as text on this ground (6.08 to 9.80 measured), so the
+     text forms are the shape forms — named anyway, because a variable that
+     exists in three palettes and not the fourth falls back to the light one
+     the moment somebody uses it. */
+  --gruen-text: #7ea885;
+  --gelb-text: #d6b13f;
+  --blau-text: #8bb8ff;
+  --rot-text: #e0687e;
+  --violett: #b18cff;
+  --oliv: #a9ae6f;
+  --indicator-empty: #816f98;
+  --code-bg: #140f2b;
+  --code-vordergrund: #e3def5;
+  --sx-schl: #e0a86a;
+  --sx-text: #8fd6a8;
+  --sx-komm: #8781a8;
+  --sx-zahl: #c9a3f0;
+  --sx-ruf: #8ab8f5;
+}
+/* Heaven: Dark Matter's light mirror — a pastel sky instead of a nebula.
+   Same build: the gradient on the frame and one ladder of sky tones
+   through the shared tokens. The frame (header + both rails)
+   sits a step DEEPER than the luminous middle so it frames instead of
+   floating; raised surfaces step out towards white. Lines and the still
+   subtitle tone are lifted against the blue tint so edges and captions
+   stay readable on a coloured light ground. Placed after the auto-dark
+   block for the same reason Dark Matter is: the later rule wins, so
+   Heaven holds whether the system sits in light or dark. */
+:root[data-modus='heaven'] {
+  --bg: #e8eef8;
+  --bg-leiste: #d3dff0;
+  --kopf-bg: #d3dff0;
+  --kopf-schatten: 0 10px 26px -10px rgba(64, 92, 138, 0.3);
+  --bg-seite: #dbe5f3;
+  --rahmen-vorgabe-1: #9fc4ff;
+  --rahmen-vorgabe-2: #c4b5ff;
+  --rahmen-vorgabe-3: #ffc9e4;
+  --rahmen-vorgabe-4: initial;
+  --rahmen-winkel-vorgabe: 160deg;
+  --frame: linear-gradient(var(--rahmen-winkel, var(--rahmen-winkel-vorgabe)), var(--rahmen-farbe-1, var(--rahmen-vorgabe-1)) 0%, var(--rahmen-farbe-2, var(--rahmen-vorgabe-2)) 50%, var(--rahmen-farbe-3, var(--rahmen-vorgabe-3)) 100%);
+  /* Drawings lie behind the glass here, so the tile stays see-through and
+     the menu page frosted: both declared, or the dark set of the system
+     would lend this look its mixed gradient. */
+  --kachel-verlauf: initial;
+  --page-frost: var(--kachel-frost);
+  --bg-erhoben: #f6f9fd;
+  --bg-hoch: #ffffff;
+  --linie: #c2d1e7;
+  --linie-stark: #a2b7d8;
+  /* The field outline, 3 : 1 on every ground a field stands on (see :root). */
+  --feldstrich: #517bba;
+  --kontrast: #8fa8d0;
+  --glass-button: rgba(255, 255, 255, 0.5);
+  --glass-button-edge: rgba(0, 0, 0, 0.1);
+  --glass-hover: rgba(255, 255, 255, 0.32);
+  --glass-dropdown: rgba(255, 255, 255, 0.92);
+  --kachel-chat: rgba(232, 238, 248, 0.55);
+  --chat-edge: inset 0 0 0 1px rgba(255, 255, 255, 0.85), 0 14px 34px -14px rgba(0, 0, 0, 0.55), 0 2px 6px -2px rgba(0, 0, 0, 0.25);
+  --kachel-eingabe: rgba(255, 255, 255, 0.6);
+  --glass-card: rgba(255, 255, 255, 0.4);
+  --glass-card-line: rgba(0, 0, 0, 0.07);
+  /* The window ring in a soft periwinkle instead of the near-black ink —
+     a modal on a sky ground should glow blue, not stamp black. */
+  --fensterring: #7e96c6;
+  --text: #22304a;
+  --text-leise: #32405b;
+  /* The ink of Heaven's feathers: the quiet text colour of the look. */
+  --vek: #32405b;
+  /* The quiet ink is the second one here too (see the root block). */
+  --text-still: var(--text-leise);
+  --rahmen-text: var(--text);
+  --blase: #dbe5f4;
+  --wz-blass: 0.05;
+  /* The user's own bubble ships in a clear light periwinkle (dark ink on
+     it via the auto threshold); a pick in the settings still overrides. */
+  --blase-eigen-standard: #c8d8f5;
+  --blase-eigen-text-standard: #1a1a18;
+  /* The state and capability colours in their light-ground forms — set
+     here explicitly so the auto-dark block can never seep through.
+     Blue is one step darker here than on the other light grounds: this sky
+     is itself blue, and blue marks on it were measurable short of what a
+     mark that has to be seen needs. The worst case is a bar filled with
+     `--blau` against its own track (`--linie`): 2.66 : 1 before, 3.44 : 1
+     after. Blue WRITING gains the same way (3.90 : 1 becomes 5.04 : 1 on
+     `--bg-erhoben`), and the keyboard focus ring on the user's own bubble —
+     the one place blue over blue really happens — reaches 3 : 1 for the
+     first time (2.86 -> 3.70).
+     #3f6da5 is the readable blue this theme already carries as
+     `--blau-text`. Of the six grounds a mark can stand on, the narrowest is
+     the bubble above at 3.70 : 1. */
+  --gruen: #5f8a68;
+  --gelb: #b9952b;
+  --blau: #3f6da5;
+  --rot: #b4544c;
+  --werkzeug: #76615b;
+  /* Measured 3.39 / 2.44 / 3.53 / 4.18 against this ground — all four short
+     of what a written line needs. */
+  --gruen-text: #4f7357;
+  --gelb-text: #81681e;
+  --blau-text: #3f6da5;
+  --rot-text: #ac5048;
+  --violett: #7f68b8;
+  --oliv: #868b54;
+  --indicator-empty: #80889d;
+  --code-bg: #e2eaf6;
+  --code-vordergrund: #253248;
+  --sx-schl: #8a5a2b;
+  --sx-text: #3f6b4a;
+  --sx-komm: #78809a;
+  --sx-zahl: #7a5c8f;
+  --sx-ruf: #2f5d80;
+}
+
+/* Moune: a light green meadow — Heaven's build with green ground instead of
+   a sky. The gradient rides on the frame, one ladder of green tones runs
+   through the shared tokens, and the drawings the look adds lie on the
+   surfaces (Vektorfeld), mounted by the window only while it stands.
+   Placed after the auto-dark block like the other two: at equal
+   specificity the later rule wins, so Moune holds whether the system sits
+   in light or dark. Every token the Heaven block sets is set here as
+   well — one left out would let the auto-dark block seep through. Where
+   the design names no value, the light block's value stands. */
+:root[data-modus='moune'] {
+  /* The ground, the rail and the gradient sit eight per cent darker than
+     the first cut, and the field is white: measured, the first cut had the
+     ground at 0.94 relative luminance with the raised card only 1.03 : 1
+     above it, so nothing stood off anything. Now the ground is at 0.78,
+     the card stands 1.23 : 1 above it and the field 1.03 : 1 above the
+     card — the same order the other light looks keep. */
+  /* The greens carry more saturation than the design's first values,
+     lightness unchanged — the first ones read as white: 15 points on the
+     frame, 25 on the windows. */
+  --bg: #e0e7d6;
+  --bg-leiste: #c1dabe;
+  --kopf-bg: #d2edcf;
+  /* The design bends no shadow under the head: declaring it absent keeps
+     the other two looks' shadow from reaching this one. */
+  --kopf-schatten: initial;
+  --bg-seite: #cfe0bf;
+  /* Three colours, 52 % in the middle; the fourth is declared absent so
+     the light block's fourth cannot leak into the field count. */
+  --rahmen-vorgabe-1: #d7e2cb;
+  --rahmen-vorgabe-2: #bdd5ba;
+  --rahmen-vorgabe-3: #bdd7c8;
+  --rahmen-vorgabe-4: initial;
+  --rahmen-winkel-vorgabe: 155deg;
+  --frame: linear-gradient(var(--rahmen-winkel, var(--rahmen-winkel-vorgabe)), var(--rahmen-farbe-1, var(--rahmen-vorgabe-1)) 0%, var(--rahmen-farbe-2, var(--rahmen-vorgabe-2)) 52%, var(--rahmen-farbe-3, var(--rahmen-vorgabe-3)) 100%);
+  /* Drawings lie behind the glass here, so the tile stays see-through and
+     the menu page frosted: both declared, or the dark set of the system
+     would lend this look its mixed gradient. */
+  --kachel-verlauf: initial;
+  --page-frost: var(--kachel-frost);
+  --bg-erhoben: #f8fdf1;
+  --bg-hoch: #ffffff;
+  --linie: #cddbc6;
+  /* Not named by the design: the light block's line and accent values stand. */
+  --linie-stark: #b1a687;
+  /* The field outline, 3 : 1 on every ground a field stands on (see :root). */
+  --feldstrich: #688a57;
+  --kontrast: #b1a687;
+  --glass-button: rgba(255, 255, 255, 0.5);
+  --glass-button-edge: rgba(0, 0, 0, 0.1);
+  --glass-hover: rgba(255, 255, 255, 0.32);
+  --glass-dropdown: rgba(255, 255, 255, 0.92);
+  --chat-edge: inset 0 0 0 1px rgba(255, 255, 255, 0.85), 0 14px 34px -14px rgba(0, 0, 0, 0.55), 0 2px 6px -2px rgba(0, 0, 0, 0.25);
+  --glass-card: rgba(255, 255, 255, 0.4);
+  --glass-card-line: rgba(0, 0, 0, 0.07);
+  /* No ring of its own: declared absent, the modal frame falls back to
+     --text, the way the light block leaves it. */
+  --fensterring: initial;
+  --text: #1f2d22;
+  --text-leise: #3a4b3f;
+  --text-still: var(--text-leise);
+  /* The columns keep the design's own inks, as in its drawing: declared
+     absent, so the light block's single ink cannot reach this look. */
+  --rahmen-text: initial;
+  --blase: #f8fdf1;
+  --wz-blass: 0.05;
+  /* Declared absent like the light block leaves them: the user's own
+     bubble falls back to --blase and the auto threshold's ink. */
+  --blase-eigen-standard: initial;
+  --blase-eigen-text-standard: initial;
+  --gruen: #4f7d57;
+  --gelb: #c9a227;
+  --blau: #5b8dbe;
+  --rot: #b4544c;
+  --werkzeug: #7a674b;
+  --gruen-text: #4f7d57;
+  --gelb-text: #725c16;
+  --blau-text: #3e6183;
+  --rot-text: #95453f;
+  --violett: #8d78bd;
+  --oliv: #8f9557;
+  --indicator-empty: #869387;
+  --code-bg: #eae1cf;
+  --code-vordergrund: #2a2620;
+  --sx-schl: #8a5a2b;
+  --sx-text: #3f6b4a;
+  --sx-komm: #7d7a71;
+  --sx-zahl: #7a5c8f;
+  --sx-ruf: #2f5d80;
+  /* The ink of the four drawings, read by the vector field. */
+  --vek: #5b8a64;
+  /* The see-through surfaces: the chat tile, the tool surface and the
+     lighter input bar read their ground from here, each with the look's
+     colour at the opacity the design gave it, so the drawing on the frame
+     behind them stays a hint. Only this look parts with opaque surfaces. */
+  --kachel-chat: rgb(243 251 233 / 0.72);
+  --kachel-werkzeug: rgb(243 251 233 / 0.78);
+  --kachel-eingabe: rgb(250 254 244 / 0.94);
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  margin: 0;
+  font-family: var(--schrift);
+  font-size: var(--schrift-text);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+#wurzel {
+  height: 100%;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* Whoever doesn't use the mouse has to see where they are. */
+:focus-visible {
+  outline: 2px solid var(--blau);
+  outline-offset: 2px;
+  border-radius: 9px;
+}
+
+/* Whoever can't tolerate motion gets none. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* A TOOL NAME, wherever it stands.
+
+   `write_file`, `web_search`, `read_file` — a tool is one thing, and one
+   thing looks like itself everywhere: the row in the chat, the row in the
+   terminal, the list in the tools window, the sentence in a notice.
+
+   It used to look like itself nowhere. Measured across the three places
+   that showed one: monospace in all of them, but 13, 12.5 and 11.5 pixels
+   and two different weights, because none of them said a size — each
+   inherited whatever its row happened to be set in. Nobody was in charge,
+   so nothing agreed.
+
+   This is the one place in charge. Change the number here and every tool
+   name in the program follows.
+
+   `--werkzeug` is the fifth colour and the only one that is not a state
+   (see the palette above): green, yellow, blue and red say what something
+   is DOING, this one says what something IS. */
+.werkzeugname {
+  font-family: var(--schrift-fest);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--werkzeug);
+}
+
+/* A SECTION HEADING on a server panel, wherever one stands.
+
+   Model, tempo, memory, network, varianten, speech settings — each panel
+   groups its own fields under a row like this, and the row read as a
+   different kind of thing wherever its own file happened to define it a
+   little differently. Five files carried the same four lines; a change to
+   one of them left the other four behind.
+
+   This is the one place in charge of the text itself. What differs from
+   panel to panel — the surrounding flex layout, a hover state, a
+   first-child margin — stays in that panel's own file, next to the
+   element that needs it.
+
+   A heading reads like a word, not a stamp: the system face in sentence
+   case, and no rule running out beside it. Several panels still draw that
+   rule with their own ::after; this is the one place that keeps every
+   heading free of it, which is why it has to win over their scoped rules. */
+.tafelkopf {
+  font: 600 var(--schrift-abschnitt) var(--schrift);
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text);
+}
+.tafelkopf::after {
+  display: none !important;
+}
+
+/* The heading of a group in any menu list: quiet, medium weight. The same
+   in settings, local, cloud and the catalogue. */
+.menuegruppe {
+  margin: 20px 10px 6px;
+  font: 500 var(--schrift-hinweis) var(--schrift);
+  color: var(--text-still);
+}
+.menuegruppe:first-child {
+  margin-top: 4px;
+}
+
+/* THE BUTTON in the foot of a mask or a window, wherever one stands.
+
+   Save and cancel under the settings, the server mask, the provider mask,
+   the job window and the first start each carried a copy of these lines,
+   and no two copies agreed: a border made the button two pixels taller in
+   five of them, the padding ran from 14 to 18 pixels across, the weight
+   from 500 to 600, and a locked button faded to a different degree.
+
+   This is the one place in charge. A quiet button and a main button are
+   the same glass in the same size: no border, so the edge is a ring ON the
+   edge and adds no height. They differ in weight, and in the edge: the
+   quiet one wears the field outline — the glass edge on the dark looks,
+   the darkened hairline on the light ones — the main one the glass edge.
+   Only Send in the input bar stays filled. What a single mask adds — a
+   press, a margin — stays in that mask's own file, on the same class. */
+.button {
+  border: none;
+  border-radius: 9px;
+  background: var(--glass-button);
+  box-shadow: inset 0 0 0 1px var(--feldstrich);
+  color: var(--text);
+  /* The whole face in one line, so nothing is inherited: a row with a line
+     height of its own would make the button taller there than elsewhere. */
+  font: 400 13px var(--schrift);
+  padding: 7px 15px;
+  cursor: pointer;
+  transition: background 0.12s, transform 0.08s;
+}
+.button.primary {
+  box-shadow: inset 0 0 0 1px var(--glass-button-edge);
+  font-weight: 500;
+}
+.button:hover:not(:disabled) {
+  background: var(--glass-hover);
+}
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* House rule: no visible scrollbars, anywhere.
+   Scrolling still works — wheel, gesture, keys all function unchanged,
+   only the display is dropped. Whoever ever wants to soften the rule:
+   it came up when the bar ran right across the tile gallery. */
+* {
+  scrollbar-width: none;
+}
+*::-webkit-scrollbar {
+  display: none;
+}
+
+/* --stufenfaktor is a zoom put on the app root itself. vh and vw stay tied
+   to the real, unzoomed viewport, so whoever divides a viewport unit by it
+   stays right under such a zoom as well. Nothing in the program sets one
+   today: it grows and shrinks through the window's own zoom (Cmd+plus and
+   Cmd+minus), which scales the viewport along and needs no factor. */
+#wurzel {
+  --stufenfaktor: 1;
+}

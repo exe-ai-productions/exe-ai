@@ -1,0 +1,112 @@
+/*
+  The frame every code block wears — an answer's own, and a file card's
+  embedded source alike.
+
+  Global on purpose, not scoped to one component's markup: both places build
+  their code as a raw HTML string (`{@html …}`, lib/markdown.js) rather than
+  Svelte-authored elements, so Svelte's own class scoping cannot reach it
+  either way. Splitting this into two copies — one per component — was
+  exactly the double-maintenance Punkt 1 set out to end for the card itself;
+  the block wearing the card would only have moved the problem one level
+  down.
+
+  Syntax token colours live in codefarben.css, loaded the same way — this
+  file only carries the frame: radius, background, the line-number column,
+  and the scrollbar that stays out of sight until the pointer is on the
+  block.
+*/
+
+/* Nothing in the chat wears a frame: a code block is only its ground — no
+   border, no lift.
+
+   The ground stays the colour pack's own: a pack brings it (Tokyo Night is
+   dark in a light program on purpose), and forcing the house ground here
+   would turn a pack into a washed-out version of itself. */
+.codeblock {
+  margin: 0 0 0.95em;
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--code-grund);
+}
+
+/* An answer's block (lib/markdown.js, codeRahmen): no header bar. The
+   language sits small in the top left corner, the copy mark in the top
+   right, and the code keeps clear of both. */
+.codeblock.umbricht { position: relative; }
+.code-sprache {
+  position: absolute; top: 7px; left: 15px;
+  font: 11.5px var(--schrift-fest); color: var(--text-still);
+  pointer-events: none;
+}
+.code-kopieren {
+  position: absolute; top: 6px; right: 6px; z-index: 1;
+  width: 28px; height: 28px; padding: 0;
+  display: grid; place-items: center;
+  border: none; border-radius: 9px; background: none;
+  color: var(--text-still); cursor: pointer;
+}
+.code-kopieren:hover { background: var(--linie); color: var(--text); }
+/* Long lines break instead of running off into the wall. The right padding
+   keeps the text out from under the copy mark. */
+.codeblock.umbricht pre { padding-right: 44px; overflow-x: visible; }
+.codeblock.umbricht.mit-sprache pre { padding-top: 30px; }
+.codeblock.umbricht code { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* One row per written line; the row draws its own number, so a wrapped
+   line keeps one. The column is as wide as the largest number needs. */
+.codeblock.nummeriert code { display: block; counter-reset: code-zeile; }
+.code-zeile {
+  display: grid;
+  grid-template-columns: calc(var(--ziffern, 1) * 1ch + 23px) minmax(0, 1fr);
+  counter-increment: code-zeile;
+}
+.code-zeile::before {
+  content: counter(code-zeile);
+  text-align: right;
+  padding-right: 10px;
+  margin-right: 12px;
+  color: var(--text-still);
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* An empty line still takes its row. */
+.code-zeile > span { min-height: 1.6em; }
+.codeblock pre {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.18s;
+  margin: 0; padding: 13px 15px; overflow-x: auto;
+  display: flex; gap: 12px; align-items: flex-start;
+}
+.codeblock:hover pre {
+  scrollbar-color: var(--linie) transparent;
+}
+.codeblock pre::-webkit-scrollbar { height: 8px; }
+.codeblock pre::-webkit-scrollbar-track { background: transparent; }
+.codeblock pre::-webkit-scrollbar-thumb {
+  background: transparent; border-radius: 9px; transition: background 0.18s;
+}
+.codeblock:hover pre::-webkit-scrollbar-thumb {
+  background: var(--linie);
+}
+.codeblock pre::-webkit-scrollbar-thumb:hover {
+  background: var(--text-still);
+}
+/* Numbers and code side by side, the numbers in a column of their own so a
+   selection cannot pick them up. */
+.code-nummern {
+  flex: none;
+  user-select: none;
+  -webkit-user-select: none;
+  text-align: right;
+  padding-right: 12px;
+  color: var(--text-still);
+  font-family: var(--schrift-fest);
+  font-size: 12.8px;
+  line-height: 1.6;
+  white-space: pre;
+}
+.codeblock pre code { flex: 1; min-width: 0; }
+.codeblock code {
+  background: none; padding: 0; border-radius: 0; font-size: 12.8px; line-height: 1.6;
+  color: var(--code-vordergrund);
+}

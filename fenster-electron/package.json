@@ -1,0 +1,82 @@
+{
+  "name": "exe-ai-terminal-fenster-electron",
+  "productName": "Exe AI",
+  "private": true,
+  "version": "0.6.9",
+  "description": "The Electron window around the Exe AI service.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "bauen": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --dir",
+    "packen": "electron-builder --mac --publish never",
+    "pack:win": "electron-builder --win --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "net.exe-hq.exe-ai-terminal",
+    "productName": "Exe AI",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "adressregel.js",
+      "kontextmenue.js",
+      "preload.js",
+      "thumbnail.js",
+      "updater.js",
+      "anzeige/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/Exe AI",
+        "to": "exe-ai-terminal"
+      },
+      {
+        "from": "../THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "exe-ai-productions",
+        "repo": "exe-ai",
+        "releaseType": "draft"
+      }
+    ],
+    "mac": {
+      "target": ["dmg", "zip"],
+      "artifactName": "Exe-AI-${version}-${arch}.${ext}",
+      "category": "public.app-category.developer-tools",
+      "icon": "../deploy/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "../deploy/entitlements-electron.plist",
+      "entitlementsInherit": "../deploy/entitlements-electron.plist",
+      "notarize": false,
+      "identity": "13CA82624F5FC964C0B0E079660D784029027173"
+    },
+    "dmg": {
+      "artifactName": "Exe-AI-${version}-${arch}.dmg"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "../deploy/icon.ico"
+    },
+    "nsis": {
+      "artifactName": "Exe-AI-${version}-${arch}.exe"
+    }
+  }
+}

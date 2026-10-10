@@ -1,0 +1,42 @@
+/*
+  The text of a report — markdown output drawn into a box of its own: the
+  agent's report in the reader (Bildschau.svelte) wears these rules, sized
+  by the box that holds it (everything here is in em). Global, because the
+  HTML comes into being at runtime and a component's scoped style only
+  reaches the markup it saw at build time. The code block's own rules live in
+  codeblock.css; only the inline-code pill and the block's frame are here.
+*/
+.berichttext > *:first-child { margin-top: 0; }
+.berichttext > *:last-child { margin-bottom: 0; }
+.berichttext p { margin: 0 0 0.85em; }
+.berichttext h2 { font-size: 1.18em; font-weight: 600; margin: 1.4em 0 0.5em; letter-spacing: -0.01em; }
+.berichttext h3 { font-size: 1.06em; font-weight: 600; margin: 1.3em 0 0.45em; }
+.berichttext h4, .berichttext h5 { font-size: 1em; font-weight: 600; margin: 1.2em 0 0.4em; }
+.berichttext ul, .berichttext ol { margin: 0 0 0.85em; padding-left: 1.35em; }
+.berichttext li { margin: 0.22em 0; }
+.berichttext blockquote {
+  margin: 0 0 0.85em; padding: 0.1em 0 0.1em 0.9em;
+  border-left: 2px solid var(--linie-stark); color: var(--text-leise);
+}
+.berichttext hr { border: none; border-top: 1px solid var(--linie); margin: 1.4em 0; }
+.berichttext a { color: inherit; text-underline-offset: 3px; text-decoration-color: var(--text-still); }
+.berichttext table {
+  border-collapse: collapse; margin: 0 0 0.95em; font-size: 0.94em; display: block; overflow-x: auto;
+}
+.berichttext th, .berichttext td { border: 1px solid var(--linie); padding: 6px 11px; text-align: left; }
+.berichttext th { font-weight: 600; background: var(--bg-seite); }
+.berichttext code {
+  font-family: var(--schrift-fest); font-size: 0.9em;
+  background: var(--blase); padding: 1.5px 5px; border-radius: 9px;
+}
+.berichttext .codeblock {
+  margin: 0 0 0.95em; border: 1px solid var(--linie); border-radius: 9px;
+  overflow: hidden; background: var(--code-grund);
+}
+/* Only the inline-code pill is undone here; the block's inside — padding,
+   wrapping, the copy mark, the numbered rows — is stil/codeblock.css, the
+   same as in a message. */
+.berichttext .codeblock code {
+  background: none; padding: 0; border-radius: 0;
+}
+

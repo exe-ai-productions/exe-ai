@@ -1,0 +1,360 @@
+# Thinking stages, per provider and where needed per model.
+#
+# This file lists ONLY what a provider itself accepts. It invents no stage.
+# A new model is added here by hand; nothing else in the program has to
+# change for it.
+#
+# Display names are NOT in this file. They live in app/locales/de.json and
+# en.json under `denken.stufe.<key>`, one key per stage, so a stage is
+# translated once and not once per model.
+#
+# The display keys are: off on minimal low medium high xhigh max
+# `none` is written here wherever a provider's own word for "off" is the
+# string "none"; the loader maps it onto the display key `off` and keeps
+# `none` as the word that goes into the request.
+#
+# Per model entry:
+#   stufen:   the display keys this model accepts, in the order shown
+#   standard: the provider's own default, if documented
+#   aus:      false where the provider refuses to switch thinking off
+#   immer:    true where the model always thinks and nothing can be switched
+#   nie:      true where the model cannot think at all
+#   felder:   fields sent with every chat answer and every fold, a stage
+#             or none (a job's own rounds do not send them yet) — for
+#             every model this row is found for (the longest prefix, the
+#             same as for its stages), and only at `adresse`
+#   adresse:  host and path an endpoint must have for `felder`
+
+# --- Where an OpenAI-dialect address belongs -------------------------------
+# The configuration does not name the provider behind an OpenAI-compatible
+# endpoint. The host in base_url does. An unknown host stays plain OpenAI:
+# `reasoning_effort` and nothing else.
+wirte:
+  api.openai.com: openai
+  generativelanguage.googleapis.com: google
+  dashscope: qwen
+  aliyuncs: qwen
+  bigmodel.cn: glm
+  api.z.ai: glm
+  api.deepseek.com: deepseek
+  api.kimi.ai: kimi
+  moonshot: kimi
+  api.minimax.io: minimax
+  api.mistral.ai: mistral
+  api.x.ai: xai
+  api.meta.ai: meta
+
+# --- What a local chat template gives away ---------------------------------
+# llama.cpp serves the raw template via /props. These are the words worth
+# looking for in it, and what each of them means. `sucht` is the literal
+# string; the search is plain containment, as it always was, only wider.
+# `kwarg` is the name of the template variable this word stands for, and it
+# is what a local server is sent. Written here and not in the code: whose
+# template calls its switch `thinking` and whose calls it `enable_thinking`
+# is the provider's business, not the program's.
+# Only where the word IS a boolean variable. `/no_think` is a token in the
+# text and `thinking_budget` is a number, so neither carries one and neither
+# may be set to true or false.
+vorlagen_muster:
+  - sucht: reasoning_effort
+    art: stufen
+    stufen: [low, medium, high]
+    feld: reasoning_effort
+  - sucht: reasoning_strength
+    art: stufen
+    stufen: [low, medium, high, xhigh]
+    feld: reasoning_effort
+  - sucht: enable_thinking
+    art: schalter
+    kwarg: enable_thinking
+  - sucht: thinking_budget
+    art: schalter
+  - sucht: /no_think
+    art: schalter
+  # Last, and on purpose: "thinking" is a substring of every word above it,
+  # so it may only decide where none of them matched. DeepSeek V3.1 and
+  # Granite 3.3 are the templates that carry the bare word.
+  - sucht: thinking
+    art: schalter
+    kwarg: thinking
+
+# --- Model families -------------------------------------------------------
+# Keyed by the `model_type` of a model's config.json on Hugging Face, so the
+# same row is hit by an MLX server (`config_model_type` in /v1/models/status),
+# by llama.cpp (`general.architecture`) and by a plain model name. Matching
+# ignores separators and case: qwen3_5, Qwen3.5 and qwen3-5 are one key.
+#
+# This is where the templates that reveal NOTHING are caught: a model that
+# always thinks carries no switch in its template, so no text search can
+# ever find it.
+familien:
+  # Always thinking, nothing to switch.
+  deepseek-r1: {immer: true}
+  kimi-k2-thinking: {immer: true}
+  minimax-m2: {immer: true}
+  minimax-m2.1: {immer: true}
+  qwen3-thinking: {immer: true}
+  qwq: {immer: true}
+  magistral: {immer: true}
+  # Switchable through the template variable.
+  qwen3: {stufen: ["off", "on"], standard: "on"}
+  qwen3-5: {stufen: ["off", "on"], standard: "on"}
+  qwen3-6: {stufen: ["off", "on"], standard: "on"}
+  qwen3-next: {stufen: ["off", "on"], standard: "on"}
+  qwen3-moe: {stufen: ["off", "on"], standard: "on"}
+  qwen3-vl: {stufen: ["off", "on"], standard: "on"}
+  glm4: {stufen: ["off", "on"], standard: "on"}
+  glm4-moe: {stufen: ["off", "on"], standard: "on"}
+  gemma4: {stufen: ["off", "on"], standard: "off"}
+  nemotron: {stufen: ["off", "on"], standard: "on"}
+  granite: {stufen: ["off", "on"], standard: "off"}
+  seed-oss: {stufen: ["off", "on"], standard: "on"}
+  deepseek-v3: {stufen: ["off", "on"], standard: "off"}
+  # Stages, straight out of the template.
+  gpt-oss: {stufen: [low, medium, high], standard: medium, feld: reasoning_effort}
+  muse-glimmer: {stufen: [low, medium, high, xhigh], standard: high, feld: reasoning_effort}
+  # Kolibri-1 (`general.architecture: kolibri1`): its chat template reads
+  # `reasoning_effort` (none, low, medium, high) and, for "off", also
+  # `enable_thinking: false` — the switch a local server sends.
+  kolibri1: {stufen: ["off", low, medium, high], standard: high, feld: reasoning_effort}
+  # No thinking at all.
+  llama: {nie: true}
+  llama4: {nie: true}
+  granite4: {nie: true}
+  qwen3-instruct: {nie: true}
+  # Reported by an MLX server as `config_model_type: diffusion_gemma`, which
+  # hands over no template and therefore no switch: such a model ends at "no
+  # thinking" with or without this row. The row is here so it says that
+  # because the catalogue HOLDS it, not because nobody was asked.
+  #
+  # A family row outranks a template (app/denkstufen.py, step 3), so on a
+  # server that does hand one over this row decides — deliberately, and for
+  # exactly as long as nothing better is known. No published reference
+  # names this family, so no stage line could be written that was not
+  # invented; the row is a default, not a measurement, and one line changes
+  # it the day a template shows otherwise.
+  diffusion-gemma: {nie: true}
+
+# --- Providers -------------------------------------------------------------
+anbieter:
+
+  anthropic:
+    # Source: Anthropic Messages API reference, "Thinking & Effort".
+    # Almost nothing is maintained here: GET /v1/models carries
+    # capabilities.effort.* and capabilities.thinking.types.* per model, and
+    # that answer wins over this section. What the answer does NOT carry is
+    # whether `thinking: {type: disabled}` is allowed — that is the one row
+    # below, and the only reason this section exists.
+    feld: output_config.effort
+    schalter: thinking.type
+    aus_wort: disabled
+    an_wort: adaptive
+    stufen: [low, medium, high, xhigh, max]
+    standard: high
+    modelle:
+      # Fable and Mythos always think; `disabled` answers 400.
+      "claude-fable": {stufen: [low, medium, high, xhigh, max], standard: high, aus: false}
+      "claude-mythos": {stufen: [low, medium, high, xhigh, max], standard: high, aus: false}
+      # Opus 5 takes `disabled` while effort stays at or below `high`. Off is
+      # sent without an effort at all, so the pair never arises here.
+      "claude-opus-5": {stufen: [low, medium, high, xhigh, max], standard: high}
+      "claude-sonnet-5": {stufen: [low, medium, high, xhigh, max], standard: high}
+      "claude-opus-4-8": {stufen: [low, medium, high, xhigh, max], standard: high}
+      "claude-opus-4-7": {stufen: [low, medium, high, xhigh, max], standard: high}
+      "claude-opus-4-6": {stufen: [low, medium, high, max], standard: high}
+      "claude-sonnet-4-6": {stufen: [low, medium, high, max], standard: high}
+      # The 4.5 generation knows no effort — only the old switch with a
+      # token budget, which the translator adds from a module constant.
+      "claude-opus-4-5": {stufen: ["off", "on"], standard: "on", budget: true}
+      "claude-sonnet-4-5": {stufen: ["off", "on"], standard: "on", budget: true}
+      "claude-haiku-4-5": {stufen: ["off", "on"], standard: "on", budget: true}
+
+  openai:
+    # Sources: developers.openai.com model pages and the responses/create
+    # reference; the o-series and the mini/nano rows only survive in
+    # learn.microsoft.com's Azure reasoning page. GET /v1/models says
+    # nothing about stages at all, which is why this section is long.
+    feld: reasoning_effort
+    aus_wort: none
+    stufen: [none, minimal, low, medium, high, xhigh, max]
+    modelle:
+      "gpt-5.6": {stufen: [none, low, medium, high, xhigh, max], standard: medium}
+      "gpt-5.5-pro": {stufen: [medium, high, xhigh], standard: high}
+      "gpt-5.5": {stufen: [none, low, medium, high, xhigh], standard: medium}
+      "gpt-5.4-pro": {stufen: [medium, high, xhigh], standard: medium}
+      "gpt-5.4": {stufen: [none, low, medium, high, xhigh], standard: none}
+      "gpt-5.3-codex": {stufen: [low, medium, high, xhigh]}
+      "gpt-5.2-pro": {stufen: [medium, high, xhigh]}
+      "gpt-5.2": {stufen: [none, low, medium, high, xhigh], standard: none}
+      "gpt-5.1": {stufen: [none, low, medium, high], standard: none}
+      "gpt-5-pro": {stufen: [high], standard: high}
+      "gpt-5-mini": {stufen: [minimal, low, medium, high]}
+      "gpt-5-nano": {stufen: [minimal, low, medium, high]}
+      "gpt-5": {stufen: [minimal, low, medium, high], standard: medium}
+      "gpt-oss": {stufen: [low, medium, high]}
+      "o3-mini": {stufen: [low, medium, high], standard: medium}
+      "o4-mini": {stufen: [low, medium, high], standard: medium}
+      "o3": {stufen: [low, medium, high], standard: medium}
+      "o1": {stufen: [low, medium, high], standard: medium}
+      "gpt-4.1": {nie: true}
+      "chatgpt": {nie: true}
+
+  google:
+    # Reached through the OpenAI-compatible endpoint (/v1beta/openai/), so
+    # `reasoning_effort` is the field, not thinkingLevel. Source:
+    # ai.google.dev/gemini-api/docs/openai and .../docs/thinking.
+    feld: reasoning_effort
+    aus_wort: none
+    stufen: [none, minimal, low, medium, high]
+    modelle:
+      "gemini-3.7-flash": {stufen: [low, medium, high], standard: medium}
+      "gemini-3.6-flash": {stufen: [minimal, low, medium, high], standard: medium}
+      "gemini-3.5-flash-lite": {stufen: [minimal, low, medium, high], standard: minimal}
+      "gemini-3.5-flash": {stufen: [minimal, low, medium, high], standard: medium}
+      "gemini-3.1-flash-lite": {stufen: [minimal, low, medium, high], standard: minimal}
+      "gemini-3.1-pro": {stufen: [low, medium, high], standard: high, aus: false}
+      "gemini-3-flash": {stufen: [minimal, low, medium, high], standard: high}
+      "gemini-3-pro": {stufen: [low, high], standard: high, aus: false}
+      "gemini-2.5-pro": {stufen: [low, medium, high], aus: false}
+      "gemini-2.5-flash-lite": {stufen: [none, low, medium, high]}
+      "gemini-2.5-flash": {stufen: [none, low, medium, high]}
+      "gemma-4": {stufen: [minimal, high]}
+
+  qwen:
+    # Model Studio's compatible mode. No stage field at all — a switch and a
+    # token budget, and the budget is a number, so it stays out of the list.
+    # Source: alibabacloud.com/help/en/model-studio/deep-thinking.
+    feld: null
+    schalter: enable_thinking
+    stufen: ["off", "on"]
+    modelle:
+      "qwen3.8-max": {stufen: ["off", "on"], standard: "on"}
+      "qwen3.8-flash": {stufen: ["off", "on"], standard: "on"}
+      "qwen3.7-max-preview": {immer: true}
+      "qwen3.7-max": {stufen: ["off", "on"], standard: "on"}
+      "qwen3.7-plus": {stufen: ["off", "on"], standard: "on"}
+      "qwen3.7-flash": {stufen: ["off", "on"], standard: "on"}
+      "qwen3.6": {stufen: ["off", "on"], standard: "on"}
+      "qwen3.5-plus": {stufen: ["off", "on"], standard: "on"}
+      "qwen3.5-flash": {stufen: ["off", "on"], standard: "on"}
+      "qwen3-max": {stufen: ["off", "on"], standard: "off"}
+      "qwen-plus": {stufen: ["off", "on"], standard: "off"}
+      "qwen-flash": {stufen: ["off", "on"], standard: "off"}
+      "qwen-turbo": {stufen: ["off", "on"], standard: "off"}
+      "qwq-plus": {immer: true}
+
+  glm:
+    # api.z.ai and bigmodel.cn share the fields. Source:
+    # docs.z.ai/api-reference/llm/chat-completion and the 5.2 / 5.3 guides.
+    feld: reasoning_effort
+    schalter: thinking.type
+    aus_wort: disabled
+    an_wort: enabled
+    stufen: ["off", "on", none, minimal, low, medium, high, xhigh, max]
+    modelle:
+      "glm-5.3-flash": {stufen: [low, high, max], standard: max, aus: false}
+      "glm-5.3": {stufen: [low, high, max], standard: max, aus: false}
+      # Only the stages that act differently: the provider maps `low` and
+      # `medium` onto `high` and `xhigh` onto `max`.
+      "glm-5.2": {stufen: ["off", high, max], standard: max}
+      "glm-5.1": {stufen: ["off", "on"], standard: "on"}
+      "glm-5": {stufen: ["off", "on"], standard: "on"}
+      "glm-4.7": {stufen: ["off", "on"], standard: "on"}
+      "glm-4.6": {stufen: ["off", "on"], standard: "on"}
+      "glm-4.5": {stufen: ["off", "on"], standard: "on"}
+
+  deepseek:
+    # Source: api-docs.deepseek.com/guides/thinking_mode. The guide puts
+    # reasoning_effort at the top level, the reference nests it under
+    # thinking — the top level is what is sent here.
+    feld: reasoning_effort
+    schalter: thinking.type
+    aus_wort: disabled
+    an_wort: enabled
+    stufen: ["off", low, medium, high, max]
+    modelle:
+      "deepseek-v4-pro": {stufen: ["off", low, medium, high, max], standard: high}
+      "deepseek-v4-flash": {stufen: ["off", low, medium, high, max], standard: high}
+      # The public id of the V4 Flash refresh carries no version marker.
+      "deepseek-flash": {stufen: ["off", low, medium, high, max], standard: high}
+
+  kimi:
+    # Source: platform.kimi.ai/docs/guide/kimi-k3-quickstart and .../api/chat.
+    feld: reasoning_effort
+    schalter: thinking.type
+    aus_wort: disabled
+    an_wort: enabled
+    stufen: ["off", "on", low, high, max]
+    modelle:
+      # K3 always thinks and refuses the thinking object outright, so the
+      # translator sends the stage alone for it.
+      "kimi-k3": {stufen: [low, high, max], standard: max, aus: false, ohne_schalter: true}
+      "kimi-k2.7-code": {stufen: ["on"], standard: "on", aus: false}
+      "kimi-k2.6": {stufen: ["off", "on"], standard: "on"}
+
+  minimax:
+    # Source: platform.minimax.io/docs/api-reference/text-openai-api.
+    feld: null
+    schalter: thinking.type
+    aus_wort: disabled
+    an_wort: adaptive
+    stufen: ["off", "on"]
+    modelle:
+      # `felder` go into every chat answer and every fold of a model this row
+      # is found for (its variants too, by the longest prefix; a job's own
+      # rounds do not send them yet), but only where the endpoint's
+      # host and path are exactly `adresse`: on that route M3 keeps its
+      # thinking inline in the answer unless `reasoning_split` is sent.
+      "minimax-m3":
+        stufen: ["off", "on"]
+        standard: "on"
+        felder: {reasoning_split: true}
+        adresse: api.minimax.io/v1
+      "minimax-m2": {immer: true}
+
+  mistral:
+    # Source: docs.mistral.ai/capabilities/reasoning/. Only the two values
+    # the documentation names; the schema's middle values are undescribed
+    # and an undescribed value is not a stage.
+    feld: reasoning_effort
+    aus_wort: none
+    stufen: [none, high]
+    modelle:
+      "mistral-medium-3-5": {stufen: [none, high]}
+      "mistral-small": {stufen: [none, high]}
+      "magistral": {immer: true}
+
+  xai:
+    # Source: docs.x.ai/developers/model-capabilities/text/reasoning.
+    feld: reasoning_effort
+    aus_wort: none
+    stufen: [none, low, medium, high, xhigh]
+    modelle:
+      "grok-4.6": {stufen: [low, medium, high, xhigh], standard: high, aus: false}
+      "grok-4.5": {stufen: [low, medium, high], standard: high, aus: false}
+      "grok-4.3": {stufen: [none, low, medium, high], standard: low}
+      "grok-4.20-multi-agent": {stufen: [low, medium, high]}
+      "grok-3-mini": {stufen: [low, medium, high]}
+      # The variants that do not reason at all.
+      "grok-4.20-0309-non-reasoning": {nie: true}
+      # Its undated alias; source: docs.x.ai/developers/models/grok-4.20-0309-non-reasoning.
+      "grok-4.20-non-reasoning": {nie: true}
+      "grok-4-fast-non-reasoning": {nie: true}
+      "grok-4-1-fast-non-reasoning": {nie: true}
+      # Every other Grok model reasons on its own and answers a stage field
+      # with 400, so nothing is offered and nothing is sent.
+      "grok": {immer: true}
+
+  meta:
+    # Source: ai.developer.meta.com/docs/reasoning for the stages. The host
+    # row above is https://api.meta.ai/v1, the address the Meta model API is
+    # served at, so these rows are reached the same way as every other
+    # OpenAI-dialect provider. The doc names no word for "off", so
+    # the list below carries none: a model that takes the switch says so
+    # in its own row.
+    feld: reasoning_effort
+    stufen: [minimal, low, medium, high, xhigh]
+    modelle:
+      "muse-spark": {stufen: [minimal, low, medium, high, xhigh], aus: false}
+      "llama-4": {nie: true}
+      "llama": {nie: true}

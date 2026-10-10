@@ -1,0 +1,79 @@
+# Builds the Windows package and hangs it on the release draft of its tag.
+#
+# Windows only. The macOS package is built, signed and notarized on the
+# maintainer's own machine — a hosted runner holds no Apple identity. The
+# tests run on Windows as well: that is the system the package is for, and
+# the suite runs there since the tests were made platform-neutral.
+#
+# Three steps, in the order a developer takes locally: the interface, then
+# the frozen service, then the shell around it. electron-builder packs the
+# installer, writes latest.yml beside it and uploads both to the release
+# of the tag — a draft (fenster-electron/package.json, publish.releaseType),
+# which nobody sees until it is published by hand. The token is the run's
+# own; nothing is signed on Windows.
+#
+# Runs on a version tag (v0.6.9) or by hand from the Actions page.
+
+name: Build packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The suite checks the interface too (svelte-check, the built app) —
+      # so the interface has to exist before the tests, same as locally.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python -m pytest tests/ -q
+
+  paket:
+    needs: tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The interface first — otherwise the program ships with one older
+      # than itself.
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # PyInstaller stays out of requirements.txt on purpose: build tools
+      # do not belong inside the package they build.
+      - run: pip install -r requirements.txt pyinstaller
+      # The service as a folder, dist/Exe AI/ — what the shell wraps.
+      - run: pyinstaller deploy/exe-ai-terminal.spec
+
+      # The shell: installer and latest.yml, straight to the release draft.
+      - run: npm ci
+        working-directory: fenster-electron
+      - run: npx electron-builder --win --publish always
+        working-directory: fenster-electron
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

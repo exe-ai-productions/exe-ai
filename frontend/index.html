@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#141413" />
+    <title>Exe AI</title>
+    <!-- The chosen look before the first paint: the stylesheet keys its
+         grounds off this attribute, and the service's answer comes later than
+         the first frame. Mirrors the key lib/anzeige.js writes; "auto" sets
+         nothing and leaves the device's report to the stylesheet. -->
+    <script>
+      ;(function () {
+        try {
+          var modus = localStorage.getItem('exe-modus')
+          if (modus && modus !== 'auto') document.documentElement.setAttribute('data-modus', modus)
+        } catch (fehler) {}
+      })()
+    </script>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+  </head>
+  <body>
+    <div id="wurzel"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,39 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Your own data and settings stay on your machine
+data/
+logs/
+config.yaml
+mcp_servers.json
+berechtigungen.json
+.env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+prompts/agenten/
+prompts/system.md
+prompts/memory.md
+prompts/skills/
+!prompts/.gitkeep
+
+# Build output
+node_modules/
+dist/
+build/
+static/app/
+
+# Models and logs
+*.gguf
+*.safetensors
+*.log
+
+.DS_Store

@@ -1,0 +1,218 @@
+/*
+  The nine colour packs for code.
+
+  One set of variables, nine fillings. The classes are highlight.js's own,
+  so a new grammar is coloured without anybody touching this file.
+
+  Eight of the packs bring their own background on purpose. A dark editor
+  pack in a light program is not a mistake — it is what people know from
+  their editor, and asking a pack to follow the app would turn Tokyo Night
+  into a washed-out version of itself.
+
+  `Exe` is the exception and the default: it has no background of its own and
+  follows the house, light and dark, using the tones the program already had.
+*/
+
+:root {
+  --code-schl: var(--sx-schl);
+  --code-text: var(--sx-text);
+  --code-komm: var(--sx-komm);
+  --code-zahl: var(--sx-zahl);
+  --code-ruf: var(--sx-ruf);
+  --code-typ: var(--sx-ruf);
+  --code-var: var(--text);
+  --code-grund: var(--code-bg);
+  /* --code-vordergrund is deliberately not set here: that is the code's own
+     text colour, and it belongs to the appearance, not to the pack. The one
+     pack that follows the house (Exe) takes it from global.css, where every
+     mode names it; the eight packs with a ground of their own name it below. */
+}
+
+/* Tokyo Night — a dark pack, carrying its own ground. */
+:root[data-codefarben='tokyo'] {
+  --code-schl: #bb9af7;
+  --code-text: #9ece6a;
+  --code-komm: #565f89;
+  --code-zahl: #ff9e64;
+  --code-ruf: #7aa2f7;
+  --code-typ: #2ac3de;
+  --code-var: #c0caf5;
+  --code-grund: #1a1b26;
+  --code-vordergrund: #a9b1d6;
+}
+
+/* One Light — a light pack, likewise with its own ground. */
+:root[data-codefarben='onelight'] {
+  --code-schl: #a626a4;
+  --code-text: #50a14f;
+  --code-komm: #a0a1a7;
+  --code-zahl: #986801;
+  --code-ruf: #4078f2;
+  --code-typ: #c18401;
+  --code-var: #e45649;
+  --code-grund: #fafafa;
+  --code-vordergrund: #383a42;
+}
+
+/* The six packs below carry the colours of highlight.js 11.12.0's own style
+   sheets (styles/github.css, github-dark.css, nord.css, base16/dracula.css,
+   base16/solarized-light.css, base16/solarized-dark.css), sorted onto the
+   nine variables: the ground and the text from `.hljs`, then keyword,
+   string, comment, number, function title, type and variable. Licences in
+   THIRD_PARTY_NOTICES.md. */
+
+/* GitHub — light, with its own white ground. */
+:root[data-codefarben='github'] {
+  --code-schl: #d73a49;
+  --code-text: #032f62;
+  --code-komm: #6a737d;
+  --code-zahl: #005cc5;
+  --code-ruf: #6f42c1;
+  --code-typ: #d73a49;
+  --code-var: #005cc5;
+  --code-grund: #ffffff;
+  --code-vordergrund: #24292e;
+}
+
+/* GitHub Dark. */
+:root[data-codefarben='githubdark'] {
+  --code-schl: #ff7b72;
+  --code-text: #a5d6ff;
+  --code-komm: #8b949e;
+  --code-zahl: #79c0ff;
+  --code-ruf: #d2a8ff;
+  --code-typ: #ff7b72;
+  --code-var: #79c0ff;
+  --code-grund: #0d1117;
+  --code-vordergrund: #c9d1d9;
+}
+
+/* Dracula. */
+:root[data-codefarben='dracula'] {
+  --code-schl: #b45bcf;
+  --code-text: #ebff87;
+  --code-komm: #626483;
+  --code-zahl: #b45bcf;
+  --code-ruf: #62d6e8;
+  --code-typ: #b45bcf;
+  --code-var: #ea51b2;
+  --code-grund: #282936;
+  --code-vordergrund: #e9e9f4;
+}
+
+/* Nord. */
+:root[data-codefarben='nord'] {
+  --code-schl: #81a1c1;
+  --code-text: #a3be8c;
+  --code-komm: #4c566a;
+  --code-zahl: #b48ead;
+  --code-ruf: #88c0d0;
+  --code-typ: #8fbcbb;
+  --code-var: #d8dee9;
+  --code-grund: #2e3440;
+  --code-vordergrund: #d8dee9;
+}
+
+/* Solarized Light. */
+:root[data-codefarben='solarizedlight'] {
+  --code-schl: #6c71c4;
+  --code-text: #859900;
+  --code-komm: #839496;
+  --code-zahl: #cb4b16;
+  --code-ruf: #268bd2;
+  --code-typ: #6c71c4;
+  --code-var: #dc322f;
+  --code-grund: #fdf6e3;
+  --code-vordergrund: #586e75;
+}
+
+/* Solarized Dark. */
+:root[data-codefarben='solarizeddark'] {
+  --code-schl: #6c71c4;
+  --code-text: #859900;
+  --code-komm: #657b83;
+  --code-zahl: #cb4b16;
+  --code-ruf: #268bd2;
+  --code-typ: #6c71c4;
+  --code-var: #dc322f;
+  --code-grund: #002b36;
+  --code-vordergrund: #93a1a1;
+}
+
+/* The classes highlight.js hands out. Grouped by what they mean, not by
+   what they are called — a type and a class name get one colour, and
+   whoever adds a grammar does not have to decide anything. */
+.hljs {
+  color: var(--code-vordergrund);
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag,
+.hljs-meta-keyword {
+  color: var(--code-schl);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: var(--code-text);
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--code-komm);
+  font-style: italic;
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet {
+  color: var(--code-zahl);
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: var(--code-ruf);
+}
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-params {
+  color: var(--code-typ);
+}
+.hljs-variable,
+.hljs-template-variable,
+.hljs-attr,
+.hljs-subst,
+.hljs-property {
+  color: var(--code-var);
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
+.hljs-deletion {
+  color: var(--rot);
+}
+
+/*
+  Program output carries its own colours (npm, git, vite). They are mapped
+  onto the chosen pack, so a build log in the terminal reads like the code
+  blocks beside it — see lib/ansi.js.
+*/
+.ansi-rot { color: var(--rot); }
+.ansi-gruen { color: var(--gruen); }
+.ansi-gelb { color: var(--gelb); }
+.ansi-blau { color: var(--code-ruf); }
+.ansi-lila { color: var(--code-schl); }
+.ansi-cyan { color: var(--code-typ); }
+.ansi-grau { color: var(--text-still); }
+.ansi-weiss { color: var(--text); }
+.ansi-schwarz { color: var(--text-still); }
+.ansi-fett { font-weight: 600; }

@@ -1,0 +1,42 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+PyYAML==6.0.2
+python-dotenv==1.0.1
+httpx==0.28.1
+
+# Web search without an instance of our own — the engine behind the shipped
+# search server (mcp/ddgs_server.py).
+ddgs==9.14.4
+
+# Tests
+pytest==8.3.4
+pytest-asyncio==0.25.0
+
+pypdf==6.14.2
+
+# Writing PDFs (app/tools/datei_schreiben.py) — pypdf above reads them and
+# rearranges pages, it cannot set text. Chosen over fpdf2 and over writing the
+# format by hand. It pulls in pillow for pictures and
+# charset-normalizer for text encodings; this program writes plain text only,
+# but those dependencies are reportlab's, not ours to drop.
+reportlab==4.4.4
+
+# Setting a drawn piece back into the picture it was cut from
+# (app/paste_back.py). reportlab above brings this library along anyway; it
+# is named here because the program uses it itself.
+pillow==12.3.0
+
+# Reading cron expressions in a schedule (app/terminplan.py) — the five-field
+# form a schedule field may carry besides a daily 'HH:MM' or a fixed instant.
+croniter==6.2.4
+
+# The IANA time-zone database as a package. macOS and Linux carry it in the
+# operating system, so zoneinfo finds it there; Windows ships none, and
+# without this the first zoneinfo lookup fails and the program cannot start.
+tzdata==2025.2
+
+# The zone the machine itself is set to, by the name the zone database uses
+# (app/wecker.py zone_name): read from /etc/localtime on macOS and Linux and
+# from the registry on Windows, where neither TZ nor /etc/localtime exists.
+tzlocal==5.4.4

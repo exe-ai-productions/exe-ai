@@ -1,0 +1,81 @@
+/*
+  The wall of square tiles — the pictures module's and the doc folder's.
+
+  Global on purpose: the two menus stand right next to each other in the
+  rail, and the doc folder looks like the pictures on purpose. The preview
+  area of a doc tile is as large as a picture tile, stands in the same grid
+  and comes in with the same fade — so size, gap and fade-in live HERE, once.
+  A copy in each of the two components drifts apart at the first change, and
+  the two walls then read as two different things.
+
+  EVERY rule below hangs on `.tilewall`, the container the two walls build.
+  That is not decoration: `kachel` is the root class of seven other
+  components (Kachel, Klappkachel, Videokachel, ModelleCloud, Downloadfenster,
+  Verbindungen, Erststart), and an unscoped `.kachel { aspect-ratio: 1; … }`
+  would turn every one of their rows into a square — measured live: an agent
+  row grew from 30 to 392 pixels. Written without the parent, this sheet is a
+  trap; with it, only what stands inside a wall is touched, and the other
+  seven keep the rules they wrote for themselves.
+
+  The tile carries no colour of its own: it is card glass with the card's
+  fine line and the house radius (9), so the ground of the look shows
+  through it as through every other card of the rail.
+
+  What is NOT here is what the two walls differ in: what stands ON the tile
+  (a picture; a preview, or the page sign), and what stands UNDER the tile
+  (nothing; a name and its origin). That belongs to the menu it serves.
+*/
+.tilewall {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+/* The square: as large as the grid column is wide, whatever the rail's width
+   is, and the same in both walls. */
+.tilewall .kachel {
+  aspect-ratio: 1;
+  border: 1px solid var(--glass-card-line);
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--glass-card);
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.3);
+  display: grid;
+  place-items: center;
+  color: var(--text-still);
+}
+
+/* Whatever the tile shows fills it. */
+.tilewall .kachel img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Lifted off the ground by a shadow and brought in with a small rise, as the
+   design of the tool surface draws them. The delay comes from the caller and
+   belongs on THIS element, not on a wrapper: `animation-delay` is not
+   inherited, and the shorthand below resets it to 0 anyway. The tiles arrive
+   one after the other, and from the ninth on together, so a folder of
+   hundreds is not a wall still building itself seconds later. */
+.tilewall .kachel-ein {
+  animation: kachel-ein 0.46s cubic-bezier(0.2, 0.9, 0.3, 1.15) both;
+}
+@keyframes kachel-ein {
+  from { opacity: 0; transform: translateY(14px) scale(0.8); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tilewall .kachel-ein { animation: none; }
+}
+
+/* The line an empty wall says instead of tiles. It is one item of the grid
+   like a tile, so it has to be told to take the whole row — without this the
+   sentence wraps inside the first 96-pixel track. */
+.tilewall .leer {
+  grid-column: 1 / -1;
+  color: var(--text-still);
+  font-size: 12.5px;
+  text-align: center;
+  padding: 26px 0;
+}

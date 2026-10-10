@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- The hardened runtime is a requirement for notarization. electron-builder
+     signs everything inside the bundle with this one file — the Electron
+     binaries and the embedded Python service alike.
+
+     The lower two are what entitlements.plist has always granted the service:
+     it maps its own libraries out of the unpacked bundle, and its FFI layer
+     allocates executable memory. Without them the service dies on launch.
+
+     allow-jit is the one thing on top, and it belongs to Chromium's
+     JavaScript engine, not to the service. Notarized with exactly these
+     three on 31.08.2026, issues: null.
+
+     device.audio-input is the fourth, and it belongs to the microphone
+     button: dictation records through the browser engine, and a hardened
+     runtime without this key refuses the microphone before the system ever
+     asks the user. macOS only — the Windows and Linux builds need nothing
+     for it. -->
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>
