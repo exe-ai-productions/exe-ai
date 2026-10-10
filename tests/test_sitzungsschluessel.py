@@ -44,7 +44,7 @@ def test_mit_dem_echten_schluessel_kommt_der_aufruf_durch(client):
 
 def test_ohne_kopf_faellt_ein_gewoehnlicher_weg_jetzt_um(client):
     """The query parameter used to stand in for the
-    header on every route — now only on the five a browser truly cannot
+    header on every route — now only on the six a browser truly cannot
     attach a header to (below)."""
     schluessel = client.headers.pop("X-Sitzungsschluessel")
     antwort = client.get(f"/api/v1/chats?schluessel={schluessel}")
@@ -52,7 +52,7 @@ def test_ohne_kopf_faellt_ein_gewoehnlicher_weg_jetzt_um(client):
 
 
 def test_the_allowed_routes_still_take_the_query_key(client):
-    """Three of the five (app/sitzungsschluessel.py:ABFRAGE_ERLAUBT) answer
+    """Four of the six (app/sitzungsschluessel.py:ABFRAGE_ERLAUBT) answer
     directly: an <img src> and a plain <a href> cannot attach a custom
     header. A 404 for a made-up id is fine here — the point is that the
     guard itself lets the request through, not what the route answers.
@@ -66,6 +66,7 @@ def test_the_allowed_routes_still_take_the_query_key(client):
         "/api/v1/agentendock/irgendeine-kennung",
         "/api/v1/images/irgendein-bild.png",
         "/api/v1/documents/irgendein-dokument/file",
+        "/api/v1/chat-files/some-chat/some-file.txt",
     ]
     for weg in wege:
         antwort = client.get(f"{weg}?schluessel={schluessel}")
@@ -81,6 +82,10 @@ def test_the_query_key_is_allowed_on_exactly_these_routes():
         "/api/v1/events/stream",
         "/api/v1/images/irgendein-bild.png",
         "/api/v1/documents/irgendein-dokument/file",
+        "/api/v1/chat-files/some-chat/some-file.txt",
+        # The one value that runs over several segments: a file in a folder
+        # below the chat's own.
+        "/api/v1/chat-files/some-chat/folder/deeper/some-file.txt",
     ]
     for weg in erlaubt:
         assert _abfrageparameter_erlaubt(weg), weg
@@ -94,6 +99,14 @@ def test_the_query_key_is_allowed_on_exactly_these_routes():
         "/api/v1/images/",
         "/api/v1/documents/irgendein-dokument",
         "/api/v1/documents//file",
+        # The chat and a path have to be there, and no segment of the path
+        # may be empty.
+        "/api/v1/chat-files",
+        "/api/v1/chat-files/some-chat",
+        "/api/v1/chat-files/some-chat/",
+        "/api/v1/chat-files//some-file.txt",
+        "/api/v1/chat-files/some-chat/folder/",
+        "/api/v1/chat-files/some-chat/folder//some-file.txt",
     ]
     for weg in nicht_erlaubt:
         assert not _abfrageparameter_erlaubt(weg), weg

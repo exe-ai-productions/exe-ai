@@ -13,7 +13,9 @@ from pathlib import Path
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "src"
 COMPONENT = (FRONTEND / "teile" / "Vektorfeld.svelte").read_text(encoding="utf-8")
 WINDOW = (FRONTEND / "App.svelte").read_text(encoding="utf-8")
-LOOKS_WITH_DRAWINGS = ("moune", "pearl", "heaven")
+# Exe and Dark Matter carry one drawing each, on the frame alone
+# (tests/test_wuerfelmuster.py).
+LOOKS_WITH_DRAWINGS = ("moune", "pearl", "heaven", "exe", "darkmatter")
 
 
 def _table_names() -> set[str]:

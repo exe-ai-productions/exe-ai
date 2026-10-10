@@ -6,7 +6,9 @@ The picture server's "Prompt preparation" block holds two things:
     the model server, the clean-up server, or a cloud model by its id
   * ``anweisungen`` — the instruction per picture family, where the user
     rewrote one; a family without an entry writes with the works text from
-    app/bildprompt.py, and "reset" stores None to get that text back
+    app/bildprompt.py, and "reset" stores None to get that text back. A
+    model without a family has an entry of its own among them
+    (``NO_FAMILY``)
 
 Stored as one setting in the global scope, the way the speech server keeps
 its clean-up (app/diktatsprachewahl.py): read on every request, so a change
@@ -48,8 +50,8 @@ def _verbesserer(roh: Any) -> str | None:
 
 def wahl_pruefen(wert: Any) -> dict[str, Any]:
     """The settings check: the server as one of the known kinds, and an
-    instruction only for a family that has one; None takes a family back to
-    the works text."""
+    instruction only for a family that has one, or for the entry of the
+    models without a family; None takes either back to the works text."""
     if not isinstance(wert, dict):
         return {}
     sauber: dict[str, Any] = {}
@@ -82,8 +84,9 @@ def verbesserer(repositories) -> str:
 
 
 def anweisung(repositories, family: str) -> str | None:
-    """The instruction for a family: the user's own where there is one, the
-    works text otherwise — None for a family that does not draw from text."""
+    """The instruction for a family, or for ``NO_FAMILY``: the user's own
+    where there is one, the works text otherwise — None for a family that
+    does not draw from text."""
     eigene = wahl(repositories)["anweisungen"].get(family)
     return eigene or ANWEISUNGEN.get(family)
 

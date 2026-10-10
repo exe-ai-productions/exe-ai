@@ -48,7 +48,7 @@
   )
   // Edges move on sd.cpp's grid of 64 (app/bildwahlen.py `RASTER`).
   const RASTER = EDGE_GRID
-  const KANTEN = reihe(256, 1536, RASTER)
+  const KANTEN = reihe(256, 2048, RASTER)
   const CFG_STUFEN = reihe(1, 30, 0.5)
   const GUIDANCE_STUFEN = reihe(1, 20, 0.1)
   // The service's own range for a seed it picks (app/api/v1/bild.py).

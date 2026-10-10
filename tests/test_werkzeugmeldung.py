@@ -341,3 +341,368 @@ def test_der_helfer_reicht_die_dauer_an_beide_wege_weiter():
     assert rumpf.count("dauer,") >= 2, (
         "the helper does not pass the duration on to both ways"
     )
+
+
+# --- The call's row in the answer, from the first character on --------------
+#
+# A call the model is still writing has its row in the answer already, with
+# its name and the number of characters so far; the complete call takes that
+# very row over. Played through the shipped branches of the window's stream
+# handler: they are cut out of App.svelte and run in node against a plain
+# answer, with everything around them (notices, questions, scrolling) as
+# stand-ins.
+
+APP = QUELLE / "App.svelte"
+MESSAGE = QUELLE / "teile" / "Nachricht.svelte"
+
+
+def _cut(source: str, start: str, end: str) -> str:
+    """The text from `start` up to, not including, `end`."""
+    assert source.count(start) == 1, start
+    rest = source[source.index(start):]
+    assert end in rest, end
+    return rest[: rest.index(end)]
+
+
+def _play(steps: str) -> dict:
+    """Run `steps` against the handler's own branches and read the report.
+
+    `handle(event)` is the handler for the events a call's row depends on,
+    `rows()` the tool rows of the answer in order: a row still being written
+    says so, a row of a complete call names its id and how many entries of
+    the tool log carry that id."""
+    app = APP.read_text(encoding="utf-8")
+    helpers = _cut(
+        app,
+        "    const werkzeugAnhaengen = (aufrufId, zeitpunktMs) => {",
+        "    /* ONE notice for the whole answer",
+    )
+    assert "const dropRowsNeverBegun = () => {" in helpers
+    questions = _cut(
+        app,
+        "        } else if (ereignis.typ === 'tool_confirm') {",
+        "        } else if (ereignis.typ === 'job_confirm') {",
+    )
+    calls = _cut(
+        app,
+        "        } else if (ereignis.typ === 'tool_call_laeuft') {",
+        "        } else if (ereignis.typ === 'tool_result') {",
+    )
+    script = (
+        textwrap.dedent(
+            """
+            const platzhalter = { id: 'm', werkzeuge: [], abschnitte: [] }
+            let scrolled = 0
+            const runter = () => { scrolled += 1 }
+            let werkzeugOffen = false
+            let drawing = false
+            const werkzeugSagen = () => {}
+            const taetigkeitSetzen = () => {}
+            const lesungenLeeren = () => {}
+            const drawingStarted = () => {}
+            const melden = () => {}
+            const schreibendeMeldungSchliessen = () => {}
+            const zielChat = 'c'
+            const lauf = { generationId: 'g' }
+            const zustand = { werkzeugfrage: {}, benutzerfrage: {}, jobfrage: {} }
+            %s
+            const handle = (ereignis) => {
+              if (false) {
+            %s
+            %s
+              }
+            }
+            const rows = () => platzhalter.abschnitte
+              .filter((a) => a.art === 'werkzeug')
+              .map((a) => a.writing
+                ? { name: a.writing.name, written: a.writing.written }
+                : {
+                    id: a.aufruf_id,
+                    entries: platzhalter.werkzeuge.filter((w) => w.aufruf_id === a.aufruf_id).length,
+                    name: platzhalter.werkzeuge.find((w) => w.aufruf_id === a.aufruf_id)?.name,
+                  })
+            const writing = (index, name, zeichen) =>
+              handle({ typ: 'tool_call_laeuft', index, name, zeichen, zeitpunkt_ms: 1000 + zeichen })
+            const complete = (aufruf_id, name, argumente = {}) =>
+              handle({ typ: 'tool_call', aufruf_id, name, server: 'own', argumente, zeitpunkt_ms: 9000 })
+            const runEnds = () => dropRowsNeverBegun()
+            void [werkzeugOffen, drawing]
+            """
+        )
+        % (helpers, questions, calls)
+        + textwrap.dedent(steps)
+    )
+    with _pruefordner() as folder:
+        (folder / "play.mjs").write_text(script, encoding="utf-8")
+        done = subprocess.run(
+            ["node", "play.mjs"], cwd=folder, capture_output=True, text=True, timeout=60
+        )
+    assert done.returncode == 0, (done.stdout + done.stderr)[-2000:]
+    mark = "---BERICHT---"
+    assert mark in done.stdout, done.stdout[-2000:]
+    return json.loads(done.stdout.split(mark, 1)[1].strip())
+
+
+def test_a_call_has_its_row_while_the_model_writes_it():
+    """One row from the first report on, counting along; the complete call
+    takes that row over — its place and its start stay, no second row."""
+    report = _play(
+        """
+        writing(0, 'write_file', 0)
+        const first = rows()
+        writing(0, 'write_file', 400)
+        writing(0, 'write_file', 6656)
+        const grown = rows()
+        const section = platzhalter.abschnitte[0]
+        const began = section.seit
+        const scrolledWhileWritten = scrolled
+        complete('c1', 'write_file', { path: 'a.html' })
+        console.log('---BERICHT---' + JSON.stringify({
+          first, grown, done: rows(), scrolledWhileWritten,
+          same: platzhalter.abschnitte[0] === section && section.seit === began,
+          entry: platzhalter.werkzeuge[0],
+        }))
+        """
+    )
+    assert report["first"] == [{"name": "write_file", "written": 0}]
+    assert report["grown"] == [{"name": "write_file", "written": 6656}]
+    assert report["done"] == [{"id": "c1", "entries": 1, "name": "write_file"}]
+    assert report["same"] is True
+    # The window follows the new row down once, not with every report.
+    assert report["scrolledWhileWritten"] == 1
+    assert report["entry"]["argumente"] == {"path": "a.html"}
+    assert report["entry"]["server"] == "own"
+
+
+def test_two_calls_of_one_round_keep_their_rows_in_the_order_written():
+    """The first complete call says the round's stream has ended: the call
+    still waiting for its turn stops counting and keeps its name. Two calls
+    of one name are taken over in the order they were written."""
+    report = _play(
+        """
+        writing(0, 'read_file', 30)
+        writing(1, 'read_file', 10)
+        writing(1, 'read_file', 45)
+        const both = rows()
+        complete('c1', 'read_file', { path: 'one' })
+        const between = rows()
+        complete('c2', 'read_file', { path: 'two' })
+        console.log('---BERICHT---' + JSON.stringify({
+          both, between, done: rows(),
+          paths: platzhalter.werkzeuge.map((w) => w.argumente.path),
+        }))
+        """
+    )
+    assert report["both"] == [
+        {"name": "read_file", "written": 30},
+        {"name": "read_file", "written": 45},
+    ]
+    assert report["between"] == [
+        {"id": "c1", "entries": 1, "name": "read_file"},
+        {"name": "read_file", "written": None},
+    ]
+    assert report["done"] == [
+        {"id": "c1", "entries": 1, "name": "read_file"},
+        {"id": "c2", "entries": 1, "name": "read_file"},
+    ]
+    assert report["paths"] == ["one", "two"]
+
+
+def test_a_call_that_was_never_reported_while_written_appears_as_before():
+    """Silence probe: a short call arrives complete and gets one row at the
+    end, with one entry in the tool log."""
+    report = _play(
+        """
+        complete('c1', 'get_current_time')
+        console.log('---BERICHT---' + JSON.stringify({
+          rows: rows(), sections: platzhalter.abschnitte, scrolled,
+        }))
+        """
+    )
+    assert report["rows"] == [{"id": "c1", "entries": 1, "name": "get_current_time"}]
+    assert report["sections"] == [{"art": "werkzeug", "aufruf_id": "c1", "seit": 9000}]
+
+
+def test_a_run_that_ends_while_a_call_is_written_leaves_no_half_row():
+    """Silence probe: the row of a call that never became one goes with the
+    run; the row of a call that ran stays."""
+    report = _play(
+        """
+        writing(0, 'read_file', 20)
+        complete('c1', 'read_file')
+        writing(0, 'write_file', 300)
+        const before = rows()
+        runEnds()
+        console.log('---BERICHT---' + JSON.stringify({ before, after: rows() }))
+        """
+    )
+    assert report["before"] == [
+        {"id": "c1", "entries": 1, "name": "read_file"},
+        {"name": "write_file", "written": 300},
+    ]
+    assert report["after"] == [{"id": "c1", "entries": 1, "name": "read_file"}]
+    # The run's end is the one place every ending passes: finished, stopped
+    # or failed.
+    app = APP.read_text(encoding="utf-8")
+    ending = app[app.index("    } finally {\n      /* An answer that ends"):]
+    assert "dropRowsNeverBegun()" in ending[: ending.index("if (belegt)")]
+
+
+def test_a_call_that_waits_for_a_yes_keeps_its_row_and_gets_no_second_one():
+    """The permission question comes when the call is complete: the row it
+    was written in is its row from there on, and the start that follows the
+    answer adds neither a row nor an entry. A call that was not reported
+    while written gets its row when it starts, as before."""
+    report = _play(
+        """
+        writing(0, 'run_command', 40)
+        handle({ typ: 'tool_confirm', aufruf_id: 'c1', name: 'run_command', argumente: { command: 'ls' }, zeitpunkt_ms: 5000 })
+        const asked = rows()
+        const waitsFor = zustand.werkzeugfrage.c.aufrufId
+        complete('c1', 'run_command', { command: 'ls' })
+        const started = rows()
+        handle({ typ: 'tool_confirm', aufruf_id: 'c2', name: 'run_command', argumente: {}, zeitpunkt_ms: 6000 })
+        const unreported = rows()
+        complete('c2', 'run_command')
+        console.log('---BERICHT---' + JSON.stringify({
+          asked, waitsFor, started, unreported, done: rows(), log: platzhalter.werkzeuge.length,
+          server: platzhalter.werkzeuge[0].server,
+        }))
+        """
+    )
+    assert report["asked"] == [{"id": "c1", "entries": 1, "name": "run_command"}]
+    assert report["waitsFor"] == "c1"
+    assert report["started"] == report["asked"]
+    assert report["server"] == "own"
+    assert report["unreported"] == report["asked"]
+    assert report["done"] == [
+        {"id": "c1", "entries": 1, "name": "run_command"},
+        {"id": "c2", "entries": 1, "name": "run_command"},
+    ]
+    assert report["log"] == 2
+
+
+def test_a_run_stopped_at_the_permission_question_leaves_no_row_of_that_call():
+    """The call got its row at the question and never started: with the run
+    its row and its entry in the tool log go. A call that ran before it
+    keeps both."""
+    report = _play(
+        """
+        writing(0, 'read_file', 20)
+        complete('c1', 'read_file')
+        // Its result is in (the result branch is no part of the cut).
+        platzhalter.werkzeuge[0].ergebnis = 'text'
+        writing(0, 'run_command', 40)
+        handle({ typ: 'tool_confirm', aufruf_id: 'c2', name: 'run_command', argumente: { command: 'ls' }, zeitpunkt_ms: 5000 })
+        const asked = rows()
+        runEnds()
+        console.log('---BERICHT---' + JSON.stringify({
+          asked, after: rows(), log: platzhalter.werkzeuge.map((w) => w.aufruf_id),
+        }))
+        """
+    )
+    assert report["asked"] == [
+        {"id": "c1", "entries": 1, "name": "read_file"},
+        {"id": "c2", "entries": 1, "name": "run_command"},
+    ]
+    assert report["after"] == [{"id": "c1", "entries": 1, "name": "read_file"}]
+    assert report["log"] == ["c1"]
+
+
+def test_the_other_written_rows_stop_counting_when_a_permission_is_asked():
+    """The question says the round's stream has ended, whether or not its
+    own call was reported while it was written."""
+    report = _play(
+        """
+        writing(1, 'write_file', 80)
+        handle({ typ: 'tool_confirm', aufruf_id: 'c1', name: 'run_command', argumente: {}, zeitpunkt_ms: 5000 })
+        console.log('---BERICHT---' + JSON.stringify({ rows: rows() }))
+        """
+    )
+    assert report["rows"] == [{"name": "write_file", "written": None}]
+
+
+def test_a_question_to_the_user_takes_the_row_it_was_written_in():
+    """`ask_user` has no start event of its own: its question is the
+    complete call."""
+    report = _play(
+        """
+        writing(0, 'ask_user', 25)
+        handle({ typ: 'user_ask', aufruf_id: 'q1', frage: 'Which one?', optionen: [], zeitpunkt_ms: 5000 })
+        console.log('---BERICHT---' + JSON.stringify({ rows: rows() }))
+        """
+    )
+    assert report["rows"] == [{"id": "q1", "entries": 1, "name": "ask_user"}]
+
+
+def test_a_row_left_over_from_a_cut_round_goes_when_the_model_goes_on():
+    """A round cut short answers only the call it was cut at. The rows of
+    the calls written before it never begin; they go as soon as the model
+    writes a call, thinks or writes text again, not only when the run ends —
+    and not before: while the round's calls still run, a written row waits
+    for its turn."""
+    report = _play(
+        """
+        writing(0, 'read_file', 30)
+        writing(1, 'write_file', 80)
+        complete('c2', 'write_file')
+        const cut = rows()
+        writing(0, 'list_dir', 5)
+        const nextCall = rows()
+        complete('c3', 'list_dir')
+        writing(0, 'read_file', 30)
+        writing(1, 'write_file', 80)
+        complete('c5', 'write_file')
+        modelGoesOn()
+        console.log('---BERICHT---' + JSON.stringify({ cut, nextCall, nextText: rows() }))
+        """
+    )
+    assert report["cut"] == [
+        {"name": "read_file", "written": None},
+        {"id": "c2", "entries": 1, "name": "write_file"},
+    ]
+    assert report["nextCall"] == [
+        {"id": "c2", "entries": 1, "name": "write_file"},
+        {"name": "list_dir", "written": 5},
+    ]
+    assert report["nextText"] == [
+        {"id": "c2", "entries": 1, "name": "write_file"},
+        {"id": "c3", "entries": 1, "name": "list_dir"},
+        {"id": "c5", "entries": 1, "name": "write_file"},
+    ]
+    # Thinking and text are the two other signs that the model goes on.
+    app = APP.read_text(encoding="utf-8")
+    assert "if (ereignis.typ === 'reasoning' || ereignis.typ === 'content') modelGoesOn()" in app
+
+
+def test_the_answer_draws_the_written_call_as_a_running_tool_row():
+    """Read off the answer's component: a section still being written is
+    drawn from its name and count as a call without a result — the running
+    row's dot — and says the notice's own sentence, no new text; the count
+    stands in figures of one width. A bundle names the call being written
+    instead of calling it running."""
+    message = MESSAGE.read_text(encoding="utf-8")
+    assert "? { ...a, werkzeug: unbegunCall(a.writing) }" in message
+    unbegun_call = _cut(message, "  function unbegunCall(writing) {", "\n  }\n")
+    for field in ("name: writing.name", "written: writing.written", "unbegun: true", "ergebnis: null"):
+        assert field in unbegun_call, field
+    snippet = _cut(message, "{#snippet beingWritten(werkzeug)}", "{/snippet}")
+    assert "textPieces('werkzeug.schreibt', { name: werkzeug.name, zeichen: werkzeug.written })" in snippet
+    assert '<span class="werkzeugname">{piece.wert}</span>' in snippet
+    assert '<span class="wz-count">{piece.wert}</span>' in snippet
+    row = _cut(message, "{#snippet werkzeugEintrag(teil, i, imBuendel)}", "{/snippet}")
+    assert "{#if teil.werkzeug.written != null}\n        {@render beingWritten(teil.werkzeug)}" in row
+    # Nothing to unfold before the call has begun.
+    assert "disabled={teil.werkzeug.unbegun}" in row
+    assert "{#if offeneTeile.has(i) && !teil.werkzeug.unbegun}" in row
+    count = _cut(message, "  .werkzeug-kopf .wz-count {", "}")
+    assert "font-variant-numeric: tabular-nums" in count
+    assert "font-family: var(--schrift-fest)" in count
+    bundle = _cut(message, "{#if eintrag.art === 'buendel'}", "{#if offen}")
+    assert "laufenderAufruf(eintrag.eintraege.filter(({ teil }) => !teil.werkzeug?.unbegun))" in bundle
+    assert "{#if written}\n                {@render beingWritten(written)}" in bundle
+    # The sentence is the one the notice over the input says, in both languages.
+    for language in ("de", "en"):
+        catalogue = json.loads((WURZEL / "app" / "locales" / f"{language}.json").read_text(encoding="utf-8"))
+        sentence = catalogue["werkzeug"]["schreibt"]
+        assert "{name}" in sentence and "{zeichen}" in sentence, sentence

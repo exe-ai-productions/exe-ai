@@ -130,3 +130,92 @@ def test_die_zeile_kommt_aus_dem_katalog():
     )
     satz = katalog["werkzeug"]["schreibt"]
     assert "{name}" in satz and "{zeichen}" in satz
+
+
+# --- The agent rows at an answer's line stand in columns -------------------
+
+MESSAGE = WURZEL / "frontend" / "src" / "teile" / "Nachricht.svelte"
+
+
+def _rule(css: str, selector: str) -> str:
+    """The declarations of the one rule that opens with this selector."""
+    opener = f"\n  {selector} {{"
+    assert css.count(opener) == 1, selector
+    return css.split(opener, 1)[1].split("}", 1)[0]
+
+
+def _width(rule: str, name: str) -> int:
+    """The characters a rule keeps room for (`width: 16ch`)."""
+    found = re.search(rf"\n\s*{name}: (\d+)ch;", rule)
+    assert found, (name, rule)
+    return int(found.group(1))
+
+
+def test_the_agent_row_stands_in_columns():
+    """An answer is only as wide as its widest row. A clock that gained a
+    digit or a last tool with a longer name widened the agent's row, and
+    with it moved the state, "Transkript" and the failure marks at the far
+    end of every row; from row to row each piece began where the name
+    before it happened to end. Now the name's cell is as wide as the
+    longest name among the answer's agents, and the clock's and the
+    state's cells keep a width of their own and are there in every row."""
+    markup, css = MESSAGE.read_text("utf-8").split("<style>", 1)
+    row = markup.split('<div class="ereignis agent-row">', 1)[1].split("\n          </div>", 1)[0]
+
+    # Every name of the answer's agents lies in the name's cell.
+    assert "{#each agentNames as other (other)}" in row
+    assert '<span class="agent-name-room" aria-hidden="true">{other}</span>' in row
+    # The cells stand whether or not the agent's run is known, in this order.
+    time = "<span class=\"agent-time\">{job ? agentRuntime(job) : ''}</span>"
+    places = [row.index(piece) for piece in (
+        '<span class="agent-name">', time, '<span class="agent-status">', '<button class="agent-transcript"',
+    )]
+    assert places == sorted(places)
+    status = row.split('<span class="agent-status">', 1)[1].split('<button class="agent-transcript"', 1)[0]
+    assert "agent-step" in status and "agent-state" in status
+
+    name = _rule(css, ".agent-name")
+    assert "display: inline-grid" in name
+    assert "grid-area: 1 / 1" in _rule(css, ".agent-name > span")
+    room = _rule(css, ".agent-name-room")
+    assert "visibility: hidden" in room and "height: 0" in room
+
+    clock = _rule(css, ".agent-time")
+    assert "flex: none" in clock and "tabular-nums" in clock
+    assert _width(clock, "min-width") > 0
+    state = _rule(css, ".agent-status")
+    # It gives way in an answer narrower than the row, and nowhere else.
+    assert "flex:" not in state and "min-width: 0" in state
+    assert "text-overflow: ellipsis" in state
+    assert "var(--schrift-fest)" in state
+    assert _width(state, "width") > 0
+
+
+def test_the_columns_fit_what_the_program_itself_shows(client, config):
+    """The two widths are measured, not chosen: the state's column holds the
+    longest name among the program's own tools whole, and the clock's the
+    longest clock a run inside an agent's own time limit can show."""
+    from app.agenten import STANDARD_MINUTEN
+    from app.tools.aufbau import registry_bauen
+
+    css = MESSAGE.read_text("utf-8").split("<style>", 1)[1]
+    tools = registry_bauen(client.app, config).namen()
+    assert tools, "the program offers no tools to measure"
+    assert max(len(name) for name in tools) <= _width(_rule(css, ".agent-status"), "width")
+    assert len(f"{int(STANDARD_MINUTEN)}:59") <= _width(_rule(css, ".agent-time"), "min-width")
+
+
+def test_the_tool_rows_and_the_readings_under_the_answer_stay_as_they_are():
+    """Silence probe: only the agent's row changed. A tool row still pushes
+    one item to its far end and gives its mark no width of its own, and the
+    readings under the answer still stand in the fixed face."""
+    css = MESSAGE.read_text("utf-8").split("<style>", 1)[1]
+    far_end = _rule(css, ".werkzeug-kopf .wz-rechts")
+    assert "margin-left: auto" in far_end and "flex: none" in far_end
+    marks = css.split("\n  .werkzeug-kopf .wz-marke,\n  .werkzeug-kopf .wz-code {", 1)[1].split("}", 1)[0]
+    assert marks.split() == "flex: none; color: var(--rot);".split()
+    assert _rule(css, ".messung").split() == "font-family: var(--schrift-fest);".split()
+    # The row itself is the loose row it was: no grid, the transcript at its far end.
+    row = _rule(css, ".agent-row")
+    assert "display: flex" in row and "gap: 8px" in row
+    assert "margin-left: auto" in _rule(css, ".agent-transcript")

@@ -194,15 +194,31 @@ def regler_von(chat_id: str, nummer: int) -> dict[str, Any] | None:
     return _regler.get((chat_id, nummer))
 
 
-def beenden(lauf: Lauf | None, *, gescheitert: bool = False, abgebrochen: bool = False) -> None:
+def beenden(
+    lauf: Lauf | None, *, gescheitert: bool = False, abgebrochen: bool = False,
+    reason: str | None = None,
+) -> None:
     """Closes the entry with the outcome the caller saw.
 
     A picture has no exit code — the state is what says how it went, and a
     stopped one is not a failure but a decision.
+
+    ``reason`` is what the caller is told about a failed picture: the
+    sentence and, below it, the painter's last words. It becomes the run's
+    output before the run closes, so the terminal still says why once the
+    window's message is gone. A finished or a stopped run takes none — it
+    has nothing to explain.
     """
     if lauf is None:
         return
     zustand = ABGEBROCHEN if abgebrochen else (FEHLER if gescheitert else FERTIG)
+    if reason and zustand == FEHLER:
+        # In its own guard: a text that cannot be written must not leave
+        # the run open — a red run without words is the smaller loss.
+        try:
+            laeufe.zeile(lauf, reason, strom="stderr")
+        except Exception:  # noqa: BLE001 - same reason as above
+            log.exception("Reason of the failed picture run could not be stored")
     try:
         laeufe.beenden(lauf, code=None, zustand=zustand)
     except Exception:  # noqa: BLE001 - same reason as above

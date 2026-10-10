@@ -7,28 +7,32 @@
   Without an open chat, drawing opens one first, and the new chat starts
   with what the studio holds — its values, its kind, its control video. So
   does a chat that is created any other way while the studio shows values
-  without one.
+  without one. A chat opened that way goes again when none of the pictures
+  it was opened for is drawn (`takeBackUnlessDrawn`).
 */
-import { tick } from 'svelte'
+import { flushSync, tick } from 'svelte'
 import { api } from './api.js'
 import { chatStateRead, chatanzeige, chatless } from './chatanzeige.svelte.js'
 import { imageSwitches } from './imageSwitches.svelte.js'
 import { seedlage } from './bildseed.svelte.js'
 import { familyOf } from './imageFamilies.svelte.js'
 import {
-  art, auswahl, drawAsked, leinwand, maskIntoChat, pictureMissing, refVideo, setValues, startValuesThere,
-  steuervideo, stilVon, studioSichtbar, takesRefVideo, werte,
+  art, auswahl, drawAsked, leinwand, maskIntoChat, maskOutOfChat, pictureMissing, refVideo, setValues,
+  startValuesThere, steuervideo, stilVon, studioSichtbar, takesRefVideo, werte, werteVorschlagen,
 } from './studio.svelte.js'
+import { leaveStanding } from './terminalfenster.svelte.js'
 import { t } from './texte.svelte.js'
 import { videoFrames as takeVideoFrames } from './videoFrames.js'
-import { melde, openNewChat, zustand } from './zustand.svelte.js'
+import { chatLoeschen, melde, neuerChat, openNewChat, zustand } from './zustand.svelte.js'
 
 // sd-cli's own frame rate, what control frames are taken at without one —
 // and the rate it reads a reference video at.
 const SD_CLI_FPS = 24
 
 /* The chat's picture line, handed in by the studio while it is mounted:
-   its way in, the stop of the picture drawing now, a waiting one taken out. */
+   its way in, the stop of the picture drawing now, a waiting one taken out.
+   The way in answers how that one picture ended, once it has: drawn or
+   not. */
 export const zeichnung = $state({
   losZeichnen: null, stopEins: null, entfernen: null, bereitet: false,
 })
@@ -129,6 +133,134 @@ chatless.pictureValues = (chatId) => {
   const set = setValues()
   // Nothing set is nothing to store: the service keeps no empty store.
   return Object.keys(set).length ? set : null
+}
+
+/* The chat a press opened to draw into, while no picture has been drawn
+   into it: every press into it asks, once its own pictures have ended,
+   whether the chat goes again. */
+let openedUndrawn = null
+
+/* Whether the service still holds a run of the chat as going. */
+const running = (runs) => runs.some((run) => run.zustand === 'laeuft')
+
+/* The one wait for a chat's runs to end that is under way, and the stream
+   it listens on. Only the chat a press opened can be taken back, so there
+   is never more than one to wait for: every press into that chat shares the
+   wait, and a wait for a chat that is no longer the one is given up. */
+let awaited = null
+
+/* Waits until the service has reported the end of every run of the chat
+   that it held as going: the chat's run stream is followed from where the
+   fetched list ends, the one the terminal reads, until each of them has had
+   its `lauf_ende` — a run that starts meanwhile is waited for as well.
+   Nothing is asked again at intervals. A dropped stream comes back by
+   itself and is sent again from the same place; if the end is never
+   reported, the wait never ends and the chat it was for is left standing. */
+function runsEnded(chat, runs, from) {
+  if (awaited?.chat === chat) return awaited.ended
+  awaited?.stream.close()
+  const going = new Set(runs.filter((run) => run.zustand === 'laeuft').map((run) => run.lauf))
+  const stream = new EventSource(api.laeufeStrom(chat, from))
+  const ended = new Promise((resolve) => {
+    stream.onmessage = (message) => {
+      let event
+      try {
+        event = JSON.parse(message.data)
+      } catch {
+        return
+      }
+      if (event.typ === 'lauf_start') going.add(event.lauf)
+      else if (event.typ === 'lauf_ende') going.delete(event.lauf)
+      if (going.size) return
+      stream.close()
+      if (awaited?.stream === stream) awaited = null
+      resolve()
+    }
+  })
+  awaited = { chat, stream, ended }
+  return ended
+}
+
+/* A chat opened to draw into is taken back when none of the pictures
+   pressed for was drawn: it would stand in the list holding nothing but the
+   prompt. Only a chat that holds nothing goes — a picture still in the line
+   for it, an answer on its way or a row the service keeps for it leaves it
+   standing, and so does a service that cannot say.
+
+   Never while the service still holds a run of the chat as going: a picture
+   that was stopped is drawn on until the painter lets go, and deleting the
+   chat under it would take a going run with it. The chat goes once that
+   run's end has been reported, and everything is looked at afresh then —
+   the run may have ended with a picture after all. */
+async function takeBackUnlessDrawn(chat, pictures) {
+  const drawn = await Promise.all(pictures)
+  if (openedUndrawn !== chat) return
+  if (drawn.some(Boolean)) {
+    openedUndrawn = null
+    return
+  }
+  const busy = () => Boolean(zustand.bildLaeuftChat[chat] || zustand.laeuft[chat] || zustand.sendet[chat])
+  let rows, runs
+  for (;;) {
+    if (busy()) return
+    let from
+    try {
+      ;[{ nachrichten: rows }, { laeufe: runs, ab: from }] = await Promise.all([
+        api.nachrichten(chat),
+        api.laeufe(chat),
+      ])
+    } catch {
+      return
+    }
+    if (openedUndrawn !== chat || rows.length || busy()) return
+    if (!running(runs)) break
+    await runsEnded(chat, runs, from)
+    if (openedUndrawn !== chat) return
+  }
+  try {
+    // The chat's own values are what is laid back: its store is read first.
+    if (chatanzeige.chatId === chat) await chatStateRead()
+  } catch {
+    return
+  }
+  if (openedUndrawn !== chat || busy()) return
+  openedUndrawn = null
+  if (zustand.aktiverChat === chat && chatanzeige.chatId === chat) leaveAsItStands(chat, runs)
+  // A chat that cannot be deleted stays in the list; the window has left it.
+  await chatLoeschen(chat).catch(() => {})
+}
+
+/* The window leaves a chat that is about to go, and looks as it did before
+   the press that opened it. What was set in the studio belongs to no chat
+   again — the values, the laid videos, the painted mask — and the chat's
+   runs stay in the terminal as the service kept them, the failed picture's
+   among them, until another chat is opened.
+
+   Leaving refills the studio for no chat and empties the terminal; both
+   happen within the flush below, and what stood is laid back before
+   anything is painted. The values the chat held of its own are set again,
+   the others shown again as they were — a model's start values are not
+   written into the next chat as its own. */
+function leaveAsItStands(chat, runs) {
+  const shown = $state.snapshot(werte)
+  const own = {
+    ...(chatanzeige.geladen ? $state.snapshot(chatanzeige.bildfenster) : {}),
+    ...setValues(),
+  }
+  if (steuervideo.chat === chat) steuervideo.chat = null
+  if (refVideo.chat === chat) refVideo.chat = null
+  maskOutOfChat(chat)
+  // The sidebar's sheet is not this press's to change.
+  const sheet = zustand.seitenblatt
+  neuerChat()
+  zustand.seitenblatt = sheet
+  flushSync()
+  leaveStanding(runs)
+  const names = Object.keys(shown)
+  werteVorschlagen(Object.fromEntries(names.filter((name) => !(name in own)).map((name) => [name, shown[name]])))
+  for (const name of names) {
+    if (name in own) werte[name] = own[name]
+  }
 }
 
 /* The references of an edit: the picture in the generation area first, as
@@ -246,6 +378,7 @@ async function vorbereitenUndZeichnen(modeWish) {
       melde(String(fehler.message || fehler), 'fehler')
       return
     }
+    openedUndrawn = ziel
   }
   const stil = stilVon(w.stil)
   const ganz = (wert) => Math.trunc(zahl(wert, 0))
@@ -339,14 +472,17 @@ async function vorbereitenUndZeichnen(modeWish) {
     const base = modeWish.mode === 'upscale'
       ? { modell: w.modell, chat_id: ziel, prompt: modeWish.prompt }
       : grund
-    losZeichnen({ ...base, ...modeWish, von: 1, nr: 1, lauf_kennung: null, frage_erstellen: true })
+    const picture = losZeichnen({ ...base, ...modeWish, von: 1, nr: 1, lauf_kennung: null, frage_erstellen: true })
+    if (ziel === openedUndrawn) takeBackUnlessDrawn(ziel, [picture])
     return
   }
   const anzahl = Math.max(1, ganz(w.bilder_je_lauf) || 1)
   // Not `crypto.randomUUID()`: over plain HTTP the page is no secure context.
   const laufKennung = anzahl > 1
     ? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}` : null
+  const pictures = []
   for (let nr = 1; nr <= anzahl; nr += 1) {
-    losZeichnen({ ...grund, von: anzahl, nr, lauf_kennung: laufKennung, frage_erstellen: nr === 1 })
+    pictures.push(losZeichnen({ ...grund, von: anzahl, nr, lauf_kennung: laufKennung, frage_erstellen: nr === 1 }))
   }
+  if (ziel === openedUndrawn) takeBackUnlessDrawn(ziel, pictures)
 }

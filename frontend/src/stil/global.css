@@ -264,9 +264,17 @@
      root block's fourth from leaking in (the field count reads the sheet). */
   --rahmen-vorgabe-4: initial;
   --rahmen-winkel-vorgabe: 180deg;
-  --frame: linear-gradient(var(--rahmen-winkel-vorgabe), var(--rahmen-vorgabe-1) calc(50% - 0.5 * var(--diagonale)), var(--rahmen-vorgabe-2) calc(50% + 0.05 * var(--diagonale)), var(--rahmen-vorgabe-3) calc(50% + 0.5 * var(--diagonale)));
-  --kachel-verlauf: linear-gradient(var(--rahmen-winkel-vorgabe), color-mix(in srgb, #1c1c1a 58%, var(--rahmen-vorgabe-1)) calc(50% - 0.5 * var(--diagonale)), color-mix(in srgb, #1c1c1a 58%, var(--rahmen-vorgabe-2)) calc(50% + 0.05 * var(--diagonale)), color-mix(in srgb, #1c1c1a 58%, var(--rahmen-vorgabe-3)) calc(50% + 0.5 * var(--diagonale)));
-  --page-frost: none;
+  /* The frame is one flat colour, and the drawing of cubes lies on it
+     (App.svelte, Vektorfeld.svelte): the three stops above are kept for
+     the look of the user's own gradient, which starts from them. Over one
+     colour the tile's glass is see-through again — bands came from a
+     gradient under it — and the drawing shows faintly through it, which
+     is what makes it read as glass; the menu page frosts, as every
+     see-through page does. */
+  --frame: #353634;
+  --vek: #d0d0cc;
+  --kachel-verlauf: initial;
+  --page-frost: var(--kachel-frost);
   --bg-erhoben: #242422;
   --bg-hoch: #2d2d2a;
   --linie: #2f2f2b;
@@ -327,9 +335,12 @@
     --rahmen-vorgabe-3: #121212;
     --rahmen-vorgabe-4: initial;
     --rahmen-winkel-vorgabe: 180deg;
-    --frame: linear-gradient(var(--rahmen-winkel-vorgabe), var(--rahmen-vorgabe-1) calc(50% - 0.5 * var(--diagonale)), var(--rahmen-vorgabe-2) calc(50% + 0.05 * var(--diagonale)), var(--rahmen-vorgabe-3) calc(50% + 0.5 * var(--diagonale)));
-    --kachel-verlauf: linear-gradient(var(--rahmen-winkel-vorgabe), color-mix(in srgb, #1c1c1a 58%, var(--rahmen-vorgabe-1)) calc(50% - 0.5 * var(--diagonale)), color-mix(in srgb, #1c1c1a 58%, var(--rahmen-vorgabe-2)) calc(50% + 0.05 * var(--diagonale)), color-mix(in srgb, #1c1c1a 58%, var(--rahmen-vorgabe-3)) calc(50% + 0.5 * var(--diagonale)));
-    --page-frost: none;
+    /* As in the Exe rule above: a flat frame, the cubes on it, the glass
+       see-through. */
+    --frame: #353634;
+    --vek: #d0d0cc;
+    --kachel-verlauf: initial;
+    --page-frost: var(--kachel-frost);
     --bg-erhoben: #242422;
     --bg-hoch: #2d2d2a;
     --linie: #2f2f2b;
@@ -433,16 +444,21 @@
   --rahmen-vorgabe-3: #1a0b3a;
   --rahmen-vorgabe-4: #07050f;
   --rahmen-winkel-vorgabe: 160deg;
-  --frame: linear-gradient(var(--rahmen-winkel, var(--rahmen-winkel-vorgabe)), var(--rahmen-farbe-1, var(--rahmen-vorgabe-1)) 0%, var(--rahmen-farbe-2, var(--rahmen-vorgabe-2)) 45%, var(--rahmen-farbe-3, var(--rahmen-vorgabe-3)) 80%, var(--rahmen-farbe-4, var(--rahmen-vorgabe-4)) 100%);
-  /* The tile and the menu page carry one flat colour here, not the
-     frame's gradient mixed with the glass: mixed that dark, every colour
-     channel is left with a handful of steps, and the three change at
-     different places — slanted stripes and blotches of colour across
-     the tile. The gradient stays where it is bright enough to run
-     smoothly, in the frame. The frost stays off: the colour is solid,
-     nothing shows through it. */
-  --kachel-verlauf: rgb(42, 15, 70);
-  --page-frost: none;
+  /* One flat colour, the dark violet of its former gradient's third stop:
+     a gradient under this look's glass broke into stripes, and the frame
+     itself looked odd beside the flat Exe frame. The four stops stay for
+     the user's own gradient. On the frame lies a net of stars (App.svelte,
+     Vektorfeld.svelte), in the ink of the look's violet. */
+  --frame: #1a0b3a;
+  --vek: #b18cff;
+  /* The tile is see-through glass over the flat frame, built as Exe's: the
+     look's own dark at the same share, so the stars show faintly through
+     it. The former gradient mixed with the glass broke into slanted
+     stripes and blotches that dark; one colour under the glass cannot
+     band. The menu page frosts, as every see-through page does. */
+  --kachel-chat: rgba(11, 8, 23, 0.58);
+  --kachel-verlauf: initial;
+  --page-frost: var(--kachel-frost);
   /* Raised surfaces (input field, cards, tiles, popovers) sit clearly LIGHTER
      than the nebula ground so they step out of it instead of dissolving into
      it — the third brightness between the dark frame and the glowing middle. */
@@ -460,7 +476,10 @@
   --glass-button-edge: rgba(236, 235, 230, 0.16);
   --glass-hover: rgba(236, 235, 230, 0.06);
   --glass-dropdown: rgba(12, 16, 22, 0.86);
-  --chat-edge: 0 14px 34px -14px rgba(0, 0, 0, 0.55), 0 2px 6px -2px rgba(0, 0, 0, 0.25);
+  /* The edge as Exe draws it — one sharp pixel in a fifth of the look's
+     accent, here its violet — so the tile stands off the frame the same
+     way in both dark looks, only the colour differs. */
+  --chat-edge: inset 0 0 0 1px color-mix(in srgb, var(--violett) 20%, transparent), 0 14px 34px -14px rgba(0, 0, 0, 0.55), 0 2px 6px -2px rgba(0, 0, 0, 0.25);
   --kachel-eingabe: rgba(236, 235, 230, 0.07);
   --glass-card: rgba(8, 6, 20, 0.34);
   --glass-card-line: rgba(236, 235, 230, 0.08);

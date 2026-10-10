@@ -51,9 +51,10 @@ def test_varianten_route_meldet_die_installierte_variante(
 
 
 def _fake_starten(aufgerufen: dict):
-    def starten(self, variante=None, veroeffentlichung=None):
+    def starten(self, variante=None, veroeffentlichung=None, replace_newer=False):
         aufgerufen["variante"] = variante
         aufgerufen["veroeffentlichung"] = veroeffentlichung
+        aufgerufen["replace_newer"] = replace_newer
         self._stand = sddownload.Fortschritt(geladen=0, gesamt=0, fertig=True)
         return self._stand
     return starten
@@ -205,3 +206,71 @@ def test_holen_mit_aktualisieren_ohne_variante_verwendet_die_installierte(
     antwort = client.post("/api/v1/bild/programm", json={"aktualisieren": True})
     assert antwort.status_code == 200
     assert aufgerufen["variante"] == "vulkan"
+
+
+# --- The way back to the tested build -------------------------------------
+
+_NEWER = "master-989-c678dfe"
+
+
+def _newer_installation(config: Config, variante: str | None = None) -> None:
+    name = _NEWER if variante is None else f"{_NEWER}-{variante}"
+    ordner = config.datenverzeichnis / sddownload.ORDNER / name
+    ordner.mkdir(parents=True)
+    (ordner / sddownload.program_name()).write_bytes(b"x")
+
+
+def test_the_status_says_whether_there_is_a_build_to_go_back_from(
+    config: Config, client: TestClient
+):
+    assert client.get("/api/v1/bild/modelle").json()["restorable"] is False
+    _newer_installation(config)
+    stand = client.get("/api/v1/bild/modelle").json()
+    assert stand["bau"] == _NEWER
+    assert stand["restorable"] is True
+
+
+def test_restoring_fetches_the_pinned_build_in_place_of_the_installed_one(
+    config: Config, client: TestClient, monkeypatch
+):
+    """No release is read and none is handed on: the pinned build is the
+    one fetched, for the variant that is installed, and it replaces a
+    newer one."""
+    _newer_installation(config, "vulkan")
+    monkeypatch.setattr(
+        sddownload, "neuere_fassung",
+        lambda eigener_bau: (_ for _ in ()).throw(AssertionError("a release was read")),
+    )
+    aufgerufen: dict = {}
+    monkeypatch.setattr(sddownload.Sddownload, "starten", _fake_starten(aufgerufen))
+    antwort = client.post("/api/v1/bild/programm", json={"restore": True})
+    assert antwort.status_code == 200
+    assert aufgerufen == {
+        "variante": "vulkan", "veroeffentlichung": None, "replace_newer": True,
+    }
+
+
+def test_with_the_pinned_build_installed_there_is_nothing_to_restore(
+    config: Config, client: TestClient, monkeypatch
+):
+    """Silence probe: the tested build is the one installed — refused, and
+    nothing is fetched."""
+    _installation(config)
+    aufgerufen: dict = {}
+    monkeypatch.setattr(sddownload.Sddownload, "starten", _fake_starten(aufgerufen))
+    antwort = client.post("/api/v1/bild/programm", json={"restore": True})
+    assert antwort.status_code == 409
+    assert aufgerufen == {}
+
+
+def test_a_plain_fetch_and_an_update_do_not_replace_a_newer_build(
+    config: Config, client: TestClient, monkeypatch
+):
+    """Silence probe: only the word to restore removes a newer build."""
+    _installation(config)
+    monkeypatch.setattr(sddownload, "neuere_fassung", lambda eigener_bau: _veroeffentlichung(889))
+    aufgerufen: dict = {}
+    monkeypatch.setattr(sddownload.Sddownload, "starten", _fake_starten(aufgerufen))
+    for body in (None, {"aktualisieren": True}):
+        assert client.post("/api/v1/bild/programm", json=body).status_code == 200
+        assert aufgerufen["replace_newer"] is False

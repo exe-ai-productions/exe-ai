@@ -430,3 +430,34 @@ process.exit(0)
     assert bericht["gelesen"] < 400
     assert bericht["leer"] == ""
     assert bericht["fehlt"] is None
+
+
+# --- What a tool wrote below the chat's folder -------------------------------
+
+
+def test_the_cross_stands_on_a_dock_file_only():
+    """A chat's document carries no cross, and neither does a file a tool
+    wrote below the chat's folder: the cross takes a file off the dock, the
+    one place removing has a route for. Silence probe: a dock file keeps
+    it, and removing still knows that one route."""
+    source = _source()
+    condition = source.split('class="weg"', 1)[0].rsplit("{#if ", 1)[1].split("}", 1)[0]
+    assert condition == "file.source === 'agent'"
+    assert "await api.agentendockEntfernen(file.id)" in _body(source, "async function remove(file) {")
+
+
+def test_the_wall_is_asked_again_while_the_open_chats_answer_runs():
+    """A tool of the chat's own answer writes into the chat's folder, and no
+    announcement says so: the wall asks every few seconds while that answer
+    runs, as it does while a job runs, and once more when it is over.
+    Silence probe: without a run it asks nothing on a clock."""
+    source = _source()
+    assert "const answering = $derived(Boolean(laufVon(chat)))" in source
+    assert "answering || zustand.auftraege.some(" in source
+    clock = source.split("const clock = setInterval(", 1)[0].rsplit("$effect(() => {", 1)[1]
+    assert "if (!running) return" in clock
+    # Only where the answer ended in the chat still open: a chat left in
+    # mid-answer asks through its own change, and a second, quiet ask
+    # beside it could leave the wall on the chat that was left.
+    assert "const now = answering ? chat : ''" in source
+    assert "if (answeredIn && answeredIn === chat && !now) untrack(() => load(true))" in source

@@ -1035,6 +1035,11 @@ class Bildrunner:
             modell_teile += bildbausatz.checkpoint_switches(
                 auftrag.familie, t5xxl=auftrag.t5xxl, clip_l=auftrag.clip_l,
                 clip_g=auftrag.clip_g, llm=auftrag.llm,
+                # Read only where no family decides about the model: then
+                # every part that is set goes beside the model.
+                llm_vision=auftrag.llm_vision, tokenizer=auftrag.tokenizer,
+                uncond_diffusion_model=auftrag.uncond_diffusion_model,
+                **video_parts(auftrag),
             )
             # A plain model has no Gespann, so bildbausatz.schalter() never
             # runs for it — the one place vae_format otherwise becomes a

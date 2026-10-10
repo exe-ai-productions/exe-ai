@@ -26,6 +26,13 @@
   let running = $state(false)
   // The one model whose values stand open, or none.
   let offen = $state('')
+  /* The family the open values last read for their model (GET
+     /bild/vorgaben): newer than the list's where the reading of the family
+     was just switched for it. A new list is the newest word again. */
+  let read = $state({})
+  $effect(() => {
+    if (familien) read = {}
+  })
 
   function load() {
     api.imageModelFiles().then((list) => (files = list)).catch(() => {})
@@ -42,7 +49,7 @@
     weightType = file.convert_types[0]
   }
 
-  const familie = (name) => familyOf(familien[name])?.label ?? t('bild.familie_keine')
+  const familie = (name) => familyOf(read[name] ?? familien[name])?.label ?? t('bild.familie_keine')
   const size = (bytes) => `${(bytes / 1e9).toLocaleString(undefined, { maximumFractionDigits: 1 })} GB`
 
   async function startConverting() {
@@ -94,7 +101,8 @@
     </button>
   </div>
   {#if offen === file.name}
-    <Bildmodellwerte modell={file.name} listen={reload} />
+    <Bildmodellwerte modell={file.name} listen={reload}
+                     onfamily={(family) => (read[file.name] = family)} />
   {/if}
   {#if converting === file.name}
     <div class="zeile liste">

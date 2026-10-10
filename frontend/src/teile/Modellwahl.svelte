@@ -15,9 +15,11 @@
   import { t } from '../lib/texte.svelte.js'
 
   /* `open` and `onToggle` belong to the bar, which keeps one menu open at a
-     time; `narrow` shortens the name when the window runs out of room, and
-     `label` hands the bar the words shown, which it measures by. */
-  let { open = false, onToggle = () => {}, narrow = false, label = $bindable('') } = $props()
+     time; `narrow` shortens the name when the window runs out of room,
+     `tight` takes the lamps out of the row as well and cuts the name
+     shorter still, and `label` hands the bar the words shown, which it
+     measures by. */
+  let { open = false, onToggle = () => {}, narrow = false, tight = false, label = $bindable('') } = $props()
 
   /* Filtered even before the selection has arrived: unfiltered means every
      model of every catalogue, and one provider alone reports 124. */
@@ -88,7 +90,7 @@
 
 <div class="anchor" data-bar-menu="model">
   <span class="group" class:open>
-    <button class="part" class:narrow onclick={() => onToggle(!open)}
+    <button class="part" class:narrow class:tight onclick={() => onToggle(!open)}
             title={chosen?.name ?? emptyText} aria-label={t('modell.titel')} aria-expanded={open}>
       <span class="name" class:empty={!chosen}>{chosen?.name ?? emptyText}</span>
       {@render lampRow(chosenLamps)}
@@ -159,6 +161,10 @@
     color: var(--text);
   }
   .part.narrow .name { max-width: 58px; }
+  /* Tight: the name down to a few letters, and no lamps in the row — the
+     readings stay on the model's own line in the menu (`tail-lamps`). */
+  .part.tight .name { max-width: 44px; }
+  .part.tight .lamps { display: none; }
   .name.empty { color: var(--text-still); }
   .chevron { display: inline-flex; color: var(--text-still); transition: transform 0.2s; }
   .group.open .chevron { transform: rotate(180deg); }

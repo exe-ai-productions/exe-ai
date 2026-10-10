@@ -190,6 +190,7 @@ MODUL_AGENTEN = WURZEL / "frontend/src/teile/ModulAgenten.svelte"
 # sentence, and one expression written down twice is how two displays of
 # the same run come apart.
 MELDER = WURZEL / "frontend/src/lib/auftragsmelder.js"
+DOT_MODULE = WURZEL / "frontend/src/lib/agentenampel.svelte.js"
 
 
 def test_die_berichtszeile_liest_den_sprachblock():
@@ -223,12 +224,19 @@ def test_ein_gebrochener_lauf_ohne_text_steht_trotzdem_in_der_liste():
     The list grew a second half since (F2/F3, tests/test_anzeigefunde.py):
     'unterbrochen' joins it, and a handed-on link steps aside for anything
     newer of the same work. Neither touches what this test is about, so it
-    asks the same two questions of the wider block."""
+    asks the same two questions of the wider block.
+
+    Which endings have a row is one function since, shared with the dot on
+    the rail: the list calls it, and the two conditions stand in it."""
     quelle = MODUL_AGENTEN.read_text(encoding="utf-8")
     block = quelle[quelle.index("const berichte = $derived"):]
     block = block[: block.index("\n  })")]
-    assert "auftrag.result" in block
-    assert "auftrag.state === 'gescheitert'" in block
+    assert "worthReading(auftrag)" in block
+    row_rule = DOT_MODULE.read_text(encoding="utf-8")
+    row_rule = row_rule[row_rule.index("export function worthReading("):]
+    row_rule = row_rule[: row_rule.index("\n}")]
+    assert "job.result" in row_rule
+    assert "job.state === 'gescheitert'" in row_rule
 
 
 def test_der_unbekannte_grund_zeigt_sich_auch_auf_dem_schirm_selbst():

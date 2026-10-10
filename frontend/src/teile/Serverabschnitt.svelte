@@ -247,6 +247,15 @@
     cursor: default;
     opacity: 0.5;
   }
+  /* Buttons that stand side by side at the end of a row are equally wide:
+     the widest one sets the width of them all. */
+  .karte :global(.buttons) {
+    flex: none;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    gap: 8px;
+  }
   /* The parts of a row, the same in every window: a name that takes the room
      up to its control (`name`, `zahlname`, and `regelname` over a slider),
      a number field 84 wide (`zahlplatz`) — over a slider as short as its

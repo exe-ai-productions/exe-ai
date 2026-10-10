@@ -508,6 +508,230 @@ def test_ein_belegtes_ziel_bleibt_unberuehrt_in_beide_richtungen(ordner):
     assert (ordner / "modell.gguf").read_bytes() == MODELL_KOPF + b"neu"
 
 
+# --- Sorted with every reading of the folder, not only at the start --------
+
+
+@pytest.fixture
+def nothing_said():
+    """The sorting remembers which files it has spoken of; each test starts
+    with none."""
+    from app import modellrunner
+
+    modellrunner._left_lying.clear()
+    yield
+    modellrunner._left_lying.clear()
+
+
+def _tree(folder: Path) -> list[str]:
+    return sorted(str(p.relative_to(folder)) for p in folder.rglob("*"))
+
+
+@pytest.mark.parametrize("first_reading", ["modelle", "mmproj", "pairing"])
+def test_a_projector_laid_down_after_the_start_is_found_without_a_restart(ordner, first_reading):
+    """A model laid into the folder by hand while the service runs brings
+    its projector along loose. Whichever reading of the folder comes first
+    sorts it into ``vision/``, and the model is offered its eyes."""
+    from app.modellrunner import begleiter_einsortieren, passende_mmproj
+
+    runner = Modellrunner(ordner)
+    begleiter_einsortieren(ordner)  # the start of the service: nothing lies loose yet
+    assert not (ordner / "vision").exists()
+    (ordner / "gross-mmproj-F16.gguf").write_bytes(b"x" * 5)
+
+    if first_reading == "modelle":
+        assert [m.name for m in runner.modelle()] == ["gross.gguf", "klein.gguf"]
+    elif first_reading == "mmproj":
+        assert runner.mmproj() == ["gross-mmproj-F16.gguf"]
+    else:
+        assert passende_mmproj(ordner, "gross.gguf") == ordner / "vision" / "gross-mmproj-F16.gguf"
+
+    assert not (ordner / "gross-mmproj-F16.gguf").exists()
+    assert (ordner / "vision" / "gross-mmproj-F16.gguf").read_bytes() == b"x" * 5
+    assert runner.mmproj() == ["gross-mmproj-F16.gguf"]
+    assert passende_mmproj(ordner, "gross.gguf") == ordner / "vision" / "gross-mmproj-F16.gguf"
+    befehl = runner.befehl("gross.gguf", 4096, 33, 8081)
+    assert befehl[befehl.index("--mmproj") + 1].endswith("gross-mmproj-F16.gguf")
+
+
+def test_a_drafter_laid_down_after_the_start_is_offered_without_a_restart(ordner):
+    from app.modellrunner import begleiter_einsortieren
+
+    runner = Modellrunner(ordner)
+    begleiter_einsortieren(ordner)
+    (ordner / "gemma-helfer.gguf").write_bytes(BEIFAHRER_KOPF)
+
+    assert [m.name for m in runner.mtp()] == ["gemma-helfer.gguf"]
+    assert (ordner / "mtp" / "gemma-helfer.gguf").is_file()
+    assert "gemma-helfer.gguf" not in [m.name for m in runner.modelle()]
+
+
+def test_a_file_that_cannot_be_renamed_leaves_the_reading_whole(ordner, monkeypatch, caplog, nothing_said):
+    """A projector somebody is still copying is locked on some systems: the
+    rename is refused. The reading goes through all the same, the file stays
+    where it lies — offered neither as a model nor as a projector — and the
+    next reading tries again. The log says it once, not once per reading."""
+    from app.modellrunner import begleiter_einsortieren, mmproj_auflisten, mtp_auflisten
+
+    begleiter_einsortieren(ordner)
+    loose = ordner / "gross-mmproj-F16.gguf"
+    loose.write_bytes(b"x" * 5)
+    real_rename = Path.rename
+    refused = []
+
+    def locked(self, target):
+        if self == loose:
+            refused.append(target)
+            raise PermissionError(13, "the file is used by another process")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", locked)
+    with caplog.at_level("WARNING", logger="app.modellrunner"):
+        for _ in range(2):
+            assert [m.name for m in modelle_auflisten(ordner)] == ["gross.gguf", "klein.gguf"]
+            assert mmproj_auflisten(ordner) == []
+            assert mtp_auflisten(ordner) == []
+    assert loose.read_bytes() == b"x" * 5
+    assert len(refused) == 6, "every reading tries the move again"
+    said = [r.getMessage() for r in caplog.records if "stays in place" in r.getMessage()]
+    assert len(said) == 1 and "cannot be moved right now" in said[0], said
+
+    monkeypatch.setattr(Path, "rename", real_rename)
+    assert mmproj_auflisten(ordner) == ["gross-mmproj-F16.gguf"]
+    assert not loose.exists()
+
+
+def test_a_folder_that_cannot_be_looked_through_leaves_the_reading_to_the_listing(ordner, monkeypatch):
+    """The sorting never raises into the reading it is part of."""
+    from app import modellrunner
+
+    def unreadable(name):
+        raise PermissionError(13, "not allowed")
+
+    # The first look at a file's name fails as an unreadable folder would.
+    monkeypatch.setattr(modellrunner, "ist_mmproj", unreadable)
+    modellrunner.begleiter_einsortieren(ordner)
+    modellrunner._loose_companions_sorted(ordner)
+
+
+def test_a_whole_model_in_the_drafter_folder_waits_for_the_start(ordner):
+    """Silence probe: a reading sorts what lies loose and nothing else. A
+    whole model lying in ``mtp/`` drafts from there and moves back with the
+    next start, as it always did."""
+    from app.modellrunner import begleiter_einsortieren, mtp_auflisten
+
+    begleiter_einsortieren(ordner)
+    (ordner / "mtp").mkdir()
+    (ordner / "mtp" / "Bonsai-1.7B-Q1_0.gguf").write_bytes(MODELL_KOPF)
+    runner = Modellrunner(ordner)
+
+    assert [m.name for m in runner.modelle()] == ["gross.gguf", "klein.gguf"]
+    assert runner.mmproj() == [] and mtp_auflisten(ordner) == []
+    assert (ordner / "mtp" / "Bonsai-1.7B-Q1_0.gguf").is_file()
+    befehl = runner.befehl("gross.gguf", 4096, 33, 8081, drafter="Bonsai-1.7B-Q1_0.gguf")
+    assert "--model-draft" in befehl
+
+    begleiter_einsortieren(ordner)
+    assert (ordner / "Bonsai-1.7B-Q1_0.gguf").is_file()
+    assert not (ordner / "mtp" / "Bonsai-1.7B-Q1_0.gguf").exists()
+
+
+def test_a_folder_without_loose_companions_is_left_as_it_is(ordner):
+    """Silence probe: reading sorts nothing where nothing lies loose, and
+    makes no folder for companions that are not there."""
+    from app.modellrunner import begleiter_einsortieren, mmproj_auflisten, mtp_auflisten
+
+    (ordner / "vision").mkdir()
+    (ordner / "vision" / "klein-mmproj-F16.gguf").write_bytes(b"augen")
+    begleiter_einsortieren(ordner)
+    before = _tree(ordner)
+    stamps = {name: (ordner / name).stat().st_mtime_ns for name in before}
+
+    assert [m.name for m in modelle_auflisten(ordner)] == ["gross.gguf", "klein.gguf"]
+    assert mmproj_auflisten(ordner) == ["klein-mmproj-F16.gguf"]
+    assert mtp_auflisten(ordner) == []
+
+    assert _tree(ordner) == before
+    assert not (ordner / "mtp").exists()
+    assert {name: (ordner / name).stat().st_mtime_ns for name in before} == stamps
+
+
+def test_a_reading_overwrites_no_taken_target_and_says_so_once(ordner, caplog, nothing_said):
+    """Silence probe: the reading moves by the same rule as the start — a
+    name taken in ``vision/`` keeps its file, the loose one stays loose."""
+    from app.modellrunner import begleiter_einsortieren, mmproj_auflisten
+
+    begleiter_einsortieren(ordner)
+    (ordner / "vision").mkdir()
+    (ordner / "vision" / "x-mmproj.gguf").write_bytes(b"neu")
+    (ordner / "x-mmproj.gguf").write_bytes(b"alt")
+    with caplog.at_level("WARNING", logger="app.modellrunner"):
+        for _ in range(3):
+            assert mmproj_auflisten(ordner) == ["x-mmproj.gguf"]
+            assert [m.name for m in modelle_auflisten(ordner)] == ["gross.gguf", "klein.gguf"]
+
+    assert (ordner / "x-mmproj.gguf").read_bytes() == b"alt"
+    assert (ordner / "vision" / "x-mmproj.gguf").read_bytes() == b"neu"
+    said = [r.getMessage() for r in caplog.records if "stays in place" in r.getMessage()]
+    assert len(said) == 1 and "target taken" in said[0], said
+
+
+def test_a_folder_the_start_never_sorted_is_left_as_it_is(ordner):
+    """Silence probe: a reading sorts the folders the start sorted and no
+    other. A folder for another kind of model is listed and not touched —
+    what looks like a companion there is still not offered as a model."""
+    from app.modellrunner import mmproj_auflisten, mtp_auflisten
+
+    (ordner / "gross-mmproj-F16.gguf").write_bytes(b"x" * 5)
+    (ordner / "gemma-helfer.gguf").write_bytes(BEIFAHRER_KOPF)
+    before = _tree(ordner)
+
+    assert [m.name for m in modelle_auflisten(ordner)] == ["gross.gguf", "klein.gguf"]
+    assert mmproj_auflisten(ordner) == []
+    assert mtp_auflisten(ordner) == []
+    assert _tree(ordner) == before
+
+
+def test_readings_at_the_same_time_move_a_file_once(ordner, monkeypatch, caplog, nothing_said):
+    """The window asks for its lists from several threads at once. One of
+    them moves the loose projector, the others wait and find it sorted —
+    none of them finds its source gone halfway."""
+    import threading
+    import time
+
+    from app.modellrunner import begleiter_einsortieren, mmproj_auflisten
+
+    begleiter_einsortieren(ordner)
+    loose = ordner / "gross-mmproj-F16.gguf"
+    loose.write_bytes(b"x" * 5)
+    real_rename = Path.rename
+    moves = []
+
+    def slow(self, target):
+        moves.append(self)
+        # Long enough for every other thread to have looked at the folder.
+        time.sleep(0.2)
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", slow)
+    together = threading.Barrier(6)
+    answers = []
+
+    def read():
+        together.wait()
+        answers.append(mmproj_auflisten(ordner))
+
+    with caplog.at_level("WARNING", logger="app.modellrunner"):
+        threads = [threading.Thread(target=read) for _ in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+    assert answers == [["gross-mmproj-F16.gguf"]] * 6
+    assert moves == [loose]
+    assert not [r.getMessage() for r in caplog.records if "stays in place" in r.getMessage()]
+
+
 # --- The folder manifest wins over the name heuristic ----------------------
 
 

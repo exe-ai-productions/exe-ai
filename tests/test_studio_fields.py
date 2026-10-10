@@ -893,3 +893,29 @@ def test_a_draw_without_a_prompt_says_so_and_the_two_sentences_read_as_decided()
     # before, and a mode on a finished picture is asked for no prompt.
     assert press.index("melde(t('studio.no_prompt'), 'hinweis')") < press.index(
         "melde(t('bildserver.kein_standardmodell'), 'hinweis')") < press.index("const kind = art()")
+
+
+def test_the_edge_sliders_run_from_256_to_2048_and_the_fields_to_the_service_s_end():
+    """Width and height are sliders from 256 to 2048 on the grid: a model
+    that starts at 2048 x 2048 stands on its slider, not past its end. The
+    number field beside each takes what the service takes."""
+    from app import bildwahlen
+
+    basics = _studio_parts()["StudioBasics.svelte"]
+    assert "const KANTEN = reihe(256, 2048, RASTER)" in basics
+    for edge in ("breite", "hoehe"):
+        assert f"<Schieberegler bind:wert={{werte.{edge}}} stufen={{KANTEN}}" in basics
+    # The silence check: the sliders start where they did and move on the
+    # service's grid, and the number fields end at the service's limits —
+    # an edge typed past them is brought back as before.
+    assert "const RASTER = EDGE_GRID" in basics
+    for edge in ("breite", "hoehe"):
+        assert (
+            f"bind:wert={{werte.{edge}}} min={{EDGE_MIN}} max={{EDGE_MAX}}\n"
+            "                        schritt={RASTER} grid={RASTER} ganzzahlig />"
+        ) in basics
+    limits = (WURZEL / "frontend" / "src" / "lib" / "studio.svelte.js").read_text(encoding="utf-8")
+    assert f"export const EDGE_GRID = {bildwahlen.RASTER}\n" in limits
+    assert f"export const EDGE_MIN = {bildwahlen.MIN_KANTE}\n" in limits
+    assert f"export const EDGE_MAX = {bildwahlen.MAX_KANTE}\n" in limits
+    assert (bildwahlen.RASTER, bildwahlen.MAX_KANTE) == (64, 4096)

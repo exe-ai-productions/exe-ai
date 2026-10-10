@@ -12,16 +12,18 @@ actually starts.
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from app import kit_bond, modellzuordnung, runnermodellwahl
-from app.api.abhaengigkeiten import hole_sprache
-from app.config import EndpointConfig
+from app import kit_bond, modellzuordnung, paketierung, runnermodellwahl, serverdownload
+from app.api.abhaengigkeiten import hole_config, hole_sprache
+from app.config import Config, EndpointConfig
 from app.i18n import t
 from app.modelldownload import BILD_ENDUNGEN, DownloadFehler, Modelldownload
 from app.modellrunner import Modellrunner, RunnerFehler, SCHLUESSEL_VARIABLE
@@ -63,6 +65,16 @@ class Modelldatei(BaseModel):
 
 class Auskunft(BaseModel):
     programm: str | None
+    # The build of the program that starts, as a build tag — None when
+    # there is no program or it does not say which build it is.
+    version: str | None = None
+    # Whether a fetched copy would be the program that starts. Only then is
+    # there anything to look for: where the settings name a program or an
+    # installed one comes first, a fetched build would never run.
+    updatable: bool = False
+    # Whether the build that starts was fetched and is not the tested one —
+    # the one case in which there is something to go back from.
+    restorable: bool = False
     ordner: str
     modelle: list[Modelldatei]
     # Vision companions in the folder. Their own list, not model entries:
@@ -169,13 +181,76 @@ def _fehler(grund: str, sprache: str) -> HTTPException:
     return HTTPException(lage, t(f"fehler.runner_{grund}", sprache))
 
 
-@router.get("", response_model=Auskunft, summary="Model server — status")
-def auskunft(runner: Modellrunner = Depends(hole_runner)) -> Auskunft:
-    lauf = runner.lauf()
+def _own_copy_first(config: Config | None, program: Path | None, fetched: str | None) -> bool:
+    """Whether a copy fetched into the data folder is the program that
+    starts — the order the runner looks in (``programm_finden``), read from
+    the other side, for whoever offers to fetch one. ``fetched`` is the
+    build tag of ``program`` when this program fetched it.
+
+    Where the settings name a program, a fetched build would lie in the
+    folder and never run. On the Mac the fetched copy comes before any
+    installed one. Elsewhere an installed one comes first: a fetched copy
+    starts only where it already does, or where there is no program at all.
+    """
+    if config is not None and config.app.runner_programm:
+        return False
+    if sys.platform == "darwin":
+        return True
+    return program is None or fetched is not None
+
+
+@dataclass(frozen=True)
+class _Program:
+    """The program that starts, as the routes about it need it — read once
+    per request, so the status, the check and the fetch cannot each see it
+    differently."""
+
+    path: Path | None
+    # Its build as a build tag; None when there is no program or it does
+    # not say which build it is.
+    version: str | None
+    # The same tag when this program fetched the build; None for a program
+    # installed some other way.
+    fetched: str | None
+    # Whether a fetched copy is the program that starts.
+    own_first: bool
+
+
+def _program(runner: Modellrunner, config: Config | None) -> _Program:
     # Read once: finding the program walks the own build's folder.
-    programm = runner.programm
+    path = runner.programm
+    # The same folder the program was just looked for in.
+    fetched = serverdownload.fetched_build(path, paketierung.daten()) if path else None
+    return _Program(
+        path=path,
+        version=fetched or (serverdownload.stated_build(path) if path else None),
+        fetched=fetched,
+        own_first=_own_copy_first(config, path, fetched),
+    )
+
+
+@router.get("", response_model=Auskunft, summary="Model server — status")
+def server_status(
+    runner: Modellrunner = Depends(hole_runner), config: Config = Depends(hole_config)
+) -> Auskunft:
+    return auskunft(runner, config)
+
+
+def auskunft(runner: Modellrunner, config: Config | None = None) -> Auskunft:
+    """What the window shows about the server. ``config`` carries the one
+    setting that matters here — a program named by hand; without it none
+    counts as named."""
+    lauf = runner.lauf()
+    program = _program(runner, config)
     return Auskunft(
-        programm=str(programm) if programm else None,
+        programm=str(program.path) if program.path else None,
+        version=program.version,
+        updatable=program.own_first and program.path is not None,
+        restorable=(
+            program.own_first
+            and program.fetched is not None
+            and program.fetched != serverdownload.BUILD
+        ),
         ordner=str(runner.ordner),
         modelle=[Modelldatei(name=m.name, groesse_gb=m.groesse_gb) for m in runner.modelle()],
         mmproj=runner.mmproj(),
@@ -246,7 +321,7 @@ async def starten(
             lauf.port if lauf else (werte.get("port") or runner.port_vorgabe)
         )
     )
-    return auskunft(runner)
+    return auskunft(runner, request.app.state.config)
 
 
 @router.post("/stop", response_model=Auskunft, summary="Stop the model server")
@@ -255,7 +330,7 @@ async def stoppen(
 ) -> Auskunft:
     runner.stoppen()
     await request.app.state.discovery.abmelden(RUNNER_ID)
-    return auskunft(runner)
+    return auskunft(runner, request.app.state.config)
 
 
 # --- Fetching a model -----------------------------------------------------
@@ -436,19 +511,105 @@ def server_fortschritt(
     return _serverstand(download)
 
 
+class ProgramFetch(BaseModel):
+    # True fetches whatever build is newest at the moment of the request,
+    # not the pinned one — which build that is, is read again here and never
+    # taken from what the window showed a moment ago.
+    aktualisieren: bool = False
+    # True fetches the pinned, tested build in place of a newer one. Asked
+    # for together with the above, this one counts: the way back is the
+    # more careful of the two.
+    restore: bool = False
+
+
+class ProgramUpdate(BaseModel):
+    verfuegbar: bool
+    bau: str | None = None
+    # True only when the release list WAS read and its newest build is not
+    # ahead of the program that starts. Not the same as "nothing
+    # available": an unreachable list compares nothing, and the window must
+    # not answer that with "up to date".
+    aktuell: bool = False
+
+
+@router.get(
+    "/programm/aktualisierung",
+    response_model=ProgramUpdate,
+    summary="Whether a newer build of the model server is out",
+)
+def program_update(
+    runner: Modellrunner = Depends(hole_runner), config: Config = Depends(hole_config)
+) -> ProgramUpdate:
+    """Asked when the window's check is pressed, never on opening and never
+    on a timer: reads the project's release list and compares its newest
+    build against the program that starts — the fetched copy or an
+    installed one alike. Where a fetched copy would not be the program that
+    starts there is nothing to offer, and without any program the plain
+    fetch below already covers it."""
+    program = _program(runner, config)
+    if program.path is None or not program.own_first:
+        return ProgramUpdate(verfuegbar=False)
+    newest = serverdownload.newest_build()
+    if newest is None:
+        return ProgramUpdate(verfuegbar=False)
+    if serverdownload.is_ahead(newest, program.version):
+        return ProgramUpdate(verfuegbar=True, bau=newest)
+    return ProgramUpdate(verfuegbar=False, aktuell=True)
+
+
 @router.post("/programm", response_model=ServerFortschritt, summary="Fetch the model server")
 def server_holen(
+    wanted: ProgramFetch | None = None,
     download: Serverdownload = Depends(hole_serverdownload),
+    runner: Modellrunner = Depends(hole_runner),
+    config: Config = Depends(hole_config),
     sprache: str = Depends(hole_sprache),
 ) -> ServerFortschritt:
-    """Fetches llama-server from the official llama.cpp release.
+    """Fetches llama-server from the official llama.cpp release — the
+    pinned build, or, with ``aktualisieren``, whichever one is newest at
+    this exact moment, or, with ``restore``, the pinned one in place of a
+    newer one.
 
     The one step that used to be an instruction ("install llama.cpp") is a
     button now — a machine without the server gets it in one click, into
     the user's data folder, where the runner looks by itself.
+
+    One program serves every server this program starts, so a fetch lifts
+    them all. A server that is running keeps running and takes the new
+    build at its next start.
     """
+    build: str | None = None
+    previous: str | None = None
+    if wanted and (wanted.restore or wanted.aktualisieren):
+        program = _program(runner, config)
+        # Both replace the program that starts, so both need one — and need
+        # the fetched copy to be the one that starts afterwards.
+        if program.path is None or not program.own_first:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, t("fehler.serverdownload_schon_da", sprache)
+            )
+        previous = program.version
+        if wanted.restore:
+            # Only a fetched build is replaced by the tested one: an
+            # installed program is not this program's to go back from.
+            if program.fetched is None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, t("fehler.serverdownload_schon_da", sprache)
+                )
+            build = serverdownload.BUILD
+        else:
+            # Re-read just before fetching rather than trust whatever the
+            # window showed a moment ago — an offer that went stale between
+            # the check and the click must not re-fetch the build that is
+            # already there.
+            build = serverdownload.newest_build()
+            if build is None or not serverdownload.is_ahead(build, previous):
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    t("fehler.serverdownload_keine_neuere_fassung", sprache),
+                )
     try:
-        download.starten()
+        download.starten(build, previous)
     except ServerdownloadFehler as fehler:
         lage = {
             "laeuft_schon": status.HTTP_409_CONFLICT,

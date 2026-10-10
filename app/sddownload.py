@@ -278,6 +278,25 @@ def installierter_bau(datenordner: Path) -> str | None:
     return chosen.tag if chosen else None
 
 
+def _hand_install(datenordner: Path) -> Path | None:
+    """A generator somebody unpacked into the bare folder by hand, or
+    nothing. It runs ahead of every build folder and belongs to the user."""
+    direkt = Path(datenordner).expanduser() / ORDNER / program_name()
+    if direkt.is_file() and os.access(direkt, os.X_OK):
+        return direkt
+    return None
+
+
+def restorable(datenordner: Path) -> bool:
+    """Whether there is a tested build to go back to: the build that runs
+    was fetched and is not the pinned one. Beside a hand install there is
+    nothing to offer — it runs whatever is fetched, and it blocks a fetch."""
+    if _hand_install(datenordner) is not None:
+        return False
+    installed = installierter_bau(datenordner)
+    return installed is not None and installed != BAU
+
+
 def installierte_variante(datenordner: Path, bau: str | None = None) -> str | None:
     """Which variant the build that runs is, read off its build folder's
     name — or nothing when there is none. The folder is the one
@@ -500,14 +519,23 @@ class Sddownload:
         return self._stand is not None and not self._stand.fertig and not self._stand.fehler
 
     def starten(
-        self, variante: str | None = None, veroeffentlichung: Veroeffentlichung | None = None
+        self,
+        variante: str | None = None,
+        veroeffentlichung: Veroeffentlichung | None = None,
+        replace_newer: bool = False,
     ) -> Fortschritt:
         """Fetches the pinned build (``pinned_build()``), or — given
         ``veroeffentlichung`` — a newer release read off GitHub; both are
         described alike and take the same path. Either way the new build lands in
         its own folder; an existing, older one is only removed once the
         fetch has succeeded (``_andere_bauten_entfernen``), so a failed
-        update leaves the working install exactly as it was."""
+        update leaves the working install exactly as it was.
+
+        ``replace_newer`` is the way back from an update: the fetched build
+        takes the place of a newer one as well, which the plain fetch
+        leaves standing. The build is fetched anew even where its folder
+        is still on disk — beside a newer one it is not the build that
+        runs, and nothing says it is whole."""
         variante = variante or VORGABE_VARIANTE
         build = veroeffentlichung or pinned_build()
         with self._schloss:
@@ -519,7 +547,7 @@ class Sddownload:
             if self._hand_installation() is not None:
                 raise SddownloadFehler("schon_da")
             bauordner = _bauordner_name_von(build.bau, variante)
-            if self._bau_vorhanden(bauordner) is not None:
+            if not replace_newer and self._bau_vorhanden(bauordner) is not None:
                 raise SddownloadFehler("schon_da")
             paket = veroeffentlichung_paket(build, variante)
             # cuda12 needs the runtime archive beside it; a release that
@@ -530,20 +558,19 @@ class Sddownload:
 
             self._stand = Fortschritt(geladen=0, gesamt=0)
             threading.Thread(
-                target=self._holen, args=(variante, build, paket[0]), daemon=True
+                target=self._holen, args=(variante, build, paket[0], replace_newer), daemon=True
             ).start()
             return self._stand
 
     def _hand_installation(self) -> Path | None:
-        direkt = self._ordner / program_name()
-        if direkt.is_file() and os.access(direkt, os.X_OK):
-            return direkt
-        return None
+        return _hand_install(self._datenordner)
 
     def _bau_vorhanden(self, bauordner: str) -> Path | None:
         return _first_runnable(_program_files(self._ordner / bauordner, program_name()))
 
-    def _holen(self, variante: str, build: Veroeffentlichung, name: str) -> None:
+    def _holen(
+        self, variante: str, build: Veroeffentlichung, name: str, replace_newer: bool = False
+    ) -> None:
         bauordner = _bauordner_name_von(build.bau, variante)
         basis = _basis(build.bau)
         archiv = self._ordner / (name + UNFERTIG)
@@ -587,7 +614,7 @@ class Sddownload:
             # variant, or from an older release, would otherwise sit next to
             # the new one, unused. The old one stays until this point: a
             # failed fetch above never reaches here, so it is never removed.
-            self._andere_bauten_entfernen(bauordner)
+            self._andere_bauten_entfernen(bauordner, replace_newer)
 
             if self._stand:
                 self._stand.fertig = True
@@ -660,7 +687,7 @@ class Sddownload:
                     datei.chmod(datei.stat().st_mode | 0o111)
         return programm
 
-    def _andere_bauten_entfernen(self, aktuell: str) -> None:
+    def _andere_bauten_entfernen(self, aktuell: str, newer_too: bool = False) -> None:
         """Only folders this program itself names (``_BAU_MUSTER``) qualify —
         loose files directly in the root are a hand install and are never
         touched, they belong to the user.
@@ -670,6 +697,10 @@ class Sddownload:
         the pinned ``BAU``, and running it after an update to a newer
         release must not silently throw that release away — cleanup is for
         catching up an old build, not for undoing a newer one.
+
+        ``newer_too`` is that undoing, asked for: the build just landed is
+        the one to run, so a newer one goes as well — left standing, it
+        would still be the build that is picked.
         """
         aufgeschluesselt = _ordner_aufschluesseln(aktuell)
         aktuelle_nummer = _bau_nummer(aufgeschluesselt[0]) if aufgeschluesselt else None
@@ -681,7 +712,8 @@ class Sddownload:
                 continue
             eintrag_nummer = _bau_nummer(eintrag_teile[0]) if eintrag_teile else None
             if (
-                aktuelle_nummer is not None
+                not newer_too
+                and aktuelle_nummer is not None
                 and eintrag_nummer is not None
                 and eintrag_nummer > aktuelle_nummer
             ):

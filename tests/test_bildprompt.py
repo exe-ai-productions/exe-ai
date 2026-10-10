@@ -14,6 +14,7 @@ from app.bildprompt import (
     ANWEISUNGEN,
     LESER,
     MAX_EINGABE,
+    NO_FAMILY,
     PromptFehler,
     _saeubern,
     nachricht,
@@ -344,7 +345,9 @@ def test_without_a_refusal_the_off_goes_out_as_before(client: TestClient):
 
 def test_every_family_that_draws_from_text_has_exactly_one_instruction():
     zeichnend = {f.name for f in image_families.FAMILIES if "txt2img" in f.tasks}
-    assert set(ANWEISUNGEN) == zeichnend
+    # Beside the families, the one entry for a model that has none.
+    assert set(ANWEISUNGEN) == zeichnend | {NO_FAMILY}
+    assert image_families.get(NO_FAMILY) is None
     gelistet = [name for namen in LESER.values() for name in namen]
     assert sorted(gelistet) == sorted(zeichnend)
 
@@ -471,7 +474,11 @@ def test_the_block_reads_every_family_with_its_works_text(client: TestClient):
     assert daten["anweisungen"]["flux"] == "Mine."
     assert daten["ab_werk"]["flux"] == ANWEISUNGEN["flux"]
     assert daten["anweisungen"]["sdxl"] == ANWEISUNGEN["sdxl"]
-    assert set(daten["leser"]) == {"clip", "t5", "llm"}
+    # The three readers and, last and in a group of its own, the entry for
+    # models without a family, with its works text like every family.
+    assert list(daten["leser"]) == ["clip", "t5", "llm", NO_FAMILY]
+    assert daten["leser"][NO_FAMILY] == [NO_FAMILY]
+    assert daten["anweisungen"][NO_FAMILY] == daten["ab_werk"][NO_FAMILY] == ANWEISUNGEN[NO_FAMILY]
 
 
 def test_the_block_offers_the_cloud_models_and_keeps_a_chosen_one():
@@ -488,3 +495,90 @@ def test_the_block_offers_the_cloud_models_and_keeps_a_chosen_one():
         assert f"wert: {wert}" in quelle
     assert "m.group !== 'local'" in quelle
     assert "ids.unshift(gewaehlt)" in quelle
+
+
+# --- A picture model without a family ------------------------------------------
+
+
+def test_a_model_without_a_family_writes_with_the_entry_for_such_models(client: TestClient):
+    """A model whose file names no family is no longer refused: the prompt
+    is written with the instruction kept for such models, and the message
+    says the family is not known."""
+    merker = _vorbereiten(client, modell="own-model.safetensors")
+    system, nutzer = merker.gesehen.nachrichten
+    assert system.content == ANWEISUNGEN[NO_FAMILY]
+    assert "own-model.safetensors (family not known)" in nutzer.content
+    # A request that names no model at all has no family either.
+    assert _vorbereiten(client).gesehen.nachrichten[0].content == ANWEISUNGEN[NO_FAMILY]
+    # The silence check: a family of the table keeps its own instruction,
+    # and one that does not draw from text is refused as before.
+    assert _vorbereiten(client, familie="sdxl").gesehen.nachrichten[0].content == ANWEISUNGEN["sdxl"]
+    assert client.post("/api/v1/bild/prompt", json={"prompt": "x", "familie": "wan"}).status_code == 422
+
+
+def test_the_works_text_for_a_model_without_a_family_says_what_it_is_and_what_to_do():
+    text = ANWEISUNGEN[NO_FAMILY]
+    assert "does not know" in text and "single paragraph" in text
+    assert text.endswith("Return only the prompt.")
+
+
+def test_an_own_instruction_for_models_without_a_family_is_kept_and_reset(client: TestClient):
+    assert bildaufbereitung.wahl_pruefen({"anweisungen": {NO_FAMILY: " Mine. "}}) == {
+        "anweisungen": {NO_FAMILY: "Mine."},
+    }
+    client.patch("/api/v1/settings/global/bildaufbereitung",
+                 json={"wert": {"anweisungen": {NO_FAMILY: "Only what I say."}}})
+    assert _vorbereiten(client, modell="own.gguf").gesehen.nachrichten[0].content == "Only what I say."
+    daten = client.get("/api/v1/bild/prompt/aufbereitung").json()
+    assert daten["anweisungen"][NO_FAMILY] == "Only what I say."
+    assert daten["ab_werk"][NO_FAMILY] == ANWEISUNGEN[NO_FAMILY]
+    # The silence check: the families beside it are untouched.
+    assert daten["anweisungen"]["sdxl"] == ANWEISUNGEN["sdxl"]
+    client.patch("/api/v1/settings/global/bildaufbereitung",
+                 json={"wert": {"anweisungen": {NO_FAMILY: None}}})
+    assert _vorbereiten(client, modell="own.gguf").gesehen.nachrichten[0].content == ANWEISUNGEN[NO_FAMILY]
+
+
+def test_with_the_reading_switched_off_the_header_s_family_is_not_taken(
+    client: TestClient, config, tmp_path
+):
+    """A model whose family is not to be read is a model without a family
+    for the prompt too: the header is not asked, and the entry for such
+    models is written with — not the instruction of the family the header
+    would name."""
+    from tests.test_image_families import _HEADERS, _gguf
+
+    folder = tmp_path / "bildmodelle"
+    folder.mkdir()
+    config.app.bildmodelle_verzeichnis = str(folder)
+    _gguf(folder / "flux.gguf", "flux", _HEADERS["flux"])
+
+    # The silence check: with the reading on, the header's family is taken.
+    read = _vorbereiten(client, modell="flux.gguf")
+    assert read.gesehen.nachrichten[0].content == ANWEISUNGEN["flux"]
+    assert "flux.gguf (Flux)" in read.gesehen.nachrichten[1].content
+
+    client.patch("/api/v1/settings/global/bildmodellwerte",
+                 json={"wert": {"flux.gguf": {"family_detection": False}}})
+    unread = _vorbereiten(client, modell="flux.gguf")
+    assert unread.gesehen.nachrichten[0].content == ANWEISUNGEN[NO_FAMILY]
+    assert "flux.gguf (family not known)" in unread.gesehen.nachrichten[1].content
+    # A family the window states still wins.
+    stated = _vorbereiten(client, modell="flux.gguf", familie="sdxl")
+    assert stated.gesehen.nachrichten[0].content == ANWEISUNGEN["sdxl"]
+
+
+def test_the_block_lists_the_entry_in_a_group_of_its_own():
+    """The family list of the block: the entry for models without a family
+    stands under its own heading and its own label — read from the
+    component's source, the way the house checks its other windows' wiring."""
+    from pathlib import Path
+
+    quelle = (
+        Path(__file__).resolve().parents[1] / "frontend" / "src" / "teile" / "Promptaufbereitung.svelte"
+    ).read_text(encoding="utf-8")
+    assert f"const NO_FAMILY = '{NO_FAMILY}'" in quelle
+    assert "[NO_FAMILY]: t('bild.familie_keine')," in quelle
+    assert "text: name === NO_FAMILY ? t('bildserver.no_family_models') : familyOf(name)?.label ?? name," in quelle
+    # The silence check: the three readers keep their headings.
+    assert "clip: 'CLIP', t5: 'T5', llm: t('bildserver.leser_llm')," in quelle

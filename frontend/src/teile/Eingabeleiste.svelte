@@ -583,10 +583,16 @@
      at most. While the row is narrow and only the room changed, the width
      the full form needed last is enough; the full form is laid out again
      only when the groups themselves changed, or when words the narrow form
-     hides did. */
+     hides did.
+     A second step for a row that is still too wide without its words
+     (`tight`): the model's lamps leave the row — they stay on the model's
+     line in its menu — and its name is cut shorter still. The microphone
+     and the arrow never leave the bar: they are what the bar is for. */
   let row = $state(null)
   let narrow = $state(false)
+  let tight = $state(false)
   let fullWidth = 0
+  let narrowWidth = 0
   let narrowContent = 0
   let measureQueued = false
   let measureForced = false
@@ -606,14 +612,30 @@
     if (!row) return
     if (narrow) {
       const unchanged = Math.abs(groupsWidth() - narrowContent) < 0.5
-      if (!forced && unchanged && row.clientWidth + 1 < fullWidth) return
+      if (!forced && unchanged && row.clientWidth + 1 < fullWidth) {
+        // Not enough room for the full form: the second step comes and
+        // goes with the room the narrow form has.
+        const needsTight = row.clientWidth + 1 < narrowWidth
+        if (needsTight !== tight) {
+          tight = needsTight
+          flushSync()
+          narrowContent = groupsWidth()
+        }
+        return
+      }
       narrow = false
+      tight = false
       flushSync()
     }
     fullWidth = neededWidth()
     if (fullWidth > row.clientWidth + 1) {
       narrow = true
       flushSync()
+      narrowWidth = neededWidth()
+      if (narrowWidth > row.clientWidth + 1) {
+        tight = true
+        flushSync()
+      }
       narrowContent = groupsWidth()
     }
   }
@@ -1949,7 +1971,7 @@
     <!-- One row under the text: plus, folders and mode on the left; the
          model with its lamps and ring, the thinking switch, the microphone
          and send on the right. -->
-    <div class="bar-row" class:narrow bind:this={row}>
+    <div class="bar-row" class:narrow class:tight bind:this={row}>
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="linkegruppe" onkeydown={modeListEscape}>
         <div class="menu-anchor" data-bar-menu="plus">
@@ -2029,7 +2051,7 @@
       </div>
 
       <div class="rechts">
-        <Modellwahl open={openMenu === 'model'} onToggle={(open) => toggleMenu('model', open)} {narrow}
+        <Modellwahl open={openMenu === 'model'} onToggle={(open) => toggleMenu('model', open)} {narrow} {tight}
                     bind:label={modelLabel} />
 
         <!-- The seconds, beside the button rather than in it: a counter
@@ -2241,6 +2263,11 @@
   }
   .bar-row.narrow .linkegruppe,
   .bar-row.narrow .rechts { gap: 2px; }
+  /* Tighter still: the buttons touch, and the model picker drops its lamps
+     (Modellwahl.svelte). */
+  .bar-row.tight { gap: 2px; }
+  .bar-row.tight .linkegruppe,
+  .bar-row.tight .rechts { gap: 0; }
   .rechts { margin-left: auto; }
   .menu-anchor { position: relative; flex: none; }
 

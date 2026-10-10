@@ -250,9 +250,24 @@ def draft_path(folder: Path, model: str, drafter: str) -> Path | None:
     return None
 
 
+# One sorting at a time: the listings below are asked from several threads
+# at once, and of two that move the same file the second would find its
+# source gone.
+_sorting = threading.Lock()
+# The loose files that stayed where they lay, said once each: the folder is
+# read again and again while a window shows it, and a file that stays is
+# one line in the log, not one per reading.
+_left_lying: set[Path] = set()
+# The folders the start sorted. A reading sorts these and no other: a folder
+# that holds another kind of model has no companions to keep apart, and
+# nothing in it is moved.
+_tended: set[Path] = set()
+
+
 def begleiter_einsortieren(ordner: Path) -> None:
     """Move loose companion files out of the model folder into their own
-    sub-folders once, at startup, so each folder shows only its own kind.
+    sub-folders, so each folder shows only its own kind — and a whole model
+    out of ``mtp/`` back into the model folder. Done when the service starts.
 
     A plain rename inside the same folder — the name is kept, so the manifest
     bond and the name heuristics still hold. A name already taken in the
@@ -261,34 +276,76 @@ def begleiter_einsortieren(ordner: Path) -> None:
     the model folder moves into ``mtp/``, and a whole model lying in
     ``mtp/`` (sorted there once by its name) moves back. A header that says
     neither leaves the file where it is.
+
+    From here on every reading of this folder sorts what is laid into it
+    loose (``_loose_companions_sorted``).
     """
-    if not ordner.is_dir():
-        return
-    for p in sorted(ordner.glob("*.gguf")):
-        if not p.is_file():
-            continue
-        if ist_mmproj(p.name):
-            unter = VISION_ORDNER
-        elif ist_mtp(p):
-            unter = MTP_ORDNER
-        else:
-            continue
-        ziel_ordner = ordner / unter
-        ziel_ordner.mkdir(exist_ok=True)
-        _umziehen(p, ziel_ordner / p.name)
-    mtp_ordner = ordner / MTP_ORDNER
-    if mtp_ordner.is_dir():
-        for p in sorted(mtp_ordner.glob("*.gguf")):
-            if p.is_file() and not ist_mmproj(p.name) and dateiart(p) == MODELL:
-                _umziehen(p, ordner / p.name)
+    _tended.add(ordner)
+    _sort_companions(ordner, models_back=True)
+
+
+def _loose_companions_sorted(ordner: Path) -> None:
+    """The same sorting with every reading of the folder (the three listings
+    below), for what lies loose: a model laid into the folder by hand while
+    the program runs brings its projector along loose, and the pairing reads
+    ``vision/`` alone — that model would have no eyes until the next start.
+
+    The way back is left to the start: a whole model lying in ``mtp/`` still
+    drafts from there (``draft_path`` asks that folder first), so nothing is
+    missing while it waits.
+    """
+    if ordner in _tended:
+        _sort_companions(ordner, models_back=False)
+
+
+def _sort_companions(ordner: Path, *, models_back: bool) -> None:
+    """Nothing here fails the reading it is part of. A file that cannot be
+    renamed right now — locked by whoever is still copying it — stays where
+    it lies and is tried again with the next reading, and a folder that
+    cannot be looked through is left to the listing itself."""
+    with _sorting:
+        try:
+            if not ordner.is_dir():
+                return
+            # A file that is gone has nothing left to be said about.
+            for gone in [p for p in _left_lying if not p.exists()]:
+                _left_lying.discard(gone)
+            for p in sorted(ordner.glob("*.gguf")):
+                if not p.is_file():
+                    continue
+                if ist_mmproj(p.name):
+                    unter = VISION_ORDNER
+                elif ist_mtp(p):
+                    unter = MTP_ORDNER
+                else:
+                    continue
+                _umziehen(p, ordner / unter / p.name)
+            mtp_ordner = ordner / MTP_ORDNER
+            if models_back and mtp_ordner.is_dir():
+                for p in sorted(mtp_ordner.glob("*.gguf")):
+                    if p.is_file() and not ist_mmproj(p.name) and dateiart(p) == MODELL:
+                        _umziehen(p, ordner / p.name)
+        except OSError as fault:
+            log.debug("companions not sorted in %s: %s", ordner, fault)
 
 
 def _umziehen(p: Path, ziel: Path) -> None:
-    """A plain rename that never overwrites: a taken name stays where it is."""
-    if ziel.exists():
-        log.warning("companion stays in place, target taken: %s", ziel)
-        return
-    p.rename(ziel)
+    """A plain rename that never overwrites and never fails its caller: a
+    taken name stays where it is, and so does a file that cannot be moved
+    right now. Either is said once for the file."""
+    try:
+        if ziel.exists():
+            reason = f"target taken: {ziel}"
+        else:
+            ziel.parent.mkdir(exist_ok=True)
+            p.rename(ziel)
+            _left_lying.discard(p)
+            return
+    except OSError as fault:
+        reason = f"it cannot be moved right now ({fault.strerror or fault}): {p}"
+    if p not in _left_lying:
+        _left_lying.add(p)
+        log.warning("companion stays in place, %s", reason)
 
 
 def modelle_auflisten(ordner: Path) -> list[Modelldatei]:
@@ -297,9 +354,10 @@ def modelle_auflisten(ordner: Path) -> list[Modelldatei]:
     Companion files are not models: vision projectors (mmproj) belong NEXT
     to a model, and multi-token-prediction modules (mtp) ride along as
     draft modules — offered as models, both would sit in the picker as
-    entries that never answer. They live in sub-folders now (a flat glob
-    passes them by); the projector's name filter and the drafter's header
-    check stay as a safety net.
+    entries that never answer. They live in sub-folders (a flat glob passes
+    them by), and one lying loose is moved there before the folder is read;
+    the projector's name filter and the drafter's header check stay as a
+    safety net for one that could not be moved.
 
     A split model is one entry: part 1 names it and carries the size of all
     parts — the server is started with part 1 and finds the rest beside it.
@@ -308,6 +366,7 @@ def modelle_auflisten(ordner: Path) -> list[Modelldatei]:
     """
     if not ordner.is_dir():
         return []
+    _loose_companions_sorted(ordner)
     dateien = []
     for p in sorted(ordner.glob("*.gguf")):
         if not p.is_file() or ist_mmproj(p.name):
@@ -332,7 +391,9 @@ def mtp_auflisten(ordner: Path) -> list[Modelldatei]:
     Sizes ride along because the draft is a passenger in the memory plan —
     a quarter gigabyte is honest weight, just not much of it. Only a file
     whose header says drafter is offered; anything else lying there is not.
+    One lying loose in the model folder is moved here first.
     """
+    _loose_companions_sorted(ordner)
     unter = ordner / MTP_ORDNER
     if not unter.is_dir():
         return []
@@ -348,7 +409,10 @@ def mmproj_auflisten(ordner: Path) -> list[str]:
 
     The name check stays even though the folder already sorts by kind: a file
     hand-dropped into vision/ that is not a projector is not offered as one.
+    A projector lying loose in the model folder is moved here first, so one
+    laid down while the program runs is found without a restart.
     """
+    _loose_companions_sorted(ordner)
     unter = ordner / VISION_ORDNER
     if not unter.is_dir():
         return []

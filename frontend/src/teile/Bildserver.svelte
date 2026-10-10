@@ -23,6 +23,7 @@
   import { melde } from '../lib/zustand.svelte.js'
   import Servertafel from './Servertafel.svelte'
   import Serverabschnitt from './Serverabschnitt.svelte'
+  import UpToDateMark from './UpToDateMark.svelte'
   import Startknopf from './Startknopf.svelte'
   import ImageServerFiles from './ImageServerFiles.svelte'
   import BildGeraete from './BildGeraete.svelte'
@@ -209,6 +210,9 @@
       aktualisierung = null
       pruefLauf += 1
       pruefend = false
+      // And the build on disk is read once more: the poll that saw the
+      // fetch end read it a moment earlier, and stops with this very tick.
+      laden()
     }
     liefLetztesMal = programmLaedt
   })
@@ -230,6 +234,16 @@
   function programmAktualisieren() {
     api
       .bildProgrammAktualisieren()
+      .then((s) => (programmStand = s))
+      .catch((fehler) => melde(String(fehler.message || fehler), 'fehler'))
+  }
+
+  /* The way back from an update: the tested build is fetched again and
+     takes the place of the one installed. Offered only while another build
+     than the tested one runs (`stand.restorable`). */
+  function restoreProgram() {
+    api
+      .imageProgramRestore()
       .then((s) => (programmStand = s))
       .catch((fehler) => melde(String(fehler.message || fehler), 'fehler'))
   }
@@ -304,14 +318,7 @@
       {t('bildserver.nach_updates_suchen')}
     </button>
     {#if aktualisierung?.aktuell && stand?.programm_da}
-      <span class="v_status aktuell">
-        <span class="kreis" aria-hidden="true">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-               stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 12.5 L9.5 18 L20 6.5" />
-          </svg>
-        </span>{t('bildserver.aktuell')}
-      </span>
+      <UpToDateMark />
     {/if}
   {/snippet}
   {#snippet zweiteZeile()}
@@ -338,13 +345,23 @@
         <!-- The build tag when there is one; a dash when the program was
              unpacked into the folder by hand (app/sddownload.py) and no tag
              lies on disk. The update offer only ever appears for a
-             tag-named build, and only after the check found one. -->
+             tag-named build, and only after the check found one; the way
+             back to the tested build stands there while another one runs. -->
         <div class="zeile">
           <span class="name">{t('bildserver.version_zeile', { bau: stand.bau ?? '—' })}</span>
-          {#if aktualisierung?.verfuegbar}
-            <button class="feldknopf" disabled={programmLaedt} onclick={programmAktualisieren}>
-              {t('bildserver.generator_aktualisieren')}
-            </button>
+          {#if stand.restorable || aktualisierung?.verfuegbar}
+            <span class="buttons">
+              {#if stand.restorable}
+                <button class="feldknopf" disabled={programmLaedt} onclick={restoreProgram}>
+                  {t('bildserver.restore_tested_build')}
+                </button>
+              {/if}
+              {#if aktualisierung?.verfuegbar}
+                <button class="feldknopf" disabled={programmLaedt} onclick={programmAktualisieren}>
+                  {t('bildserver.generator_aktualisieren')}
+                </button>
+              {/if}
+            </span>
           {/if}
         </div>
       {/if}
@@ -436,11 +453,6 @@
     color: var(--text-still);
     white-space: nowrap;
   }
-  .v_status {
-    flex: none;
-    font-size: 12px;
-    color: var(--gruen);
-  }
   .v_fehler {
     color: var(--rot);
   }
@@ -469,18 +481,5 @@
   }
   .mitmarke :global(.mark) {
     margin-left: 0;
-  }
-  .aktuell {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .kreis {
-    display: inline-grid;
-    place-items: center;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    border: 1px solid currentColor;
   }
 </style>

@@ -126,7 +126,7 @@
     <!-- A hairline under the head, clear of both edges, as on the left. -->
     <div class="kopfstrich" aria-hidden="true"></div>
 
-    <div class="inhalt" class:ganz={!feinheitenAn && leiste.modul === 'vorschau'}>
+    <div class="inhalt">
       {#if feinheitenAn}
         <StudioDetails />
       {:else if leiste.modul === 'terminal'}
@@ -306,20 +306,14 @@
     color: var(--text-still);
   }
 
-  /* The tool, melting out over its last 40 px into the row below — except
-     the preview, which reaches down to the row. */
+  /* The tool reaches down to the row of signs in full strength: no fade
+     at its foot, in no look — a last row that melts away reads as blurred. */
   .inhalt {
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent);
-    mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent);
-  }
-  .inhalt.ganz {
-    -webkit-mask-image: none;
-    mask-image: none;
   }
   /* The row of signs at the foot, as the sidebar's windows row. */
   .fusszeile {

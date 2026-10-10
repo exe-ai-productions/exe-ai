@@ -112,6 +112,37 @@ STARTFRIST = 120.0
 # diffusion model plus a ~5 GB T5 text encoder. The plain STARTFRIST above
 # would report a red lamp on a server that is only still loading.
 STARTFRIST_BAUSATZ = 600.0
+
+
+def start_deadline(*parts: object) -> float:
+    """How long a server may load before its start counts as failed.
+
+    ``parts`` are the files it was started with beside its model: the
+    diffusion model, the text encoders, the VAE and the further kit parts.
+    One of them set is enough for the long wait — the server loads every
+    file it is given before it answers for the first time, whichever switch
+    the model itself came in by. A model on its own keeps the short one.
+    """
+    return STARTFRIST_BAUSATZ if any(parts) else STARTFRIST
+
+
+# The files a server loads beside its model, by the name a draw order carries
+# each under; the server keeps what it was started with under the same name
+# behind an underscore. Named here once, read by the route and by the server.
+START_PARTS = (
+    "diffusion_model", "vae", "t5xxl", "clip_l", "clip_g", "llm",
+    "llm_vision", "tokenizer", "uncond_diffusion_model",
+)
+
+
+def start_parts(holder: object, video_parts: object, prefix: str = "") -> tuple[object, ...]:
+    """What ``holder`` starts a server with beside its model: each of
+    ``START_PARTS`` as it holds it — a draw order under the plain name, the
+    server behind ``prefix`` — and the video kits' further parts, which
+    travel as one bundle. This is what ``start_deadline`` is asked with."""
+    return (*(getattr(holder, prefix + name) for name in START_PARTS), video_parts)
+
+
 # The ceiling for one picture once the model is up: the same fifteen minutes
 # the sd-cli path allows (app/bildrunner.py ZEITGRENZE). A large highres
 # picture on a Mac genuinely takes six or seven, and both paths must give it
@@ -691,6 +722,10 @@ class Bildturbo:
                 # the ones of its family; any other plain model carries none.
                 modell_teile += bildbausatz.checkpoint_switches(
                     familie, t5xxl=t5xxl, clip_l=clip_l, clip_g=clip_g, llm=llm,
+                    # Read only where no family decides about the model:
+                    # then every part that is set goes beside the model.
+                    llm_vision=llm_vision, tokenizer=tokenizer,
+                    uncond_diffusion_model=uncond_diffusion_model, **(video_parts or {}),
                 )
                 # J2: a simple model has no Gespann, so `bildbausatz.schalter()`
                 # never runs for it — the one place `vae_format` otherwise
@@ -840,6 +875,11 @@ class Bildturbo:
             self._start_values = start_values
             self._pid_merken(self._prozess.pid)
             return True
+
+    def _start_deadline(self) -> float:
+        """The wait this server's own start is given, by the files it was
+        started with."""
+        return start_deadline(*start_parts(self, self._video_parts, prefix="_"))
 
     def bereit_abwarten(
         self, frist: float = STARTFRIST, *, stopped: Callable[[], bool] | None = None,
@@ -1166,9 +1206,7 @@ class Bildturbo:
         # server started a moment ago has not bound its port yet (measured:
         # HTTP 503 in 0.04 s on build 820, a refused connection in 0.05 s on
         # build 920). Free on a server that already answered once.
-        if not self.bereit_abwarten(
-            STARTFRIST_BAUSATZ if self._diffusion_model else STARTFRIST, stopped=stopped,
-        ):
+        if not self.bereit_abwarten(self._start_deadline(), stopped=stopped):
             if stopped is not None and stopped():
                 raise BildturboFehler("bild.abgebrochen")
             raise BildturboFehler("bild.turbo_ladefehler")
@@ -1265,9 +1303,7 @@ class Bildturbo:
             self._abgebrochen = False
             self._zeichnet = True
         try:
-            ready = self.bereit_abwarten(
-                STARTFRIST_BAUSATZ if self._diffusion_model else STARTFRIST
-            )
+            ready = self.bereit_abwarten(self._start_deadline())
             if self._abgebrochen:
                 raise BildturboFehler("bild.abgebrochen")
             if not ready:

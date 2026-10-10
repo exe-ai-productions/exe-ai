@@ -55,12 +55,18 @@
     return ids.map((id) => ({ wert: `${KENNUNG}${id}`, text: id, group: t('modell.cloud') }))
   })
 
-  const LESERNAMEN = $derived({ clip: 'CLIP', t5: 'T5', llm: t('bildserver.leser_llm') })
+  /* The groups of the family list: the three readers, and last a group of
+     its own for the one entry that is no family — the instruction every
+     model without a family is written for (app/bildprompt.py `NO_FAMILY`). */
+  const NO_FAMILY = 'no_family'
+  const LESERNAMEN = $derived({
+    clip: 'CLIP', t5: 'T5', llm: t('bildserver.leser_llm'), [NO_FAMILY]: t('bild.familie_keine'),
+  })
   const familienauswahl = $derived(
     Object.entries(stand?.leser ?? {}).flatMap(([leser, namen]) =>
       namen.map((name) => ({
         wert: name,
-        text: familyOf(name)?.label ?? name,
+        text: name === NO_FAMILY ? t('bildserver.no_family_models') : familyOf(name)?.label ?? name,
         group: LESERNAMEN[leser],
       })),
     ),

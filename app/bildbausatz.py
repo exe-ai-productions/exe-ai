@@ -39,6 +39,17 @@ PART_SWITCHES = {
 }
 
 
+# The word a model carries in place of a family where none is to decide
+# about it: the model's family is not read from its file, because the user
+# switched that off for the model. Every part that is set is then sent with
+# its own switch; none is refused for the family and none counts as missing,
+# and sd.cpp tells for itself what the model is. The model's own file goes
+# as ``-m`` (``checkpoint_switches``) unless a diffusion model was chosen
+# for it (``schalter``). No family carries this name, and a request cannot
+# say it — it is put in by the service alone.
+FREE = "free"
+
+
 def _encoders(familie: str) -> dict[str, str]:
     family = image_families.get(familie)
     encoders = family.encoders if family is not None else ()
@@ -50,7 +61,16 @@ def checkpoint_switches(familie: str | None, **encoders: object | None) -> list[
     """The text encoders passed beside ``-m`` for a checkpoint that brings
     none of its own: each encoder its family reads that is set, in the
     family's order (sd.cpp docs/sd3.md:17, ``-m … --clip_l … --clip_g …
-    --t5xxl …``). Empty for a family that reads none, and for no family."""
+    --t5xxl …``). Empty for a family that reads none, and for no family.
+
+    Where no family decides (``FREE``), every part that is set goes beside
+    ``-m`` with its own switch — a text encoder or any further part."""
+    if familie == FREE:
+        switches = {**_ENCODER_SWITCHES, "clip_g": "--clip_g", **PART_SWITCHES}
+        return [
+            entry for name, switch in switches.items() if encoders.get(name)
+            for entry in (switch, str(encoders[name]))
+        ]
     family = image_families.get(familie)
     if family is None:
         return []
@@ -218,10 +238,15 @@ def schalter(gespann: Gespann) -> list[str]:
     suggestion: skip it (a caller that builds an ``Auftrag`` directly, a
     test, a future caller) and the command built here still refuses to
     guess."""
-    if not image_families.is_kit(gespann.familie):
+    if gespann.familie == FREE:
+        # No family decides: every field has its switch and none is refused.
+        erlaubt = dict(_ENCODER_SWITCHES)
+        teile_erlaubt = dict(PART_SWITCHES)
+    elif not image_families.is_kit(gespann.familie):
         raise ValueError(f"{gespann.familie!r} is not a Bausatz family")
-    erlaubt = _encoders(gespann.familie)
-    teile_erlaubt = _parts(gespann.familie)
+    else:
+        erlaubt = _encoders(gespann.familie)
+        teile_erlaubt = _parts(gespann.familie)
     for feld in ("t5xxl", "clip_l", "llm", *PART_SWITCHES):
         wert = getattr(gespann, feld)
         if wert and feld not in erlaubt and feld not in teile_erlaubt:

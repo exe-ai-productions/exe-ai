@@ -30,6 +30,7 @@ from app.bildprompt import (
     ANWEISUNG_NEGATIV,
     ANWEISUNGEN,
     LESER,
+    NO_FAMILY,
     MAX_EINGABE,
     PromptFehler,
     nachricht,
@@ -102,11 +103,11 @@ async def prompt_verbessern(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, t("bild.stil_zu_lang", sprache)
         )
-    family = _familie(config, wunsch.modell, wunsch.familie)
-    # A family that is not known, or one that does not draw from text, has
-    # no instruction: the window asks for the family, and ``draw_image``
-    # draws with the request as it is.
-    anweisung = bildaufbereitung.anweisung(repositories, family) if family else None
+    family = _familie(config, repositories, wunsch.modell, wunsch.familie)
+    # A model without a family writes with the entry kept for such models.
+    # A family that does not draw from text has no instruction: the window
+    # says so, and ``draw_image`` draws with the request as it is.
+    anweisung = bildaufbereitung.anweisung(repositories, family or NO_FAMILY)
     if anweisung is None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, t("bild.prompt_ohne_familie", sprache)
@@ -208,7 +209,8 @@ class AufbereitungAntwort(BaseModel):
     anweisungen: dict[str, str]
     ab_werk: dict[str, str]
     # The families by the reader their text goes through, in the order the
-    # block lists them.
+    # block lists them; last, in a group of its own, the entry for models
+    # without a family.
     leser: dict[str, list[str]]
 
 
@@ -228,16 +230,18 @@ def aufbereitung_lesen(
         verbesserer=bildaufbereitung.verbesserer(repositories),
         anweisungen={name: eigene.get(name, text) for name, text in ANWEISUNGEN.items()},
         ab_werk=dict(ANWEISUNGEN),
-        leser={leser: list(namen) for leser, namen in LESER.items()},
+        leser={**{leser: list(namen) for leser, namen in LESER.items()}, NO_FAMILY: [NO_FAMILY]},
     )
 
 
-def _familie(config: Config, modell: str, genannt: str) -> str:
+def _familie(config: Config, repositories: Repositories, modell: str, genannt: str) -> str:
     """The family the prompt is written for: the one the window states, and
-    without one the family the model's own header names."""
+    without one the family the model's own header names — or none, where
+    the header names none or the reading of the family is switched off for
+    the model (app/bildmodellwerte.py)."""
     if image_families.get(genannt) is not None:
         return genannt
-    if not modell:
+    if not modell or not bildmodellwerte.family_detection(repositories, modell):
         return ""
     try:
         pfad = modell_pfad(ort(config, "image_models"), modell)

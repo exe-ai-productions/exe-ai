@@ -34,7 +34,10 @@
      this list and the dot on the rail disagreed about the same run while
      each of them kept a copy of it. */
   import { weitergereicht } from '../lib/laufstand.js'
-  import { auftragGesehen } from '../lib/agentenampel.svelte.js'
+  /* And the other one they share: which endings have a row here at all.
+     The dot can only lose its colour through a row that is opened, so it
+     must not colour for a run this list leaves out. */
+  import { auftragGesehen, worthReading } from '../lib/agentenampel.svelte.js'
   import { showPage, showReport } from '../lib/bildschau.svelte.js'
   import { farbenSetzen, farbeVon, lesbar } from '../lib/agentenfarbe.svelte.js'
   import { zeitpunkt } from '../lib/zeitpunkt.js'
@@ -94,18 +97,18 @@
 
      A schedule's run that was stopped is listed too: it is the one place
      that run can still be seen. Left as it was for every other ending: a
-     finished run with nothing to say, and an abort by hand, are not news. */
+     finished run with nothing to say, and an abort by hand, are not news.
+
+     Which endings those are is written down once, in `worthReading`
+     (lib/agentenampel.svelte.js), and read from there by this list and by
+     the dot on the rail. What stays here is the part only a list can
+     decide: which link of a chain is the one to show. */
   const berichte = $derived.by(() => {
     const gesehen = new Set()
     const zeilen = []
     for (const auftrag of zustand.auftraege) {
       const werk = auftrag.work_id ?? auftrag.id
-      const zeigen =
-        (auftrag.result ||
-          auftrag.state === 'gescheitert' ||
-          auftrag.state === 'unterbrochen' ||
-          (auftrag.state === 'abgebrochen' && auftrag.cronjob_id)) &&
-        !(weitergereicht(auftrag) && gesehen.has(werk))
+      const zeigen = worthReading(auftrag) && !(weitergereicht(auftrag) && gesehen.has(werk))
       gesehen.add(werk)
       if (zeigen) zeilen.push(auftrag)
     }

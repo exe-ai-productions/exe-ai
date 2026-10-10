@@ -8,7 +8,7 @@
   import { api } from '../lib/api.js'
   import { melde, zustand } from '../lib/zustand.svelte.js'
   import { studioWithPicture } from '../lib/studio.svelte.js'
-  import { t, texte } from '../lib/texte.svelte.js'
+  import { t, teile as textPieces, texte } from '../lib/texte.svelte.js'
   import { stoppuhr } from '../lib/dauer.js'
   import { aufrufZahl, buendeln, laufenderAufruf, schlechtesterPunkt } from '../lib/werkzeugbuendel.js'
   import { tempoGemessen, tempoTitelSchluessel } from '../lib/tempoquelle.js'
@@ -425,6 +425,19 @@
     const open = job.state === 'laeuft' || job.state === 'wartet'
     return stoppuhr((open ? takt.jetzt : Date.parse(job.updated_at)) - Date.parse(job.created_at))
   }
+  // The call that started an agent: it is drawn as that agent's row.
+  const startsAgent = (teil) =>
+    teil.art === 'werkzeug' && teil.werkzeug?.name === 'start_job' && Boolean(teil.werkzeug.auftrag_id)
+  /* The names of the agents this answer started. Every agent row keeps room
+     for the longest of them, so what stands after the name begins at the
+     same place in each row. */
+  const agentNames = $derived([
+    ...new Set(
+      teile
+        .filter(startsAgent)
+        .map((teil) => chatJob(teil.werkzeug.auftrag_id)?.agent ?? teil.werkzeug.argumente?.agent ?? ''),
+    ),
+  ])
 
   /* How long a finished thinking stretch took: from its own start to its
      own end — the first event after it that was not thinking (App.svelte,
@@ -617,9 +630,11 @@
               ((a.art !== 'reasoning' || a.text) && (a.art !== 'content' || a.text?.trim())),
           )
           .map((a) =>
-            a.art === 'werkzeug'
-              ? { ...a, werkzeug: werkzeuge.find((w) => w?.aufruf_id === a.aufruf_id) }
-              : a,
+            a.art !== 'werkzeug'
+              ? a
+              : a.writing
+                ? { ...a, werkzeug: unbegunCall(a.writing) }
+                : { ...a, werkzeug: werkzeuge.find((w) => w?.aufruf_id === a.aufruf_id) },
           )
           // A live tool section whose entry is missing draws nothing rather
           // than an empty row — can only happen if the two lists drift apart.
@@ -670,6 +685,22 @@
     ]
   })
 
+
+  /* A call that has not begun: the model is still writing it, or has
+     written it and its turn has not come (App.svelte, `callBeingWritten`).
+     It has no entry in the tool log yet and is drawn as a running call's
+     row from what is known of it: its name and, while it is written, the
+     number of characters so far — `written` is null once it is written. */
+  function unbegunCall(writing) {
+    return {
+      name: writing.name,
+      written: writing.written,
+      unbegun: true,
+      argumente: {},
+      ergebnis: null,
+      fehlgeschlagen: false,
+    }
+  }
 
   /* The same parts, with runs of two or more tool calls bundled into one
      entry (lib/werkzeugbuendel.js). */
@@ -915,6 +946,7 @@
       class="werkzeug-kopf"
       class:offen={offeneTeile.has(i)}
       aria-expanded={offeneTeile.has(i)}
+      disabled={teil.werkzeug.unbegun}
       title={stand?.laeuft
         ? t('werkzeug.hintergrund_laeuft')
         : stand?.atmet ? t('werkzeug.hintergrund_ungelesen') : null}
@@ -929,7 +961,11 @@
         if (stand && !stand.laeuft) teil.werkzeug.gesehen = true
       }}
     >
+      {#if teil.werkzeug.written != null}
+        {@render beingWritten(teil.werkzeug)}
+      {:else}
       <span class="wz-name werkzeugname">{teil.werkzeug.name}</span>
+      {/if}
       <!-- WHICH run this was. Only a background run has a number;
            every other call is one of one and would be told nothing by
            a "#1". Quiet, because it identifies rather than reports. -->
@@ -970,7 +1006,7 @@
         </span>
       {/if}
     </button>
-    {#if offeneTeile.has(i)}
+    {#if offeneTeile.has(i) && !teil.werkzeug.unbegun}
       <div class="werkzeug-text" use:rollfade transition:slide={{ duration: 200 }}>
         {#if Object.keys(teil.werkzeug.argumente ?? {}).length}
           <dl class="wz-argumente">
@@ -990,6 +1026,15 @@
       </div>
     {/if}
   </div>
+{/snippet}
+
+<!-- A call the model is still writing: the sentence the notice over the
+     input says, in the row. The name stands in the tool face, where a
+     call's name always stands, so nothing moves when the call is complete
+     and its arguments take the words' place. The number of characters runs
+     along in the fixed face: its digits are all one width. -->
+{#snippet beingWritten(werkzeug)}
+  <span class="wz-writing">{#each textPieces('werkzeug.schreibt', { name: werkzeug.name, zeichen: werkzeug.written }) as piece}{#if piece.wert === werkzeug.name}<span class="werkzeugname">{piece.wert}</span>{:else if piece.wert}<span class="wz-count">{piece.wert}</span>{:else}{piece.fest}{/if}{/each}</span>
 {/snippet}
 
 <!-- One entry's dot on the answer's line. The house's own state dot
@@ -1239,10 +1284,12 @@
         {#if eintrag.art === 'buendel'}
           {@const offen = offeneTeile.has(eintrag.schluessel)}
           {@const punktStand = buendelPunkt(eintrag)}
-          {@const laufend = laufenderAufruf(eintrag.eintraege)}
+          {@const laufend = laufenderAufruf(eintrag.eintraege.filter(({ teil }) => !teil.werkzeug?.unbegun))}
+          {@const written = eintrag.eintraege.findLast(({ teil }) => teil.werkzeug?.written != null)?.teil.werkzeug}
           <!-- Two or more tool calls in a row, with the thinking before and
                between them: one row, always closed. It names the number of
-               calls — while one runs, that call's name and "running" — and
+               calls — while one runs, that call's name and "running"; while
+               one is being written, that, the way its own row says it — and
                its dot is the worst state among the calls. Opened, the calls
                and the thinking stand as they always did, without a dot
                each. -->
@@ -1261,7 +1308,9 @@
                    stroke="currentColor" stroke-width="2.5" aria-hidden="true">
                 <path d="M9 6l6 6-6 6" />
               </svg>
-              {#if laufend}
+              {#if written}
+                {@render beingWritten(written)}
+              {:else if laufend}
                 <span class="wz-vorschau werkzeugname">{laufend.name}</span>
                 <span class="wz-rechts"><span class="wz-dauer">{t('werkzeug.buendel_laeuft')}</span></span>
               {/if}
@@ -1293,25 +1342,36 @@
         {#if teil.art === 'reasoning'}
           {@render gedankeEintrag(teil, i, false)}
 
-        {:else if teil.art === 'werkzeug' && teil.werkzeug.name === 'start_job' && teil.werkzeug.auftrag_id}
+        {:else if startsAgent(teil)}
           {@const job = chatJob(teil.werkzeug.auftrag_id)}
           <!-- An agent this answer started: a quiet row at the line, the
                agent's sign where a call has its dot — so it reads at once
                as the agent's — then its name, how long it has been at work
                and the tool it called last; no card. Once it has stopped,
                the row keeps its name, the time it took and how it ended.
-               Its transcript is one click away, in the agents view. -->
+               Its transcript is one click away, in the agents view.
+
+               The pieces stand in columns: the name's is as wide as the
+               longest name among this answer's agents — the other names
+               lie under it unseen and only lend their width — and the
+               clock's and the state's are there in every row, also while
+               they are empty. -->
           <div class="ereignis agent-row">
             <span class="punkt agent-mark" aria-hidden="true"><Agentenmarke groesse={13} /></span>
-            <span class="agent-name">{job?.agent ?? teil.werkzeug.argumente?.agent}</span>
-            {#if job}
-              <span class="agent-time">{agentRuntime(job)}</span>
-              {#if job.state === 'laeuft'}
+            <span class="agent-name">
+              <span>{job?.agent ?? teil.werkzeug.argumente?.agent}</span>
+              {#each agentNames as other (other)}
+                <span class="agent-name-room" aria-hidden="true">{other}</span>
+              {/each}
+            </span>
+            <span class="agent-time">{job ? agentRuntime(job) : ''}</span>
+            <span class="agent-status">
+              {#if job?.state === 'laeuft'}
                 {#if job.last_tool}<span class="agent-step werkzeugname">{job.last_tool}</span>{/if}
-              {:else}
+              {:else if job}
                 <span class="agent-state" class:wartet={job.state === 'wartet'}>{t('jobs.zustand.' + job.state)}</span>
               {/if}
-            {/if}
+            </span>
             <button class="agent-transcript" onclick={() => openTranscript(job?.id ?? teil.werkzeug.auftrag_id)}>
               {t('agent_row.transcript')}
             </button>
@@ -1917,17 +1977,55 @@
     top: 3px;
     color: var(--text-leise);
   }
-  .agent-name { color: var(--text); font-weight: 500; }
-  .agent-time { font-variant-numeric: tabular-nums; color: var(--text-still); }
-  .agent-step {
+  /* The row's pieces keep their places: from row to row, while the clock
+     runs and while the last tool changes. An answer is only as wide as its
+     widest row, so a piece that grew moved everything at the far end of
+     every row with it.
+
+     The name: all the names of this answer's agents lie in one cell, only
+     the row's own is seen — the cell is as wide as the longest. */
+  .agent-name {
+    display: inline-grid;
+    grid-template-columns: minmax(0, max-content);
+    min-width: 0;
+    color: var(--text);
+    font-weight: 500;
+  }
+  .agent-name > span {
+    grid-area: 1 / 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--werkzeug);
+  }
+  .agent-name-room {
+    height: 0;
+    visibility: hidden;
+    user-select: none;
+  }
+  /* The clock: room for five characters, minutes and seconds up to 99:59 —
+     an agent's own time limit starts at twenty minutes. A longer clock
+     widens it, it is never cut. */
+  .agent-time {
+    flex: none;
+    min-width: 5ch;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-still);
+  }
+  /* How it ended, or the tool it called last: sixteen characters of the
+     fixed face, the longest name among the program's own tools. A longer
+     name ends in an ellipsis; the transcript has it whole. Where the
+     answer is narrower than the row, this cell and the name give way. */
+  .agent-status {
+    width: 16ch;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font: 12px var(--schrift-fest);
   }
-  .agent-state { color: var(--text-still); }
+  .agent-step { color: var(--werkzeug); }
+  .agent-state { font: 12.5px var(--schrift); color: var(--text-still); }
   .agent-state.wartet { color: var(--gelb-text); }
   .agent-transcript {
     margin-left: auto;
@@ -2071,6 +2169,25 @@
   }
   .werkzeug-kopf:hover .wz-vorschau {
     color: var(--text-leise);
+  }
+  /* A call that has not begun has nothing to unfold. */
+  .werkzeug-kopf:disabled {
+    cursor: default;
+  }
+  /* "… is being written — n characters": words, so they leave the fixed
+     face like the words at the row's far end; the name in them and the
+     running number keep it. It gives way like the preview it stands for. */
+  .werkzeug-kopf .wz-writing {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--schrift);
+  }
+  .werkzeug-kopf .wz-count {
+    font-family: var(--schrift-fest);
+    font-variant-numeric: tabular-nums;
   }
   /* "Running" and the failure mark share the row's far end — one item
      pushed right, not two competing auto margins. They are words, not

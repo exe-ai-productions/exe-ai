@@ -176,3 +176,59 @@ def test_where_a_drawn_piece_goes_is_no_dial_of_the_picture():
     for dials in (bildlauf._regler_von(wunsch), bildlauf._regler_von(wunsch.model_dump())):
         assert "crop_of" not in dials and "crop_box" not in dials
         assert (dials["startbild"], dials["staerke"], dials["maske"]) == ("piece.png", 0.4, "mask.png")
+
+
+def test_a_failed_run_carries_the_reason_as_its_output(monkeypatch):
+    """A failed picture's run keeps what the caller was told — the sentence
+    and, below it, the painter's last words —, written before the run
+    closes, so the terminal still says why once the message is gone."""
+    reason = "The image could not be drawn\n\n[ERROR] model file is broken"
+    lauf = bildlauf.beginnen("chat-bild-reason", "broken")
+    told: list[str] = []
+    melden = laeufe.melden
+
+    def _melden(chat_id, **daten):
+        told.append(daten["typ"])
+        melden(chat_id, **daten)
+
+    monkeypatch.setattr(laeufe, "melden", _melden)
+    bildlauf.beenden(lauf, gescheitert=True, reason=reason)
+
+    assert lauf.zustand == FEHLER
+    assert lauf.ausgabe == reason
+    assert _als_daten(lauf)["ausgabe"] == reason
+    assert told == ["lauf_zeile", "lauf_ende"]
+    laeufe.vergessen("chat-bild-reason")
+
+
+def test_a_finished_and_a_stopped_run_stay_without_text():
+    """The silence probe: only a failure has something to explain. A run
+    that finished or was stopped takes no text, whatever it is handed, and
+    a failure nobody gave a reason for stays empty as before."""
+    finished = bildlauf.beginnen("chat-bild-silent", "fine")
+    bildlauf.beenden(finished, reason="never shown")
+    assert finished.zustand == FERTIG and finished.ausgabe == ""
+
+    stopped = bildlauf.beginnen("chat-bild-silent", "stopped")
+    bildlauf.beenden(stopped, abgebrochen=True, reason="never shown")
+    assert stopped.zustand == ABGEBROCHEN and stopped.ausgabe == ""
+
+    bare = bildlauf.beginnen("chat-bild-silent", "failed")
+    bildlauf.beenden(bare, gescheitert=True)
+    assert bare.zustand == FEHLER and bare.ausgabe == ""
+    laeufe.vergessen("chat-bild-silent")
+
+
+def test_a_reason_that_cannot_be_written_still_lets_the_run_close(monkeypatch):
+    """The text is the lesser thing: when writing it fails, the run still
+    ends red instead of staying on "running" for good."""
+    lauf = bildlauf.beginnen("chat-bild-broken-text", "broken")
+
+    def _zeile(*a, **k):
+        raise RuntimeError("no room")
+
+    monkeypatch.setattr(laeufe, "zeile", _zeile)
+    bildlauf.beenden(lauf, gescheitert=True, reason="The image could not be drawn")
+    assert lauf.zustand == FEHLER and lauf.ausgabe == ""
+    laeufe.vergessen("chat-bild-broken-text")
+

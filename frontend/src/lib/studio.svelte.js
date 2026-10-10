@@ -811,6 +811,16 @@ export function maskIntoChat(chatId) {
   masken.set(chatId, held)
 }
 
+/* And the way back, for a chat created from the window that is taken away
+   again: what was painted stays with the window, under no chat, where the
+   surface finds it as before that chat. */
+export function maskOutOfChat(chatId) {
+  const held = masken.get(chatId)
+  if (!held) return
+  masken.delete(chatId)
+  masken.set(null, held)
+}
+
 /* Sets values without writing them: what the model starts with, shown for
    a chat that has none of its own. */
 export function werteVorschlagen(teil) {

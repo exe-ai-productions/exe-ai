@@ -149,6 +149,39 @@ def test_unbrauchbare_zahlen_des_servers_kosten_nur_sich_selbst():
 # claim, not the spelling: that nothing is estimated, and that a reading made
 # of chunks never reaches the display.
 
+def test_ein_gleicher_uhrstand_macht_die_erzeugungszeit_nicht_zum_ganzen_lauf():
+    """Measured on windows-latest: the clock there counts in steps of about
+    16 ms, so a one-chunk answer stamped the same moment for its first token
+    and for the end of the run. The generation time then fell back to the
+    whole run — 0.7 s for an answer written in no measurable time — and the
+    speed beside it read as if the thinking had been counted in again."""
+    werte = tempo_ermitteln(
+        zeitmessung={},
+        nutzung={},
+        haeppchen=1,
+        dauer=0.703,
+        erstes_token_nach=0.703,
+        denken_gesehen=True,
+    )
+
+    assert werte["erzeugungs_sekunden"] is None
+
+
+def test_die_erzeugungszeit_bleibt_der_rest_nach_dem_ersten_token():
+    """The silence probe for the fix above: with a real gap between the
+    first token and the end, the span is still that gap and nothing else."""
+    werte = tempo_ermitteln(
+        zeitmessung={},
+        nutzung={},
+        haeppchen=3,
+        dauer=1.2,
+        erstes_token_nach=0.5,
+        denken_gesehen=True,
+    )
+
+    assert werte["erzeugungs_sekunden"] == 0.7
+
+
 from pathlib import Path  # noqa: E402 - the guard half belongs at the bottom
 
 APP = Path(__file__).resolve().parents[1] / "frontend" / "src" / "App.svelte"

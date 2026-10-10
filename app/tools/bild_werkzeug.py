@@ -409,7 +409,13 @@ def fensterbild(repositories, chat_id: str | None, config) -> FensterBild:
         modell = bildstandardmodell.lesen(repositories, modelle)
         if not modell:
             return FensterBild(None)
-    header = bildinhalt.family(ordner / modell) or ""
+    # A model whose family is not to be read has none here either, exactly
+    # as the picture route takes it: its own values hold, and its kit is
+    # the one given to it.
+    header = (
+        bildinhalt.family(ordner / modell) or ""
+        if bildmodellwerte.family_detection(repositories, modell) else ""
+    )
     familie = image_families.get(window.get("familie")) or image_families.get(header)
     start = image_families.start_values(familie.name if familie is not None else None, modell)
     own = (

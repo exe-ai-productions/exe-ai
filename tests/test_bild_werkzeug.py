@@ -1130,3 +1130,62 @@ def test_draw_image_starts_a_distilled_model_at_its_own_values(tmp_path, monkeyp
         gezeichnet[name] = dienst.gezeichnet[0]
     assert (gezeichnet[modelle[0]]["schritte"], gezeichnet[modelle[0]]["cfg"]) == (4, 1.0)
     assert (gezeichnet[modelle[1]]["schritte"], gezeichnet[modelle[1]]["cfg"]) == (20, 1.0)
+
+
+# --- A model whose family is not read ------------------------------------------
+
+
+class _RepoWithModelValues(_Repo):
+    """The window reading plus what the picture server holds per model."""
+
+    def __init__(self, wert, model_values):
+        super().__init__(wert)
+        self._model_values = model_values
+
+    def zusammengefuehrt(self, schluessel, *, chat=None, vorgabe=None):
+        if schluessel == "bildmodellwerte":
+            return self._model_values
+        return super().zusammengefuehrt(schluessel, chat=chat, vorgabe=vorgabe)
+
+
+def test_a_model_whose_family_is_not_read_is_described_without_one(tmp_path, monkeypatch):
+    """The tool's description follows the switch of the picture server: with
+    the reading off, the header's family is not told to the language model —
+    and with it on (the silence probe) it is, as before."""
+    ordner = tmp_path / "bilder"
+    ordner.mkdir()
+    (ordner / "a.safetensors").write_bytes(b"x")
+    monkeypatch.setattr(bild_werkzeug, "ort", lambda config, was: ordner)
+    # What the file's header would say, were it asked.
+    monkeypatch.setattr(bild_werkzeug.bildinhalt, "family", lambda pfad: "sdxl")
+    window = {"modell": "a.safetensors"}
+
+    read = bild_werkzeug.fensterbild(_RepoWithModelValues(window, {}), "c1", None)
+    assert read.familie is not None and read.familie.name == "sdxl"
+
+    unread = bild_werkzeug.fensterbild(
+        _RepoWithModelValues(window, {"a.safetensors": {"family_detection": False}}), "c1", None
+    )
+    assert unread.familie is None
+
+
+def test_draw_image_leaves_the_kit_of_such_a_model_to_the_service(tmp_path, monkeypatch):
+    """Drawn from the chat, a model whose family is not read goes to the
+    picture route exactly as the picture window sends it: the model alone,
+    no family and no part named. The route then puts in the parts the model
+    was given, the same for both."""
+    model = "model.safetensors"
+    vorgaben = {
+        "family": "", "family_detection": False, "standalone": True,
+        "parts": {"llm": "llm.gguf", "tokenizer": "tokenizer.json", "vae": "ae.safetensors"},
+    }
+    service, text = _zeichnen_mit_dienst(
+        tmp_path, monkeypatch, {"c1": {"modell": model}}, "c1",
+        modelle=[model], familien={model: ""}, vorgaben=vorgaben,
+    )
+    assert len(service.gezeichnet) == 1, text
+    body = service.gezeichnet[0]
+    assert body["modell"] == model
+    assert "familie" not in body
+    for field in ("diffusion_model", "t5xxl", "clip_l", "clip_g", "llm", "tokenizer", "vae"):
+        assert field not in body, field

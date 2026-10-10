@@ -45,7 +45,11 @@ import { weitergereicht } from './laufstand.js'
    as a failure here because a run that stopped without a result is
    something you have to go and look at. That sentence was true of every
    `unterbrochen` run when it was written; since e959e99 it is true of one
-   of its two kinds, and `weitergereicht` is the other. */
+   of its two kinds, and `weitergereicht` is the other.
+
+   A colour here is what an ending is worth IF it reaches the dot. Whether
+   it does is `worthReading` below: an abort is red only where it left a
+   row to open — a schedule's run, or a run that had written something. */
 const AUSGANG = {
   fertig: 'gruen',
   abgebrochen: 'rot',
@@ -92,6 +96,28 @@ export function istBeendet(auftrag) {
   return Boolean(auftrag) && Object.hasOwn(AUSGANG, auftrag.state)
 }
 
+/** Does this ended run have something to open in the reports list?
+ *
+ *  A report — or an ending worth reading without one: a failure, a run a
+ *  service restart cut off, and a schedule's run that was stopped, because
+ *  the list is the one place that last one can still be seen. A finished
+ *  run with nothing to say and a run stopped by hand are neither.
+ *
+ *  It stands here, and the reports list takes it from here, because the dot
+ *  loses a colour in exactly one way: the run is opened, and only a row of
+ *  that list can be opened. While the list kept this to itself, a run
+ *  stopped by hand painted the dot red and had no row to open — red until
+ *  the page was loaded again. One function answers for both, so neither
+ *  can change its mind alone. */
+export function worthReading(job) {
+  return Boolean(
+    job.result ||
+      job.state === 'gescheitert' ||
+      job.state === 'unterbrochen' ||
+      (job.state === 'abgebrochen' && job.cronjob_id),
+  )
+}
+
 /** Is this run still waiting to be looked at? */
 export function auftragUngesehen(job) {
   if (!job) return false
@@ -128,6 +154,11 @@ export function punktfarbe() {
        EVERY `unterbrochen` row, `dienst_neustart` included. This leaves out
        the handed-on ones only. */
     if (weitergereicht(job)) continue
+    /* Nothing to open, nothing to colour. Skipped like a handed-on run
+       rather than painted 'still', and for the same reason: a run stopped
+       by hand a minute ago must not push an older failure nobody has
+       opened off the dot. */
+    if (!worthReading(job)) continue
     /* Asked per run, not against one watermark: a newer report somebody
        has read must not push an older one nobody has read off the dot. */
     if (!auftragUngesehen(job)) continue

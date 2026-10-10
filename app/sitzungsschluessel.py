@@ -39,19 +39,25 @@ AUSGENOMMEN = frozenset({"/api/v1/tools/oauth/callback"})
 
 # The header the app's own frontend sends on every fetch; the query
 # parameter is the fallback for the places a browser cannot attach a header
-# at all — EventSource and a plain <img src>/href. Exactly these five, each
-# GET, each a segment after the ``{}``; the last is a chat document's file,
-# fetched by the doc folder's download link and by the app shell's
-# preview. Every other route only accepts the header — a query
+# at all — EventSource and a plain <img src>/href. Exactly these six, each
+# GET, each ``{}`` one segment; the last two are a chat document's file and
+# a file lying loose below a chat's own folder, fetched by the doc folder's
+# tile, its download link and the app shell's preview. That last one may
+# lie in a folder of its own, so its path is the one place a value runs
+# over several segments (``REST``). Every other route
+# only accepts the header — a query
 # parameter lands in server logs and browser history, the header does not.
 HEADER = "X-Sitzungsschluessel"
 ABFRAGEPARAMETER = "schluessel"
+# One segment or more, at the end of a pattern only.
+REST = "{+}"
 ABFRAGE_ERLAUBT = (
     "/api/v1/agentendock/{}",
     "/api/v1/laeufe/{}/stream",
     "/api/v1/events/stream",
     "/api/v1/images/{}",
     "/api/v1/documents/{}/file",
+    "/api/v1/chat-files/{}/" + REST,
 )
 
 # The dock route shares its prefix with a literal listing route
@@ -68,14 +74,26 @@ def _abfrageparameter_erlaubt(weg: str) -> bool:
     teile = weg.split("/")
     for muster in ABFRAGE_ERLAUBT:
         muster_teile = muster.split("/")
-        if len(muster_teile) != len(teile):
-            continue
-        if not all(m == "{}" or m == t for m, t in zip(muster_teile, teile, strict=True)):
-            continue
-        if "{}" in muster_teile:
-            wert = teile[muster_teile.index("{}")]
-            if not wert or wert in KEIN_WERT.get(muster, frozenset()):
+        path_parts = teile
+        if muster_teile[-1] == REST:
+            # Whatever follows the fixed part is one value, however many
+            # segments it has — and none of them may be empty.
+            fixed = len(muster_teile) - 1
+            rest = teile[fixed:]
+            if not rest or not all(rest):
                 continue
+            muster_teile = [*muster_teile[:-1], "{}"]
+            path_parts = [*teile[:fixed], "/".join(rest)]
+        if len(muster_teile) != len(path_parts):
+            continue
+        if not all(m == "{}" or m == t for m, t in zip(muster_teile, path_parts, strict=True)):
+            continue
+        # Every ``{}`` has to carry a value — a pattern with two of them is
+        # not matched by a path that fills only the first. The literal
+        # values a route shares its prefix with are told apart by the first.
+        values = [t for m, t in zip(muster_teile, path_parts, strict=True) if m == "{}"]
+        if values and (not all(values) or values[0] in KEIN_WERT.get(muster, frozenset())):
+            continue
         return True
     return False
 

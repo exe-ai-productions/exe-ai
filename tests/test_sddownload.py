@@ -1106,3 +1106,90 @@ def test_playing_windows_an_existing_exe_build_is_already_there(tmp_path, monkey
     with pytest.raises(SddownloadFehler) as error:
         Sddownload(tmp_path).starten()
     assert error.value.grund == "schon_da"
+
+
+# --- The way back to the tested build -------------------------------------
+
+_NEWER = "master-989-c678dfe"
+
+
+def _play_macos(monkeypatch) -> None:
+    monkeypatch.setattr(sddownload.sys, "platform", "darwin")
+    monkeypatch.setattr(sddownload.platform, "machine", lambda: "arm64")
+
+
+def _lay_build(tmp_path, name: str):
+    folder = tmp_path / ORDNER / name
+    folder.mkdir(parents=True)
+    program = folder / sddownload.program_name()
+    program.write_bytes(b"x")
+    program.chmod(0o755)
+    return folder
+
+
+def test_restoring_replaces_a_newer_build_with_the_pinned_one(tmp_path, monkeypatch):
+    """The way back from an update: the pinned build is fetched again and
+    the newer one goes, although a plain fetch leaves a newer one standing."""
+    _play_macos(monkeypatch)
+    newer = _lay_build(tmp_path, _NEWER)
+    monkeypatch.setattr(sddownload.httpx, "stream", FalscherStrom(_archiv_mit_programm()))
+
+    download = Sddownload(tmp_path)
+    download.starten(replace_newer=True)
+    _warten(download)
+
+    stand = download.stand()
+    assert stand is not None and stand.fertig and stand.fehler is None
+    assert sddownload.installierter_bau(tmp_path) == BAU
+    assert (tmp_path / ORDNER / BAU / sddownload.program_name()).is_file()
+    assert not newer.exists()
+
+
+def test_restoring_fetches_the_pinned_build_anew_where_its_folder_still_lies(
+    tmp_path, monkeypatch
+):
+    """Beside a newer build the pinned folder is not the build that runs,
+    and nothing says it is whole: it is fetched again instead of being
+    reported as already there."""
+    _play_macos(monkeypatch)
+    _lay_build(tmp_path, BAU)
+    newer = _lay_build(tmp_path, _NEWER)
+    strom = FalscherStrom(_archiv_mit_programm())
+    monkeypatch.setattr(sddownload.httpx, "stream", strom)
+
+    download = Sddownload(tmp_path)
+    download.starten(replace_newer=True)
+    _warten(download)
+
+    stand = download.stand()
+    assert stand is not None and stand.fertig and stand.fehler is None
+    assert sddownload.installierter_bau(tmp_path) == BAU
+    assert not newer.exists()
+
+
+def test_a_plain_fetch_still_leaves_the_newer_build_and_reports_the_pinned_one_there(
+    tmp_path, monkeypatch
+):
+    """Silence probe: without the word to replace it, nothing about a
+    plain fetch changed — the pinned folder counts as already there."""
+    _play_macos(monkeypatch)
+    _lay_build(tmp_path, BAU)
+    newer = _lay_build(tmp_path, _NEWER)
+    with pytest.raises(SddownloadFehler) as fehler:
+        Sddownload(tmp_path).starten()
+    assert fehler.value.grund == "schon_da"
+    assert newer.is_dir()
+
+
+def test_only_a_fetched_build_other_than_the_pinned_one_can_be_restored(tmp_path):
+    assert sddownload.restorable(tmp_path) is False
+    pinned = _lay_build(tmp_path, BAU)
+    assert sddownload.restorable(tmp_path) is False
+    _lay_build(tmp_path, _NEWER)
+    assert sddownload.restorable(tmp_path) is True
+    # A generator unpacked by hand runs ahead of every fetched build and
+    # blocks a fetch: beside it there is nothing to offer.
+    loose = pinned.parent / sddownload.program_name()
+    loose.write_bytes(b"x")
+    loose.chmod(0o755)
+    assert sddownload.restorable(tmp_path) is False

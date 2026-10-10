@@ -163,6 +163,14 @@
      right column, the chat tile and the input bar. The drawing a surface
      shows is named per look. */
   const heaven = $derived(modus === 'heaven')
+  /* Exe carries one drawing, on the frame alone — the cubes under the side
+     rails; "auto" is Exe while the device reports dark. The rails, the
+     chat tile and the input bar take nothing: whatever stands on the
+     frame is left as it is. */
+  const exe = $derived(modus === 'dunkel' || (modus === 'auto' && geraet.dunkel))
+  /* Dark Matter carries one drawing too, on the frame alone: the net of
+     stars. */
+  const darkmatter = $derived(modus === 'darkmatter')
   const leistenZeichnung = $derived(moune ? 'huegel' : heaven ? 'balloons' : pearl ? 'waves' : false)
   const eingabeZeichnung = $derived(moune ? 'pusteblume' : heaven ? 'paper-plane' : pearl ? 'oyster' : false)
 
@@ -1318,6 +1326,7 @@
     const gone = bildQueue.find((w) => w.queue_id === id)
     if (!gone) return
     bildQueue = bildQueue.filter((w) => w !== gone)
+    gone.settle(false)
     const run = gone.lauf_kennung
     if (run) {
       const rest = bildQueue.filter((w) => w.lauf_kennung === run)
@@ -1350,14 +1359,21 @@
 
   /* Counted per page: the id only tells the wishes of this one line apart. */
   let queueCounter = 0
-  /* Enqueue and, if nothing is drawing yet, start working the queue off. */
-  async function bildLokalZeichnen(wunsch) {
+  /* Enqueue and, if nothing is drawing yet, start working the queue off.
+     Answers how this one picture ended, once it has: true when it was
+     drawn, false when it failed, was stopped or left the line undrawn. */
+  function bildLokalZeichnen(wunsch) {
     queueCounter += 1
-    wunsch = { ...wunsch, queue_id: queueCounter }
-    bildQueue.push(wunsch)
+    let settle
+    const outcome = new Promise((resolve) => { settle = resolve })
+    bildQueue.push({ ...wunsch, queue_id: queueCounter, settle })
     bildZahlSetzen()
     bildChatsAktualisieren()
-    if (bildLokalLaeuft) return
+    if (!bildLokalLaeuft) workPictureLine()
+    return outcome
+  }
+
+  async function workPictureLine() {
     bildLokalLaeuft = true
     try {
       while (bildQueue.length) {
@@ -1370,6 +1386,9 @@
         // unless it still has more of its own waiting in the queue.
         bildLaufWunsch = null
         bildChatsAktualisieren()
+        // Said only now: whoever hears it finds the line as it stands
+        // without this picture.
+        naechste.settle(Boolean(naechste.drawn))
       }
     } finally {
       bildLokalLaeuft = false
@@ -1418,7 +1437,7 @@
     try {
       // The line's own marks stay here; the service takes no field it does
       // not know.
-      const { queue_id: _, ...request } = wunsch
+      const { queue_id: _, settle: _settle, ...request } = wunsch
       const antwort = await api.bildZeichnen(request)
       // Drawn: it leaves the line to come at once, not only once the chat
       // has caught up with it.
@@ -1664,6 +1683,7 @@
   function bildStoppen() {
     // Cancel everything, not only the one drawing: the queued ones were
     // asked for by the same hand and stopping means stopping.
+    for (const waiting of bildQueue) waiting.settle(false)
     bildQueue = []
     bildZahlSetzen()
     // The queued chats drop from the set right away; the one still drawing
@@ -1910,6 +1930,77 @@
        would keep showing the empty result. */
     const werkzeugAnhaengen = (aufrufId, zeitpunktMs) => {
       platzhalter.abschnitte.push({ art: 'werkzeug', aufruf_id: aufrufId, seit: zeitpunktMs ?? Date.now() })
+    }
+    /* A call has its row from the moment the model begins to write it, not
+       only once it is complete: a long argument takes the model a minute,
+       and all that while the answer showed a waiting word and no call.
+
+       Such a row is a section without a call id — the id only exists once
+       the call is complete — that says under `writing` which call of the
+       round it is, its name and how many characters of it are written. The
+       complete call takes the row over (`rowOfCall`), so it is one row from
+       the first character to the result. */
+    const dropRows = (which) => {
+      if (platzhalter.abschnitte.some(which)) {
+        platzhalter.abschnitte = platzhalter.abschnitte.filter((a) => !which(a))
+      }
+    }
+    /* Whether rows stand that are written out and wait for their turn. A
+       round that was cut off answers only the call it was cut at; the rows
+       of its other calls never begin. They go the moment the model writes
+       or thinks again — only then is it certain their turn will not come. */
+    let rowsWaiting = false
+    const modelGoesOn = () => {
+      if (!rowsWaiting) return
+      rowsWaiting = false
+      dropRows((a) => a.writing?.written === null)
+    }
+    const callBeingWritten = (index, name, written, zeitpunktMs) => {
+      modelGoesOn()
+      const row = platzhalter.abschnitte.find((a) => a.writing?.index === index)
+      if (row) row.writing = { index, name, written }
+      else {
+        platzhalter.abschnitte.push({
+          art: 'werkzeug',
+          aufruf_id: null,
+          writing: { index, name, written },
+          seit: zeitpunktMs ?? Date.now(),
+        })
+        runter()
+      }
+    }
+    /* A complete call says the round's stream has ended, so every call of
+       the round is written: the rows still waiting for their turn stop
+       counting and keep their name. The call takes the row it was written
+       in — the first of its name, calls begin in the order they were
+       written. Handed back, or nothing for a call that was never reported
+       while it was written. */
+    const writtenRow = (aufrufId, name) => {
+      for (const a of platzhalter.abschnitte) if (a.writing) a.writing.written = null
+      const row = platzhalter.abschnitte.find((a) => a.writing?.name === name)
+      if (row) {
+        row.aufruf_id = aufrufId
+        delete row.writing
+      }
+      rowsWaiting = platzhalter.abschnitte.some((a) => a.writing)
+      return row
+    }
+    // The row of a call that is complete: the one it was written in, or a
+    // new one at the end, as before.
+    const rowOfCall = (aufrufId, name, zeitpunktMs) => {
+      if (!writtenRow(aufrufId, name)) werkzeugAnhaengen(aufrufId, zeitpunktMs)
+    }
+    /* The run is over. A call still being written never became a call, and
+       one that got its row at its permission question (`asked`) and was
+       never answered never ran: their rows go, no half row stays. */
+    const dropRowsNeverBegun = () => {
+      for (const row of platzhalter.abschnitte.filter((a) => a.asked)) {
+        const at = platzhalter.werkzeuge.findLastIndex(
+          (w) => w.aufruf_id === row.aufruf_id && w.ergebnis === null,
+        )
+        if (at >= 0) platzhalter.werkzeuge.splice(at, 1)
+      }
+      dropRows((a) => a.writing || a.asked)
     }
     /* A question of this run that is settled comes down — keyed by call id,
        so only the one that was actually answered goes. */
@@ -2182,6 +2273,8 @@
         if (ereignis.typ !== 'reasoning' && ereignis.typ !== 'denktempo') {
           endThinking(ereignis.zeitpunkt_ms)
         }
+        // The model thinks or writes again: the round before is over.
+        if (ereignis.typ === 'reasoning' || ereignis.typ === 'content') modelGoesOn()
         if (ereignis.typ === 'start') {
           lauf.generationId = ereignis.generation_id
           platzhalter.id = ereignis.message_id
@@ -2290,6 +2383,22 @@
           // The run stands at a tool now: the thinking is over.
           taetigkeitSetzen(platzhalter, 'werkzeug', ereignis.zeitpunkt_ms, true)
           lesungenLeeren(platzhalter)
+          /* The call is complete and waits for a yes. The row it was
+             written in is its row from here on, not a line that still says
+             "being written" — marked `asked` until the call starts; a call
+             without such a row gets its row when it starts, as before. */
+          const asked = writtenRow(ereignis.aufruf_id, ereignis.name)
+          if (asked) {
+            asked.asked = true
+            platzhalter.werkzeuge.push({
+              aufruf_id: ereignis.aufruf_id,
+              name: ereignis.name,
+              server: '',
+              argumente: ereignis.argumente,
+              ergebnis: null,
+              fehlgeschlagen: false,
+            })
+          }
           zustand.werkzeugfrage[zielChat] = {
             generationId: lauf.generationId,
             aufrufId: ereignis.aufruf_id,
@@ -2328,7 +2437,7 @@
             ergebnis: null,
             fehlgeschlagen: false,
           })
-          werkzeugAnhaengen(ereignis.aufruf_id, ereignis.zeitpunkt_ms)
+          rowOfCall(ereignis.aufruf_id, 'ask_user', ereignis.zeitpunkt_ms)
           if (!ereignis.settled) {
             zustand.benutzerfrage[zielChat] = {
               generationId: lauf.generationId,
@@ -2370,7 +2479,7 @@
             ergebnis: null,
             fehlgeschlagen: false,
           })
-          werkzeugAnhaengen(ereignis.aufruf_id, ereignis.zeitpunkt_ms)
+          rowOfCall(ereignis.aufruf_id, 'start_job', ereignis.zeitpunkt_ms)
           if (!ereignis.settled) {
             zustand.jobfrage[zielChat] = {
               generationId: lauf.generationId,
@@ -2409,6 +2518,8 @@
             true,
           )
           werkzeugOffen = true
+          // The same in the answer: the call's row, counting along.
+          callBeingWritten(ereignis.index ?? 0, ereignis.name, ereignis.zeichen ?? 0, ereignis.zeitpunkt_ms)
           taetigkeitSetzen(platzhalter, 'werkzeug', ereignis.zeitpunkt_ms)
         } else if (ereignis.typ === 'tool_call') {
           /* The same notice moves on: it was reporting the argument being
@@ -2419,16 +2530,30 @@
           // Also attached to the message: the notification disappears
           // again, but the history should keep a traceable record of what
           // ran.
-          platzhalter.werkzeuge.push({
-            aufruf_id: ereignis.aufruf_id,
-            name: ereignis.name,
-            // Which server it came from — the catalogue picks the mark by it.
-            server: ereignis.server || '',
-            argumente: ereignis.argumente,
-            ergebnis: null,
-            fehlgeschlagen: false,
-          })
-          werkzeugAnhaengen(ereignis.aufruf_id, ereignis.zeitpunkt_ms)
+          const asked = platzhalter.abschnitte.find(
+            (a) => a.asked && a.aufruf_id === ereignis.aufruf_id,
+          )
+          if (asked) {
+            // The row has stood since its permission was asked for.
+            delete asked.asked
+            const held = platzhalter.werkzeuge.findLast((w) => w.aufruf_id === ereignis.aufruf_id)
+            held.server = ereignis.server || ''
+            held.argumente = ereignis.argumente
+          } else {
+            platzhalter.werkzeuge.push({
+              aufruf_id: ereignis.aufruf_id,
+              name: ereignis.name,
+              // Which server it came from — the catalogue picks the mark by it.
+              server: ereignis.server || '',
+              argumente: ereignis.argumente,
+              ergebnis: null,
+              fehlgeschlagen: false,
+            })
+            /* The row it was written in becomes its row — no second one —
+               and a call that was never reported while being written gets
+               its row here. */
+            rowOfCall(ereignis.aufruf_id, ereignis.name, ereignis.zeitpunkt_ms)
+          }
           // A picture being drawn: the picture window's working tile.
           if (ereignis.name === 'draw_image') {
             drawing = true
@@ -2770,6 +2895,8 @@
         const stehengeblieben = werkzeugMeldungen.get(werkzeugToast)
         if (stehengeblieben) schliesseMeldung(stehengeblieben)
       }
+      // The same for the answer's rows of calls that never began.
+      dropRowsNeverBegun()
       if (belegt) {
         /* The bubble and its placeholder come down — nothing was sent —
            and the words go back where they were typed. Then the chat is
@@ -3339,6 +3466,10 @@
     <Vektorfeld art="clouds" />
   {:else if pearl}
     <Vektorfeld art="dunes" />
+  {:else if exe}
+    <Vektorfeld art="wuerfel" />
+  {:else if darkmatter}
+    <Vektorfeld art="sternnetz" />
   {/if}
   <!-- `--seite-links`: where the chat surface starts, the left edge every
        menu page takes (Seitenrahmen.svelte) — the same sum the status strip

@@ -8,12 +8,17 @@ in the chain "fetch, start, chat", and it was the one that broke.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
-from app import runnermodellwahl
+import pytest
+
+from app import paketierung, runnermodellwahl, serverdownload
 from app.api.v1 import runner as runner_api
 from app.feineinstellungen import Feineinstellungen
 from app.modellrunner import Lauf, RunnerFehler
+from app.serverdownload import BUILD, Fortschritt, Serverdownload
+from tests.conftest import llama_server_name
 
 
 class StummerRunner:
@@ -610,3 +615,231 @@ def test_a_model_that_arrives_gets_no_part_that_is_missing(client, tmp_path):
     assert _model_part(client, "z_image_turbo-Q8_0.gguf", "llm") is None
     assert _model_part(client, "z_image_turbo-Q8_0.gguf", "vae") == "ae.safetensors"
     assert _model_part(client, "sd_xl_base_1.0.safetensors", "vae") is None
+
+
+# --- The program itself: its build, a newer one, and the way back ---------
+
+NEWER = "b11541"
+
+
+def _lay_build(folder: Path, build: str) -> Path:
+    """A fetched build as it lies on disk: its folder, the server inside."""
+    target = folder / "llama.cpp" / build / "build" / "bin"
+    target.mkdir(parents=True)
+    server = target / llama_server_name()
+    server.write_bytes(b"x")
+    return server
+
+
+class _RecordingDownload:
+    """Stands in for the fetch: keeps what it was asked for, fetches nothing."""
+
+    def __init__(self):
+        self.calls: list[tuple[str | None, str | None]] = []
+
+    def stand(self):
+        return Fortschritt(geladen=0, gesamt=0)
+
+    def starten(self, build=None, previous=None):
+        self.calls.append((build, previous))
+        return Fortschritt(geladen=0, gesamt=0)
+
+
+def _program(client, monkeypatch, tmp_path, program: Path | None):
+    """The program the runner would start, in a data folder of the test."""
+    runner = StummerRunner()
+    runner.programm = program
+    client.app.state.modellrunner = runner
+    monkeypatch.setattr(paketierung, "daten", lambda: tmp_path)
+    download = _RecordingDownload()
+    client.app.state.serverdownload = download
+    return download
+
+
+def _newest(monkeypatch, build: str | None):
+    monkeypatch.setattr(serverdownload, "newest_build", lambda: build)
+
+
+def test_the_status_names_the_build_of_the_program_that_starts(client, tmp_path, monkeypatch):
+    _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, BUILD))
+    status = client.get("/api/v1/runner").json()
+    assert status["version"] == BUILD
+    assert status["updatable"] is True
+    # The tested build is installed: there is nothing to go back from.
+    assert status["restorable"] is False
+
+
+def test_the_status_names_the_build_an_installed_program_states(client, tmp_path, monkeypatch):
+    installed = tmp_path / "elsewhere" / llama_server_name()
+    installed.parent.mkdir()
+    installed.write_bytes(b"x")
+    _program(client, monkeypatch, tmp_path / "data", installed)
+    monkeypatch.setattr(serverdownload, "_stated_build", lambda program: 10310)
+    status = client.get("/api/v1/runner").json()
+    assert status["version"] == "b10310"
+    # Not fetched by this program, so not this program's to go back from.
+    assert status["restorable"] is False
+
+
+def test_a_fetched_build_other_than_the_tested_one_can_be_restored(
+    client, tmp_path, monkeypatch
+):
+    _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, NEWER))
+    status = client.get("/api/v1/runner").json()
+    assert status["version"] == NEWER
+    assert status["restorable"] is True
+
+
+def test_the_check_reports_a_newer_build(client, tmp_path, monkeypatch):
+    _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, BUILD))
+    _newest(monkeypatch, NEWER)
+    answer = client.get("/api/v1/runner/programm/aktualisierung")
+    assert answer.status_code == 200
+    assert answer.json() == {"verfuegbar": True, "bau": NEWER, "aktuell": False}
+
+
+@pytest.mark.parametrize(("installed", "newest"), [(BUILD, BUILD), (NEWER, "b11500")])
+def test_the_same_or_a_lower_build_is_up_to_date_and_nothing_is_fetched(
+    client, tmp_path, monkeypatch, installed, newest
+):
+    """Silence probe: a build that is not ahead is no offer — and a click
+    that arrives all the same fetches nothing."""
+    download = _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, installed))
+    _newest(monkeypatch, newest)
+    answer = client.get("/api/v1/runner/programm/aktualisierung").json()
+    assert answer == {"verfuegbar": False, "bau": None, "aktuell": True}
+    refused = client.post("/api/v1/runner/programm", json={"aktualisieren": True})
+    assert refused.status_code == 409
+    assert download.calls == []
+
+
+def test_an_unreadable_release_list_is_not_called_up_to_date(client, tmp_path, monkeypatch):
+    _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, BUILD))
+    _newest(monkeypatch, None)
+    answer = client.get("/api/v1/runner/programm/aktualisierung").json()
+    assert answer == {"verfuegbar": False, "bau": None, "aktuell": False}
+
+
+def test_updating_fetches_the_newest_build_read_at_that_moment(client, tmp_path, monkeypatch):
+    download = _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, BUILD))
+    _newest(monkeypatch, NEWER)
+    answer = client.post("/api/v1/runner/programm", json={"aktualisieren": True})
+    assert answer.status_code == 200
+    assert download.calls == [(NEWER, BUILD)]
+
+
+def test_restoring_fetches_the_tested_build(client, tmp_path, monkeypatch):
+    download = _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, NEWER))
+    answer = client.post("/api/v1/runner/programm", json={"restore": True})
+    assert answer.status_code == 200
+    assert download.calls == [(BUILD, NEWER)]
+
+
+def test_an_installed_program_is_not_restored_from(client, tmp_path, monkeypatch):
+    """Silence probe: a program this one did not fetch is not this
+    program's to go back from, on any system."""
+    installed = tmp_path / "elsewhere" / llama_server_name()
+    installed.parent.mkdir()
+    installed.write_bytes(b"x")
+    download = _program(client, monkeypatch, tmp_path / "data", installed)
+    monkeypatch.setattr(serverdownload, "_stated_build", lambda program: 11500)
+    answer = client.post("/api/v1/runner/programm", json={"restore": True})
+    assert answer.status_code == 409
+    assert download.calls == []
+
+
+def test_asked_for_both_the_way_back_counts(client, tmp_path, monkeypatch):
+    download = _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, NEWER))
+    _newest(monkeypatch, "b11600")
+    answer = client.post("/api/v1/runner/programm", json={"restore": True, "aktualisieren": True})
+    assert answer.status_code == 200
+    assert download.calls == [(BUILD, NEWER)]
+
+
+def test_with_the_tested_build_installed_there_is_nothing_to_restore(
+    client, tmp_path, monkeypatch
+):
+    """Silence probe, through the real fetch: it refuses the build that is
+    already the one installed, and starts nothing."""
+    _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, BUILD))
+    download = Serverdownload(tmp_path)
+    client.app.state.serverdownload = download
+    answer = client.post("/api/v1/runner/programm", json={"restore": True})
+    assert answer.status_code == 409
+    assert download.stand() is None
+
+
+def test_a_program_named_in_the_settings_gets_no_offer(client, tmp_path, monkeypatch):
+    """Silence probe: where the settings name the program, a fetched build
+    would lie in the folder and never run — so the build is named, nothing
+    is looked for, and nothing is fetched."""
+    named = tmp_path / "own" / llama_server_name()
+    named.parent.mkdir()
+    named.write_bytes(b"x")
+    download = _program(client, monkeypatch, tmp_path / "data", named)
+    monkeypatch.setattr(client.app.state.config.app, "runner_programm", str(named))
+    monkeypatch.setattr(serverdownload, "_stated_build", lambda program: 10310)
+
+    def never():
+        raise AssertionError("the release list was read although nothing can be offered")
+
+    monkeypatch.setattr(serverdownload, "newest_build", never)
+    status = client.get("/api/v1/runner").json()
+    assert status["version"] == "b10310"
+    assert status["updatable"] is False and status["restorable"] is False
+    answer = client.get("/api/v1/runner/programm/aktualisierung").json()
+    assert answer == {"verfuegbar": False, "bau": None, "aktuell": False}
+    for body in ({"aktualisieren": True}, {"restore": True}):
+        assert client.post("/api/v1/runner/programm", json=body).status_code == 409
+    assert download.calls == []
+
+
+def test_the_plain_fetch_of_a_machine_without_a_server_is_unchanged(
+    client, tmp_path, monkeypatch
+):
+    """Silence probe: no body, no program — the pinned build is asked for
+    exactly as before, and the status offers nothing to look for."""
+    download = _program(client, monkeypatch, tmp_path, None)
+    status = client.get("/api/v1/runner").json()
+    assert status["version"] is None
+    assert status["updatable"] is False and status["restorable"] is False
+    assert client.post("/api/v1/runner/programm").status_code == 200
+    assert download.calls == [(None, None)]
+
+
+@pytest.mark.parametrize(
+    ("platform", "program", "own_first"),
+    [
+        # The Mac starts the fetched copy before any installed one.
+        ("darwin", "installed", True),
+        ("darwin", "fetched", True),
+        # Elsewhere an installed program comes first: a fetched copy would
+        # lie in the folder and never run.
+        ("linux", "installed", False),
+        ("win32", "installed", False),
+        ("linux", "fetched", True),
+        ("linux", None, True),
+    ],
+)
+def test_a_fetched_copy_is_offered_only_where_it_would_start(
+    config, tmp_path, monkeypatch, platform, program, own_first
+):
+    """The rule alone, without a running service: another system is played
+    only for the one question, never around the service's own threads."""
+    fetched = _lay_build(tmp_path, BUILD)
+    installed = tmp_path / "elsewhere" / llama_server_name()
+    installed.parent.mkdir()
+    installed.write_bytes(b"x")
+    path = {"installed": installed, "fetched": fetched, None: None}[program]
+
+    fetched_tag = serverdownload.fetched_build(path, tmp_path) if path else None
+
+    def asked() -> bool:
+        with monkeypatch.context() as played:
+            played.setattr(sys, "platform", platform)
+            return runner_api._own_copy_first(config, path, fetched_tag)
+
+    assert asked() is own_first
+    # A program the settings name comes before everything, on every system.
+    monkeypatch.setattr(config.app, "runner_programm", str(installed))
+    assert asked() is False

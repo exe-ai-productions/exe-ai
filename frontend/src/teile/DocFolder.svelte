@@ -4,7 +4,8 @@
 
      One list from the service (app/docfolder.py): what the person dropped
      into the dock, what agents and cron jobs delivered, what was uploaded
-     into chats. In a chat it holds that chat's files and no other chat's;
+     into chats, and what a tool or a command wrote into a chat's own
+     folder. In a chat it holds that chat's files and no other chat's;
      on the start page, with no chat open, every file. The one list of
      choices — on the start page only — narrows by who brought a file and
      by project; the service does the narrowing, so what is shown and what
@@ -36,7 +37,7 @@
   import { neuigkeit } from '../lib/ereignisstrom.svelte.js'
   import { shellPreview, shellPreviews } from '../lib/thumbnails.js'
   import { t } from '../lib/texte.svelte.js'
-  import { frage, melde, zustand } from '../lib/zustand.svelte.js'
+  import { frage, laufVon, melde, zustand } from '../lib/zustand.svelte.js'
   import { bildZeigen, showPage } from '../lib/bildschau.svelte.js'
   import { dateiart } from '../lib/dateiarten.js'
   import { fileStart } from '../lib/fileStart.js'
@@ -134,14 +135,29 @@
 
   /* Nothing announces a file arriving while a run is still going, so the
      list is asked again every few seconds while one is — the cadence the
-     agents view keeps for its step logs — and not at all while none is. */
+     agents view keeps for its step logs — and not at all while none is.
+     A run is a job anywhere, or the open chat's own answer: its tools write
+     into the chat's folder just as a job's do. */
+  const answering = $derived(Boolean(laufVon(chat)))
   const running = $derived(
-    zustand.auftraege.some((job) => job.state === 'laeuft' || job.state === 'wartet'),
+    answering || zustand.auftraege.some((job) => job.state === 'laeuft' || job.state === 'wartet'),
   )
   $effect(() => {
     if (!running) return
     const clock = setInterval(() => load(true), 3000)
     return () => clearInterval(clock)
+  })
+
+  /* And once more when the chat's answer is over. A job's ending comes down
+     the live line; an answer's does not, and what it wrote in its last
+     moments would fall between two asks and stay unseen. Only for an
+     answer that ended in the chat still open: leaving a chat in mid-answer
+     is a change of chat, and that asks for itself. */
+  let answeredIn = ''
+  $effect(() => {
+    const now = answering ? chat : ''
+    if (answeredIn && answeredIn === chat && !now) untrack(() => load(true))
+    answeredIn = now
   })
 
   function isPicture(file) {
@@ -487,7 +503,10 @@
                 <Hauszeichen zeichen="stopwatch" groesse={18} />
               </span>
             {/if}
-            {#if file.source !== 'document'}
+            <!-- The cross takes a file off the dock, and stands on a dock
+                 file only: what lies in a chat's folder — a document of
+                 the chat, or a file a tool wrote there — carries none. -->
+            {#if file.source === 'agent'}
               <button
                 class="weg"
                 onclick={() => remove(file)}

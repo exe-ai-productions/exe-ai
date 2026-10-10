@@ -39,6 +39,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from app import serverdownload
 from app.no_console import no_window
 
 log = logging.getLogger(__name__)
@@ -112,9 +113,13 @@ def programm_finden(datenordner: Path, neben: Path | None = None) -> Path | None
     gefunden = shutil.which(PROGRAMM)
     if gefunden:
         return Path(gefunden)
-    wurzel = Path(datenordner).expanduser() / "llama.cpp"
-    if wurzel.is_dir():
-        treffer = sorted(wurzel.rglob(PROGRAMM))
+    # The copy this program fetched: out of the folder of the build the
+    # model server takes, never out of another build that still lies
+    # beside it — the two programs of one run come from one build.
+    build = serverdownload.installed_build(datenordner)
+    if build is not None:
+        folder = Path(datenordner).expanduser() / serverdownload.ORDNER / build
+        treffer = sorted(folder.rglob(PROGRAMM))
         if treffer:
             return treffer[0]
     return None
@@ -207,7 +212,7 @@ def kosinus(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
     punkt = betrag_a = betrag_b = 0.0
-    for x, y in zip(a, b):
+    for x, y in zip(a, b, strict=True):
         punkt += x * y
         betrag_a += x * x
         betrag_b += y * y

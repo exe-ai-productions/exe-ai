@@ -86,6 +86,16 @@ function aufrufkarte(nummer) {
   return null
 }
 
+/** The runs of a chat that no longer exists, left standing while no chat is
+    open: a picture that failed keeps its run, as the service last had it,
+    in front of whoever pressed for it. The service has forgotten them with
+    the chat, so nothing more arrives for them; the next chat opened starts
+    its own list, as on every switch. */
+export function leaveStanding(runs) {
+  if (verbundenerChat !== null) return
+  terminal.laeufe = runs
+}
+
 /* ——— The stream ——— */
 
 let quelle = null

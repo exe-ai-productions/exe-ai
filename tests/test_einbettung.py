@@ -104,7 +104,7 @@ def test_ein_vektor_uebersteht_die_ablage():
     vektor = [0.5, -0.25, 1.0, 0.0]
     zurueck = einbettung.entpacken(einbettung.packen(vektor))
     assert len(zurueck) == len(vektor)
-    for a, b in zip(vektor, zurueck):
+    for a, b in zip(vektor, zurueck, strict=True):
         assert math.isclose(a, b, rel_tol=1e-6, abs_tol=1e-6)
 
 
@@ -203,3 +203,55 @@ def test_lange_woerter_lassen_den_schritt_nicht_kollabieren():
     # Neighbours still overlap — the ratio kept the search's context.
     erste, zweite = abschnitte[0].split(), abschnitte[1].split()
     assert erste[-1] in zweite, "no overlap between neighbours any more"
+
+
+# --- Which llama-embedding is taken ---------------------------------------
+
+
+def _lay_build(folder, build: str):
+    """A fetched build as it lies on disk: the server and, beside it, the
+    embedding program out of the same package."""
+    from tests.conftest import llama_server_name
+
+    target = folder / "llama.cpp" / build / "build" / "bin"
+    target.mkdir(parents=True)
+    (target / llama_server_name()).write_bytes(b"x")
+    program = target / einbettung.PROGRAMM
+    program.write_bytes(b"x")
+    program.chmod(0o755)
+    return program
+
+
+def test_without_a_neighbour_the_program_comes_from_the_build_the_server_takes(
+    tmp_path, monkeypatch
+):
+    """Two fetched builds on disk: the embedding program is the newer
+    one's, the build the model server starts — not whichever folder sorts
+    first."""
+    from app.serverdownload import BUILD
+
+    monkeypatch.setattr(einbettung.shutil, "which", lambda name: None)
+    _lay_build(tmp_path, BUILD)
+    newer = _lay_build(tmp_path, "b11541")
+    assert einbettung.programm_finden(tmp_path) == newer
+
+
+def test_a_neighbour_beside_the_model_server_still_wins(tmp_path, monkeypatch):
+    """Silence probe: the program beside the model server that is known
+    comes first, whatever lies in the data folder."""
+    from app.serverdownload import BUILD
+
+    monkeypatch.setattr(einbettung.shutil, "which", lambda name: None)
+    _lay_build(tmp_path, BUILD)
+    _lay_build(tmp_path, "b11541")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    neighbour = elsewhere / einbettung.PROGRAMM
+    neighbour.write_bytes(b"x")
+    neighbour.chmod(0o755)
+    assert einbettung.programm_finden(tmp_path, neben=elsewhere / "llama-server") == neighbour
+
+
+def test_without_any_fetched_build_there_is_no_program(tmp_path, monkeypatch):
+    monkeypatch.setattr(einbettung.shutil, "which", lambda name: None)
+    assert einbettung.programm_finden(tmp_path) is None

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import bildgeraete, model_convert
+from app import bildgeraete, bildmodellwerte, bildwahlen, model_convert
 from app.bildrunner import Bildrunner
 from app.config import Config
 from app.tools import bild_werkzeug
@@ -375,3 +375,56 @@ def test_the_page_s_writes_go_out_one_after_another():
     effect = source.split("  $effect(() => {\n    const jetzt = w ? $state.snapshot(w) : null", 1)[1].split(
         "return () => clearTimeout(zeit)", 1)[0]
     assert "if (!Object.keys(changedSince(jetzt)).length) return" in effect
+
+
+# --- Width and height of a model ----------------------------------------------
+
+
+def test_the_model_page_s_edge_sliders_end_at_2048_and_its_fields_at_the_service_s_end():
+    """The sliders for width and height run from 256 to 2048 on the grid,
+    as the studio's do; the number field beside each ends where the service
+    ends, not where the slider does."""
+    source = (Path(__file__).resolve().parent.parent / "frontend/src/teile/Bildmodellwerte.svelte").read_text(
+        encoding="utf-8")
+    assert "const SLIDER_MAX = 2048" in source
+    assert "{ length: (SLIDER_MAX - SLIDER_MIN) / EDGE_GRID + 1 }, (_, i) => SLIDER_MIN + i * EDGE_GRID," in source
+    assert "import { EDGE_GRID, EDGE_MAX, EDGE_MIN } from '../lib/studio.svelte.js'" in source
+    for edge in ("breite", "hoehe"):
+        assert f"<Schieberegler bind:wert={{w.{edge}}} stufen={{KANTEN}}" in source
+        assert (
+            f"<Zahlenfeld bind:wert={{w.{edge}}} min={{EDGE_MIN}} max={{EDGE_MAX}} "
+            "schritt={EDGE_GRID} grid={EDGE_GRID} ganzzahlig />"
+        ) in source
+    # The limits the fields end at are the service's own.
+    limits = (Path(__file__).resolve().parent.parent / "frontend/src/lib/studio.svelte.js").read_text(
+        encoding="utf-8")
+    assert f"export const EDGE_MIN = {bildwahlen.MIN_KANTE}\n" in limits
+    assert f"export const EDGE_MAX = {bildwahlen.MAX_KANTE}\n" in limits
+    # The silence check: the sliders start at 256 and move in steps of 64.
+    assert "const SLIDER_MIN = 256" in source
+    assert f"export const EDGE_GRID = {bildwahlen.RASTER}\n" in limits and bildwahlen.RASTER == 64
+
+
+def test_an_edge_of_a_model_past_the_service_s_end_is_brought_back(
+    config: Config, client: TestClient, tmp_path: Path
+):
+    """The silence check: what the page can now type past 2048 is kept as
+    typed up to the service's end, and anything past that end is brought
+    back to it, on the grid, as before."""
+    assert bildmodellwerte.pruefen({"a.gguf": {"breite": 2048, "hoehe": 2050}}) == {
+        "a.gguf": {"breite": 2048, "hoehe": 2112},
+    }
+    assert bildmodellwerte.pruefen({"a.gguf": {"breite": 5000, "hoehe": 100000}}) == {
+        "a.gguf": {"breite": bildwahlen.MAX_KANTE, "hoehe": bildwahlen.MAX_KANTE},
+    }
+    folder = tmp_path / "bildmodelle"
+    folder.mkdir()
+    config.app.bildmodelle_verzeichnis = str(folder)
+    (folder / "a.safetensors").write_bytes(b"x")
+    stored = client.patch(
+        "/api/v1/settings/global/bildmodellwerte",
+        json={"wert": {"a.safetensors": {"breite": 2048, "hoehe": 5000}}},
+    )
+    assert stored.status_code == 200, stored.text
+    values = client.get("/api/v1/bild/vorgaben", params={"modell": "a.safetensors"}).json()
+    assert (values["breite"], values["hoehe"]) == (2048, bildwahlen.MAX_KANTE)

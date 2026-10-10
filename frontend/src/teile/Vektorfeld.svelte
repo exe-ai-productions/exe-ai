@@ -19,6 +19,8 @@
   import balloons from '../stil/heaven/02_balloons.svg?raw'
   import birds from '../stil/heaven/03_birds.svg?raw'
   import paperPlane from '../stil/heaven/04_paper_plane.svg?raw'
+  import wuerfel from '../stil/exe/01_wuerfel.svg?raw'
+  import sternnetz from '../stil/darkmatter/01_sternnetz.svg?raw'
 
   /* Moune's four drawings with the weight the design gave each one
      (strength 100 % × weight × 0.34, walked to in the design); Pearl and
@@ -45,6 +47,17 @@
     balloons: { roh: balloons, deckkraft: 0.289 },
     birds: { roh: birds, deckkraft: 0.34 },
     'paper-plane': { roh: paperPlane, deckkraft: 0.374 },
+    /* Exe's one drawing, on the frame alone: stairs of cubes at both feet
+       of the window, under the side rails, rising and fading to nothing.
+       Faint — a texture of the ground, not a picture — at the weight the
+       design set (18 % of the ink). Drawn by a script, so every cube is
+       the same solid: its faces carry the frame's colour and hide what
+       stands behind them. */
+    wuerfel: { roh: wuerfel, deckkraft: 0.18 },
+    /* Dark Matter's one drawing, on the frame alone, at the same weight: a
+       net of lines with a four-pointed star at every knot, over the whole
+       frame — a sky, showing faintly through the chat's glass. */
+    sternnetz: { roh: sternnetz, deckkraft: 0.18 },
   }
 
   let { art } = $props()

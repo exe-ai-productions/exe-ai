@@ -36,7 +36,9 @@
   import Startknopf from './Startknopf.svelte'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import Serverreihe from './Serverreihe.svelte'
+  import Serverabschnitt from './Serverabschnitt.svelte'
   import Serverlogkopf from './Serverlogkopf.svelte'
+  import UpToDateMark from './UpToDateMark.svelte'
   import {
     protokollOffen,
     oeffneProtokoll,
@@ -534,7 +536,10 @@
       liefVorher = auskunft.laeuft
       if (!feinGeladen && !auskunft.laeuft) await feinLaden()
       if (protokollAuf || protokollOffen() || auskunft.laeuft) protokoll = await api.runnerProtokoll()
-      if (!auskunft.programm) {
+      /* While the program is missing — and while a fetch runs beside a
+         program that is there: an update starts with the program in place,
+         and nothing else would ever see it end. */
+      if (!auskunft.programm || programmLaedt) {
         programmStand = await api.serverProgrammStand()
         tempoMessen(
           programmStand && !programmStand.fertig && !programmStand.fehler ? programmStand : null,
@@ -720,6 +725,61 @@
   function programmHolen() {
     api.serverProgrammHolen().then((s) => (programmStand = s)).catch((f) => melde(f.message, 'fehler'))
   }
+
+  /* Whether a newer build of the server program exists — asked only when
+     the button is pressed, never on opening and never inside the poll
+     above: nothing looks for updates by itself. */
+  let updateAnswer = $state(null)
+  let checking = $state(false)
+
+  // Only the newest check may answer: a fetch landing meanwhile clears the
+  // answer, and an older one arriving after that must not bring it back.
+  let checkRun = 0
+
+  async function checkForUpdate() {
+    const run = ++checkRun
+    checking = true
+    // The last answer goes while the new one is asked, so it cannot stand
+    // beside the running check as if it were its result.
+    updateAnswer = null
+    try {
+      const answer = await api.serverProgramUpdateCheck()
+      if (run === checkRun) updateAnswer = answer
+    } catch (fehler) {
+      if (run === checkRun) melde(fehler.message, 'fehler')
+    } finally {
+      if (run === checkRun) checking = false
+    }
+  }
+
+  /* Once a fetch actually FINISHES the last answer is cleared — it spoke of
+     the build before, and the next press asks again. A fetch that failed
+     says so: the version row still names the build that was there, and
+     without a word it would look as if nothing had been tried. */
+  let fetchingBefore = false
+  $effect(() => {
+    if (fetchingBefore && !programmLaedt) {
+      updateAnswer = null
+      checkRun += 1
+      checking = false
+      if (programmStand?.fehler) melde(t('bildserver.generator_fehler'), 'fehler')
+    }
+    fetchingBefore = programmLaedt
+  })
+
+  /* The server reads the release list again itself rather than trust the
+     build this window showed a moment ago, so a stale offer never fetches
+     what is already there. */
+  function updateProgram() {
+    api.serverProgramUpdate().then((s) => (programmStand = s)).catch((f) => melde(f.message, 'fehler'))
+  }
+
+  /* The way back from an update: the tested build takes the place of the
+     newer one. Offered only while a fetched build other than the tested one
+     runs (`auskunft.restorable`). */
+  function restoreProgram() {
+    api.serverProgramRestore().then((s) => (programmStand = s)).catch((f) => melde(f.message, 'fehler'))
+  }
 </script>
 
 {#if erststart}
@@ -849,6 +909,46 @@
             />
           {/snippet}
         </Serverreihe>
+        <!-- The program every server of this page starts, in one row: the
+             build that starts on the left — a dash for a program that does
+             not say which build it is — and on the right what can be done
+             about it, in the order it is done: look for a newer build,
+             fetch the one that was found, go back to the tested one. The
+             answer "up to date" stands beside the button that asked.
+
+             The check stands only where a fetched copy would be the program
+             that starts; beside a program the settings name, or an
+             installed one that comes first, the build is named and nothing
+             is offered. -->
+        {#if hatProgramm}
+          <Serverabschnitt zeichen="server" titel="llama.cpp">
+            <div class="zeile">
+              <span class="name build">{t('bildserver.version_zeile', { bau: auskunft.version ?? '—' })}</span>
+              {#if auskunft.updatable && updateAnswer?.aktuell}
+                <UpToDateMark />
+              {/if}
+              {#if auskunft.updatable || auskunft.restorable}
+                <span class="buttons">
+                  {#if auskunft.updatable}
+                    <button class="feldknopf" disabled={checking || programmLaedt} onclick={checkForUpdate}>
+                      {t('bildserver.nach_updates_suchen')}
+                    </button>
+                    {#if updateAnswer?.verfuegbar}
+                      <button class="feldknopf" disabled={programmLaedt} onclick={updateProgram}>
+                        {t('bildserver.generator_aktualisieren')}
+                      </button>
+                    {/if}
+                  {/if}
+                  {#if auskunft.restorable}
+                    <button class="feldknopf" disabled={programmLaedt} onclick={restoreProgram}>
+                      {t('bildserver.restore_tested_build')}
+                    </button>
+                  {/if}
+                </span>
+              {/if}
+            </div>
+          </Serverabschnitt>
+        {/if}
       {/snippet}
       {#snippet unten()}
         <div class="log">
@@ -1051,5 +1151,11 @@
   .knopf.gesperrt {
     opacity: 0.5;
     cursor: default;
+  }
+
+  /* The build number in digits of one width: the row keeps its place when
+     an update changes the number. */
+  .build {
+    font-variant-numeric: tabular-nums;
   }
 </style>

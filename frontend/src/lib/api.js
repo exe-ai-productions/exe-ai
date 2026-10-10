@@ -298,6 +298,10 @@ export const api = {
       method: 'POST',
       body: alsText({ variante: variante ?? null, aktualisieren: true }),
     }),
+  /* Fetches the tested build in place of the one installed — the way back
+     from an update. Which variant that is, the server reads off the disk. */
+  imageProgramRestore: () =>
+    ruf('/bild/programm', { method: 'POST', body: alsText({ restore: true }) }),
   bildProgrammStand: () => ruf('/bild/programm'),
   /* Which GPU-backend variants this machine could offer, and which one (if
      any) is on disk right now — empty on every platform but win32, which
@@ -580,6 +584,17 @@ export const api = {
   /* The model server itself — fetched once on machines without one. */
   serverProgrammHolen: () => ruf('/runner/programm', { method: 'POST' }),
   serverProgrammStand: () => ruf('/runner/programm'),
+  /* Whether a newer build than the one that starts exists — asked when the
+     window's check is pressed, never on a timer (app/serverdownload.py). */
+  serverProgramUpdateCheck: () => ruf('/runner/programm/aktualisierung'),
+  /* Fetches whichever build is newest at the moment of the click — the
+     server reads the release list again rather than trust a build this
+     call could pass in. */
+  serverProgramUpdate: () =>
+    ruf('/runner/programm', { method: 'POST', body: alsText({ aktualisieren: true }) }),
+  /* Fetches the tested build in place of a newer one. */
+  serverProgramRestore: () =>
+    ruf('/runner/programm', { method: 'POST', body: alsText({ restore: true }) }),
 
   /* The stored text of one document — what the chat's document card opens
      in the preview rail. */

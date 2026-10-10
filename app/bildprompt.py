@@ -195,10 +195,27 @@ _EIGENE: dict[str, str] = {
     ),
 }
 
+# The entry for a picture model that has no family: its header names none,
+# or the user switched the reading of its family off for it. It stands in
+# the list beside the families, under a name no family carries, with a
+# works text and an instruction of the user's own like each of them.
+NO_FAMILY = "no_family"
+_NO_FAMILY = (
+    "You write prompts for an image model this program does not know: its "
+    "file names no model family, so nothing is known about the way it reads "
+    "a prompt. Write the prompt therefore as one clear and complete English "
+    "description of the finished picture, in a single paragraph: the main "
+    "subject first, then composition, setting, light, colours and style. "
+    "Return only the prompt."
+)
+
 ANWEISUNGEN: dict[str, str] = {
-    name: _EIGENE.get(name) or _VORLAGE[leser].format(name=image_families.get(name).label)
-    for leser, namen in LESER.items()
-    for name in namen
+    **{
+        name: _EIGENE.get(name) or _VORLAGE[leser].format(name=image_families.get(name).label)
+        for leser, namen in LESER.items()
+        for name in namen
+    },
+    NO_FAMILY: _NO_FAMILY,
 }
 
 

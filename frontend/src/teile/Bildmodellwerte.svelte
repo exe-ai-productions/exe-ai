@@ -20,7 +20,9 @@
   import { melde } from '../lib/zustand.svelte.js'
   import { familyOf } from '../lib/imageFamilies.svelte.js'
   import { PREDICTIONEN } from '../lib/bildlisten.js'
+  import { EDGE_GRID, EDGE_MAX, EDGE_MIN } from '../lib/studio.svelte.js'
   import Auswahlfeld from './Auswahlfeld.svelte'
+  import Schalter from './Schalter.svelte'
   import Schieberegler from './Schieberegler.svelte'
   import Zahlenfeld from './Zahlenfeld.svelte'
   import WachsendesFeld from './WachsendesFeld.svelte'
@@ -29,16 +31,17 @@
 
   /* `listen` is the picture server's own answer (GET /bild/modelle): its
      sampler and scheduler lists and the files of each kit folder. */
-  let { modell, listen = null } = $props()
+  let { modell, listen = null, onfamily = null } = $props()
 
   const SCHLUESSEL = 'bildmodellwerte'
-  // The picture window's own ranges (app/bildwahlen.py).
-  const KANTE_MIN = 256
-  const KANTE_MAX = 1536
-  const KANTE_RASTER = 64
-  // The edges a slider stops at: every step of the grid across the range.
+  /* The edges a slider stops at: every step of the grid from 256 to 2048,
+     the range the studio's sliders run across too. The number field beside
+     a slider ends where the service does (app/bildwahlen.py), so an edge
+     past the slider's end can still be typed. */
+  const SLIDER_MIN = 256
+  const SLIDER_MAX = 2048
   const KANTEN = Array.from(
-    { length: (KANTE_MAX - KANTE_MIN) / KANTE_RASTER + 1 }, (_, i) => KANTE_MIN + i * KANTE_RASTER,
+    { length: (SLIDER_MAX - SLIDER_MIN) / EDGE_GRID + 1 }, (_, i) => SLIDER_MIN + i * EDGE_GRID,
   )
   const SCHRITTE_MAX = 80
   const CFG_MAX = 30
@@ -74,6 +77,9 @@
     try {
       const v = await api.bildVorgaben(modell)
       familie = v.family || ''
+      // The row above shows the family: told what was just read, it does
+      // not keep the one from before the switch.
+      onfamily?.(familie)
       eigenstaendig = Boolean(v.standalone)
       w = {
         breite: v.breite, hoehe: v.hoehe, schritte: v.schritte, cfg: v.cfg,
@@ -81,6 +87,12 @@
         sampler: v.sampler, scheduler: v.scheduler ?? '',
         clip_skip: v.clip_skip ? String(v.clip_skip) : 'auto',
         prediction: v.prediction || 'auto', trigger: v.trigger ?? '', hinweis: v.hinweis ?? '',
+        // Whether the model's family is read from its file; on unless the
+        // user switched it off for this model.
+        family_detection: v.family_detection !== false,
+        // The diffusion model chosen while the family is not read; empty,
+        // the model's own file goes to sd.cpp as it is.
+        diffusion_model: v.diffusion_model ?? '',
         // The kit as every picture of the model takes it: the parts given
         // here over the ones the folder offers.
         ...Object.fromEntries(Object.keys(TEILE).map((teil) => [teil, v.parts?.[teil] ?? ''])),
@@ -100,16 +112,25 @@
 
   const eintrag = $derived(familyOf(familie))
   const mitGuidance = $derived(eintrag?.start?.guidance != null)
+  /* The family is not read for this model: no family says which parts
+     belong, so every part can be given and each may stay empty — the
+     diffusion model too, and then the model's own file goes to sd.cpp as
+     it is. Exactly the given parts are sent. */
+  const free = $derived(Boolean(w) && !w.family_detection)
   // A kit family's own diffusion model is assembled from its parts; any
   // other model has only its VAE here.
-  const bausatz = $derived(Boolean(eintrag?.kit && eigenstaendig))
-  // The parts the family reads: its VAE, its text encoders, its further parts.
-  const teile = $derived(bausatz ? ['vae', ...eintrag.encoders, ...eintrag.parts] : ['vae'])
+  const bausatz = $derived(free || Boolean(eintrag?.kit && eigenstaendig))
+  // The parts the family reads: its VAE, its text encoders, its further
+  // parts — and every part there is where no family is read.
+  const teile = $derived(
+    free ? Object.keys(TEILE) : bausatz ? ['vae', ...eintrag.encoders, ...eintrag.parts] : ['vae'],
+  )
   /* What the model cannot start without: its diffusion model, every text
      encoder its family reads and, where the family decodes with a VAE of
      its own, the VAE (app/bildbausatz.py ``fehlendes_teil``). */
   const noetig = $derived(
-    bausatz ? [...eintrag.encoders, ...(eintrag.vae_channels != null ? ['vae'] : [])] : [],
+    bausatz && !free
+      ? [...eintrag.encoders, ...(eintrag.vae_channels != null ? ['vae'] : [])] : [],
   )
   const da = $derived(noetig.filter((teil) => w?.[teil]).length)
   const mitFlowShift = $derived(eintrag?.start?.flow_shift != null)
@@ -125,7 +146,9 @@
      model's own, a CLIP skip travels as its number, and an empty part is
      the one the folder offers. */
   function gespeichert(name, wert) {
-    if (name in TEILE) return wert || null
+    // Only "off" is the model's own: switched on again it is like every model.
+    if (name === 'family_detection') return wert ? null : false
+    if (name in TEILE || name === 'diffusion_model') return wert || null
     if (name === 'clip_skip') return wert === 'auto' ? null : Number(wert)
     if (name === 'prediction') return wert === 'auto' ? '' : wert
     if (wert === '' && ['breite', 'hoehe', 'schritte', 'cfg', 'guidance', 'flow_shift'].includes(name)) return null
@@ -150,8 +173,13 @@
       try {
         await api.einstellungMischen('global', SCHLUESSEL, { [modell]: geaendert })
         gesendet = { ...gesendet, ...Object.fromEntries(Object.keys(geaendert).map((n) => [n, jetzt[n]])) }
-        // A part given back to the folder shows the file the folder offers.
-        if (Object.keys(geaendert).some((n) => n in TEILE && geaendert[n] === null)) await laden()
+        // A part given back to the folder shows the file the folder offers,
+        // and with the reading of the family switched the model stands at
+        // other start values and another kit.
+        if (
+          'family_detection' in geaendert
+          || Object.keys(geaendert).some((n) => n in TEILE && geaendert[n] === null)
+        ) await laden()
       } catch (fehler) {
         melde(String(fehler.message || fehler), 'fehler')
       }
@@ -165,6 +193,8 @@
      the kit can do without, which then stays off. */
   function teilEintraege(teil) {
     const dateien = alsAuswahl(listen?.[TEILE[teil][1]])
+    // No family is read: an empty part is left to sd.cpp.
+    if (free) return [{ wert: '', text: t('parameter.auto') }, ...dateien]
     if (!bausatz) return [{ wert: '', text: t('bild.vae_keins') }, ...dateien]
     if (!noetig.includes(teil)) return [{ wert: '', text: t('bild.adetailer_keins') }, ...dateien]
     return [{ wert: '', text: t('bildserver.teil_fehlt_kurz') }, ...dateien]
@@ -189,7 +219,7 @@
         <div class="feld regel">
           <div class="kopfzeile">
             <span class="was">{t('bild.breite')}</span>
-            <div class="zahl"><Zahlenfeld bind:wert={w.breite} min={KANTE_MIN} max={KANTE_MAX} schritt={KANTE_RASTER} ganzzahlig /></div>
+            <div class="zahl"><Zahlenfeld bind:wert={w.breite} min={EDGE_MIN} max={EDGE_MAX} schritt={EDGE_GRID} grid={EDGE_GRID} ganzzahlig /></div>
           </div>
           <Schieberegler bind:wert={w.breite} stufen={KANTEN}
                          mit_zahl={false} fuellung beschriftung={t('bild.breite')} />
@@ -197,7 +227,7 @@
         <div class="feld regel">
           <div class="kopfzeile">
             <span class="was">{t('bild.hoehe')}</span>
-            <div class="zahl"><Zahlenfeld bind:wert={w.hoehe} min={KANTE_MIN} max={KANTE_MAX} schritt={KANTE_RASTER} ganzzahlig /></div>
+            <div class="zahl"><Zahlenfeld bind:wert={w.hoehe} min={EDGE_MIN} max={EDGE_MAX} schritt={EDGE_GRID} grid={EDGE_GRID} ganzzahlig /></div>
           </div>
           <Schieberegler bind:wert={w.hoehe} stufen={KANTEN}
                          mit_zahl={false} fuellung beschriftung={t('bild.hoehe')} />
@@ -252,6 +282,14 @@
 
       <div class="spalte">
         <div class="kopf tafelkopf">{t('bildserver.modell_spalte')}</div>
+        <!-- Whether the model's family is read from its file. Off, every
+             part of the kit below can be given by hand. -->
+        <div class="feld">
+          <span class="was">{t('bildserver.detect_family')}</span>
+          <div class="breit"></div>
+          <Schalter an={w.family_detection} beschriftung={t('bildserver.detect_family')}
+                    onschalten={(neu) => (w.family_detection = neu)} />
+        </div>
         {#if clipSchichten}
           <div class="feld">
             <span class="was">{t('bild.clip_skip')}</span>
@@ -283,7 +321,7 @@
       <!-- The head and, at its end, the sign that opens the folder the VAE
            files are picked from. -->
       <div class="kithead">
-        <Bausatzkopf open={bausatzOffen} there={bausatz ? da + 1 : null} all={noetig.length + 1}
+        <Bausatzkopf open={bausatzOffen} there={bausatz && !free ? da + 1 : null} all={noetig.length + 1}
                      countRight onToggle={() => (bausatzOffen = !bausatzOffen)} />
         <button class="foldersign" onclick={() => api.bildBegleiterOrdner('vae').catch(() => {})}
                 title={t('bild.vae_ordner')} aria-label={t('bild.vae_ordner')}>
@@ -292,7 +330,15 @@
       </div>
       {#if bausatzOffen}
         <div class="teile">
-          {#if bausatz}
+          {#if free}
+            <div class="feld">
+              <span class="was">{t('bild.diffusion_model')}</span>
+              <div class="breit">
+                <Auswahlfeld bind:wert={w.diffusion_model} beschriftung={t('bild.diffusion_model')}
+                             eintraege={[{ wert: '', text: t('parameter.auto') }, ...alsAuswahl(listen?.modelle)]} />
+              </div>
+            </div>
+          {:else if bausatz}
             <div class="feld">
               <span class="was">{t('bild.diffusion_model')}</span>
               <div class="breit">

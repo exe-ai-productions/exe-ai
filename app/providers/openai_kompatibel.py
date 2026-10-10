@@ -239,10 +239,14 @@ def tempo_ermitteln(
     nutzung = nutzung or {}
 
     # What we can measure ourselves: everything after the first token. If
-    # that moment is missing, nothing arrived anyway.
+    # that moment is missing, nothing arrived anyway. Never below zero,
+    # and zero is a real reading: on a clock that counts in steps of
+    # about 16 ms (Windows), a one-chunk answer can stamp the same moment
+    # for its first token and for the end of the run — an answer written
+    # in no measurable time, not one that took the whole run.
     eigene_erzeugungszeit = dauer
-    if erstes_token_nach is not None and dauer > erstes_token_nach:
-        eigene_erzeugungszeit = dauer - erstes_token_nach
+    if erstes_token_nach is not None:
+        eigene_erzeugungszeit = max(0.0, dauer - erstes_token_nach)
 
     denk_tokens = _denk_tokens(nutzung)
     # Whether `completion_tokens` can be brought onto the same definition as

@@ -61,6 +61,16 @@ BAUSATZFELDER = (
     "uncond_diffusion_model", "high_noise_diffusion_model",
     "audio_vae", "audio_encoder", "embeddings_connectors",
 )
+# Whether the model's family is read from its own file. A switch and no
+# value: it is on unless the user switched it off for this model, so only
+# "off" is ever something the model holds. Off, no family decides about the
+# model's kit: every part can be given, and exactly the given ones are sent.
+FAMILY_DETECTION = "family_detection"
+# The diffusion model such a model is drawn with, a file of the model
+# folder (``--diffusion-model``). Unset, the model's own file goes to sd.cpp
+# as ``-m``, the way a model without a family does: a whole checkpoint
+# nobody recognises still loads. Read only while the family is not.
+DIFFUSION_MODEL = "diffusion_model"
 
 
 def _zahl(wert: Any) -> float | None:
@@ -85,6 +95,8 @@ def _feld(name: str, wert: Any) -> Any:
     """One field as it is kept, or None — unset, the family's value holds."""
     if wert is None:
         return None
+    if name == FAMILY_DETECTION:
+        return wert if isinstance(wert, bool) else None
     # A switch is no number here, though Python counts True as one.
     if isinstance(wert, bool):
         return None
@@ -105,7 +117,7 @@ def _feld(name: str, wert: Any) -> Any:
         return wert if wert in SAMPLER else None
     if name == "scheduler":
         return wert if wert == "" or wert in SCHEDULER else None
-    if name in BAUSATZFELDER:
+    if name in BAUSATZFELDER or name == DIFFUSION_MODEL:
         return _dateiname(wert)
     if name == "clip_skip":
         zahl = _zahl(wert)
@@ -133,19 +145,44 @@ def pruefen(wert: Any) -> dict[str, Any]:
             continue
         sauber[modell] = {
             name: _feld(name, felder[name])
-            for name in (*MASSFELDER, *MODELLFELDER, *BAUSATZFELDER)
+            for name in (
+                *MASSFELDER, *MODELLFELDER, *BAUSATZFELDER, FAMILY_DETECTION, DIFFUSION_MODEL,
+            )
             if name in felder
         }
     return sauber
 
 
 def eigene(repositories, modell: str) -> dict[str, Any]:
-    """The values this model sets itself — only the set ones."""
+    """The values this model sets itself — only the set ones. The switch
+    for reading its family is no value and is asked for on its own
+    (``family_detection``)."""
     stand = repositories.einstellungen.zusammengefuehrt(SCHLUESSEL, vorgabe={})
     felder = stand.get(modell) if isinstance(stand, dict) else None
     if not isinstance(felder, dict):
         return {}
-    return {name: wert for name, wert in pruefen({modell: felder})[modell].items() if wert is not None}
+    return {
+        name: wert for name, wert in pruefen({modell: felder})[modell].items()
+        if wert is not None and name != FAMILY_DETECTION
+    }
+
+
+def without_family_detection(repositories) -> set[str]:
+    """The models whose family is not read from their file: the ones the
+    user switched it off for. Read in one go, for whoever lists a folder."""
+    stand = repositories.einstellungen.zusammengefuehrt(SCHLUESSEL, vorgabe={})
+    if not isinstance(stand, dict):
+        return set()
+    return {
+        modell for modell, felder in pruefen(stand).items()
+        if isinstance(felder, dict) and felder.get(FAMILY_DETECTION) is False
+    }
+
+
+def family_detection(repositories, modell: str) -> bool:
+    """Whether this model's family is read from its file — on for every
+    model that has not been switched off."""
+    return modell not in without_family_detection(repositories)
 
 
 def set_part(repositories, modell: str, field: str, datei: str, *, keep_own: bool = False) -> None:

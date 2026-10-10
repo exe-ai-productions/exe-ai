@@ -58,6 +58,7 @@ WURZEL = Path(__file__).resolve().parent.parent
 FRONTEND = WURZEL / "frontend"
 MODUL_AGENTEN = FRONTEND / "src" / "teile" / "ModulAgenten.svelte"
 LAUFSTAND = FRONTEND / "src" / "lib" / "laufstand.js"
+DOT_MODULE = FRONTEND / "src" / "lib" / "agentenampel.svelte.js"
 
 ENDE = {"fertig", "abgebrochen", "gescheitert", "unterbrochen"}
 
@@ -359,7 +360,17 @@ def _bloecke() -> str:
     would report on a rule the list is no longer using, which is the same
     mistake as copying. tests/test_laufstand.py is the one that says there
     must be no local declaration at all.
+
+    Which endings have a row at all is the second thing the two share, and
+    the block reads it from the dot's module (``worthReading``). That
+    function is lifted from there the same way — the one the list really
+    calls, not a copy of what it says.
     """
+    dot_source = DOT_MODULE.read_text(encoding="utf-8")
+    start = dot_source.index("export function worthReading(")
+    row_rule = dot_source[start : dot_source.index("\n}\n", start) + len("\n}\n")].replace(
+        "export function worthReading", "function worthReading"
+    )
     quelle = MODUL_AGENTEN.read_text(encoding="utf-8")
     eigene = "  function weitergereicht(auftrag) {"
     if eigene in quelle:
@@ -375,7 +386,7 @@ def _bloecke() -> str:
         "  const berichte = $derived.by(() => {",
         "function berichteAus(auftraege) {",
     ).replace("zustand.auftraege", "auftraege")
-    return regel + rumpf + "\n}\n"
+    return regel + row_rule + rumpf + "\n}\n"
 
 
 @nodepflicht

@@ -32,6 +32,7 @@ reading of it.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import textwrap
@@ -41,10 +42,15 @@ from uuid import uuid4
 
 import pytest
 
+# Borrowed rather than copied: running the reports list is what that file
+# already does, on the block lifted out of the component itself.
+from tests.test_anzeigefunde import _zeilen as report_rows
+
 WURZEL = Path(__file__).resolve().parent.parent
 FRONTEND = WURZEL / "frontend"
 MODUL = FRONTEND / "src" / "lib" / "agentenampel.svelte.js"
 LAUFSTAND = FRONTEND / "src" / "lib" / "laufstand.js"
+REPORTS_PANEL = FRONTEND / "src" / "teile" / "ModulAgenten.svelte"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None or not (FRONTEND / "node_modules").is_dir(),
@@ -159,12 +165,19 @@ def _lauf(
 _NAECHSTE = iter(f"job-{n}" for n in range(1, 999))
 
 
-def _job(zustand, grund=None, wann=SPAET, kennung=None):
+def _job(zustand, grund=None, wann=SPAET, kennung=None, *, result="Report", schedule=None):
+    """One job row. It carries a report unless a test takes it away: whether
+    a run has one decides whether the reports list has a row for it, and a
+    run without a row colours nothing. So every test about something else
+    gets a run that can be opened, and the tests about exactly that say
+    ``result=None`` out loud."""
     return {
         "id": kennung or next(_NAECHSTE),
         "state": zustand,
         "end_reason": grund,
         "updated_at": wann,
+        "result": result,
+        "cronjob_id": schedule,
     }
 
 
@@ -202,8 +215,9 @@ def test_ohne_grund_gilt_genau_die_regel_der_liste():
 
 
 def test_die_uebrigen_ausgaenge_sagen_was_sie_immer_sagten():
-    """Nothing else moved: a report is green, a failure and an abort are
-    red, and a state that is not an ending colours nothing."""
+    """Nothing else moved: a report is green, a failure and an abort that
+    left a report are red, and a state that is not an ending colours
+    nothing."""
     assert _lauf([_job("fertig")]) == "gruen"
     assert _lauf([_job("gescheitert", "kontext_voll")]) == "rot"
     assert _lauf([_job("abgebrochen", "benutzer_abbruch")]) == "rot"
@@ -323,3 +337,146 @@ def test_drei_enden_und_eines_gelesen_lassen_die_anderen_stehen():
     assert _lauf(jobs, gelesen=["a"]) == "gruen"
     assert _lauf(jobs, gelesen=["a", "b"]) == "gruen"
     assert _lauf(jobs, gelesen=["a", "b", "c"]) == "still"
+
+
+# --- The dot follows the reports list ---------------------------------------
+#
+# The dot loses a colour in one way only: the run is opened, and a run is
+# opened from its row in the reports list. So a run the list has no row for
+# must not colour the dot — it would hold that colour until the page is
+# loaded again. The list is run as it stands (tests/test_anzeigefunde.py
+# lifts its block out of the component), the dot is run as it stands, and
+# both are asked about the same rows.
+
+
+def test_a_run_stopped_by_hand_colours_nothing_and_has_no_row():
+    """The one run the two displays disagreed about this time: a run stopped
+    under the running ones ends 'abgebrochen' with no report. The dot went
+    red for it, and the list offered nothing to open."""
+    stopped = _job("abgebrochen", "benutzer_abbruch", result=None)
+
+    assert _lauf([stopped]) == "still"
+    assert report_rows([stopped]) == []
+
+
+def test_a_finished_run_with_nothing_to_say_colours_nothing_either():
+    """The same gap in green: nothing was written, so there is no row, and a
+    green dot would have nothing behind it to read."""
+    silent = _job("fertig", "fertig", result=None)
+
+    assert _lauf([silent]) == "still"
+    assert report_rows([silent]) == []
+
+
+def test_a_run_stopped_by_hand_hides_no_older_report():
+    """Skipped, not painted 'still': the stop a minute ago is not "the
+    newest ended one", so the report nobody has opened keeps the dot — and
+    keeps it green, which is what tells the three possible answers apart."""
+    farbe = _lauf(
+        [
+            _job("abgebrochen", "benutzer_abbruch", SPAET, result=None),
+            _job("fertig", "fertig", MITTE),
+        ]
+    )
+    assert farbe == "gruen"
+
+
+def test_a_failure_stays_red_until_it_is_opened():
+    """Silence probe. A failure needs no report to have a row — the reason
+    is its news — so it is red, listed, and quiet once somebody opened it."""
+    failed = _job("gescheitert", "zeitgrenze", kennung="failed", result=None)
+
+    assert report_rows([failed]) == ["failed"]
+    assert _lauf([failed]) == "rot"
+    assert _lauf([failed], gelesen=["failed"]) == "still"
+
+
+def test_a_run_cut_off_by_a_restart_stays_red_until_it_is_opened():
+    """Silence probe. The sweep at service start writes no result either."""
+    cut_off = _job("unterbrochen", "dienst_neustart", kennung="cut", result=None)
+
+    assert report_rows([cut_off]) == ["cut"]
+    assert _lauf([cut_off]) == "rot"
+    assert _lauf([cut_off], gelesen=["cut"]) == "still"
+
+
+def test_a_stopped_run_of_a_schedule_stays_in_list_and_dot():
+    """Silence probe. The same state as the run stopped by hand above, and
+    the one thing telling them apart is the schedule behind it: its row is
+    the only place that run can still be seen."""
+    stopped = _job(
+        "abgebrochen", "benutzer_abbruch", kennung="planned", result=None, schedule="plan-1"
+    )
+
+    assert report_rows([stopped]) == ["planned"]
+    assert _lauf([stopped]) == "rot"
+    assert _lauf([stopped], gelesen=["planned"]) == "still"
+
+
+def test_a_finished_run_with_a_report_stays_green():
+    """Silence probe."""
+    done = _job("fertig", "fertig", kennung="done")
+
+    assert report_rows([done]) == ["done"]
+    assert _lauf([done]) == "gruen"
+
+
+ENDINGS = [
+    (state, reason, result, schedule)
+    for state, reason in (
+        ("fertig", "fertig"),
+        ("gescheitert", "zeitgrenze"),
+        ("abgebrochen", "benutzer_abbruch"),
+        ("unterbrochen", "dienst_neustart"),
+        ("unterbrochen", "kontext_voll"),
+    )
+    for result in (None, "Report")
+    for schedule in (None, "plan-1")
+]
+
+
+@pytest.mark.parametrize("state,reason,result,schedule", ENDINGS)
+def test_no_run_without_a_row_colours_the_dot(state, reason, result, schedule):
+    """The rule itself, over every ending a run can have, with and without a
+    report, with and without a schedule: whatever the list leaves out, the
+    dot leaves alone. Before the two read one function, the run stopped by
+    hand and the finished run with nothing to say broke this.
+
+    And the other way round, so no row here passes by saying nothing: a run
+    with a row colours the dot — except the one that handed its work on,
+    which the list keeps as the last link of its chain and the dot skips on
+    purpose (tests/test_laufstand.py)."""
+    row = _job(state, reason, result=result, schedule=schedule)
+    handed_on = state == "unterbrochen" and reason != "dienst_neustart"
+
+    listed = bool(report_rows([row]))
+    coloured = _lauf([row]) != "still"
+
+    assert coloured == (listed and not handed_on)
+
+
+def test_dot_and_list_take_the_rule_from_one_function():
+    """The claim that has to be read rather than run: there is one copy.
+
+    The list imports ``worthReading`` from the dot's module and calls it;
+    the dot calls it too; and the block that builds the list names no ending
+    of its own any more. A second copy in the component would keep every
+    test above green on the day the two start to differ — each side would
+    be measured against itself."""
+    dot = MODUL.read_text(encoding="utf-8")
+    panel = REPORTS_PANEL.read_text(encoding="utf-8")
+
+    assert dot.count("function worthReading(") == 1
+    decision = dot.split("export function punktfarbe() {", 1)[1]
+    assert "if (!worthReading(job)) continue" in decision
+
+    assert "function worthReading(" not in panel
+    # Whatever else the panel takes from that module, this name is in it.
+    assert re.search(
+        r"import \{[^}]*\bworthReading\b[^}]*\} from '\.\./lib/agentenampel\.svelte\.js'", panel
+    )
+    start = panel.index("  const berichte = $derived.by(() => {")
+    block = panel[start : panel.index("\n  })", start)]
+    assert "worthReading(auftrag)" in block
+    for own_reading in ("auftrag.result", "'gescheitert'", "'abgebrochen'", "cronjob_id"):
+        assert own_reading not in block, f"the list decides {own_reading} for itself again"

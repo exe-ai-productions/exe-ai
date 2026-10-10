@@ -40,7 +40,7 @@ from app import (
 from app.api.v1.bilder import ERLAUBTE_TYPEN
 from app.bildmetadaten import metadaten_entfernen
 from app.bildschutz import putzen_an
-from app.bildturbo import STARTFRIST, STARTFRIST_BAUSATZ, Bildturbo, BildturboFehler
+from app.bildturbo import Bildturbo, BildturboFehler, start_deadline, start_parts
 from app.bildrunner import (
     Auftrag, BildFehler, Bildrunner, LoRA, TEXTVERSTEHER_ORDNER, UPSCALER_ORDNER, VAE_ORDNER,
     controlnet_pfad, controlnets, embeddings, loras, lora_pfad, modelle,
@@ -358,6 +358,9 @@ class BildmodellAntwort(BaseModel):
     # (app/sddownload.py) — the window shows it as the version of what it
     # is about to call. None while nothing is installed.
     bau: str | None = None
+    # Whether the generator that runs was fetched and is not the tested
+    # build — the one case in which there is something to go back from.
+    restorable: bool = False
     ordner: str
     # Shown as plain path text next to the folder-open button — not
     # independently relocatable Speicherorte (the name would collide with
@@ -451,9 +454,14 @@ def bildmodelle(
     runner = _runner(request)
     gefunden = modelle(_bildordner(config))
     programm_da = runner.programm is not None
+    # Asked once for the whole folder: a model whose family is not to be
+    # read is listed without one.
+    unread = bildmodellwerte.without_family_detection(repositories)
     return BildmodellAntwort(
         modelle=gefunden,
-        families={name: _family_of(config, name) for name in gefunden},
+        families={
+            name: "" if name in unread else _family_of(config, name) for name in gefunden
+        },
         sizes=_sizes_of(config, gefunden),
         loras=loras(_bildordner(config)),
         vaes=vaes(_bildordner(config)),
@@ -472,6 +480,7 @@ def bildmodelle(
         standardmodell=bildstandardmodell.lesen(repositories, gefunden),
         programm_da=programm_da,
         bau=sddownload.installierter_bau(config.datenverzeichnis),
+        restorable=sddownload.restorable(config.datenverzeichnis),
         ordner=str(_bildordner(config)),
         lora_ordner=str(_bildordner(config) / bildwahlen.LORA_ORDNER),
         vae_ordner=str(_bildordner(config) / VAE_ORDNER),
@@ -554,10 +563,13 @@ _VIDEO_PART_FIELDS = (
 )
 
 
-def kit_fields(family: image_families.Family | None) -> tuple[str, ...]:
+def kit_fields(family: image_families.Family | None, *, free: bool = False) -> tuple[str, ...]:
     """The parts a model is drawn with besides itself: the VAE of every
     model, and for a kit's own diffusion model the text encoders and the
-    further parts its family reads."""
+    further parts its family reads. ``free`` — the model's family is not
+    read — is every part there is, since no family says which belong."""
+    if free:
+        return tuple(_KIT_PART_FOLDERS)
     if family is None or not family.kit:
         return ("vae",)
     return ("vae", *family.encoders, *family.parts)
@@ -573,8 +585,17 @@ def _model_kit(
     (``_matching_parts``); a part given to the model in the picture server
     (app/bildmodellwerte.py) wins over the offered one. A given part whose
     file left its folder counts as none, so a missing part is named rather
-    than an unknown file. Any other model has only its VAE here."""
+    than an unknown file. Any other model has only its VAE here.
+
+    A model whose family is not read (app/bildmodellwerte.py) has exactly
+    the parts given to it: the folder offers nothing by itself, because no
+    family says what would fit. Its diffusion model is the file chosen for
+    it; with none chosen it has none here, and its own file is the model."""
     folder = _bildordner(config)
+    own = bildmodellwerte.eigene(repositories, model)
+    free = not bildmodellwerte.family_detection(repositories, model)
+    if free:
+        family = None
     standalone = bool(
         family is not None and family.kit and bildinhalt.standalone_diffusion_model(path)
     )
@@ -585,7 +606,11 @@ def _model_kit(
         and bildinhalt.checkpoint_without_text_encoders(path)
     )
     kit: dict[str, str] = {}
-    if standalone and family is not None:
+    if free:
+        chosen = own.get(bildmodellwerte.DIFFUSION_MODEL)
+        if chosen and chosen in modelle(folder):
+            kit["diffusion_model"] = chosen
+    elif standalone and family is not None:
         kit["diffusion_model"] = model
         kit.update(_matching_parts(folder, family))
     elif bare and family is not None:
@@ -593,11 +618,10 @@ def _model_kit(
             field: name for field, name in _matching_parts(folder, family).items()
             if field in family.encoders
         })
-    own = bildmodellwerte.eigene(repositories, model)
     # Each folder is listed once, however many parts it holds.
     listed: dict = {}
     fields = ("vae", *family.encoders) if bare and family is not None else kit_fields(
-        family if standalone else None
+        family if standalone else None, free=free
     )
     for field in fields:
         name = own.get(field)
@@ -619,13 +643,25 @@ def _kit_for_start(
     starts with ``--diffusion-model`` and its parts, refused, naming the
     part, when one is missing; any other model starts with ``-m`` and the
     VAE it was given."""
-    family_name = bildinhalt.family(path) or ""
+    free = not bildmodellwerte.family_detection(repositories, model)
+    family_name = "" if free else bildinhalt.family(path) or ""
     family = image_families.get(family_name)
     names = _model_kit(config, repositories, model, path, family)
     parts = {
         field: _begleiter(_KIT_PART_FOLDERS[field][1], config, name, sprache)
         for field, name in names.items() if field != "diffusion_model"
     }
+    if free:
+        # No family is read: the model with exactly the parts given to it,
+        # and the diffusion model chosen for it where one was. None is
+        # asked for, none refused.
+        bundle = {field: parts.pop(field) for field in _VIDEO_PART_FIELDS if parts.get(field)}
+        chosen = _begleiter(modell_pfad, config, names.get("diffusion_model"), sprache)
+        return {
+            "familie": bildbausatz.FREE,
+            **({"diffusion_model": chosen} if chosen is not None else {}),
+            **parts, **({"video_parts": bundle} if bundle else {}),
+        }
     if "diffusion_model" not in names or family is None:
         # A checkpoint without text encoders of its own starts with the
         # encoders of its family beside it; any other with its VAE alone.
@@ -756,6 +792,13 @@ class BildVorgabenAntwort(BaseModel):
     # The family read from the model's own header; empty when the header
     # names none of the table's families — then the window asks.
     family: str = ""
+    # Whether the model's family is read from its file at all. Off — the
+    # user switched it off for this model — ``family`` is empty, every kit
+    # part can be given, and exactly the given ones are sent.
+    family_detection: bool = True
+    # The diffusion model chosen for a model whose family is not read;
+    # empty, the model's own file goes to sd.cpp as it is.
+    diffusion_model: str = ""
     # The model is a kit's diffusion model on its own (no text encoder or
     # VAE inside), drawn with --diffusion-model rather than -m.
     standalone: bool = False
@@ -868,23 +911,25 @@ def bild_vorgaben(
     family_name = ""
     standalone = False
     parts: dict[str, str] = {}
+    detection = bildmodellwerte.family_detection(repositories, modell) if modell else True
+    chosen_diffusion_model = ""
     if modell:
         try:
             path = modell_pfad(_bildordner(config), modell)
         except BildFehler:
             path = None
         if path is not None:
-            family_name = bildinhalt.family(path) or ""
+            # The header is not asked for a family where the reading is off.
+            family_name = (bildinhalt.family(path) or "") if detection else ""
             family = image_families.get(family_name)
             # Told for every model: a diffusion model whose family the
             # header does not name is still one, and the window fills it
             # in once the family is said by hand.
             standalone = bildinhalt.standalone_diffusion_model(path)
-            parts = {
-                field: name
-                for field, name in _model_kit(config, repositories, modell, path, family).items()
-                if field != "diffusion_model"
-            }
+            kit = _model_kit(config, repositories, modell, path, family)
+            parts = {field: name for field, name in kit.items() if field != "diffusion_model"}
+            if not detection:
+                chosen_diffusion_model = kit.get("diffusion_model", "")
             log.info("Picture model %s: family %s", modell, family_name or "not recognised")
     start = image_families.start_values(family_name, modell)
     werte: dict = {
@@ -895,6 +940,8 @@ def bild_vorgaben(
     }
     eigene = bildmodellwerte.eigene(repositories, modell) if modell else {}
     werte.update(eigene)
+    # Told only while it is read, and only a file that is still there.
+    werte[bildmodellwerte.DIFFUSION_MODEL] = chosen_diffusion_model
     quellen = dict(start.sources)
     for name in eigene:
         quellen[name] = "model"
@@ -904,6 +951,7 @@ def bild_vorgaben(
         vae_format=start.vae_format, rng=start.rng, switches=dict(start.switches),
         model_args=family.model_args if (family := image_families.get(family_name)) else "",
         family=family_name, standalone=standalone, parts=parts,
+        family_detection=detection,
         sources=quellen, eigene=sorted(eigene),
     )
 
@@ -979,6 +1027,8 @@ class GeneratorHolenAnfrage(BaseModel):
     # (from an earlier /bild/programm/aktualisierung poll) is never trusted
     # for the fetch itself, only for showing the offer.
     aktualisieren: bool = False
+    # True fetches the pinned, tested build in place of the one installed.
+    restore: bool = False
 
 
 class GeneratorAktualisierung(BaseModel):
@@ -1050,7 +1100,8 @@ def generator_holen(
 ) -> GeneratorFortschritt:
     """Fetches sd-cli from a release of the project's own stable-diffusion.cpp
     fork — the pinned build, or, with ``aktualisieren``, whichever one is
-    newest at this exact moment.
+    newest at this exact moment, or, with ``restore``, the pinned one in
+    place of the build installed.
 
     The one thing this panel could not do was the one thing a fresh
     installation needs: it said the generator was missing and left it at
@@ -1059,7 +1110,19 @@ def generator_holen(
     """
     variante = anfrage.variante if anfrage else None
     veroeffentlichung = None
-    if anfrage and anfrage.aktualisieren:
+    restore = bool(anfrage and anfrage.restore)
+    if restore:
+        # The way back from an update, and nothing else: with the tested
+        # build installed, or a generator unpacked by hand, there is
+        # nothing to go back from.
+        if not sddownload.restorable(config.datenverzeichnis):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, t("fehler.sddownload_schon_da", sprache)
+            )
+        if variante is None:
+            # The variant that is installed, exactly as an update takes it.
+            variante = sddownload.installierte_variante(config.datenverzeichnis)
+    elif anfrage and anfrage.aktualisieren:
         # An update is a catch-up on an existing install, not a second way
         # to bootstrap one — a fresh install already has the plain fetch
         # below, at the pinned, tested build. Nothing on disk means nothing
@@ -1085,7 +1148,7 @@ def generator_holen(
             status.HTTP_400_BAD_REQUEST, t("fehler.sddownload_unbekannte_variante", sprache)
         )
     try:
-        download.starten(variante, veroeffentlichung)
+        download.starten(variante, veroeffentlichung, replace_newer=restore)
     except SddownloadFehler as fehler:
         lage = {
             "laeuft_schon": status.HTTP_409_CONFLICT,
@@ -1343,10 +1406,20 @@ async def bild_erzeugen(
     # model neither names stays without one and draws with sd-cli's own
     # defaults for everything the request leaves out. Read off the thread:
     # a header not read before can be megabytes.
+    # A model whose family is not to be read (app/bildmodellwerte.py) is
+    # drawn with exactly the parts given to it, and with the diffusion
+    # model chosen for it where one was. A family said in the window still
+    # sets the values the picture starts at; about the parts it says
+    # nothing.
+    free = wunsch.mode != "upscale" and not await asyncio.to_thread(
+        bildmodellwerte.family_detection, repositories, wunsch.modell
+    )
     if wunsch.familie:
         # A word said is checked as said: an unknown one is refused below,
         # never quietly replaced by what the header says.
         family_name = wunsch.familie
+    elif free:
+        family_name = ""
     else:
         roh_familie: str | None = await asyncio.to_thread(
             bildinhalt.family,
@@ -1366,21 +1439,27 @@ async def bild_erzeugen(
         )
         wunsch = wunsch.model_copy(update=kit)
     try:
-        bildbausatz.familie_pruefen(
-            family_name,
-            diffusion_model=wunsch.diffusion_model, t5xxl=wunsch.t5xxl,
-            clip_l=wunsch.clip_l, clip_g=wunsch.clip_g, llm=wunsch.llm,
-            llm_vision=wunsch.llm_vision, tokenizer=wunsch.tokenizer,
-            uncond_diffusion_model=wunsch.uncond_diffusion_model,
-            bare_checkpoint=(
-                wunsch.diffusion_model is None
-                and any((wunsch.t5xxl, wunsch.clip_l, wunsch.clip_g, wunsch.llm))
-                and bildinhalt.checkpoint_without_text_encoders(pfad)
-            ),
-            high_noise_diffusion_model=wunsch.high_noise_diffusion_model,
-            audio_vae=wunsch.audio_vae, audio_encoder=wunsch.audio_encoder,
-            embeddings_connectors=wunsch.embeddings_connectors,
-        )
+        if free:
+            # No family decides about the parts; only a family word nobody
+            # knows is still refused.
+            if wunsch.familie and not image_families.known(wunsch.familie):
+                raise ValueError(f"{wunsch.familie!r} is not a family this program knows")
+        else:
+            bildbausatz.familie_pruefen(
+                family_name,
+                diffusion_model=wunsch.diffusion_model, t5xxl=wunsch.t5xxl,
+                clip_l=wunsch.clip_l, clip_g=wunsch.clip_g, llm=wunsch.llm,
+                llm_vision=wunsch.llm_vision, tokenizer=wunsch.tokenizer,
+                uncond_diffusion_model=wunsch.uncond_diffusion_model,
+                bare_checkpoint=(
+                    wunsch.diffusion_model is None
+                    and any((wunsch.t5xxl, wunsch.clip_l, wunsch.clip_g, wunsch.llm))
+                    and bildinhalt.checkpoint_without_text_encoders(pfad)
+                ),
+                high_noise_diffusion_model=wunsch.high_noise_diffusion_model,
+                audio_vae=wunsch.audio_vae, audio_encoder=wunsch.audio_encoder,
+                embeddings_connectors=wunsch.embeddings_connectors,
+            )
     except ValueError as fehler:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, t("bild.familie_ungueltig", sprache)
@@ -1405,7 +1484,8 @@ async def bild_erzeugen(
     )
     vae = _begleiter(vae_pfad, config, wunsch.vae, sprache)
     # A kit missing a part never reaches sd.cpp: the answer names the part.
-    if bausatz_diffusion_model is not None:
+    # A free kit has no family that could miss one.
+    if bausatz_diffusion_model is not None and not free:
         _kit_complete(family_name, {
             "t5xxl": bausatz_t5xxl, "clip_l": bausatz_clip_l, "clip_g": bausatz_clip_g,
             "llm": bausatz_llm, "vae": vae,
@@ -1565,7 +1645,7 @@ async def bild_erzeugen(
             if wunsch.live_preview == "tae" else None
         ),
         # A Bausatz's files, resolved above, alongside the CFG lock.
-        familie=family_name,
+        familie=bildbausatz.FREE if free else family_name,
         diffusion_model=bausatz_diffusion_model,
         t5xxl=bausatz_t5xxl, clip_l=bausatz_clip_l, clip_g=bausatz_clip_g,
         llm=bausatz_llm, vae_format=bausatz_vae_format, guidance=bausatz_guidance,
@@ -1690,7 +1770,6 @@ async def bild_erzeugen(
             code = (status.HTTP_499_CLIENT_CLOSED_REQUEST
                     if hasattr(status, "HTTP_499_CLIENT_CLOSED_REQUEST") else 499)
             raise HTTPException(code, t(fehler.grund, sprache)) from fehler
-        bildlauf.beenden(lauf, gescheitert=True)
         satz = t(fehler.grund, sprache)
         if fehler.protokoll:
             # The picture SERVER's real last words, verbatim below the
@@ -1699,6 +1778,9 @@ async def bild_erzeugen(
             # ("invalid lora path: x.safetensors") is the whole explanation,
             # and swallowing it leaves a bare "could not be drawn".
             satz = f"{satz}\n\n{fehler.protokoll}"
+        # The run keeps the same words as its output: the window's message
+        # is gone after a moment, the red run in the terminal stays.
+        bildlauf.beenden(lauf, gescheitert=True, reason=satz)
         # Whoever reads this sentence is the one who asked for it, and this
         # route writes it in the language of the request (``hole_sprache``):
         # the window asks in its own, the drawing tool asks in English,
@@ -1706,11 +1788,6 @@ async def bild_erzeugen(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, satz) from fehler
     except BildFehler as fehler:
         schluessel = fehler.grund
-        bildlauf.beenden(
-            lauf,
-            gescheitert=schluessel != "bild.abgebrochen",
-            abgebrochen=schluessel == "bild.abgebrochen",
-        )
         code = {
             "bild.laeuft_schon": status.HTTP_409_CONFLICT,
             # Asked for, not gone wrong — the window says nothing and the
@@ -1724,6 +1801,14 @@ async def bild_erzeugen(
             # The painter's REAL last words, verbatim below the sentence —
             # no rewritten error catalogue, the raw log is the truth.
             satz = f"{satz}\n\n{fehler.protokoll}"
+        # A failed run keeps these words as its output, as above; a stopped
+        # one is closed without any.
+        bildlauf.beenden(
+            lauf,
+            gescheitert=schluessel != "bild.abgebrochen",
+            abgebrochen=schluessel == "bild.abgebrochen",
+            reason=satz,
+        )
         # See the raise above: the sentence stands in the language of the
         # request, and the drawing tool is the one asking in English.
         raise HTTPException(code, satz) from fehler
@@ -2466,12 +2551,10 @@ def _draw_on_server(
                 extra_start=_server_start_switches(auftrag),
                 ad_extra=image_switches.key_value_list(auftrag.switches, "--extra-ad-args"),
             )
-            # A Bausatz's load is much heavier than a plain model's — the
-            # long deadline gives it room without falsely reporting a
-            # still-loading server as failed.
-            deadline = (
-                STARTFRIST_BAUSATZ if auftrag.diffusion_model is not None else STARTFRIST
-            )
+            # A load with files beside the model is much heavier than a
+            # plain model's — the long deadline gives it room without
+            # falsely reporting a still-loading server as failed.
+            deadline = start_deadline(*start_parts(auftrag, video_parts(auftrag)))
             if not turbo.bereit_abwarten(deadline, stopped=runner.stop_asked):
                 runner.end_if_stopped()
                 raise BildturboFehler("bild.turbo_ladefehler")

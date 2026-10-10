@@ -1068,3 +1068,55 @@ def test_repairing_faces_alone_keeps_its_seed(mode_run, client: TestClient, chat
     row = next(m for m in _nachrichten(client, chat_id) if m.get("bild") == answer["bild"])
     assert row["stats"]["seed"] == 77
     assert _info(client, answer["bild"])["seed"] == 77
+
+
+# --- A failed picture's run says why ------------------------------------------
+
+
+def _runs(client: TestClient, chat_id: str) -> list[dict]:
+    answer = client.get(f"/api/v1/laeufe/{chat_id}")
+    assert answer.status_code == 200, answer.text
+    return answer.json()["laeufe"]
+
+
+def test_a_failed_picture_s_run_carries_the_answer_s_words(
+    bild_senden, client: TestClient, monkeypatch, chat_id: str,
+):
+    """The red run in the terminal carries the same text the caller got:
+    the sentence and the painter's last words below it."""
+
+    def _erzeugen(self, auftrag, ziel):
+        raise BildFehler("bild.gescheitert", "[ERROR] load tensors from model loader failed")
+
+    monkeypatch.setattr(Bildrunner, "erzeugen", _erzeugen)
+    answer = client.post(
+        "/api/v1/bild", json={"prompt": "x", "modell": "base.safetensors", "chat_id": chat_id},
+    )
+    assert answer.status_code == 503
+    said = answer.json()["detail"]
+    assert "load tensors from model loader failed" in said
+
+    run = _runs(client, chat_id)[-1]
+    assert run["zustand"] == "fehler"
+    assert run["ausgabe"] == said
+
+
+def test_a_stopped_and_a_finished_picture_s_run_stay_without_text(
+    bild_senden, client: TestClient, monkeypatch, chat_id: str,
+):
+    """The silence probe: a picture that was drawn and one that was stopped
+    leave a run without any output."""
+    bild_senden(chat_id)
+    assert [(run["zustand"], run["ausgabe"]) for run in _runs(client, chat_id)] == [("fertig", "")]
+
+    def _erzeugen(self, auftrag, ziel):
+        raise BildFehler("bild.abgebrochen", "stopped while drawing")
+
+    monkeypatch.setattr(Bildrunner, "erzeugen", _erzeugen)
+    answer = client.post(
+        "/api/v1/bild", json={"prompt": "x", "modell": "base.safetensors", "chat_id": chat_id},
+    )
+    assert answer.status_code == 499
+    run = _runs(client, chat_id)[-1]
+    assert run["zustand"] == "abgebrochen"
+    assert run["ausgabe"] == ""

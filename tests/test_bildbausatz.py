@@ -12,7 +12,9 @@ from pathlib import Path
 import pytest
 
 from app import image_families
-from app.bildbausatz import Gespann, familie_pruefen, schalter
+from app.bildbausatz import (
+    FREE, PART_SWITCHES, Gespann, checkpoint_switches, familie_pruefen, fehlendes_teil, schalter,
+)
 
 FLUX, ZIMAGE, FLUX2 = "flux", "zimage", "flux2"
 
@@ -324,3 +326,123 @@ def test_a_plain_checkpoint_draws_without_encoder_switches(tmp_path, monkeypatch
     for switch in ("--clip_l", "--clip_g", "--t5xxl", "--llm"):
         assert switch not in command
 
+
+# --- A model no family decides about -----------------------------------------
+
+
+def test_beside_the_plain_model_every_given_part_has_its_switch():
+    """The model's family is not read and no diffusion model was chosen: the
+    model's own file goes as ``-m``, and beside it every part that is set —
+    the tokenizer among them — and nothing that is not set."""
+    assert checkpoint_switches(
+        FREE, t5xxl=None, clip_l=None, clip_g=None, llm=Path("/llm.gguf"),
+        llm_vision=None, tokenizer=Path("/tokenizer.json"), uncond_diffusion_model=None,
+    ) == ["--llm", _p("/llm.gguf"), "--tokenizer", _p("/tokenizer.json")]
+    assert checkpoint_switches(FREE, t5xxl=None, llm=None, tokenizer=None) == []
+
+
+@pytest.mark.parametrize(
+    "field,switch",
+    [("t5xxl", "--t5xxl"), ("clip_l", "--clip_l"), ("clip_g", "--clip_g"), ("llm", "--llm"),
+     *PART_SWITCHES.items()],
+)
+def test_beside_the_plain_model_no_field_is_refused(field, switch):
+    assert checkpoint_switches(FREE, **{field: Path("/part.gguf")}) == [switch, _p("/part.gguf")]
+
+
+def test_the_command_of_a_model_without_a_read_family(tmp_path, monkeypatch):
+    """sd-cli's own command line: ``-m`` with the given parts where no
+    diffusion model was chosen, ``--diffusion-model`` with them where one
+    was — and, the silence probe, a part beside a model whose family is
+    read and does not take it stays out as before."""
+    from app import bildrunner
+
+    monkeypatch.setattr(bildrunner.shutil, "which", lambda _: "/somewhere/sd-cli")
+    model, chosen = tmp_path / "model.safetensors", tmp_path / "chosen.safetensors"
+    parts = {"llm": tmp_path / "llm.gguf", "tokenizer": tmp_path / "tokenizer.json"}
+    runner = bildrunner.Bildrunner(tmp_path)
+
+    command = runner.befehl(
+        bildrunner.Auftrag(modell=model, prompt="x", familie=FREE, **parts), tmp_path / "out.png",
+    )
+    start = command.index("-m")
+    assert command[start:start + 6] == [
+        "-m", str(model), "--llm", str(parts["llm"]), "--tokenizer", str(parts["tokenizer"]),
+    ]
+    assert "--diffusion-model" not in command
+
+    command = runner.befehl(
+        bildrunner.Auftrag(modell=model, prompt="x", familie=FREE, diffusion_model=chosen, **parts),
+        tmp_path / "out.png",
+    )
+    start = command.index("--diffusion-model")
+    assert command[start:start + 6] == [
+        "--diffusion-model", str(chosen), "--llm", str(parts["llm"]),
+        "--tokenizer", str(parts["tokenizer"]),
+    ]
+    assert "-m" not in command
+
+    command = runner.befehl(
+        bildrunner.Auftrag(modell=model, prompt="x", familie="sdxl", **parts), tmp_path / "out.png",
+    )
+    assert "--tokenizer" not in command and "--llm" not in command
+
+
+def test_a_free_kit_carries_exactly_the_parts_it_was_given():
+    """A diffusion model was chosen for the model whose family is not read:
+    every part that is set travels with its own switch — the tokenizer
+    beside a plain LLM among them, which a family reading an LLM alone
+    refuses — and nothing that is not set."""
+    gespann = Gespann(
+        familie=FREE, diffusion_model=Path("/model.safetensors"),
+        llm=Path("/llm.gguf"), tokenizer=Path("/tokenizer.json"),
+        vae=Path("/ae.safetensors"),
+    )
+    assert schalter(gespann) == [
+        "--diffusion-model", _p("/model.safetensors"),
+        "--llm", _p("/llm.gguf"),
+        "--tokenizer", _p("/tokenizer.json"),
+        "--vae", _p("/ae.safetensors"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "field,switch",
+    [("t5xxl", "--t5xxl"), ("clip_l", "--clip_l"), ("llm", "--llm"), *PART_SWITCHES.items()],
+)
+def test_a_free_kit_refuses_no_field(field, switch):
+    gespann = Gespann(
+        familie=FREE, diffusion_model=Path("/model.gguf"), **{field: Path("/part.gguf")}
+    )
+    assert schalter(gespann) == ["--diffusion-model", _p("/model.gguf"), switch, _p("/part.gguf")]
+
+
+def test_a_free_kit_without_parts_is_the_model_alone():
+    """Every field may stay empty: then nothing but the model is sent."""
+    gespann = Gespann(familie=FREE, diffusion_model=Path("/model.gguf"))
+    assert schalter(gespann) == ["--diffusion-model", _p("/model.gguf")]
+
+
+def test_a_free_kit_lacks_no_part():
+    assert fehlendes_teil(FREE, {}) is None
+
+
+def test_free_is_no_family_and_no_request_can_say_it():
+    """The silence probe: the word stands for "no family decides" and is put
+    in by the service alone. It is no family of the table, and a request that
+    says it is refused like any other unknown word."""
+    assert image_families.get(FREE) is None
+    assert image_families.is_kit(FREE) is False
+    with pytest.raises(ValueError):
+        familie_pruefen(FREE, **{**_KEIN_TEIL, "diffusion_model": Path("/model.gguf")})
+
+
+def test_a_known_family_still_refuses_a_part_it_does_not_read():
+    """The silence probe: with the family read, a tokenizer beside a Z-Image
+    model is refused exactly as before."""
+    gespann = Gespann(
+        familie=ZIMAGE, diffusion_model=Path("/zimage.gguf"),
+        llm=Path("/llm.gguf"), tokenizer=Path("/tokenizer.json"),
+    )
+    with pytest.raises(ValueError):
+        schalter(gespann)

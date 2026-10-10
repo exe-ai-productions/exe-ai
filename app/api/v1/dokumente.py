@@ -32,6 +32,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app import docfolder, dokumentablage, pdfseiten
+from app.agentendock import type_from_name
 from app.api.abhaengigkeiten import hole_repositories, hole_sprache
 from app.db import Repositories
 from app.i18n import t
@@ -363,6 +364,39 @@ def document_file(
         media_type=document.mime_type or "application/octet-stream",
         filename=document.filename,
         content_disposition_type=_disposition(document.mime_type),
+    )
+
+
+@router.get(
+    "/chat-files/{chat_id}/{name:path}",
+    summary="A file lying below a chat's own folder that no document names",
+)
+def chat_file(
+    chat_id: str,
+    name: str,
+    request: Request,
+    language: str = Depends(hole_sprache),
+) -> FileResponse:
+    """What a write tool or a command left in the chat's folder or in a
+    folder below it, for the doc folder's tile. The chat and the path below
+    its folder are all the request may say: the folder is built from the
+    id, and what the path resolves to has to lie in that folder
+    (``docfolder.chat_file``) — ``..`` and a link leading out get the 404 of
+    a file that is not there.
+
+    Handed out the way a document's file is: only a PDF is shown in place.
+    A page a model wrote must never run under this service's address."""
+    file = docfolder.chat_file(request.app.state.config, chat_id, name)
+    if file is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, t("fehler.dokument_fehlt", language)
+        )
+    mime_type = type_from_name(file.name) or "application/octet-stream"
+    return FileResponse(
+        file,
+        media_type=mime_type,
+        filename=file.name,
+        content_disposition_type=_disposition(mime_type),
     )
 
 

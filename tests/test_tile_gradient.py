@@ -3,13 +3,15 @@
 See-through glass over a flat dark gradient leaves bands one grey level
 apart. A look whose frame is a gradient therefore names that gradient a
 second time, every colour already mixed with its glass, and the tile and the
-menu page draw it themselves, fixed to the window like the frame. Dark
-Matter is the exception among them: mixed that dark its gradient breaks into
-stripes, so its tile carries one flat colour. The looks with a flat frame or
-with drawings behind the glass keep the see-through ground. Both surfaces
-wear the same edge and the same shadow in every look; inside the edge the
-light looks draw a bright rim, Exe a faint green line, and Dark Matter and a
-dark gradient of the user's own nothing.
+menu page draw it themselves, fixed to the window like the frame. Exe and
+Dark Matter carry a flat frame with a drawing on it instead, and over one
+colour nothing bands: their tile keeps the see-through glass, in the same
+share of the look's own dark, so the drawing shows faintly through. The
+looks with a flat light frame or with drawings behind a gradient keep the
+see-through ground too. Both surfaces wear the same edge and the same shadow
+in every look; inside the edge the light looks draw a bright rim, Exe a
+faint green line, Dark Matter a faint violet one, and a dark gradient of the
+user's own nothing.
 """
 
 from __future__ import annotations
@@ -36,16 +38,16 @@ LOOKS = {
 }
 # The looks that mix their gradient into the tile, and the rule that holds
 # the frame they mix.
-MIXED = {"exe": "exe", "auto": "auto", "own-light": "own", "own-dark": "own"}
-# The look whose frame is a gradient and whose tile is one colour all the same.
-FLAT = {"darkmatter": "rgb(42, 15, 70)"}
+MIXED = {"own-light": "own", "own-dark": "own"}
+# The looks whose frame is one flat colour with a drawing on it; their glass
+# stays see-through, since one colour under it cannot band.
+FLAT = ("exe", "auto", "darkmatter")
 # The looks that keep the see-through tile and the frosted menu page although
 # the dark set of the system could reach them.
-DECLARED_ABSENT = ("own", "heaven", "moune")
-# What a look draws inside the edge of the tile: a faint green line, nothing,
-# or a bright rim.
-LINED = ("exe", "auto")
-BARE = ("darkmatter", "own-dark")
+DECLARED_ABSENT = ("own", "heaven", "moune") + FLAT
+# What a look draws inside the edge of the tile: a faint line in its accent,
+# nothing, or a bright rim.
+BARE = ("own-dark",)
 LIGHT = ("light", "heaven", "moune")
 
 # A colour of the frame is a variable, or a variable with a variable to fall
@@ -54,8 +56,11 @@ NESTED = r"(?:[^()]|\((?:[^()]|\([^()]*\))*\))+"
 MIX = re.compile(r"color-mix\(in srgb, (#[0-9a-f]{6}) (\d+)%, (" + NESTED + r")\)")
 # The drop shadow every look gives the tile and the menu page.
 OUTER = "0 14px 34px -14px rgba(0, 0, 0, 0.55), 0 2px 6px -2px rgba(0, 0, 0, 0.25)"
-# One sharp pixel in a fifth of the green: no blur, so it has no steps to draw.
+# One sharp pixel in a fifth of the look's accent: no blur, so it has no
+# steps to draw. Green for Exe, violet for Dark Matter.
 GREEN_LINE = "inset 0 0 0 1px color-mix(in srgb, var(--gruen) 20%, transparent)"
+VIOLET_LINE = "inset 0 0 0 1px color-mix(in srgb, var(--violett) 20%, transparent)"
+LINED = {"exe": GREEN_LINE, "auto": GREEN_LINE, "darkmatter": VIOLET_LINE}
 
 
 def _rule(look: str) -> str:
@@ -105,17 +110,20 @@ def test_a_look_with_a_gradient_frame_names_it_mixed_with_its_glass():
         assert _value(look, "--page-frost") == "none", f"{look}: the menu page still blurs its own gradient"
 
 
-def test_dark_matter_gives_the_tile_one_flat_colour():
-    """Mixed with its dark glass the gradient of this look is left with a
-    handful of steps per colour channel, and they show as stripes. The tile
-    and the menu page carry one colour instead; the gradient stays in the
-    frame, and the frost stays off — nothing shows through a solid colour."""
-    for look, colour in FLAT.items():
-        ground = _value(look, "--kachel-verlauf") or ""
-        assert "gradient" not in ground, f"{look}: the tile draws a gradient again: {ground[:40]}"
-        assert ground == colour, f"{look}: the tile is not the one colour: {ground[:40]}"
-        assert (_value(look, "--frame") or "").startswith("linear-gradient("), f"{look}: the frame lost its gradient"
-        assert _value(look, "--page-frost") == "none", f"{look}: the menu page blurs a solid colour"
+def test_a_look_with_a_flat_frame_keeps_the_see_through_glass_over_it():
+    """Over one colour there is nothing to mix and no band to hide: the frame
+    is one colour, the tile and the menu page keep the see-through glass,
+    and the frost stays on — the drawing on the frame shows through, soft.
+    The two dark looks give their glass the same share of their own dark,
+    so the tiles differ in colour alone."""
+    shares = {}
+    for look in FLAT:
+        frame = _value(look, "--frame") or ""
+        assert re.fullmatch(r"#[0-9a-f]{6}", frame), f"{look}: the frame is not one flat colour: {frame[:40]}"
+        assert _value(look, "--kachel-verlauf") == "initial", f"{look}: the tile is not see-through"
+        assert _value(look, "--page-frost") == "var(--kachel-frost)", f"{look}: the menu page lost its frost"
+        shares[look] = _glass(_value(look, "--kachel-chat") or "")[1]
+    assert len(set(shares.values())) == 1, f"the glass of the flat looks differs in share: {shares}"
 
 
 def test_the_gradient_and_the_frost_are_named_together_in_every_rule():
@@ -125,7 +133,7 @@ def test_the_gradient_and_the_frost_are_named_together_in_every_rule():
     the page's own gradient, or leaves text on see-through glass unfrosted."""
     sheet = SHEET.read_text(encoding="utf-8")
     bodies = [body for body in re.findall(r"\{([^{}]*)\}", sheet) if "--kachel-verlauf:" in body]
-    assert len(bodies) == len(MIXED) + len(FLAT) + len(DECLARED_ABSENT), (
+    assert len(bodies) == len(MIXED) + len(DECLARED_ABSENT), (
         "a look names the ground of the tile that no check here knows"
     )
     for body in bodies:
@@ -175,20 +183,20 @@ def test_the_menu_page_wears_the_edge_and_the_shadow_of_the_chat_tile():
     assert "inset: 1px;" in _component_rule(PAGE, ".seite::before")
 
 
-def test_exe_draws_one_faint_green_line_inside_the_edge():
-    """One sharp pixel in a fifth of the green, before the drop shadow — in
-    Exe and in the dark set the system asks for. Sharp on purpose: a glow
-    fading inwards is left with a few steps of brightness that show as
-    rectangles lying inside one another."""
-    for look in LINED:
+def test_the_dark_looks_draw_one_faint_line_of_their_accent_inside_the_edge():
+    """One sharp pixel in a fifth of the accent, before the drop shadow —
+    green in Exe and in the dark set the system asks for, violet in Dark
+    Matter, so both tiles stand off their frame the same way. Sharp on
+    purpose: a glow fading inwards is left with a few steps of brightness
+    that show as rectangles lying inside one another."""
+    for look, line in LINED.items():
         edge = _value(look, "--chat-edge") or ""
-        assert edge == GREEN_LINE + ", " + OUTER, f"{look}: the edge is not the green line and the drop shadow: {edge}"
+        assert edge == line + ", " + OUTER, f"{look}: the edge is not the faint line and the drop shadow: {edge}"
 
 
-def test_dark_matter_and_a_dark_own_gradient_draw_nothing_inside_the_edge():
-    """The silence check for the green line: it is Exe's alone. Dark Matter
-    names its own edge, and the user's dark gradient, which otherwise takes
-    Exe's values, takes the line back."""
+def test_a_dark_own_gradient_draws_nothing_inside_the_edge():
+    """The silence check for the faint line: the user's dark gradient, which
+    otherwise takes Exe's values, takes the line back."""
     for look in BARE:
         edge = _value(look, "--chat-edge") or ""
         assert "inset" not in edge, f"{look}: the edge draws inside the tile: {edge}"

@@ -15,15 +15,20 @@ it.
 
 from __future__ import annotations
 
+import inspect
+import re
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.v1 import bild
 from app.bildrunner import Bildrunner
-from app.bildturbo import STARTFRIST, STARTFRIST_BAUSATZ
+from app.bildturbo import (
+    START_PARTS, STARTFRIST, STARTFRIST_BAUSATZ, Bildturbo, BildturboFehler,
+)
 from app.config import Config
-from tests.test_bildturbo import _LebtImmer
+from tests.test_bildturbo import _LebtImmer, _sd_server_binary_anlegen
 
 
 # A whole kit per family, filled in where a test sends a diffusion model:
@@ -286,6 +291,144 @@ def test_bausatz_wartet_mit_der_langen_startfrist(bausatz_turbo_senden):
 
 def test_ohne_bausatz_bleibt_die_kurze_startfrist(bausatz_turbo_senden):
     assert bausatz_turbo_senden()["frist"] == STARTFRIST
+
+
+def test_a_model_with_a_part_beside_it_waits_the_long_start_deadline(
+    bausatz_turbo_senden, client: TestClient,
+):
+    """A model whose family is not read starts as ``-m`` and carries its
+    parts beside it — a load as heavy as a kit's, so it gets the kit's
+    wait and a server that is only still loading is not called failed."""
+    answer = client.patch(
+        "/api/v1/settings/global/bildmodellwerte",
+        json={"wert": {"base.safetensors": {"family_detection": False}}},
+    )
+    assert answer.status_code == 200, answer.text
+    assert bausatz_turbo_senden(llm="llm.gguf")["frist"] == STARTFRIST_BAUSATZ
+
+
+def test_a_vae_beside_the_model_waits_the_long_start_deadline(bausatz_turbo_senden):
+    """The VAE is a file the server loads before its first answer too."""
+    assert bausatz_turbo_senden(vae="ae.safetensors")["frist"] == STARTFRIST_BAUSATZ
+
+
+@pytest.mark.parametrize(("field", "value", "deadline"), [
+    (None, None, STARTFRIST),
+    ("_diffusion_model", "flux1-dev.gguf", STARTFRIST_BAUSATZ),
+    ("_llm", "llm.gguf", STARTFRIST_BAUSATZ),
+    ("_t5xxl", "t5xxl.gguf", STARTFRIST_BAUSATZ),
+    ("_vae", "ae.safetensors", STARTFRIST_BAUSATZ),
+    ("_tokenizer", "tokenizer.json", STARTFRIST_BAUSATZ),
+    ("_video_parts", (("audio_vae", "audio.safetensors"),), STARTFRIST_BAUSATZ),
+])
+def test_the_server_s_own_waits_follow_the_files_it_was_started_with(
+    tmp_path: Path, monkeypatch, field, value, deadline,
+):
+    """Drawing and upscaling wait for a server still coming up by the same
+    rule as the route that started it: one file beside the model is enough
+    for the long wait, a model on its own keeps the short one."""
+    turbo = Bildturbo(tmp_path)
+    turbo._prozess = _LebtImmer()
+    turbo._modell = "base.safetensors"
+    if field is not None:
+        setattr(turbo, field, value)
+    waited: list[float] = []
+
+    def _bereit_abwarten(frist, stopped=None):
+        waited.append(frist)
+        return False
+
+    monkeypatch.setattr(turbo, "bereit_abwarten", _bereit_abwarten)
+    with pytest.raises(BildturboFehler):
+        turbo.zeichnen({}, stopped=lambda: False)
+    with pytest.raises(BildturboFehler):
+        turbo.upscale("", "upscaler")
+    assert waited == [deadline, deadline]
+
+
+_FREE = {"wert": {"base.safetensors": {"family_detection": False}}}
+
+
+@pytest.mark.parametrize(("fields", "free", "set_parts", "deadline"), [
+    ({}, False, set(), STARTFRIST),
+    ({"vae": "ae.safetensors"}, False, {"vae"}, STARTFRIST_BAUSATZ),
+    ({"audio_vae": "ae.safetensors"}, True, {"video_parts"}, STARTFRIST_BAUSATZ),
+    (
+        {"diffusion_model": "flux1-dev.gguf", "familie": "flux"}, False,
+        {"diffusion_model", "t5xxl", "clip_l", "vae"}, STARTFRIST_BAUSATZ,
+    ),
+])
+def test_the_route_and_the_server_itself_wait_the_same_time(
+    bausatz_turbo_senden, client: TestClient, monkeypatch, tmp_path: Path,
+    fields, free, set_parts, deadline,
+):
+    """The route that starts the server and the server it started read the
+    same list of parts: started with exactly what the route hands over, the
+    server gives its own start the wait the route just gave it — with one
+    part beside the model (the VAE, a video kit's part), with a whole kit,
+    and with nothing but the model."""
+    if free:
+        answer = client.patch("/api/v1/settings/global/bildmodellwerte", json=_FREE)
+        assert answer.status_code == 200, answer.text
+    handed_over: dict = {}
+    monkeypatch.setattr(
+        client.app.state.bildturbo, "starten",
+        lambda *args, **kwargs: handed_over.update(args=args, kwargs=kwargs),
+    )
+    by_the_route = bausatz_turbo_senden(**fields)["frist"]
+    # The wait is measured for exactly these parts and no others.
+    assert {
+        name for name in (*START_PARTS, "video_parts") if handed_over["kwargs"].get(name)
+    } == set_parts
+
+    _sd_server_binary_anlegen(tmp_path / "own")
+    monkeypatch.setattr("subprocess.Popen", lambda befehl, **kwargs: _LebtImmer())
+    server = Bildturbo(tmp_path / "own")
+    server.starten(*handed_over["args"], **handed_over["kwargs"])
+
+    assert by_the_route == deadline
+    assert server._start_deadline() == by_the_route
+
+
+def test_the_parts_of_the_start_deadline_are_named_once(tmp_path: Path):
+    """Neither the route nor the server names a part where it asks for the
+    wait: both read the one list. A part written out at either place again
+    is a second list that can fall behind the first."""
+    found = re.search(
+        r"deadline = start_deadline\((.*?)\)\n", inspect.getsource(bild._draw_on_server), re.S,
+    )
+    assert found, "the route no longer asks start_deadline where it starts the server"
+    asked_by_the_route = found.group(1)
+    asked_by_the_server = inspect.getsource(Bildturbo._start_deadline)
+    for place in (asked_by_the_route, asked_by_the_server):
+        assert "start_parts(" in place
+        assert not [name for name in START_PARTS if re.search(rf"\b_?{name}\b", place)]
+    # Every name is one the server is started with and keeps.
+    started_with = inspect.signature(Bildturbo.starten).parameters
+    kept = vars(Bildturbo(tmp_path))
+    assert all(name in started_with and f"_{name}" in kept for name in START_PARTS)
+
+
+def test_a_picture_the_server_fails_keeps_the_answer_s_words_on_its_run(
+    bausatz_turbo_senden, client: TestClient, monkeypatch, chat_id: str,
+):
+    """The picture server's refusal stands on the run as it stands in the
+    answer: the sentence and the server's own last words."""
+
+    def _zeichnen(koerper, **k):
+        raise BildturboFehler("bild.turbo_ladefehler", "HTTP 400: invalid lora path")
+
+    monkeypatch.setattr(client.app.state.bildturbo, "zeichnen", _zeichnen)
+    answer = client.post(
+        "/api/v1/bild", json={"prompt": "x", "modell": "base.safetensors", "chat_id": chat_id},
+    )
+    assert answer.status_code == 503
+    said = answer.json()["detail"]
+    assert "invalid lora path" in said
+
+    runs = client.get(f"/api/v1/laeufe/{chat_id}").json()["laeufe"]
+    assert runs[-1]["zustand"] == "fehler"
+    assert runs[-1]["ausgabe"] == said
 
 
 @pytest.mark.parametrize(
