@@ -471,7 +471,7 @@ class WerkzeugRegistry:
                 name=eintrag.name,
                 command=befehl,
                 args=argumente,
-                # ${NOTION_TOKEN} and co. are resolved here — the values
+                # ${SEARXNG_URL} and co. are resolved here — the values
                 # come from the environment (.env is loaded at service start
                 # and before every registry restart). A missing value stays
                 # as ${…} and the server fails visibly instead of running
