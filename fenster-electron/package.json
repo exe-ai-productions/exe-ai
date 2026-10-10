@@ -9,7 +9,8 @@
     "start": "electron .",
     "bauen": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --dir",
     "packen": "electron-builder --mac --publish never",
-    "pack:win": "electron-builder --win --publish never"
+    "pack:win": "electron-builder --win --publish never",
+    "pack:store": "electron-builder --win appx --publish never"
   },
   "dependencies": {
     "electron-updater": "^6.8.9"
@@ -65,6 +66,16 @@
     },
     "dmg": {
       "artifactName": "Exe-AI-${version}-${arch}.dmg"
+    },
+    "appx": {
+      "applicationId": "ExeAI",
+      "identityName": "ExeAI.ExeAI",
+      "publisher": "CN=962E9CB6-CED5-4B24-A50B-FA4F4C9DCE07",
+      "publisherDisplayName": "Exe AI",
+      "displayName": "Exe AI",
+      "backgroundColor": "transparent",
+      "artifactName": "Exe-AI-${version}-${arch}.appx",
+      "languages": ["en-US", "de-DE"]
     },
     "win": {
       "target": [

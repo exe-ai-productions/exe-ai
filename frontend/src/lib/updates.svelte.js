@@ -12,7 +12,9 @@
   nothing of an update is shown anywhere.
 */
 
-const STATES = ['none', 'checking', 'available', 'downloading', 'downloaded', 'error']
+// `store`: a copy from the Microsoft Store, which the Store keeps current —
+// the page offers no look and no download there.
+const STATES = ['none', 'checking', 'available', 'downloading', 'downloaded', 'error', 'store']
 
 export const updates = $state({
   // Whether the page runs in the shell at all.

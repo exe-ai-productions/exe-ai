@@ -1,0 +1,54 @@
+# Builds the Microsoft Store package (AppX) of the current commit and keeps
+# it as a workflow artifact — nothing goes to a release. The Store is fed by
+# hand: the maintainer downloads the artifact and submits it in Partner
+# Center, where Microsoft signs it. The package is unsigned on purpose: the
+# publisher in fenster-electron/package.json is the Store's own identity,
+# and only the Store may sign for it.
+#
+# The tests are not run here: a Store package is built from a commit the
+# release workflow has already tested.
+#
+# Runs by hand from the Actions page.
+
+name: Build Store package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  store:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The interface first — otherwise the program ships with one older
+      # than itself.
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt pyinstaller
+      # The service as a folder, dist/Exe AI/ — what the shell wraps.
+      - run: pyinstaller deploy/exe-ai-terminal.spec
+
+      - run: npm ci
+        working-directory: fenster-electron
+      - run: npm run pack:store
+        working-directory: fenster-electron
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exe-ai-store-package
+          path: fenster-electron/dist/*.appx
+          if-no-files-found: error

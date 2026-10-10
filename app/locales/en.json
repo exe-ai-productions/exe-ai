@@ -1239,6 +1239,7 @@
     "downloading": "Downloading … {percent} %",
     "install": "Install",
     "later": "Later",
+    "store": "Updates come from the Microsoft Store.",
     "version": "Version {version}",
     "check": "Check for updates",
     "current": "The app is up to date.",

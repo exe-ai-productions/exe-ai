@@ -1239,6 +1239,7 @@
     "downloading": "Lädt … {percent} %",
     "install": "Installieren",
     "later": "Später",
+    "store": "Updates kommen aus dem Microsoft Store.",
     "version": "Version {version}",
     "check": "Nach Updates suchen",
     "current": "Die App ist aktuell.",

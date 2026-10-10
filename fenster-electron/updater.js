@@ -23,6 +23,13 @@ autoUpdater.allowDowngrade = false
 // and its stack traces stay out.
 autoUpdater.logger = null
 
+// A copy from the Microsoft Store is the Store's to keep current: it
+// installs every new version itself, and a look of our own would find a
+// feed that copy cannot install from. Electron says which copy runs
+// (process.windowsStore); such a copy never looks, fetches or installs, and
+// tells the page so in one state of its own.
+const storeManaged = Boolean(process.windowsStore)
+
 // A run from the source folder is not packaged and has no feed description,
 // so it never looks for anything. A trial run can name one of its own — a
 // file like the app-update.yml a packaged shell carries — and then checks
@@ -35,7 +42,8 @@ if (trialConfig) {
 }
 
 // What the page is told. `state` is one of none, checking, available,
-// downloading, downloaded, error. `found`, `notes` and `date` describe the
+// downloading, downloaded, error — or store, from the first moment on, in a
+// copy the Store keeps current. `found`, `notes` and `date` describe the
 // newer release of the last look that found one — the notes as the release
 // carries them, which from a GitHub release is HTML. `progress` is set while
 // a download runs, `reason` while the state is error.
@@ -44,7 +52,7 @@ const status = {
   found: '',
   notes: '',
   date: '',
-  state: 'none',
+  state: storeManaged ? 'store' : 'none',
   progress: null,
   reason: '',
 }
@@ -135,6 +143,7 @@ async function settle(call) {
 // Looks at the feed. Not while a download runs or lies ready: the look would
 // put the state back to "available" underneath it.
 function check() {
+  if (storeManaged) return snapshot()
   if (status.state === 'downloading' || status.state === 'downloaded') return snapshot()
   return settle(() => autoUpdater.checkForUpdates())
 }

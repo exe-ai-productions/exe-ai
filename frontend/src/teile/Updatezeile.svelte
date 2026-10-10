@@ -31,11 +31,19 @@
   <div class="updates" bind:this={part}>
     <div class="row">
       <span class="version">{t('updates.version', { version: updates.version })}</span>
-      <button class="act" onclick={look} disabled={updates.state === 'checking'}>
-        {t('updates.check')}
-      </button>
+      {#if updates.state !== 'store'}
+        <button class="act" onclick={look} disabled={updates.state === 'checking'}>
+          {t('updates.check')}
+        </button>
+      {/if}
     </div>
-    {#if updates.state === 'available'}
+    {#if updates.state === 'store'}
+      <!-- A copy from the Microsoft Store: the Store keeps it current, so
+           there is nothing to look for here, and no button that could. -->
+      <div class="row">
+        <span class="result done">{t('updates.store')}</span>
+      </div>
+    {:else if updates.state === 'available'}
       <div class="row">
         <span class="result">{t('updates.found', { version: updates.found })}</span>
         <button class="act" onclick={downloadUpdate}>{t('updates.download')}</button>

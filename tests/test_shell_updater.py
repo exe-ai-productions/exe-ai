@@ -47,7 +47,7 @@ def _run(script: str, env: dict[str, str] | None = None) -> Any:
     return json.loads(run.stdout.strip().splitlines()[-1])
 
 
-def _updater(body: str, *, packaged: bool = True, env: dict[str, str] | None = None) -> Any:
+def _updater(body: str, *, packaged: bool = True, store: bool = False, env: dict[str, str] | None = None) -> Any:
     """Loads updater.js with stand-ins and runs `body` (async) against it.
     The stand-in for the library behaves like the library where it matters:
     a failure is the 'error' event first and the rejected promise second."""
@@ -78,6 +78,7 @@ Module._load = function (request, ...rest) {{
   if (request === 'electron-updater') return {{ autoUpdater }}
   return load.call(this, request, ...rest)
 }}
+if ({str(store).lower()}) process.windowsStore = true
 const updater = require({json.dumps(str(UPDATER))})
 updater.start(() => window)
 const status = () => handlers['updates-status']()
@@ -559,3 +560,38 @@ def test_a_build_on_the_machine_never_uploads():
     for name, script in scripts.items():
         if "electron-builder" in script and "--dir" not in script:
             assert script.endswith("--publish never"), name
+
+
+# --- a copy from the Microsoft Store ----------------------------------------
+
+
+def test_a_copy_from_the_store_never_looks_and_says_so_from_the_start():
+    """The Store keeps such a copy current: its state is `store` before any
+    look, the look the shell takes after the start touches the library not
+    at all, and the state stays."""
+    result = _updater("""
+    const before = status()
+    const after = await handlers['updates-check']()
+    return { before, after, calls }
+    """, store=True)
+    assert result["before"]["state"] == "store"
+    assert result["after"]["state"] == "store"
+    assert result["calls"] == []
+
+
+def test_a_copy_that_is_not_from_the_store_keeps_its_own_look():
+    """The silence check: without the Store's mark nothing changes."""
+    result = _updater("""
+    const before = status()
+    await handlers['updates-check']()
+    return { before, calls }
+    """)
+    assert result["before"]["state"] == "none"
+    assert result["calls"] == ["check"]
+
+
+def test_the_settings_row_of_a_store_copy_names_the_store_and_offers_no_look():
+    row = (SHELL.parent / "frontend" / "src" / "teile" / "Updatezeile.svelte").read_text(encoding="utf-8")
+    assert "{#if updates.state !== 'store'}" in row
+    assert "{#if updates.state === 'store'}" in row
+    assert "t('updates.store')" in row
