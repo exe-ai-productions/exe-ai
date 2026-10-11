@@ -13,6 +13,11 @@
 # own; nothing is signed on Windows.
 #
 # Runs on a version tag (v0.6.9) or by hand from the Actions page.
+#
+# The two jobs start at once: the package does not wait for the tests,
+# and the tests use every core of the runner (pytest-xdist, one file per
+# worker). A red test job is there to be seen before the draft is
+# published by hand; it no longer holds the package back.
 
 name: Build packages
 
@@ -41,11 +46,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -r requirements.txt
-      - run: python -m pytest tests/ -q
+      - run: pip install -r requirements.txt pytest-xdist
+      - run: python -m pytest tests/ -q -n 4 --dist loadfile
 
   paket:
-    needs: tests
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

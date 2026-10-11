@@ -919,11 +919,17 @@
              The check stands only where a fetched copy would be the program
              that starts; beside a program the settings name, or an
              installed one that comes first, the build is named and nothing
-             is offered. -->
-        {#if hatProgramm}
-          <Serverabschnitt zeichen="server" titel="llama.cpp">
-            <div class="zeile">
-              <span class="name build">{t('bildserver.version_zeile', { bau: auskunft.version ?? '—' })}</span>
+             is offered.
+
+             The section stands whether the program is there or not: without
+             it the row holds the one button that fetches it — the first-run
+             board carries the same button, but that board goes with the
+             first model, and a machine with models and no program was left
+             with no way to get one. -->
+        <Serverabschnitt zeichen="server" titel="llama.cpp">
+          <div class="zeile">
+            <span class="name build">{t('bildserver.version_zeile', { bau: auskunft?.version ?? '—' })}</span>
+            {#if hatProgramm}
               {#if auskunft.updatable && updateAnswer?.aktuell}
                 <UpToDateMark />
               {/if}
@@ -946,9 +952,26 @@
                   {/if}
                 </span>
               {/if}
-            </div>
-          </Serverabschnitt>
-        {/if}
+            {:else if programmLaedt}
+              <!-- The program on its way down: the bar and its share after
+                   the dash, where the buttons stand otherwise. -->
+              <span class="balken"><i style="width:{Math.round(programmStand.anteil * 100)}%"></i></span>
+              <span class="balkenzahl">{Math.round(programmStand.anteil * 100)} %</span>
+            {:else}
+              <!-- No program: the one button that fetches it, at the right end
+                   of the row where the check stands once there is one. A
+                   fetch that ended in an error says so beside the button
+                   that tries again; without it the button simply stood
+                   there again, as if nothing had been tried. -->
+              {#if programmStand?.fehler}
+                <span class="v_fehler">{t('bildserver.generator_fehler')}</span>
+              {/if}
+              <span class="buttons">
+                <button class="feldknopf" onclick={programmHolen}>{t('modell.server_download')}</button>
+              </span>
+            {/if}
+          </div>
+        </Serverabschnitt>
       {/snippet}
       {#snippet unten()}
         <div class="log">
@@ -1157,5 +1180,9 @@
      an update changes the number. */
   .build {
     font-variant-numeric: tabular-nums;
+  }
+  /* A fetch that failed, in the colour of a failure, beside the button. */
+  .v_fehler {
+    color: var(--rot);
   }
 </style>

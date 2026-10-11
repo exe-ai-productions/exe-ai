@@ -139,6 +139,9 @@ def test_kein_text_steht_unuebersetzt_in_beiden_katalogen():
         "bild.medium_video",
         # Words English and German share unchanged.
         "downloads.titel",
+        # The fetch button of the model-server row says the same word in
+        # both languages.
+        "modell.server_download",
         "menue.chat", "menue.cloud", "jobs.bereich_chats",
         # "Cloud" is the same word in both languages, the same reason as
         # menue.cloud above — this is the Improve window's own copy of it,

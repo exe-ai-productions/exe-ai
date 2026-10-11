@@ -851,6 +851,7 @@
     "protokoll_vergroessern": "Server-Log vergrößern",
     "unknown_architecture": "Der letzte Start ist gescheitert: Der Modell-Server kennt die Bauart {arch} nicht",
     "server_holen": "Modell-Server herunterladen",
+    "server_download": "Download",
     "kein_modell_da": "Noch kein Modell im Ordner — hol dir zuerst eins",
     "zum_katalog": "Zum Katalog",
     "feld_modell": "Modelle",

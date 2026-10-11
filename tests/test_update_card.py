@@ -273,6 +273,7 @@ def test_every_text_stands_word_for_word_in_both_languages():
         "current": "Die App ist aktuell.",
         "found": "Neue Version {version} verfügbar.",
         "failed": "Prüfen nicht möglich: {reason}",
+        "store": "Updates kommen aus dem Microsoft Store.",
     }
     assert texts["en"] == {
         "title": "New version available",
@@ -286,4 +287,5 @@ def test_every_text_stands_word_for_word_in_both_languages():
         "current": "The app is up to date.",
         "found": "New version {version} available.",
         "failed": "Could not check: {reason}",
+        "store": "Updates come from the Microsoft Store.",
     }

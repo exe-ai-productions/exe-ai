@@ -851,6 +851,7 @@
     "protokoll_vergroessern": "Enlarge server log",
     "unknown_architecture": "The last start failed: the model server does not know the architecture {arch}",
     "server_holen": "Get the model server",
+    "server_download": "Download",
     "kein_modell_da": "No model in the folder yet — fetch one first",
     "zum_katalog": "Open catalog",
     "feld_modell": "Models",

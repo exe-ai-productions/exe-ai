@@ -1,5 +1,13 @@
 # Patch notes
 
+## 0.6.10 — hotfix
+
+- **The model server page always shows the llama.cpp row.** When llama-server is
+  missing, the row offers a **Download** button that fetches the tested build.
+  Before, that button only existed while no model was in the model folder, so a
+  computer with a model but without the server had no way to get one, and
+  starting a model ended with "llama-server not found".
+
 ## 0.6.9 — the first public release
 
 Exe AI is available for macOS on Apple Silicon and as an installer for

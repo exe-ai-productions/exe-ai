@@ -2,7 +2,7 @@
   "name": "exe-ai-terminal-fenster-electron",
   "productName": "Exe AI",
   "private": true,
-  "version": "0.6.9",
+  "version": "0.6.10",
   "description": "The Electron window around the Exe AI service.",
   "main": "main.js",
   "scripts": {
