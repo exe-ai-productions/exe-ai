@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import fake_server, llama_server_name
+from tests.conftest import fake_server, llama_server_name, sized_file
 from app.modellrunner import (
     Lauf, Modellrunner, RunnerFehler, modelle_auflisten, programm_finden,
 )
@@ -62,8 +62,7 @@ def test_ein_ordner_der_nicht_existiert_ist_leer(tmp_path):
 
 def _gross(pfad: Path, groesse: int) -> None:
     # Sparse: the size is real to stat, the disk stays empty.
-    with pfad.open("wb") as datei:
-        datei.truncate(groesse)
+    sized_file(pfad, groesse)
 
 
 def test_zwei_teile_sind_ein_modell_mit_der_summe(tmp_path):

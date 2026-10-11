@@ -9,6 +9,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.conftest import sized_file
 from app import sprachserver, stimme
 from app.modellrunner import Lauf
 
@@ -509,8 +510,7 @@ def test_die_auskunft_trennt_modelle_von_projektoren(client: TestClient):
         # two real gigabytes to prove it would be a slow test saying the
         # same thing. Bytes on the 10^9 scale, the same one the size reads
         # on (app/modellrunner.py `Modelldatei`).
-        with pfad.open("wb") as datei:
-            datei.truncate(int(gb * 1e9))
+        sized_file(pfad, int(gb * 1e9))
 
     grosse_datei(ordner / "asr-gross-Q8_0.gguf", 2)
     grosse_datei(ordner / "klein.gguf", 0.5)

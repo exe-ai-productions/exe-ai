@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.conftest import sized_file
 from app import bildrunner, bildspeicher, systemspeicher
 from app.api.v1 import bild as bildapi
 from app.bildrunner import Auftrag, Bildrunner
@@ -166,16 +167,13 @@ def test_control_image_travels_per_job(tmp_path: Path):
 def test_check_counts_every_kit_file(tmp_path: Path):
     """The diffusion model, its encoders, the VAE — not the model file
     alone. Sparse files, so the sizes cost no disk."""
-    def sized_file(name: str, gib: float) -> Path:
-        path = tmp_path / name
-        with open(path, "wb") as f:
-            f.truncate(int(gib * GIB))
-        return path
+    def kit_file(name: str, gib: float) -> Path:
+        return sized_file(tmp_path / name, int(gib * GIB))
 
-    flux = sized_file("flux.gguf", 6)
+    flux = kit_file("flux.gguf", 6)
     job = Auftrag(
-        modell=flux, prompt="x", diffusion_model=flux, t5xxl=sized_file("t5.gguf", 5),
-        clip_l=sized_file("clip_l.safetensors", 0.25), vae=sized_file("ae.safetensors", 0.25),
+        modell=flux, prompt="x", diffusion_model=flux, t5xxl=kit_file("t5.gguf", 5),
+        clip_l=kit_file("clip_l.safetensors", 0.25), vae=kit_file("ae.safetensors", 0.25),
     )
     assert bildapi._kit_files_gb(job) == pytest.approx(11.5)
 

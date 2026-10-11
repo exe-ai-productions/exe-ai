@@ -904,6 +904,46 @@ def fake_server(path: Path, *, says: Sequence[str] = (), seconds: int = 30) -> P
     return path
 
 
+def sized_file(path: Path, size: int) -> Path:
+    """A file that reports ``size`` bytes and costs no disk — for a test
+    that needs the size of a model and none of its content.
+
+    On a POSIX system growing an empty file leaves a hole. On Windows it
+    does not: growing a file there writes every one of its bytes as a zero
+    (``truncate``, since Python 3.5), so a test that asks for gigabytes
+    writes gigabytes, and the disk of the whole machine is busy for as long
+    as that takes — long enough for a test in another worker to run into
+    its time limit. There the file is marked sparse first and its last byte
+    is written at the far end: what lies before that byte stays a hole. A
+    volume that knows no sparse files gets the file the slow way."""
+    with path.open("wb") as file:
+        if sys.platform == "win32":
+            import ctypes
+            import msvcrt
+            from ctypes import wintypes
+
+            set_sparse = 0x000900C4
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.DeviceIoControl.argtypes = [
+                wintypes.HANDLE, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
+                wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
+            ]
+            kernel32.DeviceIoControl.restype = wintypes.BOOL
+            returned = wintypes.DWORD(0)
+            marked = kernel32.DeviceIoControl(
+                msvcrt.get_osfhandle(file.fileno()), set_sparse, None, 0, None, 0,
+                ctypes.byref(returned), None,
+            )
+            if not marked:
+                file.truncate(size)
+            elif size:
+                file.seek(size - 1)
+                file.write(b"\0")
+        else:
+            file.truncate(size)
+    return path
+
+
 def llama_server_name() -> str:
     """The file name of the model server on this system, as the program
     looks for it (app/serverdownload.py, ``gefundener_server``): Windows
