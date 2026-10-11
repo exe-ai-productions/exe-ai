@@ -46,6 +46,14 @@ def test_a_version_tag_or_a_hand_start_triggers_the_build():
     assert trigger["push"]["tags"] == ["v*"]
 
 
+def test_the_tests_use_every_core_of_the_runner():
+    job = _workflow()["jobs"]["tests"]
+    (step,) = [step for step in job["steps"] if str(step.get("run", "")).startswith("python -m pytest")]
+    assert step["run"] == "python -m pytest tests/ -q -n 4 --dist loadfile"
+    (install,) = [step for step in job["steps"] if "pip install" in str(step.get("run", ""))]
+    assert "pytest-xdist" in install["run"]
+
+
 def test_the_run_may_write_the_release():
     assert _workflow()["permissions"]["contents"] == "write"
 
@@ -53,7 +61,9 @@ def test_the_run_may_write_the_release():
 def test_the_package_job_builds_on_windows_and_publishes_with_the_runs_token():
     job = _workflow()["jobs"]["paket"]
     assert job["runs-on"] == "windows-latest"
-    assert job["needs"] == "tests"
+    # The package does not wait for the tests any more: both jobs start at
+    # once, and a red test job is seen before the draft is published by hand.
+    assert "needs" not in job
     (step,) = [
         step for step in job["steps"] if "electron-builder" in str(step.get("run", ""))
     ]
