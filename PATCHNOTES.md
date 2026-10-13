@@ -1,5 +1,13 @@
 # Patch notes
 
+## 0.6.11 — hotfix
+
+- **Web search works on Windows.** On Windows, the built-in web search stopped
+  as soon as a result contained a character outside the old Windows character
+  set, such as an emoji or Chinese or Cyrillic text, and the searches after it
+  failed as well. Accented letters like ä, ö or é also arrived garbled. Search
+  results now arrive with every character intact.
+
 ## 0.6.10 — hotfix
 
 - **The model server page always shows the llama.cpp row.** When llama-server is

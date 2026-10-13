@@ -128,8 +128,10 @@ async def bedienen(
             nachricht, servername, version, werkzeuge, ausfuehren
         )
         if antwort is not None:
-            sys.stdout.write(json.dumps(antwort, ensure_ascii=False) + "\n")
-            sys.stdout.flush()
+            # Bytes, not text: on Windows a text pipe takes the ANSI code page.
+            line = json.dumps(antwort, ensure_ascii=False) + "\n"
+            sys.stdout.buffer.write(line.encode("utf-8"))
+            sys.stdout.buffer.flush()
 
 
 def starten(
