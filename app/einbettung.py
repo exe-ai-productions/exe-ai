@@ -116,9 +116,8 @@ def programm_finden(datenordner: Path, neben: Path | None = None) -> Path | None
     # The copy this program fetched: out of the folder of the build the
     # model server takes, never out of another build that still lies
     # beside it — the two programs of one run come from one build.
-    build = serverdownload.installed_build(datenordner)
-    if build is not None:
-        folder = Path(datenordner).expanduser() / serverdownload.ORDNER / build
+    folder = serverdownload.installed_folder(datenordner)
+    if folder is not None:
         treffer = sorted(folder.rglob(PROGRAMM))
         if treffer:
             return treffer[0]

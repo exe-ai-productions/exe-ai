@@ -1,5 +1,11 @@
 # Patch notes
 
+## 0.6.13 — Windows Hotfix
+
+### Windows
+
+- Fixed an issue that ran the model server on Windows on the processor only: the graphics card stayed idle, the GPU layers setting had no effect, and large models took minutes to read the context. The model server now offers the same builds of llama.cpp as the image server: CPU, CUDA, Vulkan and ROCm.
+
 ## 0.6.12 — Major Bugfix Update
 
 ### New

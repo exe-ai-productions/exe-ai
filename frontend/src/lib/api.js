@@ -654,9 +654,18 @@ export const api = {
   hfTokenEntfernen: () => ruf('/models/token', { method: 'DELETE' }),
   /* Shows the model folder in the file manager. Always that one folder. */
   modellordnerOeffnen: () => ruf('/runner/folder', { method: 'POST' }),
-  /* The model server itself — fetched once on machines without one. */
-  serverProgrammHolen: () => ruf('/runner/programm', { method: 'POST' }),
+  /* The model server itself — fetched once on machines without one.
+     `variante` only matters on Windows, where the server comes in several
+     builds (see app/serverdownload.py); left unset, the default applies. */
+  serverProgrammHolen: (variante) =>
+    ruf('/runner/programm', {
+      method: 'POST',
+      ...(variante ? { body: alsText({ variante }) } : {}),
+    }),
   serverProgrammStand: () => ruf('/runner/programm'),
+  /* The builds this machine could fetch, and the one that was — empty
+     everywhere but Windows on x64. */
+  serverProgrammVarianten: () => ruf('/runner/programm/varianten'),
   /* Whether a newer build than the one that starts exists — asked when the
      window's check is pressed, never on a timer (app/serverdownload.py). */
   serverProgramUpdateCheck: () => ruf('/runner/programm/aktualisierung'),

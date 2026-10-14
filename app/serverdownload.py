@@ -12,10 +12,16 @@ update stays a decision, not an accident. That decision has a button of its
 own: the newest build is fetched when somebody asks for it, and the pinned
 one comes back the same way.
 
-Every build lies in a folder named after its tag. The one that runs is the
-one with the highest build number, and a fetch that succeeded removes the
-others — so the folder on disk is the whole answer to "which build is
-this", and nothing has to be remembered beside it.
+Every build lies in a folder named after its tag — and, where it is not the
+CPU build, its variant: ``b11429`` and ``b11429-cuda12``. The one that runs
+is the one with the highest build number, and a fetch that succeeded removes
+the others — so the folder on disk is the whole answer to "which build is
+this, and which variant", and nothing has to be remembered beside it.
+
+Windows on x64 offers the variants of the same build the picture generator
+offers (``app/sddownload.py``): the CPU build, CUDA, Vulkan and ROCm. The
+CPU build stays the default — it runs everywhere; the graphics card builds
+are a choice somebody makes, not a gamble on drivers.
 
 Same shape as the model download next door: one at a time, watchable
 progress, a part-file until complete. The archive is unpacked next to the
@@ -45,7 +51,8 @@ log = logging.getLogger(__name__)
 
 # The pinned llama.cpp build and the packages per system. CPU builds on
 # purpose where a GPU flavour would gamble on drivers: they run everywhere,
-# and macOS carries its Metal support inside the plain package.
+# and macOS carries its Metal support inside the plain package. Windows on
+# x64 is the one system with a choice, in the table further down.
 BUILD = "b11429"
 
 _REPO = "ggml-org/llama.cpp"
@@ -61,11 +68,26 @@ _RELEASES = f"https://api.github.com/repos/{_REPO}/releases"
 _PAKETE: dict[tuple[str, str], str] = {
     ("darwin", "arm64"): "llama-{build}-bin-macos-arm64.tar.gz",
     ("darwin", "x86_64"): "llama-{build}-bin-macos-x64.tar.gz",
-    ("win32", "amd64"): "llama-{build}-bin-win-cpu-x64.zip",
     ("win32", "arm64"): "llama-{build}-bin-win-cpu-arm64.zip",
     ("linux", "x86_64"): "llama-{build}-bin-ubuntu-x64.tar.gz",
     ("linux", "aarch64"): "llama-{build}-bin-ubuntu-arm64.tar.gz",
 }
+
+# Windows on x64: the variants of one build, each with its package (tag left
+# open) and its size in bytes, measured on the pinned build's release. CUDA
+# additionally needs the runtime archive below: the shipped build fails to
+# start without those DLLs on a machine that lacks a CUDA Toolkit, and
+# whether one is installed cannot be told reliably, so it is always fetched
+# alongside — the name carries no build tag, it hangs on the same release.
+_PAKETE_WIN32: dict[str, tuple[str, int]] = {
+    "cpu": ("llama-{build}-bin-win-cpu-x64.zip", 19_398_918),
+    "cuda12": ("llama-{build}-bin-win-cuda-12.4-x64.zip", 264_478_423),
+    "vulkan": ("llama-{build}-bin-win-vulkan-x64.zip", 33_337_769),
+    "rocm": ("llama-{build}-bin-win-rocm-10.0-x64.zip", 256_958_369),
+}
+_CUDART: tuple[str, int] = ("cudart-llama-bin-win-cuda-12.4-x64.zip", 391_443_627)
+
+VORGABE_VARIANTE = "cpu"
 
 BROCKEN = 1024 * 1024
 UNFERTIG = ".teil"
@@ -75,6 +97,9 @@ ORDNER = "llama.cpp"
 
 # A build tag is the letter b and the build number, nothing else.
 _BUILD_TAG = re.compile(r"b(\d+)")
+
+# A build folder: the tag, and for a variant other than the default its name.
+_BAUORDNER = re.compile(r"(b\d+)(?:-([a-z0-9]+))?")
 
 # The two ways the program itself states its build: the number after the
 # word "build", since the project numbers its versions, and before that the
@@ -93,17 +118,65 @@ def _basis(build: str) -> str:
     return f"https://github.com/{_REPO}/releases/download/{build}"
 
 
-def paketname(build: str = BUILD) -> str | None:
-    """The package of ``build`` for this machine, or nothing when llama.cpp
-    has none."""
+def _maschine() -> str:
     maschine = platform.machine().lower()
     if maschine == "x64":
         maschine = "amd64" if sys.platform == "win32" else "x86_64"
+    return maschine
+
+
+def paketname(build: str = BUILD, variante: str | None = None) -> str | None:
+    """The package of ``build`` for this machine and ``variante`` (the CPU
+    build where none is named), or nothing when llama.cpp has none. Only
+    Windows on x64 has variants: on any other machine a variant other than
+    the default has no package, and is refused rather than fetched into a
+    folder named after a backend the machine does not have."""
+    variante = variante or VORGABE_VARIANTE
+    maschine = _maschine()
+    if sys.platform == "win32" and maschine == "amd64":
+        paket = _PAKETE_WIN32.get(variante)
+        return paket[0].format(build=build) if paket else None
+    if variante != VORGABE_VARIANTE:
+        return None
     schluessel = (
         "win32" if sys.platform == "win32" else "darwin" if sys.platform == "darwin" else "linux"
     )
     form = _PAKETE.get((schluessel, maschine))
     return form.format(build=build) if form else None
+
+
+def waehlbare_varianten() -> list[tuple[str, int]]:
+    """The variants a picker could offer on THIS machine, with the size of
+    what each one downloads — CUDA with its runtime. Empty everywhere but
+    Windows on x64: every other machine has one package and nothing to
+    choose from."""
+    if sys.platform != "win32" or _maschine() != "amd64":
+        return []
+    return [
+        (variante, groesse + (_CUDART[1] if variante == "cuda12" else 0))
+        for variante, (_, groesse) in _PAKETE_WIN32.items()
+    ]
+
+
+def bauordner_name(build: str, variante: str | None = None) -> str:
+    """The default variant keeps the plain build folder; every other one
+    gets its own, so a variant switch never mixes two builds."""
+    variante = variante or VORGABE_VARIANTE
+    return build if variante == VORGABE_VARIANTE else f"{build}-{variante}"
+
+
+def _bauordner_teile(name: str) -> tuple[str, str] | None:
+    """A build folder's name, split into its tag and its variant — the
+    default variant when the name carries none. Nothing when the name is no
+    build folder of this program: a suffix it never names a folder with
+    does not qualify."""
+    treffer = _BAUORDNER.fullmatch(name)
+    if treffer is None:
+        return None
+    variante = treffer.group(2)
+    if variante is not None and variante not in _PAKETE_WIN32:
+        return None
+    return treffer.group(1), variante or VORGABE_VARIANTE
 
 
 def build_number(build: str) -> int | None:
@@ -156,10 +229,12 @@ def _is_unpacking(folder: Path) -> bool:
         return False
 
 
-def _own_build(data_folder: Path) -> tuple[str, Path] | None:
-    """The fetched build that runs, as its tag and its server: of the build
-    folders below the data folder, the one with the highest build number
-    that holds a server.
+def _own_build(data_folder: Path) -> tuple[str, str, Path] | None:
+    """The fetched build that runs, as its tag, its variant and its server:
+    of the build folders below the data folder, the one with the highest
+    build number that holds a server — and at the same number a folder named
+    for a variant ahead of the plain one, so a build fetched in two variants
+    runs as the one that was fetched last, never as the one before it.
 
     A build older than the pinned one does not count. It was left behind by
     an earlier version of this program, which pinned it — it is not the
@@ -172,17 +247,16 @@ def _own_build(data_folder: Path) -> tuple[str, Path] | None:
     except OSError:
         return None
     floor = build_number(BUILD) or 0
-    candidates = sorted(
-        (
-            (number, entry)
-            for entry in entries
-            if (number := build_number(entry.name)) is not None and number >= floor
-        ),
-        key=lambda pair: pair[0],
-        reverse=True,
-    )
+    candidates: list[tuple[tuple[int, bool], str, str, Path]] = []
+    for entry in entries:
+        parts = _bauordner_teile(entry.name)
+        number = build_number(parts[0]) if parts else None
+        if parts is None or number is None or number < floor:
+            continue
+        candidates.append(((number, parts[1] != VORGABE_VARIANTE), parts[0], parts[1], entry))
+    candidates.sort(key=lambda candidate: candidate[0], reverse=True)
     name = _server_name()
-    for _, entry in candidates:
+    for _, tag, variant, entry in candidates:
         if _is_unpacking(entry):
             continue
         try:
@@ -192,7 +266,7 @@ def _own_build(data_folder: Path) -> tuple[str, Path] | None:
             # folder can vanish while it is being read.
             continue
         if hits:
-            return entry.name, hits[0]
+            return tag, variant, hits[0]
     return None
 
 
@@ -200,7 +274,7 @@ def gefundener_server(ordner: Path) -> Path | None:
     """The unpacked llama-server below the data folder, or nothing — of
     several fetched builds, the one with the highest build number."""
     own = _own_build(ordner)
-    return own[1] if own else None
+    return own[2] if own else None
 
 
 def installed_build(data_folder: Path) -> str | None:
@@ -209,17 +283,52 @@ def installed_build(data_folder: Path) -> str | None:
     return own[0] if own else None
 
 
+def installed_variant(data_folder: Path) -> str | None:
+    """The variant of the fetched build that runs, read off its folder's
+    name — or nothing when there is none, or when the machine has no
+    variants to name (a plain folder there is the one package it has)."""
+    own = _own_build(data_folder)
+    if own is None or not waehlbare_varianten():
+        return None
+    return own[1]
+
+
+def installed_folder(data_folder: Path) -> Path | None:
+    """The build folder of the fetched build that runs, or nothing — what
+    lies in it belongs to the same build."""
+    own = _own_build(data_folder)
+    if own is None:
+        return None
+    root = Path(data_folder).expanduser() / ORDNER
+    return root / own[2].relative_to(root).parts[0]
+
+
 def fetched_build(program: Path, data_folder: Path) -> str | None:
     """The tag of the build folder ``program`` lies in — or nothing when
     it is not a build this program fetched."""
+    parts = _fetched_parts(program, data_folder)
+    return parts[0] if parts else None
+
+
+def fetched_variant(program: Path, data_folder: Path) -> str | None:
+    """The variant of the build folder ``program`` lies in — or nothing when
+    it is not a build this program fetched."""
+    parts = _fetched_parts(program, data_folder)
+    return parts[1] if parts else None
+
+
+def _fetched_parts(program: Path, data_folder: Path) -> tuple[str, str] | None:
     root = Path(data_folder).expanduser() / ORDNER
     try:
         inside = Path(program).resolve().relative_to(root.resolve())
     except (OSError, ValueError):
         return None
-    if inside.parts and build_number(inside.parts[0]) is not None:
-        return inside.parts[0]
-    return None
+    if not inside.parts:
+        return None
+    parts = _bauordner_teile(inside.parts[0])
+    if parts is None or build_number(parts[0]) is None:
+        return None
+    return parts
 
 
 def stated_build(program: Path) -> str | None:
@@ -327,6 +436,14 @@ def is_ahead(build: str, running: str | None) -> bool:
     return running_number is None or number > running_number
 
 
+def _groesse(url: str) -> int:
+    """How many bytes the file at ``url`` has, read off the head of the
+    answer — the body is not read, the connection is closed with it."""
+    with httpx.stream("GET", url, follow_redirects=True, timeout=60) as antwort:
+        antwort.raise_for_status()
+        return int(antwort.headers.get("content-length") or 0)
+
+
 class Serverdownload:
     """One fetch of the model server, watchable while it runs."""
 
@@ -341,42 +458,63 @@ class Serverdownload:
     def laeuft(self) -> bool:
         return self._stand is not None and not self._stand.fertig and not self._stand.fehler
 
-    def starten(self, build: str | None = None, previous: str | None = None) -> Fortschritt:
+    def starten(
+        self,
+        build: str | None = None,
+        previous: str | None = None,
+        variante: str | None = None,
+    ) -> Fortschritt:
         """Fetches the pinned build — or, given ``build``, that one in place
         of whatever is installed.
 
-        Without ``build`` this is the first fetch of a machine that has no
-        server of its own, and one that has is left alone. With it, the
-        named build replaces the installed one: a newer build for an update,
-        the pinned one to come back from it. Either way the new build lands
-        in its own folder, and the others are only removed once the fetch
-        has succeeded — a failed one leaves the working server exactly as it
+        Without ``build`` or ``variante`` this is the first fetch of a
+        machine that has no server of its own, and one that has is left
+        alone. With ``build``, the named build replaces the installed one: a
+        newer build for an update, the pinned one to come back from it. With
+        ``variante`` alone, the installed build comes again in that variant —
+        a switch of backend, not of build. Either way the new build lands in
+        its own folder, and the others are only removed once the fetch has
+        succeeded — a failed one leaves the working server exactly as it
         was.
 
         ``previous`` is the build that ran until now, for the one line the
         log gets about the change.
         """
+        wanted = variante or VORGABE_VARIANTE
         with self._schloss:
             if self.laeuft():
                 raise ServerdownloadFehler("laeuft_schon")
-            installed = installed_build(self._ordner.parent)
-            if installed is not None and (build is None or build == installed):
+            own = _own_build(self._ordner.parent)
+            installed = own[0] if own else None
+            if installed is not None and build is None and variante is None:
                 raise ServerdownloadFehler("schon_da")
-            target = build or BUILD
-            name = paketname(target)
+            # A switch of variant keeps the build that runs: the pinned one
+            # would not outrank a newer one that was fetched, and the switch
+            # would not take.
+            target = build or installed or BUILD
+            if own is not None and (target, wanted) == (own[0], own[1]):
+                raise ServerdownloadFehler("schon_da")
+            name = paketname(target) if wanted == VORGABE_VARIANTE else paketname(target, wanted)
             if name is None:
                 raise ServerdownloadFehler("kein_paket")
 
             self._stand = Fortschritt(geladen=0, gesamt=0)
             threading.Thread(
-                target=self._holen, args=(target, name, previous or installed), daemon=True
+                target=self._holen,
+                args=(target, name, previous or installed, wanted),
+                daemon=True,
             ).start()
             return self._stand
 
-    def _holen(self, build: str, name: str, previous: str | None) -> None:
+    def _holen(
+        self, build: str, name: str, previous: str | None, variante: str = VORGABE_VARIANTE
+    ) -> None:
         archiv = self._ordner / (name + UNFERTIG)
-        folder = self._ordner / build
+        folder = self._ordner / bauordner_name(build, variante)
         hidden = folder.resolve()
+        # CUDA brings its runtime in a second archive, unpacked beside it.
+        cudart = _CUDART[0] if variante == "cuda12" else None
+        cudart_archiv = self._ordner / (cudart + UNFERTIG) if cudart else None
 
         with _unpacking_lock:
             _unpacking.add(hidden)
@@ -385,20 +523,20 @@ class Serverdownload:
             # thread before the state could say so, and the bar would stand
             # at nought for good.
             self._ordner.mkdir(parents=True, exist_ok=True)
-            with httpx.stream(
-                "GET", f"{_basis(build)}/{name}", follow_redirects=True, timeout=60
-            ) as antwort:
-                antwort.raise_for_status()
-                if self._stand:
-                    self._stand.gesamt = int(antwort.headers.get("content-length") or 0)
-                with archiv.open("wb") as schreiben:
-                    for brocken in antwort.iter_bytes(BROCKEN):
-                        schreiben.write(brocken)
-                        if self._stand:
-                            self._stand.geladen += len(brocken)
-
+            if cudart and self._stand:
+                # Fixed upfront from both archives, not measured from the
+                # first one while it comes down: the bar would reach its end
+                # and fall back once the second archive adds its size.
+                self._stand.gesamt = _groesse(f"{_basis(build)}/{name}") + _groesse(
+                    f"{_basis(build)}/{cudart}"
+                )
+            self._laden(build, name, archiv, fest=cudart is not None)
             self._entpacken(archiv, name, folder)
             archiv.unlink(missing_ok=True)
+            if cudart and cudart_archiv is not None:
+                self._laden(build, cudart, cudart_archiv, fest=True)
+                self._entpacken(cudart_archiv, cudart, folder)
+                cudart_archiv.unlink(missing_ok=True)
 
             hits = sorted(folder.rglob(_server_name()))
             if not hits:
@@ -407,6 +545,8 @@ class Serverdownload:
                 hits[0].chmod(hits[0].stat().st_mode | 0o111)
         except Exception as fehler:  # noqa: BLE001 - the reason belongs in the state
             archiv.unlink(missing_ok=True)
+            if cudart_archiv is not None:
+                cudart_archiv.unlink(missing_ok=True)
             shutil.rmtree(folder, ignore_errors=True)
             if self._stand:
                 self._stand.fehler = (
@@ -420,10 +560,33 @@ class Serverdownload:
             with _unpacking_lock:
                 _unpacking.discard(hidden)
 
-        self._remove_other_builds(build)
-        log.info("Model server program: build %s replaced by build %s", previous or "none", build)
+        self._remove_other_builds(folder.name)
+        log.info(
+            "Model server program: build %s replaced by build %s (%s)",
+            previous or "none", build, variante,
+        )
         if self._stand:
             self._stand.fertig = True
+
+    def _laden(self, build: str, name: str, ziel: Path, fest: bool = False) -> None:
+        """One archive, streamed to disk. Called once for the package and,
+        for CUDA, a second time for its runtime — both add to the same
+        ``Fortschritt``, so ``geladen`` runs through both and never resets.
+
+        ``fest`` means the caller fixed ``gesamt`` upfront: this call must
+        not measure it again from the response, or the bytes count twice.
+        """
+        with httpx.stream(
+            "GET", f"{_basis(build)}/{name}", follow_redirects=True, timeout=60
+        ) as antwort:
+            antwort.raise_for_status()
+            if self._stand and not fest:
+                self._stand.gesamt = int(antwort.headers.get("content-length") or 0)
+            with ziel.open("wb") as schreiben:
+                for brocken in antwort.iter_bytes(BROCKEN):
+                    schreiben.write(brocken)
+                    if self._stand:
+                        self._stand.geladen += len(brocken)
 
     def _entpacken(self, archiv: Path, name: str, folder: Path) -> None:
         """Into a folder named after the build, so an update never mixes."""
@@ -436,8 +599,9 @@ class Serverdownload:
                 tf.extractall(folder, filter="data")
 
     def _remove_other_builds(self, current: str) -> None:
-        """Every other build folder goes: one build stays on disk, the one
-        just fetched. Only folders named like a build tag qualify — whatever
+        """Every other build folder goes — another build, and another
+        variant of the same one alike: one build stays on disk, the one just
+        fetched. Only folders named like a build folder qualify — whatever
         else lies in the folder is not this program's to remove.
 
         A folder that cannot be removed right now stays and is not in the
@@ -452,7 +616,7 @@ class Serverdownload:
         except OSError:
             return
         for entry in entries:
-            if entry.name == current or build_number(entry.name) is None or not entry.is_dir():
+            if entry.name == current or _bauordner_teile(entry.name) is None or not entry.is_dir():
                 continue
             shutil.rmtree(entry, ignore_errors=True)
             try:

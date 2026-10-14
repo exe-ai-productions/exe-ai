@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -812,12 +813,15 @@ class _RecordingDownload:
 
     def __init__(self):
         self.calls: list[tuple[str | None, str | None]] = []
+        # The variant each fetch was asked for, beside the calls.
+        self.variants: list[str | None] = []
 
     def stand(self):
         return Fortschritt(geladen=0, gesamt=0)
 
-    def starten(self, build=None, previous=None):
+    def starten(self, build=None, previous=None, variante=None):
         self.calls.append((build, previous))
+        self.variants.append(variante)
         return Fortschritt(geladen=0, gesamt=0)
 
 
@@ -1029,3 +1033,90 @@ def test_a_fetched_copy_is_offered_only_where_it_would_start(
     # A program the settings name comes before everything, on every system.
     monkeypatch.setattr(config.app, "runner_programm", str(installed))
     assert asked() is False
+
+
+# --- Windows: the variants of the server -----------------------------------
+
+
+def _windows(monkeypatch) -> None:
+    """Windows on x64 for the module that fetches the server, and only for
+    it: the rest of the program that answers keeps the system it runs on."""
+    monkeypatch.setattr(serverdownload, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(serverdownload.platform, "machine", lambda: "AMD64")
+
+
+def _lay_windows_build(folder: Path, name: str) -> Path:
+    """A fetched build as it lies on disk on Windows, by its folder's name."""
+    target = folder / "llama.cpp" / name
+    target.mkdir(parents=True)
+    server = target / "llama-server.exe"
+    server.write_bytes(b"MZ")
+    return server
+
+
+def test_windows_lists_the_four_variants_and_names_the_one_that_was_fetched(
+    client, tmp_path, monkeypatch
+):
+    _windows(monkeypatch)
+    server = _lay_windows_build(tmp_path, f"{BUILD}-cuda12")
+    _program(client, monkeypatch, tmp_path, server)
+    answer = client.get("/api/v1/runner/programm/varianten")
+    assert answer.status_code == 200
+    assert answer.json() == {
+        "varianten": [
+            {"variante": "cpu", "groesse": 19_398_918},
+            {"variante": "cuda12", "groesse": 264_478_423 + 391_443_627},
+            {"variante": "vulkan", "groesse": 33_337_769},
+            {"variante": "rocm", "groesse": 256_958_369},
+        ],
+        "installiert": "cuda12",
+    }
+
+
+def test_the_other_systems_list_no_variant(client, tmp_path, monkeypatch):
+    """Silence probe: on a Mac the list is empty and nothing is named."""
+    _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, BUILD))
+    answer = client.get("/api/v1/runner/programm/varianten")
+    assert answer.status_code == 200
+    assert answer.json() == {"varianten": [], "installiert": None}
+
+
+def test_a_variant_that_is_asked_for_goes_to_the_fetch(client, tmp_path, monkeypatch):
+    download = _program(client, monkeypatch, tmp_path, None)
+    answer = client.post("/api/v1/runner/programm", json={"variante": "vulkan"})
+    assert answer.status_code == 200
+    assert download.calls == [(None, None)]
+    assert download.variants == ["vulkan"]
+
+
+def test_updating_keeps_the_variant_that_runs(client, tmp_path, monkeypatch):
+    download = _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, f"{BUILD}-cuda12"))
+    _newest(monkeypatch, NEWER)
+    assert client.post("/api/v1/runner/programm", json={"aktualisieren": True}).status_code == 200
+    assert download.calls == [(NEWER, BUILD)]
+    assert download.variants == ["cuda12"]
+
+
+def test_the_way_back_keeps_the_variant_that_runs(client, tmp_path, monkeypatch):
+    download = _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, f"{NEWER}-vulkan"))
+    assert client.post("/api/v1/runner/programm", json={"restore": True}).status_code == 200
+    assert download.calls == [(BUILD, NEWER)]
+    assert download.variants == ["vulkan"]
+
+
+def test_an_update_of_the_plain_build_asks_for_the_default_variant(client, tmp_path, monkeypatch):
+    """Silence probe: the build most machines have is the plain one."""
+    download = _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, BUILD))
+    _newest(monkeypatch, NEWER)
+    assert client.post("/api/v1/runner/programm", json={"aktualisieren": True}).status_code == 200
+    assert download.variants == ["cpu"]
+
+
+def test_an_unknown_variant_is_refused_and_nothing_is_fetched(client, tmp_path, monkeypatch):
+    _windows(monkeypatch)
+    _program(client, monkeypatch, tmp_path, None)
+    download = Serverdownload(tmp_path)
+    client.app.state.serverdownload = download
+    answer = client.post("/api/v1/runner/programm", json={"variante": "cuda99"})
+    assert answer.status_code == 400
+    assert download.stand() is None

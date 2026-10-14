@@ -540,6 +540,34 @@ def server_fortschritt(
     return _serverstand(download)
 
 
+class ServerVariante(BaseModel):
+    variante: str
+    # What the variant downloads in all, its runtime included.
+    groesse: int
+
+
+class ServerVarianten(BaseModel):
+    varianten: list[ServerVariante]
+    installiert: str | None = None
+
+
+@router.get(
+    "/programm/varianten",
+    response_model=ServerVarianten,
+    summary="Server builds available for this PC",
+)
+def server_varianten() -> ServerVarianten:
+    """The variants of the server this machine could fetch — empty
+    everywhere but Windows on x64 — and the one that was fetched."""
+    return ServerVarianten(
+        varianten=[
+            ServerVariante(variante=variante, groesse=groesse)
+            for variante, groesse in serverdownload.waehlbare_varianten()
+        ],
+        installiert=serverdownload.installed_variant(paketierung.daten()),
+    )
+
+
 class ProgramFetch(BaseModel):
     # True fetches whatever build is newest at the moment of the request,
     # not the pinned one — which build that is, is read again here and never
@@ -549,6 +577,10 @@ class ProgramFetch(BaseModel):
     # for together with the above, this one counts: the way back is the
     # more careful of the two.
     restore: bool = False
+    # The variant to fetch (a name out of ``/programm/varianten``). Without
+    # it a first fetch takes the default, and an update or the way back
+    # keeps the variant that runs.
+    variante: str | None = None
 
 
 class ProgramUpdate(BaseModel):
@@ -612,6 +644,7 @@ def server_holen(
     """
     build: str | None = None
     previous: str | None = None
+    variant = wanted.variante if wanted else None
     if wanted and (wanted.restore or wanted.aktualisieren):
         program = _program(runner, config)
         # Both replace the program that starts, so both need one — and need
@@ -621,6 +654,10 @@ def server_holen(
                 status.HTTP_409_CONFLICT, t("fehler.serverdownload_schon_da", sprache)
             )
         previous = program.version
+        # The way back and the update change the build, not the backend:
+        # the variant that runs stays, unless one was named.
+        if variant is None and program.path is not None:
+            variant = serverdownload.fetched_variant(program.path, paketierung.daten())
         if wanted.restore:
             # Only a fetched build is replaced by the tested one: an
             # installed program is not this program's to go back from.
@@ -641,7 +678,7 @@ def server_holen(
                     t("fehler.serverdownload_keine_neuere_fassung", sprache),
                 )
     try:
-        download.starten(build, previous)
+        download.starten(build, previous, variant)
     except ServerdownloadFehler as fehler:
         lage = {
             "laeuft_schon": status.HTTP_409_CONFLICT,

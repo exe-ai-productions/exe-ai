@@ -726,6 +726,38 @@
     api.serverProgrammHolen().then((s) => (programmStand = s)).catch((f) => melde(f.message, 'fehler'))
   }
 
+  /* The builds of the server this machine could fetch — a list only on
+     Windows on x64, empty everywhere else — and the one that was fetched.
+     Read once and again whenever a fetch ends, never on the poll above. */
+  let varianten = $state(null)
+  async function variantenLaden() {
+    try {
+      varianten = await api.serverProgrammVarianten()
+    } catch {
+      varianten = null
+    }
+  }
+  variantenLaden()
+
+  /* The list stands where the server is ours to choose: with no program at
+     all, or where the fetched copy is the one that starts. Beside a program
+     the settings name, or an installed one that comes first, a fetched
+     build would never run — nothing is offered. */
+  const variantenZeigen = $derived(
+    Boolean(varianten?.varianten?.length) && (!hatProgramm || Boolean(auskunft?.updatable)),
+  )
+
+  function groesseText(bytes) {
+    return `${Math.round(bytes / (1024 * 1024))} MB`
+  }
+
+  function variantHolen(variante) {
+    api
+      .serverProgrammHolen(variante)
+      .then((s) => (programmStand = s))
+      .catch((f) => melde(f.message, 'fehler'))
+  }
+
   /* Whether a newer build of the server program exists — asked only when
      the button is pressed, never on opening and never inside the poll
      above: nothing looks for updates by itself. */
@@ -768,6 +800,7 @@
       checkRun += 1
       checking = false
       if (programmStand?.fehler) melde(t('bildserver.generator_fehler'), 'fehler')
+      variantenLaden()
     }
     fetchingBefore = programmLaedt
   })
@@ -957,6 +990,8 @@
                   {/if}
                 </span>
               {/if}
+            {:else if variantenZeigen}
+              <!-- The list below is the way to fetch it. -->
             {:else if programmLaedt}
               <!-- The program on its way down: the bar and its share after
                    the dash, where the buttons stand otherwise. -->
@@ -976,6 +1011,33 @@
               </span>
             {/if}
           </div>
+          <!-- Windows on x64: the builds of the server, as the picture
+               generator lists its own — the CPU build runs everywhere and
+               is the one a first fetch brings; the others use the graphics
+               card. -->
+          {#if variantenZeigen}
+            {#each varianten.varianten as v (v.variante)}
+              <div class="zeile">
+                <span class="name">{v.variante}</span>
+                {#if v.variante === varianten.installiert}
+                  <span class="v_still">{t('bildserver.variante_installiert')}</span>
+                {:else}
+                  <button class="feldknopf" disabled={programmLaedt}
+                          onclick={() => variantHolen(v.variante)}>
+                    {t('bildserver.variante_holen', { groesse: groesseText(v.groesse) })}
+                  </button>
+                {/if}
+              </div>
+            {/each}
+            {#if programmLaedt}
+              <div class="zeile">
+                <span class="balken"><i style="width:{Math.round(programmStand.anteil * 100)}%"></i></span>
+                <span class="balkenzahl">{Math.round(programmStand.anteil * 100)} %</span>
+              </div>
+            {:else if programmStand?.fehler}
+              <div class="zeile"><span class="name v_fehler">{t('bildserver.generator_fehler')}</span></div>
+            {/if}
+          {/if}
         </Serverabschnitt>
       {/snippet}
       {#snippet unten()}
@@ -1189,5 +1251,13 @@
   /* A fetch that failed, in the colour of a failure, beside the button. */
   .v_fehler {
     color: var(--rot);
+  }
+  /* A build that is there: a quiet word where the button would stand. */
+  .v_still {
+    flex: none;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--text-still);
+    white-space: nowrap;
   }
 </style>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import sys
 import tarfile
 import time
 import zipfile
@@ -124,8 +125,9 @@ def test_holen_entpackt_und_findet_den_server(tmp_path, monkeypatch):
 
 
 # The packages of the pinned build as the release lists them
-# (gh api repos/ggml-org/llama.cpp/releases/tags/b11429, the six this
-# program uses out of its asset list).
+# (gh api repos/ggml-org/llama.cpp/releases/tags/b11429, the nine this
+# program uses out of its asset list) — with the size in bytes of those the
+# Windows picker offers.
 _RELEASE_B11429 = {
     "llama-b11429-bin-macos-arm64.tar.gz",
     "llama-b11429-bin-macos-x64.tar.gz",
@@ -133,14 +135,29 @@ _RELEASE_B11429 = {
     "llama-b11429-bin-win-cpu-arm64.zip",
     "llama-b11429-bin-ubuntu-x64.tar.gz",
     "llama-b11429-bin-ubuntu-arm64.tar.gz",
+    "llama-b11429-bin-win-cuda-12.4-x64.zip",
+    "llama-b11429-bin-win-vulkan-x64.zip",
+    "llama-b11429-bin-win-rocm-10.0-x64.zip",
+}
+_WINDOWS_SIZES_B11429 = {
+    "llama-b11429-bin-win-cpu-x64.zip": 19_398_918,
+    "llama-b11429-bin-win-cuda-12.4-x64.zip": 264_478_423,
+    "llama-b11429-bin-win-vulkan-x64.zip": 33_337_769,
+    "llama-b11429-bin-win-rocm-10.0-x64.zip": 256_958_369,
+    "cudart-llama-bin-win-cuda-12.4-x64.zip": 391_443_627,
 }
 
 
 def test_the_package_names_are_the_release_files_of_the_pinned_build():
     assert BUILD == "b11429"
-    assert {
-        form.format(build=BUILD) for form in serverdownload._PAKETE.values()
-    } == _RELEASE_B11429
+    names = {form.format(build=BUILD) for form in serverdownload._PAKETE.values()}
+    names |= {form.format(build=BUILD) for form, _ in serverdownload._PAKETE_WIN32.values()}
+    assert names == _RELEASE_B11429
+    sizes = {
+        form.format(build=BUILD): size for form, size in serverdownload._PAKETE_WIN32.values()
+    }
+    sizes[serverdownload._CUDART[0]] = serverdownload._CUDART[1]
+    assert sizes == _WINDOWS_SIZES_B11429
 
 
 def test_a_system_without_a_package_stays_without(monkeypatch):
@@ -415,3 +432,209 @@ def test_a_program_that_does_not_say_its_build_has_none(tmp_path, monkeypatch):
     monkeypatch.setattr(serverdownload, "_stated", {})
     monkeypatch.setattr(serverdownload.subprocess, "run", run)
     assert serverdownload.stated_build(program) is None
+
+
+# --- Windows: the variants of one build -----------------------------------
+
+CPU_X64 = f"llama-{BUILD}-bin-win-cpu-x64.zip"
+CUDA_X64 = f"llama-{BUILD}-bin-win-cuda-12.4-x64.zip"
+VULKAN_X64 = f"llama-{BUILD}-bin-win-vulkan-x64.zip"
+ROCM_X64 = f"llama-{BUILD}-bin-win-rocm-10.0-x64.zip"
+CUDART = "cudart-llama-bin-win-cuda-12.4-x64.zip"
+RELEASE = f"https://github.com/ggml-org/llama.cpp/releases/download/{BUILD}"
+
+
+def _windows(monkeypatch, machine: str = "AMD64") -> None:
+    """The machine of the user: Windows, and the processor it reports."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(serverdownload.platform, "machine", lambda: machine)
+
+
+def _zip_with_server() -> bytes:
+    speicher = io.BytesIO()
+    with zipfile.ZipFile(speicher, "w") as zf:
+        zf.writestr("llama-server.exe", b"MZ")
+        zf.writestr("ggml-base.dll", b"MZ")
+    return speicher.getvalue()
+
+
+def _lay_variant(folder: Path, build: str, variant: str | None) -> Path:
+    """A fetched build of a variant as it lies on disk on Windows."""
+    name = build if variant is None else f"{build}-{variant}"
+    target = folder / "llama.cpp" / name
+    target.mkdir(parents=True)
+    server = target / "llama-server.exe"
+    server.write_bytes(b"MZ")
+    return server
+
+
+def test_windows_offers_the_four_variants_with_what_each_one_downloads(monkeypatch):
+    _windows(monkeypatch)
+    assert serverdownload.waehlbare_varianten() == [
+        ("cpu", 19_398_918),
+        # CUDA's runtime comes with it: it is part of what is downloaded.
+        ("cuda12", 264_478_423 + 391_443_627),
+        ("vulkan", 33_337_769),
+        ("rocm", 256_958_369),
+    ]
+    assert serverdownload.VORGABE_VARIANTE == "cpu"
+
+
+@pytest.mark.parametrize(
+    ("system", "machine"),
+    [("darwin", "arm64"), ("darwin", "x86_64"), ("linux", "x86_64"), ("linux", "aarch64"),
+     ("win32", "ARM64")],
+)
+def test_no_other_machine_has_a_variant_to_choose_from(monkeypatch, system, machine):
+    """Silence probe: macOS, Linux and Windows on arm64 keep their one
+    package, and a variant other than the default has none there."""
+    monkeypatch.setattr(sys, "platform", system)
+    monkeypatch.setattr(serverdownload.platform, "machine", lambda: machine)
+    assert serverdownload.waehlbare_varianten() == []
+    assert paketname(BUILD, "cuda12") is None
+    assert paketname(BUILD, "cpu") == paketname(BUILD)
+    assert paketname() is not None
+
+
+def test_each_variant_has_its_own_package_and_an_unknown_one_has_none(monkeypatch):
+    _windows(monkeypatch)
+    assert paketname() == CPU_X64
+    assert paketname(BUILD, "cpu") == CPU_X64
+    assert paketname(BUILD, "cuda12") == CUDA_X64
+    assert paketname(BUILD, "vulkan") == VULKAN_X64
+    assert paketname(BUILD, "rocm") == ROCM_X64
+    assert paketname(BUILD, "cuda13") is None
+    assert paketname(NEWER, "vulkan") == VULKAN_X64.replace(BUILD, NEWER)
+
+
+def test_cuda_comes_with_its_runtime_beside_the_server(tmp_path, monkeypatch):
+    _windows(monkeypatch)
+    strom = FalscherStrom(_zip_with_server())
+    monkeypatch.setattr(serverdownload.httpx, "stream", strom)
+    download = Serverdownload(tmp_path)
+    download.starten(variante="cuda12")
+    _wait(download)
+
+    stand = download.stand()
+    assert stand is not None and stand.fertig and stand.fehler is None
+    # The sizes of both are asked for first, then the package and its
+    # runtime come down.
+    assert strom.asked.count(f"{RELEASE}/{CUDA_X64}") == 2
+    assert strom.asked.count(f"{RELEASE}/{CUDART}") == 2
+    assert serverdownload.installed_build(tmp_path) == BUILD
+    assert serverdownload.installed_variant(tmp_path) == "cuda12"
+    assert (tmp_path / "llama.cpp" / f"{BUILD}-cuda12" / "llama-server.exe").is_file()
+    # The bar knows its whole length from the start: both archives.
+    assert stand.geladen == stand.gesamt
+
+
+@pytest.mark.parametrize(
+    ("variant", "package"), [("vulkan", VULKAN_X64), ("rocm", ROCM_X64), ("cpu", CPU_X64)]
+)
+def test_the_other_variants_fetch_their_package_only(tmp_path, monkeypatch, variant, package):
+    _windows(monkeypatch)
+    strom = FalscherStrom(_zip_with_server())
+    monkeypatch.setattr(serverdownload.httpx, "stream", strom)
+    download = Serverdownload(tmp_path)
+    download.starten(variante=variant)
+    _wait(download)
+
+    stand = download.stand()
+    assert stand is not None and stand.fertig and stand.fehler is None
+    assert strom.asked == [f"{RELEASE}/{package}"]
+    assert serverdownload.installed_variant(tmp_path) == variant
+
+
+def test_a_variant_is_read_from_the_folder_and_that_folder_is_the_one_that_runs(
+    tmp_path, monkeypatch
+):
+    _windows(monkeypatch)
+    assert serverdownload.installed_variant(tmp_path) is None
+    plain = _lay_variant(tmp_path, BUILD, None)
+    assert serverdownload.installed_variant(tmp_path) == "cpu"
+    assert gefundener_server(tmp_path) == plain
+    # Two variants of one build: the one with a name of its own runs.
+    vulkan = _lay_variant(tmp_path, BUILD, "vulkan")
+    assert serverdownload.installed_variant(tmp_path) == "vulkan"
+    assert gefundener_server(tmp_path) == vulkan
+    assert serverdownload.installed_folder(tmp_path) == vulkan.parent
+    # The build is the number, never the variant.
+    assert serverdownload.installed_build(tmp_path) == BUILD
+    assert serverdownload.fetched_build(vulkan, tmp_path) == BUILD
+    assert serverdownload.fetched_variant(vulkan, tmp_path) == "vulkan"
+    assert serverdownload.fetched_variant(plain, tmp_path) == "cpu"
+
+
+def test_a_folder_with_a_name_of_another_kind_is_no_build(tmp_path, monkeypatch):
+    """Silence probe: a suffix this program never names a folder with does
+    not make a build."""
+    _windows(monkeypatch)
+    _lay_variant(tmp_path, BUILD, "cuda13")
+    assert gefundener_server(tmp_path) is None
+    assert serverdownload.installed_variant(tmp_path) is None
+
+
+def test_the_variant_that_is_installed_is_not_fetched_again(tmp_path, monkeypatch):
+    _windows(monkeypatch)
+    _lay_variant(tmp_path, BUILD, "vulkan")
+    download = Serverdownload(tmp_path)
+    with pytest.raises(ServerdownloadFehler) as fehler:
+        download.starten(variante="vulkan")
+    assert fehler.value.grund == "schon_da"
+    # Nor does a plain first fetch, with no variant named, touch it.
+    with pytest.raises(ServerdownloadFehler) as fehler:
+        download.starten()
+    assert fehler.value.grund == "schon_da"
+
+
+def test_a_switch_of_variant_keeps_the_build_that_runs_and_takes_the_old_variant_away(
+    tmp_path, monkeypatch
+):
+    _windows(monkeypatch)
+    _lay_variant(tmp_path, NEWER, None)
+    strom = FalscherStrom(_zip_with_server())
+    monkeypatch.setattr(serverdownload.httpx, "stream", strom)
+    download = Serverdownload(tmp_path)
+    download.starten(variante="vulkan")
+    _wait(download)
+
+    stand = download.stand()
+    assert stand is not None and stand.fertig and stand.fehler is None
+    # The pinned build would not outrank the newer one: the build that runs
+    # is the build that comes again.
+    assert strom.asked == [f"https://github.com/ggml-org/llama.cpp/releases/download/{NEWER}/"
+                           f"{VULKAN_X64.replace(BUILD, NEWER)}"]
+    assert serverdownload.installed_build(tmp_path) == NEWER
+    assert serverdownload.installed_variant(tmp_path) == "vulkan"
+    assert not (tmp_path / "llama.cpp" / NEWER).exists()
+
+
+def test_a_failed_fetch_of_a_variant_leaves_the_working_server_as_it_was(tmp_path, monkeypatch):
+    _windows(monkeypatch)
+    cpu = _lay_variant(tmp_path, BUILD, None)
+
+    def stream(*args, **kwargs):
+        raise httpx.ConnectError("no network")
+
+    monkeypatch.setattr(serverdownload.httpx, "stream", stream)
+    download = Serverdownload(tmp_path)
+    download.starten(variante="cuda12")
+    _wait(download)
+
+    stand = download.stand()
+    assert stand is not None and stand.fehler == "fehlgeschlagen" and not stand.fertig
+    assert gefundener_server(tmp_path) == cpu
+    assert not (tmp_path / "llama.cpp" / f"{BUILD}-cuda12").exists()
+
+
+def test_a_variant_a_machine_lacks_is_refused_before_anything_is_fetched(tmp_path, monkeypatch):
+    """Silence probe: on a Mac a variant has no package, and nothing comes
+    down for it."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(serverdownload.platform, "machine", lambda: "arm64")
+    strom = FalscherStrom(b"")
+    monkeypatch.setattr(serverdownload.httpx, "stream", strom)
+    with pytest.raises(ServerdownloadFehler) as fehler:
+        Serverdownload(tmp_path).starten(variante="cuda12")
+    assert fehler.value.grund == "kein_paket"
+    assert strom.asked == []
