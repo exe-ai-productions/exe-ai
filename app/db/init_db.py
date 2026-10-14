@@ -21,7 +21,7 @@ def main() -> None:
     config.datenverzeichnis.mkdir(parents=True, exist_ok=True)
 
     db = datenbank_oeffnen(config)
-    print(f"Datenbank : {db.pfad}")
+    print(f"Database : {db.pfad}")
     print(f"Schema    : Version {db.schema_version()}")
 
     tabellen = [
@@ -30,7 +30,7 @@ def main() -> None:
             "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
         ).fetchall()
     ]
-    print(f"Tabellen  : {', '.join(tabellen)}")
+    print(f"Tables    : {', '.join(tabellen)}")
     db.schliessen()
 
 

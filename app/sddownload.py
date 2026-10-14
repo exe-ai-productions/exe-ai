@@ -364,7 +364,7 @@ def pinned_build() -> Veroeffentlichung:
     cuda12 progress bar only."""
     number = _bau_nummer(BAU)
     if number is None:
-        raise RuntimeError(f"The pinned build tag {BAU!r} carries no build number")
+        raise RuntimeError(f"The pinned build tag {BAU!r} does not contain a build number.")
     return Veroeffentlichung(
         bau=BAU,
         nummer=number,

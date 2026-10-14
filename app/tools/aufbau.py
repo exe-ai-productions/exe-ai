@@ -19,30 +19,63 @@ from __future__ import annotations
 import functools
 import ipaddress
 
-from app import dokumentablage
+from app import dokumentablage, mcp_name_move
 from app.agentendock import dock_fuer
 from app.config import PROJEKT_WURZEL, Config
 from app.speicherorte import ort
 from app.tools import create_folder, video_tool
-from app.tools.registry import WerkzeugRegistry, server_lesen
+from app.tools.registry import WerkzeugRegistry, program_tool_names, server_lesen
 
 
 # A service listening on every address is reached on loopback of the same
 # family; one bound to a single address only answers there. An IPv6
 # wildcard socket may refuse IPv4 (Windows sets IPV6_V6ONLY), so it is
 # reached on IPv6 loopback.
-def own_address(config: Config) -> str:
-    """The base URL this very service answers on, for its own tools."""
-    host = config.app.host.strip() or "0.0.0.0"
+def dial_host(host: str) -> str:
+    """The host to connect to for a service bound to ``host``: a wildcard
+    (or nothing) is reached on loopback, a single address on itself."""
+    host = host.strip() or "0.0.0.0"
     try:
         address = ipaddress.ip_address(host.split("%")[0])
     except ValueError:
         address = None
     if address is not None and address.is_unspecified:
         host = "::1" if address.version == 6 else "127.0.0.1"
-    if ":" in host:
-        host = f"[{host}]"
-    return f"http://{host}:{config.app.port}"
+    return host
+
+
+def service_url(host: str, port: int) -> str:
+    """The base URL of a service bound to ``host`` on ``port``, as it is
+    reached from this machine."""
+    reached = dial_host(host)
+    if ":" in reached:
+        reached = f"[{reached}]"
+    return f"http://{reached}:{port}"
+
+
+def own_address(config: Config) -> str:
+    """The base URL this very service answers on, for its own tools."""
+    return service_url(config.app.host, config.app.port)
+
+
+def _move_names(app, config: Config):
+    """What the registry calls with a server's tool names once the server has
+    started: the lists and rules that still name them as the server does are
+    moved to the names the model is offered (``app/mcp_name_move.py``)."""
+    marker = config.pfad(config.mcp.servers_file).with_name("mcp_namen.json")
+
+    def move(server: str, tools: list[str]) -> None:
+        mcp_name_move.move_for_server(
+            server,
+            tools,
+            built_in=program_tool_names(),
+            repositories=app.state.repositories,
+            agent_folder=config.pfad(config.app.agenten_verzeichnis),
+            rules_path=config.pfad(config.app.berechtigungen_datei),
+            marker=marker,
+        )
+
+    return move
 
 
 def registry_bauen(app, config: Config) -> WerkzeugRegistry:
@@ -97,4 +130,7 @@ def registry_bauen(app, config: Config) -> WerkzeugRegistry:
             app.state.repositories,
             config.datenverzeichnis,
         ),
+        # Where the stored names of a server's tools are moved to the ones
+        # the model is offered, once for each server.
+        on_tool_list=_move_names(app, config),
     )

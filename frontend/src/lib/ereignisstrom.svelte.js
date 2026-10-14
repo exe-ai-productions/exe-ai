@@ -40,6 +40,7 @@ import {
   uebernehmen as serverzustandUebernehmen,
 } from './serverzustand.svelte.js'
 import { auftraegeStillLaden, chatOeffnen, modelleLaden, zustand } from './zustand.svelte.js'
+import { auswahlLaden } from './modelle.svelte.js'
 
 export const leitung = $state({
   /* Has the line carried anything yet? `EventSource.onopen` is what says
@@ -53,7 +54,7 @@ export const leitung = $state({
    an `$effect` and reload when it moves. A counter rather than a callback
    list: a panel that is not on screen has no effect running, so it costs
    nothing and needs no unsubscribing. */
-export const neuigkeit = $state({ auftraege: 0, termine: 0, endpunkte: 0 })
+export const neuigkeit = $state({ auftraege: 0, termine: 0, endpunkte: 0, einbettung: 0 })
 
 /* Once a minute, and only while the line is down. */
 const NETZ_MS = 60_000
@@ -93,6 +94,20 @@ const HANDLUNG = {
     neuigkeit.termine += 1
     neuigkeit.auftraege += 1
   },
+  /* A schedule was made, changed, paused, resumed or removed, by anyone:
+     a chat, an agent, the command line, another window. The sidebar's own
+     readout is fetched here, and the counter moves so the calendar and the
+     list look again. The job list stays as it is — no run moved. */
+  cron_changed: () => {
+    cronStandLaden()
+    neuigkeit.termine += 1
+  },
+  /* One of the two model switches was written, by anyone: another window,
+     another device. Which one is the key it carries; the state is read
+     again, the way a window reads it when it opens. */
+  model_switches_changed: () => {
+    auswahlLaden()
+  },
   /* Reachability rides on the model list, which is where the windows read
      it from. */
   endpunkt_status: () => {
@@ -104,7 +119,28 @@ const HANDLUNG = {
      used to fetch them on beats of their own read them straight off it.
      Which is also why a dropped one is a fact that is simply gone — and
      why `onopen` below asks for it again. */
-  modellserver_zustand: serverzustandUebernehmen,
+  modellserver_zustand: (ereignis) => {
+    serverzustandUebernehmen(ereignis)
+    /* The embedding server's page keeps no beat of its own: it reads its
+       answer again when its own server speaks, which is how a start nobody
+       watched leaves its reason there. */
+    if (ereignis?.runner === 'embedding') neuigkeit.einbettung += 1
+  },
+  /* The server behind a provider changed its word — active, idle or
+     offline (app/server_state.py). Carries its answer: every entry of that
+     provider on the list takes the word in place (a catalogue is many
+     models on one server), and the footer reads it from there. The chosen
+     model that is not on the list sits beside it and takes the word the
+     same way: it is the one the footer names. A provider this window
+     neither lists nor has chosen from is nobody's to show. */
+  server_state: (ereignis) => {
+    if (!ereignis.server_state) return
+    for (const modell of zustand.modelle) {
+      if (modell.anbieter === ereignis.endpoint_id) modell.server_state = ereignis.server_state
+    }
+    const unlisted = zustand.unlistedModel
+    if (unlisted?.anbieter === ereignis.endpoint_id) unlisted.server_state = ereignis.server_state
+  },
   /* A chat of ours is being compacted before its answer can start. The
      placeholder this window pushed for that answer is the row the waiting
      mark stands on, so its activity is what says "compressing" — until
@@ -203,6 +239,7 @@ export function verbinden() {
     serverzustandLaden()
     if (!erstesOeffnen) {
       modelleLaden()
+      auswahlLaden()
       /* And the chat that is on screen, exactly once.
 
          The line hands out FACTS, and nothing here is numbered — a burst of

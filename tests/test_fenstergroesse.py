@@ -18,11 +18,63 @@ def test_eingetragen_schlaegt_alles():
     assert (tokens, quelle) == (4096, fenstergroesse.QUELLE_EINGETRAGEN)
 
 
-def test_server_schlaegt_gelernt():
+def test_learned_beats_the_server():
     tokens, quelle = fenstergroesse.aufloesen(
         "gpt-4o", eingetragen=None, server=32768, gelernt=16384
     )
+    assert (tokens, quelle) == (16384, fenstergroesse.QUELLE_GELERNT)
+
+
+def test_on_a_local_endpoint_the_server_beats_learned():
+    tokens, quelle = fenstergroesse.aufloesen(
+        "gpt-4o", eingetragen=None, server=32768, gelernt=16384, local=True
+    )
     assert (tokens, quelle) == (32768, fenstergroesse.QUELLE_SERVER)
+
+
+def test_on_a_local_endpoint_a_silent_server_leaves_learned_in_force():
+    tokens, quelle = fenstergroesse.aufloesen(
+        "gpt-4o", eingetragen=None, server=None, gelernt=16384, local=True
+    )
+    assert (tokens, quelle) == (16384, fenstergroesse.QUELLE_GELERNT)
+
+
+def test_a_configured_value_beats_everything_on_a_local_endpoint_too():
+    tokens, quelle = fenstergroesse.aufloesen(
+        "gpt-4o", eingetragen=4096, server=32768, gelernt=16384, local=True
+    )
+    assert (tokens, quelle) == (4096, fenstergroesse.QUELLE_EINGETRAGEN)
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        ("http://127.0.0.1:8080/v1", True),
+        ("http://localhost:1234/v1", True),
+        ("http://[::1]:8080/v1", True),
+        ("http://192.168.1.20:8080/v1", True),
+        ("http://10.0.0.5/v1", True),
+        ("http://172.20.0.2:8000/v1", True),
+        ("http://169.254.10.1/v1", True),
+        # Tailscale's shared range, which `ipaddress` does not call private.
+        ("http://100.100.0.1/v1", True),
+        # A name without a dot, `*.local`, and a container runtime's host.
+        ("http://gpu-box:8000/v1", True),
+        ("http://studio.local:8000/v1", True),
+        ("http://host.docker.internal:11434/v1", True),
+        ("gpu-box:8000", True),
+        # Not on the own network: a provider, a public address, and a
+        # Tailscale name — the name says nothing about where it leads.
+        ("https://api.openai.com/v1", False),
+        ("http://8.8.8.8/v1", False),
+        ("http://100.128.0.1/v1", False),
+        ("https://some-machine.tailnet-name.ts.net:8443/v1", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_is_local_endpoint(base_url, expected):
+    assert fenstergroesse.is_local_endpoint(base_url) is expected
 
 
 def test_gelernt_schlaegt_tabelle():
@@ -63,10 +115,17 @@ def test_gelernt_ist_je_endpunkt_und_modell(repos):
 
 
 class _Endpunkt:
-    def __init__(self, id: str, modell: str | None = None, context_tokens: int | None = None):
+    def __init__(
+        self,
+        id: str,
+        modell: str | None = None,
+        context_tokens: int | None = None,
+        base_url: str | None = None,
+    ):
         self.id = id
         self.modell = modell
         self.context_tokens = context_tokens
+        self.base_url = base_url
 
 
 class _Zustand:
@@ -82,8 +141,9 @@ class _Zustand:
         modell: str | None = None,
         eingetragen: int | None = None,
         provider=None,
+        base_url: str | None = None,
     ):
-        self.endpunkt = _Endpunkt(endpunkt_id, modell, eingetragen)
+        self.endpunkt = _Endpunkt(endpunkt_id, modell, eingetragen, base_url)
         self.kontext_quelle = kontext_quelle
         self.context_tokens = context_tokens
         self.gemeldeter_name = gemeldeter_name
@@ -120,14 +180,79 @@ def test_aus_fehler_lernen_merkt_und_uebernimmt_sofort(repos):
     assert fenstergroesse.gelernt_holen(repos, "omlx", "ornith") == 65536
 
 
-def test_aus_fehler_lernen_ueberschreibt_nie_eingetragen_oder_server(repos):
-    for quelle in (fenstergroesse.QUELLE_EINGETRAGEN, fenstergroesse.QUELLE_SERVER):
-        zustand = _Zustand("omlx", kontext_quelle=quelle, context_tokens=8192)
-        fehler = _Refusal("This model's maximum context length is 4096 tokens.")
+def test_aus_fehler_lernen_ueberschreibt_nie_eingetragen(repos):
+    zustand = _Zustand(
+        "omlx", kontext_quelle=fenstergroesse.QUELLE_EINGETRAGEN, context_tokens=8192
+    )
+    fehler = _Refusal("This model's maximum context length is 4096 tokens.")
+    fenstergroesse.aus_fehler_lernen(repos, zustand, fehler)
+    assert zustand.context_tokens == 8192
+    assert zustand.kontext_quelle == fenstergroesse.QUELLE_EINGETRAGEN
+    assert fenstergroesse.gelernt_holen(repos, "omlx", "ornith") is None
+
+
+def test_a_refusal_naming_a_smaller_window_is_learned_over_the_server(repos):
+    """The server reports 8192, the refusal names 4096: the smaller number is
+    taken and goes before the server's from here on."""
+    zustand = _Zustand("omlx", kontext_quelle=fenstergroesse.QUELLE_SERVER, context_tokens=8192)
+    fehler = _Refusal("This model's maximum context length is 4096 tokens.")
+
+    fenstergroesse.aus_fehler_lernen(repos, zustand, fehler)
+
+    assert zustand.context_tokens == 4096
+    assert zustand.kontext_quelle == fenstergroesse.QUELLE_GELERNT
+    assert fenstergroesse.gelernt_holen(repos, "omlx", "ornith") == 4096
+
+
+def test_a_refusal_naming_a_window_that_is_not_smaller_is_not_learned_over_the_server(repos):
+    for named in (8192, 16384):
+        zustand = _Zustand(
+            "omlx", kontext_quelle=fenstergroesse.QUELLE_SERVER, context_tokens=8192
+        )
+        fehler = _Refusal(f"This model's maximum context length is {named} tokens.")
         fenstergroesse.aus_fehler_lernen(repos, zustand, fehler)
         assert zustand.context_tokens == 8192
-        assert zustand.kontext_quelle == quelle
+        assert zustand.kontext_quelle == fenstergroesse.QUELLE_SERVER
         assert fenstergroesse.gelernt_holen(repos, "omlx", "ornith") is None
+
+
+# --- The poll: learned before the server, except on the own network ---------
+
+
+@pytest.mark.asyncio
+async def test_serverseitig_aufloesen_keeps_learned_across_the_net_and_not_on_the_own_one(repos):
+    fenstergroesse.gelernt_merken(repos, "omlx", "ornith", 16384)
+    provider = _Provider(kontextgroesse=32768)
+
+    remote_addresses = (
+        "https://api.example.com/v1",
+        "https://studio.tailnet-name.ts.net:8443/v1",
+    )
+    for address in remote_addresses:
+        zustand = _Zustand("omlx", None, provider=provider, base_url=address)
+        assert await fenstergroesse.serverseitig_aufloesen(zustand, repos, 1.0) == (
+            16384,
+            fenstergroesse.QUELLE_GELERNT,
+        )
+
+    for address in ("http://127.0.0.1:8080/v1", "http://100.100.0.1/v1"):
+        zustand = _Zustand("omlx", None, provider=provider, base_url=address)
+        assert await fenstergroesse.serverseitig_aufloesen(zustand, repos, 1.0) == (
+            32768,
+            fenstergroesse.QUELLE_SERVER,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_silent_server_on_the_own_network_leaves_learned_in_force(repos):
+    fenstergroesse.gelernt_merken(repos, "omlx", "ornith", 16384)
+    zustand = _Zustand(
+        "omlx", None, provider=_Provider(wirft=True), base_url="http://127.0.0.1:8080/v1"
+    )
+    assert await fenstergroesse.serverseitig_aufloesen(zustand, repos, 1.0) == (
+        16384,
+        fenstergroesse.QUELLE_GELERNT,
+    )
 
 
 def test_aus_fehler_lernen_ohne_lesbare_zahl_tut_nichts(repos):

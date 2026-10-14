@@ -88,6 +88,19 @@ def aufgeloest(wert: Any, profil: denkstufen.Denkprofil) -> str | None:
     return denkstufen.standardstufe(profil)
 
 
+def sent_stage(einstellungen: Any, profil: denkstufen.Denkprofil, model_id: str) -> str | None:
+    """The stage a request for this model carries when nobody names one: the
+    stored stage as far as the model still offers it, else the one standing
+    in for it (:func:`aufgeloest`). ``None`` where there is nothing to set.
+
+    Read for the model list, so the window shows what goes out and keeps no
+    copy of the rule.
+    """
+    if not profil.schaltbar:
+        return None
+    return aufgeloest(einstellungen.aufgeloest(SCHLUESSEL, modell=model_id), profil)
+
+
 def nearest_depth(wanted: str | None, offered: list[str]) -> str | None:
     """The depth to send for a stored stage this model no longer offers.
 

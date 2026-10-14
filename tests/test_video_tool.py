@@ -91,8 +91,8 @@ def test_a_video_from_words_runs_on_the_video_model_s_own_start(tmp_path, monkey
     assert body["prompt"] == "a dog runs" and "startbild" not in body
     assert (body["chat_id"], body["lauf_kennung"]) == ("c1", "answer-1")
     assert text == (
-        f"The video was made (model {VIDEO}, 832×480 pixels, 81 frames), is "
-        f"attached to this answer and saved as {tmp_path / 'pictures' / 'out.png'}."
+        f"The video was generated (model {VIDEO}, 832×480 pixels, 81 frames), "
+        f"attached to this response, and saved as {tmp_path / 'pictures' / 'out.png'}."
     )
     # Nothing was written anywhere but the draw itself.
     assert [url.rsplit("/", 1)[-1] for url, _ in service.aufrufe] == ["bild"]
@@ -136,14 +136,14 @@ def test_a_kind_the_model_cannot_make_is_refused_in_words(tmp_path, monkeypatch)
     words_only = _service(families={VIDEO: "hunyuan_video"})
     text = _call(tmp_path, monkeypatch, words_only, {"image": str(shared / "dog.png")}, folders=[shared])
     assert text == (
-        "The video was not made: the video model in use — HunyuanVideo 1.5 — makes "
-        "videos from words only. Call again without an image."
+        "The video was not generated: the selected model, HunyuanVideo 1.5, accepts text "
+        "input only. Call again without an image."
     )
     from_a_picture = _service(families={VIDEO: "wan22_i2v"})
     text = _call(tmp_path, monkeypatch, from_a_picture)
     assert text == (
-        "The video was not made: the video model in use — Wan 2.2 I2V A14B — needs a "
-        "picture to start from. Pass its path as image."
+        "The video was not generated: the selected model, Wan 2.2 I2V A14B, requires an "
+        "input image. Pass its path as image."
     )
     assert words_only.gezeichnet == [] and from_a_picture.gezeichnet == []
     assert words_only.handed_in == []
@@ -163,7 +163,7 @@ def test_a_video_from_a_picture_starts_from_its_content(tmp_path, monkeypatch):
     assert service.handed_in == [b"PNG-bytes-of-a-dog"]
     body = service.gezeichnet[-1]
     assert body["startbild"] == "handed-in.png" and body["video"] is True
-    assert "started from dog.png" in text
+    assert "based on dog.png" in text
     assert not (tmp_path / "pictures").exists()
 
 
@@ -181,7 +181,7 @@ def test_a_picture_outside_the_run_s_folders_is_refused(tmp_path, monkeypatch):
         _call(tmp_path, monkeypatch, service, {"image": str(outside / "secret.png")}, folders=[shared])
     assert service.aufrufe == []
     text = _call(tmp_path, monkeypatch, service, {"image": str(shared / "notes.txt")}, folders=[shared])
-    assert text == "The video was not made: notes.txt is not a PNG, JPEG or WebP picture."
+    assert text == "The video was not generated: notes.txt is not a PNG, JPEG, or WebP image."
     assert service.gezeichnet == []
 
 
@@ -196,8 +196,8 @@ def test_in_a_job_the_video_is_saved_and_named_but_not_attached(tmp_path, monkey
         tmp_path, monkeypatch, service, chat_id="job-1", antwort_id=None, herkunft="agent",
     )
     assert f"saved as {tmp_path / 'pictures' / 'out.png'}" in text
-    assert "it is not attached to your report" in text and "is attached to this answer" not in text
-    assert "deliver it with" not in text
+    assert "It is not attached to your report" in text and "attached to this response" not in text
+    assert "deliver it using" not in text
 
     # With the delivery tool the job is told how to pass the video on.
     registry = _registry(tmp_path)
@@ -207,8 +207,8 @@ def test_in_a_job_the_video_is_saved_and_named_but_not_attached(tmp_path, monkey
         video_tool.WERKZEUG_NAME, {"prompt": "a dog runs"}, chat_id="job-1", herkunft="agent",
     ))
     assert text.endswith(
-        "it is not attached to your report. When it is meant for the user as a result "
-        "of this job, deliver it with deliver_file, passing this path."
+        "It is not attached to your report. If this video is a deliverable for the user, "
+        "deliver it using deliver_file with this path."
     )
     assert "lauf_kennung" not in service.gezeichnet[-1]
 
@@ -216,7 +216,7 @@ def test_in_a_job_the_video_is_saved_and_named_but_not_attached(tmp_path, monkey
 def test_a_refusal_of_the_route_reaches_the_model_as_the_route_wrote_it(tmp_path, monkeypatch):
     service = _service(answers={"/bild": Antwort({"detail": "The VAE is missing."}, 400)})
     assert _call(tmp_path, monkeypatch, service) == (
-        "The video could not be made: The VAE is missing."
+        "The video could not be generated: The VAE is missing."
     )
 
 
@@ -226,7 +226,7 @@ def test_a_failed_call_on_the_way_is_said_of_the_video(tmp_path, monkeypatch):
     service = _service(
         answers={"/settings/resolved/bildfenster": Antwort({"detail": "No such chat."}, 500)}
     )
-    assert _call(tmp_path, monkeypatch, service) == "The video could not be made: No such chat."
+    assert _call(tmp_path, monkeypatch, service) == "The video could not be generated: No such chat."
     assert service.gezeichnet == []
 
 
@@ -235,7 +235,7 @@ def test_a_stopped_run_asks_for_no_video(tmp_path, monkeypatch):
     stop.set()
     service = _service()
     assert _call(tmp_path, monkeypatch, service, abbruch=stop) == (
-        "The video was not made: the run was stopped."
+        "The video was not generated because the run was stopped."
     )
     assert service.gezeichnet == []
 
@@ -243,31 +243,31 @@ def test_a_stopped_run_asks_for_no_video(tmp_path, monkeypatch):
 def test_the_sentences_the_model_reads_stand_word_for_word():
     """The fixed sentences of both tools that paint, each in full: a change
     to one of them is a change somebody decided, never a slip."""
-    seen = "do not describe its contents afterwards — you have not seen it."
+    seen = "Do not describe its contents afterward; you have not seen it."
     assert bild_werkzeug.IN_CHAT == (
-        "The finished picture appears in your answer by itself, and the result names "
-        "its file and path; " + seen
+        "The finished image appears automatically in your response, and the result includes its "
+        "filename and path. " + seen
     )
     assert bild_werkzeug.IN_JOB == (
-        "The finished picture is saved in the pictures folder, which the user sees "
-        "under Images, and the answer names its file; " + seen
+        "The finished image is saved in the pictures folder, visible to the user under Images. "
+        "The response includes its filename. " + seen
     )
     assert bild_werkzeug.INPUT_PICTURE["description"] == (
-        "Optional: the path of a picture to draw from — a file you may read, in a "
-        "shared folder or in the pictures folder. With it, the picture is drawn from "
-        "that one instead of from scratch."
+        "Optional: path to a readable image in a shared folder or the pictures folder. If "
+        "provided, this image is used as the starting point instead of generating one from "
+        "scratch."
     )
     assert video_tool.IN_CHAT == (
-        "The finished video appears in your answer by itself, and the result names "
-        "its file and path; " + seen
+        "The finished video appears automatically in your response, and the result includes its "
+        "filename and path. " + seen
     )
     assert video_tool.IN_JOB == (
-        "The finished video is saved in the pictures folder, which the user sees "
-        "under Images, and the answer names its file; " + seen
+        "The finished video is saved in the pictures folder, visible to the user under Images. "
+        "The response includes its filename. " + seen
     )
     assert video_tool.MODEL_NOT_CHOSEN == (
-        "The video was not made: several video models are installed, and this chat "
-        "has none of them chosen. Ask the user to choose one under Images › Video."
+        "The video was not generated: several video models are installed, but none is selected "
+        "for this chat. Ask the user to select one under Images › Video."
     )
     assert video_tool.NO_VIDEO_MODEL == (
         "No video model is installed. The user can add one under Images or from the "
@@ -275,8 +275,7 @@ def test_the_sentences_the_model_reads_stand_word_for_word():
     )
     # Silence probe: the sentences nobody asked to change are what they were.
     assert video_tool.UNUSABLE_ANSWER == (
-        "The video could not be made: the picture service sent an answer that could "
-        "not be used."
+        "The video could not be generated: the image service returned an unusable response."
     )
     assert video_tool.werkzeug_beschreibung().beschreibung == (
         "Makes a short video with the video model installed on this machine — from "
@@ -287,19 +286,19 @@ def test_the_sentences_the_model_reads_stand_word_for_word():
     )
     fields = video_tool.werkzeug_beschreibung().schema["properties"]
     assert fields["prompt"]["description"] == (
-        "What the video shows and how it moves. Write it in English."
+        "Describe the video's content and motion in English."
     )
-    assert fields["negative_prompt"]["description"] == "What must stay out of the video. Optional."
+    assert fields["negative_prompt"]["description"] == "Optional. Elements to exclude from the video."
     assert fields["image"]["description"] == (
-        "Optional: the path of a picture the video starts from — a file you may read, "
-        "in a shared folder or in the pictures folder."
+        "Optional: path to a readable image in a shared folder or the pictures folder to use "
+        "as the video's starting point."
     )
 
 
 def test_without_the_painter_the_model_reads_where_the_user_fetches_it(tmp_path, monkeypatch):
     service = Bilddienst(modelle=[], programm_da=False)
     assert _call(tmp_path, monkeypatch, service) == (
-        "No image generator is installed. The user can fetch it under Images (plus menu)."
+        "No image generator is installed. The user can download it from the plus menu under Images."
     )
     assert service.gezeichnet == []
 
@@ -310,9 +309,9 @@ def test_the_description_says_what_the_model_has_to_know():
     assert in_chat.name == "draw_video" and in_chat.server == bild_werkzeug.SERVER_NAME
     assert in_chat.schema["required"] == ["prompt"]
     assert set(in_chat.schema["properties"]) == {"prompt", "negative_prompt", "image"}
-    assert "the result names its file and path" in in_chat.beschreibung
+    assert "the result includes its filename and path" in in_chat.beschreibung
     assert "has no time limit" in in_chat.beschreibung
-    assert "appears in your answer" not in in_job.beschreibung
+    assert "appears automatically in your response" not in in_job.beschreibung
     assert "saved in the pictures folder" in in_job.beschreibung
 
 
@@ -341,11 +340,12 @@ def test_without_a_video_model_the_tool_is_nowhere(tmp_path):
     assert video_tool.WERKZEUG_NAME not in _offered(WerkzeugRegistry([], video_ready=lambda: True))
 
 
-def test_a_server_s_tool_of_the_same_name_is_never_taken_over(tmp_path):
-    """The video tool comes and goes with the model folder, so its name is
-    kept free even while no video model is installed — otherwise the name
-    would stand twice the day one arrives. A registry that can never have
-    the tool takes the server's."""
+def test_a_server_s_tool_of_the_same_name_is_offered_under_its_own_name(tmp_path):
+    """The video tool comes and goes with the model folder. A server's tool
+    that is called the same is offered as ``mcp__<server>__<tool>``, so the
+    name of the video tool never stands twice — whether a video model is
+    installed or not — and the server's tool is neither taken over by it
+    nor hidden by it."""
     from app.tools.mcp_client import MCPWerkzeug
     from app.tools.registry import ServerEintrag
 
@@ -354,10 +354,12 @@ def test_a_server_s_tool_of_the_same_name_is_never_taken_over(tmp_path):
 
     not_yet = _registry(tmp_path, video_ready=lambda: False)
     not_yet._werkzeuge_uebernehmen(ServerEintrag(name="other"), _Client())
+    assert "mcp__other__draw_video" in not_yet.namen()
     assert "draw_video" not in not_yet.namen()
     never = _registry(tmp_path, video_ready=None)
     never._werkzeuge_uebernehmen(ServerEintrag(name="other"), _Client())
-    assert "draw_video" in never.namen()
+    assert "mcp__other__draw_video" in never.namen()
+    assert "draw_video" not in never.namen()
 
 
 def _clock_forward(folder: Path) -> None:
@@ -487,9 +489,9 @@ def test_the_stop_signal_goes_to_the_video_tool_too():
 
 def test_the_overview_names_videos_only_for_a_run_that_has_the_tool():
     with_it = grundprompt.bauen(kann=grundprompt.faehigkeiten({"draw_image", "draw_video"}))
-    assert "make short videos with the video model on this machine" in with_it
+    assert "create short videos with the video model on this machine" in with_it
     without = grundprompt.bauen(kann=grundprompt.faehigkeiten({"draw_image"}))
-    assert "videos" not in without and "draw pictures" in without
+    assert "videos" not in without and "generate images" in without
 
 
 # --- Against the service itself ------------------------------------------------
@@ -577,7 +579,7 @@ def test_the_service_makes_the_video_and_the_path_points_at_the_file(
             client.app.state.sitzungsschluessel, antwort_id=answer.id, chat_id=chat_id,
         )
     )
-    assert refused.startswith("The video could not be made: "), refused
+    assert refused.startswith("The video could not be generated: "), refused
     assert "VAE" in refused and wan["jobs"] == []
     bildmodellwerte.set_part(repositories, "wan.safetensors", "vae", "wan_vae.safetensors")
 
@@ -589,7 +591,7 @@ def test_the_service_makes_the_video_and_the_path_points_at_the_file(
                 antwort_id=answer.id, chat_id=chat_id, input_picture=picture,
             )
         )
-        assert text.startswith("The video was made (model wan.safetensors"), text
+        assert text.startswith("The video was generated (model wan.safetensors"), text
         path = Path(text.rsplit("saved as ", 1)[1].rstrip("."))
         assert path.is_file() and path.parent == ort(config, "images")
         job = wan["jobs"][-1]

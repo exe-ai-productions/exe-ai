@@ -213,6 +213,17 @@ async def test_ein_gefeuerter_termin_geht_ueber_die_leitung(angemeldet):
     await lauscher.aclose()
 
 
+async def test_ein_geaenderter_zeitplan_geht_ueber_die_leitung(angemeldet):
+    lauscher = ereignisstrom.strom.zuschauen()
+    aufgabe = asyncio.ensure_future(_naechstes(lauscher))
+    await _lauschend(ereignisstrom.strom)
+
+    await bus.veroeffentlichen(Ereignisse.CRON_CHANGED, cronjob_id="t1")
+
+    assert await aufgabe == {"typ": "cron_changed", "cronjob_id": "t1"}
+    await lauscher.aclose()
+
+
 async def test_der_modellserver_geht_ueber_die_leitung(angemeldet):
     """The flags travel WITH the announcement, unlike everything else on
     this line, and the server they speak for travels with them
@@ -233,6 +244,44 @@ async def test_der_modellserver_geht_ueber_die_leitung(angemeldet):
     await lauscher.aclose()
 
 
+async def test_the_agent_servers_unknown_architecture_goes_over_the_line(angemeldet):
+    """A server that is not the chat server names itself, and the one thing
+    that failed its start travels with the announcement."""
+    lauscher = ereignisstrom.strom.zuschauen()
+    aufgabe = asyncio.ensure_future(_naechstes(lauscher))
+    await _lauschend(ereignisstrom.strom)
+
+    await bus.veroeffentlichen(
+        Ereignisse.MODELLSERVER_ZUSTAND,
+        runner="agent", laeuft=False, flash_aktiv=None, mtp_aktiv=None,
+        unknown_architecture="diffusion-gemma",
+    )
+
+    assert await aufgabe == {
+        "typ": "modellserver_zustand", "runner": "agent",
+        "laeuft": False, "flash_aktiv": None, "mtp_aktiv": None,
+        "unknown_architecture": "diffusion-gemma",
+    }
+    await lauscher.aclose()
+
+
+async def test_an_announcement_without_an_architecture_carries_no_key(angemeldet):
+    """Silence: a server that runs, or failed for another reason, says
+    nothing about an architecture — the line keeps its three facts."""
+    lauscher = ereignisstrom.strom.zuschauen()
+    aufgabe = asyncio.ensure_future(_naechstes(lauscher))
+    await _lauschend(ereignisstrom.strom)
+
+    await bus.veroeffentlichen(
+        Ereignisse.MODELLSERVER_ZUSTAND,
+        runner="agent", laeuft=True, flash_aktiv=True, mtp_aktiv=None,
+        unknown_architecture=None,
+    )
+
+    assert "unknown_architecture" not in await aufgabe
+    await lauscher.aclose()
+
+
 async def test_ein_unbekannter_zustand_bleibt_unbekannt(angemeldet):
     """None is its own answer — "running, and nobody knows yet" — and must
     not arrive as False, which the dot would show as a fault."""
@@ -248,6 +297,23 @@ async def test_ein_unbekannter_zustand_bleibt_unbekannt(angemeldet):
     assert await aufgabe == {
         "typ": "modellserver_zustand", "runner": "chat",
         "laeuft": True, "flash_aktiv": None, "mtp_aktiv": None,
+    }
+    await lauscher.aclose()
+
+
+async def test_the_servers_word_goes_over_the_line(angemeldet):
+    """One endpoint, one word, carried with the announcement — the clients
+    show it as it is (app/server_state.py)."""
+    lauscher = ereignisstrom.strom.zuschauen()
+    aufgabe = asyncio.ensure_future(_naechstes(lauscher))
+    await _lauschend(ereignisstrom.strom)
+
+    await bus.veroeffentlichen(
+        Ereignisse.SERVER_STATE, endpoint_id="cloud-1", server_state="active"
+    )
+
+    assert await aufgabe == {
+        "typ": "server_state", "endpoint_id": "cloud-1", "server_state": "active",
     }
     await lauscher.aclose()
 

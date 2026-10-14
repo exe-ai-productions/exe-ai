@@ -91,18 +91,18 @@ async def registry(testserver_datei: Path):
 
 @pytest.mark.asyncio
 async def test_werkzeuge_werden_vom_server_geholt(registry: WerkzeugRegistry):
-    assert "addieren" in registry.namen()
+    assert "mcp__test__addieren" in registry.namen()
 
 
 @pytest.mark.asyncio
 async def test_werkzeug_wird_ausgefuehrt(registry: WerkzeugRegistry):
-    assert await registry.ausfuehren("addieren", {"a": 2, "b": 3}) == "5"
+    assert await registry.ausfuehren("mcp__test__addieren", {"a": 2, "b": 3}) == "5"
 
 
 @pytest.mark.asyncio
 async def test_mehrere_aufrufe_nacheinander(registry: WerkzeugRegistry):
-    assert await registry.ausfuehren("addieren", {"a": 1, "b": 1}) == "2"
-    assert await registry.ausfuehren("addieren", {"a": 10, "b": 5}) == "15"
+    assert await registry.ausfuehren("mcp__test__addieren", {"a": 1, "b": 1}) == "2"
+    assert await registry.ausfuehren("mcp__test__addieren", {"a": 10, "b": 5}) == "15"
 
 
 @pytest.mark.asyncio
@@ -110,13 +110,13 @@ async def test_fehler_des_werkzeugs_wird_als_fehler_gemeldet(registry: WerkzeugR
     from app.tools import MCPFehler
 
     with pytest.raises(MCPFehler):
-        await registry.ausfuehren("geht_kaputt", {})
+        await registry.ausfuehren("mcp__test__geht_kaputt", {})
 
 
 @pytest.mark.asyncio
 async def test_uebersetzung_ins_modellformat(registry: WerkzeugRegistry):
     werkzeuge = registry.als_openai_werkzeuge()
-    addieren = next(w for w in werkzeuge if w["function"]["name"] == "addieren")
+    addieren = next(w for w in werkzeuge if w["function"]["name"] == "mcp__test__addieren")
     assert addieren["type"] == "function"
     assert addieren["function"]["parameters"]["required"] == ["a", "b"]
 
@@ -217,8 +217,8 @@ async def test_tor_3_nein_mit_grund_kommt_unveraendert_an(tmp_path):
     with pytest.raises(WerkzeugVerboten) as ausnahme:
         await reg.ausfuehren("web_search", {}, herkunft="agent", agent=agent)
     assert str(ausnahme.value) == (
-        "'web_search' is not in this agent's tools list. Named tools: "
-        "read_file. Work with those, or ask the user to add it to the agent."
+        "'web_search' is not in this agent's tool list. Listed tools: read_file. Use those "
+        "tools, or ask the user to add this one to the agent."
     )
 
 
@@ -231,7 +231,7 @@ async def test_kaputter_server_reisst_die_anderen_nicht_mit(testserver_datei: Pa
         ]
     )
     await reg.starten()
-    assert "addieren" in reg.namen()
+    assert "mcp__gut__addieren" in reg.namen()
     assert "kaputt" not in reg.clients
     await reg.stoppen()
 
@@ -249,8 +249,8 @@ async def test_bestaetigungspflicht_wird_gemerkt(testserver_datei: Path):
         ]
     )
     await reg.starten()
-    assert reg.braucht_bestaetigung("addieren") is True
-    assert reg.braucht_bestaetigung("geht_kaputt") is False
+    assert reg.braucht_bestaetigung("mcp__test__addieren") is True
+    assert reg.braucht_bestaetigung("mcp__test__geht_kaputt") is False
     await reg.stoppen()
 
 
@@ -258,14 +258,12 @@ async def test_bestaetigungspflicht_wird_gemerkt(testserver_datei: Path):
 
 
 def test_mitgelieferte_mcp_datei_ist_lesbar():
-    eintraege = server_lesen(Path("mcp_servers.json"))
+    eintraege = server_lesen(Path("mcp_servers.example.json"))
     namen = {eintrag.name for eintrag in eintraege}
-    assert "searxng" in namen
-    websuche = next(e for e in eintraege if e.name == "searxng")
-    # enabled is NOT checked: the bundled file is a skeleton — the
-    # entries are visible but disabled out of the box,
-    # because everyone fills in their own values. What matters is that the
-    # file is readable and the allowlist is in place.
+    # The one search that ships. The self-run one comes from its own card,
+    # with the address of the person's own instance: nothing of it is here.
+    assert namen == {"websuche"}
+    websuche = eintraege[0]
     assert websuche.allowed_tools == ["web_search", "read_webpage"]
 
 
@@ -631,7 +629,9 @@ def test_uebersicht_sagt_woher_ein_werkzeug_kommt():
     reg = WerkzeugRegistry([], shell_an=True)
     reg._werkzeuge_uebernehmen(ServerEintrag(name="zeitserver"), _Client())
     zeilen = reg.uebersicht()
-    assert next(e for e in zeilen if e["name"] == "server_tool")["builtin"] is False
+    zeile = next(e for e in zeilen if e["name"] == "mcp__zeitserver__server_tool")
+    assert zeile["builtin"] is False
+    assert zeile["anzeige"] == "server_tool"
     assert next(e for e in zeilen if e["name"] == "run_command")["builtin"] is True
 
 

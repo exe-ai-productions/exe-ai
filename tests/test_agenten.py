@@ -590,3 +590,355 @@ def test_eine_gesunde_datei_oeffnet_und_speichert_wie_bisher(client):
     geschrieben = client.put("/api/v1/agents/gesund/fields", json={"description": "Anders."})
     assert geschrieben.status_code == 200
     assert "Anders." in datei.read_text(encoding="utf-8")
+
+
+# --- Saving an agent file -----------------------------------------------------
+
+_ALT = "---\ndescription: alt\n---\n\nAlt.\n"
+# The sentences are asserted in English; a page without a language is German.
+_EN = {"Accept-Language": "en"}
+
+
+@pytest.mark.parametrize(
+    ("language", "text"),
+    [
+        ("en", "The file cannot be saved."),
+        ("de", "Die Datei lässt sich nicht speichern."),
+    ],
+)
+@pytest.mark.platforms("posix", reason="a folder closed by its rights")
+def test_ein_ordner_ohne_schreibrecht_ist_ein_satz_kein_serverfehler(client, language, text):
+    """Both saving routes answer 422 with the file's name and the sentence of
+    the page's language — not a 500 — and the old file stays byte for byte."""
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root may write into any folder")
+    order = _agentenordner(client)
+    datei = order / "alt.md"
+    datei.write_text(_ALT, encoding="utf-8")
+    vorher = datei.read_bytes()
+    header = {"Accept-Language": language}
+    satz = f"'alt.md': {text}"
+    mode = order.stat().st_mode
+    order.chmod(0o500)
+    try:
+        roh = client.put("/api/v1/agents/alt", json={"content": "neu"}, headers=header)
+        felder = client.put(
+            "/api/v1/agents/alt/fields", json={"description": "Anders."}, headers=header
+        )
+    finally:
+        order.chmod(mode)
+
+    assert (roh.status_code, roh.json()["detail"]) == (422, satz)
+    assert (felder.status_code, felder.json()["detail"]) == (422, satz)
+    assert datei.read_bytes() == vorher
+
+
+@pytest.mark.parametrize("route", ["/api/v1/agents/alt", "/api/v1/agents/alt/fields"])
+def test_ein_abbruch_beim_schreiben_laesst_die_alte_datei_stehen(client, monkeypatch, route):
+    """The write ends in the step that takes the name — a full disk, a
+    process ending: the old file is the whole old file and no side file is
+    left in the folder."""
+    import errno
+
+    from app import atomic_file
+
+    order = _agentenordner(client)
+    datei = order / "alt.md"
+    datei.write_text(_ALT, encoding="utf-8")
+    vorher = datei.read_bytes()
+
+    rename = atomic_file.rename_onto
+
+    def voll(side, target):
+        # The copy beside the file takes its name the same way and succeeds;
+        # the file itself is the step that fails.
+        if target.name.endswith(".vorher"):
+            return rename(side, target)
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(atomic_file, "rename_onto", voll)
+    body = {"content": "neu"} if route.endswith("alt") else {"description": "Anders."}
+    antwort = client.put(route, json=body, headers=_EN)
+
+    assert antwort.status_code == 422
+    assert antwort.json()["detail"] == "'alt.md': The file cannot be saved."
+    assert datei.read_bytes() == vorher
+    # The previous version was set beside the file; no side file is left.
+    assert sorted(p.name for p in order.iterdir()) == ["alt.md", "alt.md.vorher"]
+
+
+def test_ein_gewoehnliches_speichern_schreibt_wie_bisher(client):
+    """Silence probe for both routes: the file on the disk is what was sent."""
+    order = _agentenordner(client)
+    datei = order / "gewoehnlich.md"
+    datei.write_text(_ALT, encoding="utf-8")
+
+    roh = client.put(
+        "/api/v1/agents/gewoehnlich",
+        json={"content": "---\ndescription: roh\n---\n\nRoh.\n"},
+    )
+    assert roh.status_code == 200
+    assert datei.read_text(encoding="utf-8") == "---\ndescription: roh\n---\n\nRoh.\n"
+
+    felder = client.put("/api/v1/agents/gewoehnlich/fields", json={"description": "Form."})
+    assert felder.status_code == 200
+    assert 'description: "Form."' in datei.read_text(encoding="utf-8")
+    assert sorted(p.name for p in order.iterdir()) == ["gewoehnlich.md", "gewoehnlich.md.vorher"]
+
+
+# --- What lies under an agent's name ------------------------------------------
+
+_KEINE_DATEI = "'{name}': There is no regular file under this name in the agents folder."
+
+
+@pytest.mark.platforms("posix", reason="symbolic links need no rights there")
+def test_ein_link_aus_dem_agentenordner_heraus_wird_in_keiner_route_angefasst(
+    client, tmp_path_factory
+):
+    """A link in the folder that points at a file outside it is no agent
+    file: view, both saves and the deletion refuse with the sentence, the
+    file outside keeps its bytes and the link stays a link."""
+    draussen = tmp_path_factory.mktemp("draussen") / "fremd.txt"
+    draussen.write_text("fremd", encoding="utf-8")
+    link = _agentenordner(client) / "link.md"
+    link.symlink_to(draussen)
+    satz = _KEINE_DATEI.format(name="link.md")
+
+    antworten = [
+        client.get("/api/v1/agents/link", headers=_EN),
+        client.put("/api/v1/agents/link", json={"content": "---\ndescription: x\n---\n\nHi.\n"}, headers=_EN),
+        client.put("/api/v1/agents/link/fields", json={"description": "x", "prompt": "Hi."}, headers=_EN),
+        client.delete("/api/v1/agents/link", headers=_EN),
+    ]
+
+    for antwort in antworten:
+        assert antwort.status_code == 422
+        assert antwort.json()["detail"] == satz
+    assert draussen.read_text(encoding="utf-8") == "fremd"
+    assert link.is_symlink()
+
+
+@pytest.mark.platforms("posix", reason="symbolic links need no rights there")
+def test_ein_toter_link_legt_ausserhalb_keine_datei_an(client, tmp_path_factory):
+    """A link whose target does not exist yet: the save would create the file
+    behind the link, outside the folder. It refuses, and nothing appears."""
+    ziel = tmp_path_factory.mktemp("draussen") / "neu.md"
+    link = _agentenordner(client) / "tot.md"
+    link.symlink_to(ziel)
+
+    antwort = client.put(
+        "/api/v1/agents/tot", json={"content": "---\ndescription: x\n---\n\nHi.\n"}, headers=_EN
+    )
+
+    assert antwort.status_code == 422
+    assert antwort.json()["detail"] == _KEINE_DATEI.format(name="tot.md")
+    assert not ziel.exists()
+
+
+@pytest.mark.platforms("posix", reason="symbolic links need no rights there")
+def test_ein_link_innerhalb_des_ordners_und_ein_ordner_als_link_arbeiten_wie_bisher(
+    client, tmp_path_factory
+):
+    """Silence probe: what the barrier lets through still works. A link to
+    a file of the same folder is read and saved through, and stays a link.
+    An agents folder that is itself a link takes a new agent."""
+    order = _agentenordner(client)
+    echt = order / "echt.md"
+    echt.write_text(_ALT, encoding="utf-8")
+    (order / "kurz.md").symlink_to(echt)
+
+    assert client.get("/api/v1/agents/kurz").status_code == 200
+    gespeichert = client.put(
+        "/api/v1/agents/kurz", json={"content": "---\ndescription: neu\n---\n\nNeu.\n"}
+    )
+    assert gespeichert.status_code == 200
+    assert (order / "kurz.md").is_symlink()
+    assert "description: neu" in echt.read_text(encoding="utf-8")
+
+    anderswo = tmp_path_factory.mktemp("anderswo")
+    for rest in order.iterdir():
+        rest.unlink()
+    order.rmdir()
+    order.symlink_to(anderswo, target_is_directory=True)
+    angelegt = client.put(
+        "/api/v1/agents/frisch/fields", json={"description": "x", "prompt": "Hi."}
+    )
+    assert angelegt.status_code == 200
+    assert (anderswo / "frisch.md").is_file()
+
+
+def test_ein_ordner_unter_dem_namen_ist_ein_satz_kein_serverfehler(client):
+    """A folder called ``ordner.md`` is no agent file: every route that
+    reaches the name says so, and the folder is left as it was."""
+    ordner = _agentenordner(client) / "ordner.md"
+    ordner.mkdir()
+    satz = _KEINE_DATEI.format(name="ordner.md")
+
+    antworten = [
+        client.get("/api/v1/agents/ordner", headers=_EN),
+        client.put("/api/v1/agents/ordner", json={"content": "---\ndescription: x\n---\n\nHi.\n"}, headers=_EN),
+        client.put("/api/v1/agents/ordner/fields", json={"description": "x", "prompt": "Hi."}, headers=_EN),
+        client.delete("/api/v1/agents/ordner", headers=_EN),
+    ]
+
+    for antwort in antworten:
+        assert antwort.status_code == 422
+        assert antwort.json()["detail"] == satz
+    assert ordner.is_dir()
+    assert list(ordner.iterdir()) == []
+
+
+def test_ein_freier_name_legt_den_agenten_an_wie_bisher(client):
+    """Silence probe: nothing under the name — the agent is created."""
+    angelegt = client.put(
+        "/api/v1/agents/frei/fields", json={"description": "x", "prompt": "Hi."}
+    )
+
+    assert angelegt.status_code == 200
+    assert (_agentenordner(client) / "frei.md").is_file()
+
+
+# --- The previous version beside the file ------------------------------------
+
+_NEBEN = ".vorher"
+
+
+def test_vor_dem_speichern_liegt_die_vorige_fassung_daneben(client):
+    """An agent file whose bytes are no text is replaced by what the page
+    then sends — empty. The bytes it had stand beside it afterwards, whole."""
+    datei = _kranke_datei(client)
+    vorher = datei.read_bytes()
+
+    antwort = client.put("/api/v1/agents/krank", json={"content": ""})
+
+    assert antwort.status_code == 200
+    assert datei.read_bytes() == b""
+    assert (datei.parent / f"krank.md{_NEBEN}").read_bytes() == vorher
+
+
+def test_das_formular_legt_die_vorige_fassung_daneben(client):
+    datei = _agentenordner(client) / "gesund.md"
+    datei.write_text("---\ndescription: vorher\n---\n\nMach.\n", encoding="utf-8")
+    vorher = datei.read_bytes()
+
+    antwort = client.put("/api/v1/agents/gesund/fields", json={"description": "nachher"})
+
+    assert antwort.status_code == 200
+    assert datei.read_bytes() != vorher
+    assert (datei.parent / f"gesund.md{_NEBEN}").read_bytes() == vorher
+
+
+def test_jedes_sichern_ersetzt_die_eine_fassung_daneben(client):
+    """Two saves: the copy beside is the file as it was before the second."""
+    datei = _agentenordner(client) / "zweimal.md"
+    datei.write_text("---\ndescription: eins\n---\n\nMach.\n", encoding="utf-8")
+    zwei = "---\ndescription: zwei\n---\n\nMach.\n"
+    drei = "---\ndescription: drei\n---\n\nMach.\n"
+
+    assert client.put("/api/v1/agents/zweimal", json={"content": zwei}).status_code == 200
+    assert client.put("/api/v1/agents/zweimal", json={"content": drei}).status_code == 200
+
+    assert (datei.parent / f"zweimal.md{_NEBEN}").read_text(encoding="utf-8") == zwei
+    assert datei.read_text(encoding="utf-8") == drei
+
+
+def test_die_datei_daneben_ist_kein_agent_in_keiner_liste(client):
+    """Silence probe: the lists name what they named before the save."""
+    datei = _agentenordner(client) / "liste.md"
+    datei.write_text("---\ndescription: a\n---\n\nMach.\n", encoding="utf-8")
+    vorher_dateien = {e["name"] for e in client.get("/api/v1/agent-files").json()}
+    vorher_agenten = {a["name"] for a in client.get("/api/v1/agents").json()}
+
+    assert client.put("/api/v1/agents/liste/fields", json={"description": "b"}).status_code == 200
+
+    assert (datei.parent / f"liste.md{_NEBEN}").is_file()
+    assert {e["name"] for e in client.get("/api/v1/agent-files").json()} == vorher_dateien
+    assert {a["name"] for a in client.get("/api/v1/agents").json()} == vorher_agenten
+
+
+def test_ein_erstes_sichern_legt_nichts_daneben(client):
+    """A new agent and the first save over a shipped one have no previous
+    version in the user's folder: nothing is set beside, the save is as it was."""
+    from app.config import Config
+
+    config: Config = client.app.state.config
+    mitgeliefert = config.mitgeliefert(config.app.agenten_mitgeliefert)
+    mitgeliefert.mkdir(parents=True, exist_ok=True)
+    (mitgeliefert / "ausgeliefert.md").write_text(
+        "---\ndescription: a\n---\n\nMach.\n", encoding="utf-8"
+    )
+    order = _agentenordner(client)
+
+    neu = client.put("/api/v1/agents/neu/fields", json={"description": "x", "prompt": "Hi."})
+    erstes = client.put("/api/v1/agents/ausgeliefert/fields", json={"description": "b"})
+
+    assert (neu.status_code, erstes.status_code) == (200, 200)
+    assert sorted(p.name for p in order.iterdir()) == ["ausgeliefert.md", "neu.md"]
+
+
+def test_die_dateirouten_legen_die_vorige_fassung_weiter_daneben(client):
+    """The one way is shared: the configuration file still has its copy."""
+    config = client.app.state.config
+    datei = config.pfad("./config.yaml")
+    vorher = datei.read_bytes() if datei.exists() else None
+    datei.write_text("app:\n  language: en\n", encoding="utf-8")
+    try:
+        antwort = client.put("/api/v1/dateien/konfiguration", json={"inhalt": "app:\n  language: de\n"})
+
+        assert antwort.status_code == 200
+        beside = datei.with_name("config.yaml.vorher")
+        assert beside.read_text(encoding="utf-8") == "app:\n  language: en\n"
+    finally:
+        if vorher is None:
+            datei.unlink()
+        else:
+            datei.write_bytes(vorher)
+        datei.with_name("config.yaml.vorher").unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("route", ["/api/v1/agents/alt", "/api/v1/agents/alt/fields"])
+def test_laesst_sich_die_vorige_fassung_nicht_danebenlegen_wird_nicht_geschrieben(
+    client, monkeypatch, route
+):
+    """Partial failure: the copy cannot be made. The agent file stays byte
+    for byte and the answer is the sentence of a save that failed."""
+    import errno
+
+    from app import previous_version
+
+    datei = _agentenordner(client) / "alt.md"
+    datei.write_text(_ALT, encoding="utf-8")
+    vorher = datei.read_bytes()
+
+    def voll(quelle, ziel):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(previous_version.shutil, "copy2", voll)
+    body = {"content": "neu"} if route.endswith("alt") else {"description": "Anders."}
+    antwort = client.put(route, json=body, headers=_EN)
+
+    assert antwort.status_code == 422
+    assert antwort.json()["detail"] == "'alt.md': The file cannot be saved."
+    assert datei.read_bytes() == vorher
+    assert [p.name for p in datei.parent.iterdir()] == ["alt.md"]
+
+
+@pytest.mark.platforms("posix", reason="a copy closed by its rights")
+def test_eine_schreibgeschuetzte_vorige_fassung_wird_trotzdem_ersetzt(client):
+    """The copy beside keeps the rights of the file it was taken from. One
+    that is read-only must not block every later save: it is replaced by the
+    next copy, as a rename does not ask the file."""
+    order = _agentenordner(client)
+    datei = order / "alt.md"
+    datei.write_text(_ALT, encoding="utf-8")
+    daneben = order / f"alt.md{_NEBEN}"
+    daneben.write_text("aelter", encoding="utf-8")
+    daneben.chmod(0o444)
+
+    antwort = client.put("/api/v1/agents/alt", json={"content": "---\ndescription: neu\n---\n\nNeu.\n"})
+
+    assert antwort.status_code == 200
+    assert daneben.read_text(encoding="utf-8") == _ALT
+    assert sorted(p.name for p in order.iterdir()) == ["alt.md", f"alt.md{_NEBEN}"]

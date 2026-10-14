@@ -451,6 +451,12 @@ def _llm(path: Path, architecture: str, width: int) -> Path:
     return _gguf(path, architecture, {"token_embd.weight": [151936, width]})
 
 
+def _mmproj(path: Path) -> Path:
+    """A vision projector: a GGUF that names the clip architecture and holds
+    no token embedding, so it is no text encoder."""
+    return _gguf(path, "clip", {"v.blk.0.attn_q.weight": [1152, 1152]})
+
+
 def test_the_llm_whose_architecture_and_width_fit_is_put_in(client: TestClient, picture_folder: Path):
     """Z-Image reads Qwen3 4B: of a Qwen3 8B, a Qwen3-VL 4B and a Qwen3 4B
     in the folder, only the last one fits — and the 16-channel VAE beside
@@ -512,6 +518,42 @@ def test_two_copies_of_the_same_llm_still_fit(client: TestClient, picture_folder
     _llm(picture_folder / "text_encoders" / "qwen3-4b-q8.gguf", "qwen3", 2560)
     v = client.get("/api/v1/bild/vorgaben", params={"modell": "zi.safetensors"}).json()
     assert v["parts"] == {"llm": "qwen3-4b-q4.gguf"}
+
+
+def test_the_qwen3vl_8b_encoder_comes_to_qwen_image_2_1_in_any_quantisation(
+    client: TestClient, picture_folder: Path
+):
+    """Qwen-Image 2.1 reads Qwen3-VL 8B (architecture qwen3vl, width 4096):
+    of a 4B (2560), the 8B in two quantisations and the vision projector in
+    the folder, an 8B is put in — and only one of the two quantisations."""
+    _safetensors(picture_folder / "q21.safetensors", _HEADERS["qwen_image_2_1"])
+    _llm(picture_folder / "text_encoders" / "a-qwen3vl-4b.gguf", "qwen3vl", 2560)
+    _mmproj(picture_folder / "text_encoders" / "b-mmproj-qwen3vl-8b.gguf")
+    _llm(picture_folder / "text_encoders" / "c-qwen3vl-8b-q8.gguf", "qwen3vl", 4096)
+    _llm(picture_folder / "text_encoders" / "d-qwen3vl-8b-q4.gguf", "qwen3vl", 4096)
+    v = client.get("/api/v1/bild/vorgaben", params={"modell": "q21.safetensors"}).json()
+    assert v["family"] == "qwen_image_2_1"
+    assert v["parts"]["llm"] == "c-qwen3vl-8b-q8.gguf"
+
+
+def test_nothing_that_is_not_qwen3vl_8b_comes_to_qwen_image_2_1(client: TestClient, picture_folder: Path):
+    """The silence probe: the 4B of Krea 2, a vision projector and a
+    safetensors encoder that names no architecture leave the field to the
+    user, and Krea 2 still takes its 4B with the 8B beside it."""
+    _safetensors(picture_folder / "q21.safetensors", _HEADERS["qwen_image_2_1"])
+    _llm(picture_folder / "text_encoders" / "qwen3vl-4b.gguf", "qwen3vl", 2560)
+    _mmproj(picture_folder / "text_encoders" / "mmproj-qwen3vl-8b.gguf")
+    _safetensors(picture_folder / "text_encoders" / "qwen3vl_8b_bf16.safetensors", {
+        "model.layers.0.self_attn.q_proj.weight": [4096, 4096],
+        "model.embed_tokens.weight": [151936, 4096],
+    })
+    v = client.get("/api/v1/bild/vorgaben", params={"modell": "q21.safetensors"}).json()
+    assert "llm" not in v["parts"]
+    _safetensors(picture_folder / "k2.safetensors", _HEADERS["krea2"])
+    _llm(picture_folder / "text_encoders" / "qwen3vl-8b.gguf", "qwen3vl", 4096)
+    k = client.get("/api/v1/bild/vorgaben", params={"modell": "k2.safetensors"}).json()
+    assert k["family"] == "krea2"
+    assert k["parts"]["llm"] == "qwen3vl-4b.gguf"
 
 
 def test_flux1_reads_no_llm(client: TestClient, picture_folder: Path):
@@ -1117,6 +1159,19 @@ def test_krea2_draws_from_a_start_picture():
         assert image_families.get(name).tasks == ("txt2img", "edit"), name
 
 
+def test_qwen_image_2_1_draws_from_a_start_picture():
+    """sd-cli draws picture to picture and through a mask with a
+    Qwen-Image 2.1 model: the start picture's layout stays, and with a mask
+    the part outside it stays as it was. The family carries the task and the
+    studio offers the kind; its edit stays beside it."""
+    assert image_families.get("qwen_image_2_1").tasks == ("txt2img", "img2img", "edit")
+    listed = {entry["name"]: entry["tasks"] for entry in image_families.as_json()}
+    assert "img2img" in listed["qwen_image_2_1"]
+    # The silence check: the families nobody has measured it with keep theirs.
+    for name in ("qwen_image", "qwen_image_layered", "longcat", "anima", "boogu", "mage_flow"):
+        assert "img2img" not in image_families.get(name).tasks, name
+
+
 def test_krea2_edits_only_with_a_lora_and_the_table_says_so():
     """Krea 2 reads reference images only with a LoRA made for it; every
     other family that edits does so by itself. The table handed to the
@@ -1559,3 +1614,80 @@ def test_the_route_hands_a_checkpoint_without_encoders_its_family_s(client: Test
     whole = client.get("/api/v1/bild/vorgaben", params={"modell": "sd3.5_whole.safetensors"}).json()
     assert (whole["family"], whole["parts"]) == ("sd3", {})
 
+
+
+def test_the_kit_of_a_family_told_by_the_head_does_not_need_the_name():
+    """``turbo.safetensors`` shows no family by its name; given the family its
+    head names, its kit is the family's."""
+    assert image_families.kit_of_file("turbo.safetensors") == ()
+    parts = image_families.kit_of_family(image_families.get("krea2"), "turbo.safetensors")
+    assert {part.part: part.name for part in parts} == {
+        "llm": "Qwen3VL-4B-Instruct-Q4_K_M.gguf", "vae": "wan_2.1_vae.safetensors",
+    }
+
+
+def test_no_family_has_no_kit():
+    assert image_families.kit_of_family(None, "turbo.safetensors") == ()
+
+
+# --- Which families cannot start without a VAE -----------------------------
+
+# The eleven kit families whose table names a VAE among the kit's parts and
+# gives no channel count, so the VAE counted for none of them.
+_VAE_BY_KIT_ONLY = {
+    "qwen_image", "qwen_image_2_1", "krea2", "lens", "ernie", "anima", "mage_flow",
+    "ideogram4", "ltx", "minimax_h3", "hunyuan_video",
+}
+
+
+def test_a_family_whose_kit_names_a_vae_needs_one():
+    """Every family of the table that is assembled from parts and names a
+    VAE among them cannot start without it — channel count or not."""
+    for family in image_families.FAMILIES:
+        names_a_vae = any(part.part == "vae" for part in family.kit_parts)
+        if names_a_vae:
+            assert image_families.needs_vae(family), family.name
+    assert {
+        family.name for family in image_families.FAMILIES
+        if family.kit and image_families.needs_vae(family) and family.vae_channels is None
+    } == _VAE_BY_KIT_ONLY
+
+
+def test_a_family_that_names_no_vae_and_no_channels_needs_none():
+    """Silence probe: a kit that names no VAE and a checkpoint need none."""
+    for name in ("sd3", "chroma_radiance", "sdxl", "sd15", "minit2i", "qwen_image_layered"):
+        assert not image_families.needs_vae(image_families.get(name)), name
+
+
+def test_the_families_whose_docs_pass_a_vae_cannot_start_without_one():
+    """sd.cpp's docs pass a VAE in every example of SeFi-Image (the Flux.2
+    VAE) and PixArt (a 4-channel one), so their kits are refused without
+    one, naming the part — also with no kit source in the table."""
+    from app import bildbausatz
+
+    for name, text_encoder in (("sefi", "llm"), ("pixart", "t5xxl")):
+        family = image_families.get(name)
+        assert image_families.needs_vae(family), name
+        assert bildbausatz.fehlendes_teil(name, {text_encoder: "enc"}) == "vae", name
+        assert bildbausatz.fehlendes_teil(name, {text_encoder: "enc", "vae": "v"}) is None, name
+    # Silence probe: the kit families whose docs name no VAE need none, and
+    # every other kit family is asked for one as before.
+    needing = {f.name for f in image_families.FAMILIES if f.kit and image_families.needs_vae(f)}
+    assert {f.name for f in image_families.FAMILIES if f.kit} - needing == {
+        "sd3", "chroma_radiance", "minit2i", "qwen_image_layered",
+    }
+
+
+def test_a_four_channel_vae_is_never_picked_by_itself():
+    """SD1.x and SDXL VAEs share the channel count, and PixArt reads either:
+    the header cannot say which fits, so the model's own setting decides."""
+    assert not image_families.vae_by_itself(image_families.get("pixart"))
+    assert image_families.vae_by_itself(image_families.get("sefi"))
+
+
+def test_the_table_over_the_api_says_which_family_needs_a_vae():
+    listed = {row["name"]: row["needs_vae"] for row in image_families.as_json()}
+    assert listed["krea2"] is True
+    assert listed["flux"] is True
+    assert listed["sdxl"] is False
+    assert listed["sd3"] is False

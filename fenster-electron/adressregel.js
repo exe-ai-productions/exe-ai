@@ -60,15 +60,31 @@ function darfNachDraussen(adresse) {
 // nothing opens). One answer for every frame and for a server's redirect, so
 // no route into a window can answer differently from another.
 //
-// Only a main frame a person or page moved may go outside: a redirect is the
-// server's choice, not a click, and a subframe opening a browser tab would
-// let any embedded page start one. What a subframe may still load besides
-// our own pages: the two inert documents it is born with — the preview's
-// `srcdoc` and an empty `about:blank` — and Chromium's built-in PDF viewer,
-// which shows a PDF of ours inside frames of its own extension (its id is
-// fixed in Chromium; measured in a document window showing one of our PDFs).
+// A page never opens the browser by itself: a script that sets `location` in
+// a loop would otherwise open one tab after another, and a form posting to a
+// foreign address would arrive there as an empty GET. A page's navigation
+// always has a frame that started it (the page itself), and that is stopped.
+// What goes outside is
+//   * a CLICK on a link in a page (linkclicks.js asks for it, `linkVerdict`
+//     answers), and
+//   * a navigation no frame started — the person did, through Chromium's PDF
+//     viewer, which navigates for a link inside a PDF and sets no initiating
+//     frame — or one the viewer's own frames started.
+// A redirect is the server's choice and is only ever stopped. What a
+// subframe may still load besides our own pages: the two inert documents it
+// is born with — the preview's `srcdoc` and an empty `about:blank` — and the
+// PDF viewer itself, which shows a PDF of ours inside frames of its own
+// extension (its id is fixed in Chromium; measured in a document window
+// showing one of our PDFs).
 const EMPTY_FRAMES = new Set(['srcdoc', 'blank'])
 const PDF_VIEWER = 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/'
+
+// Is this address a page of Chromium's PDF viewer? Its frames and its own
+// page both live under the extension's address; asked of a web contents'
+// address, it tells the viewer from the window and from the developer tools.
+function isPdfViewer(address) {
+  return String(address || '').startsWith(PDF_VIEWER)
+}
 
 // `about:blank#x` is the same empty document as `about:blank`: compared by
 // scheme and path, not by the raw text.
@@ -113,15 +129,34 @@ function toolsVerdict(text, mainFrame) {
   return TOOLS_FRAMES.has(parsed.protocol) || isEmptyFrame(text) ? 'allow' : 'block'
 }
 
+// `initiator` is the address of the frame that started the navigation;
+// `byBrowser` says that no frame did (the person, through the PDF viewer).
+// Both are only ever a reason to send a foreign http(s) address outside,
+// never to let anything load in the window.
 function navigationVerdict(
-  address, port, { mainFrame = false, redirect = false, tools = false } = {},
+  address, port,
+  { mainFrame = false, redirect = false, tools = false, initiator = '', byBrowser = false } = {},
 ) {
   const text = String(address)
   if (tools) return toolsVerdict(text, mainFrame)
   if (istEigeneSeite(text, port)) return 'allow'
   if (!mainFrame && (isEmptyFrame(text) || text.startsWith(PDF_VIEWER))) return 'allow'
-  if (mainFrame && !redirect && darfNachDraussen(text)) return 'outside'
+  const fromViewer = byBrowser || String(initiator).startsWith(PDF_VIEWER)
+  if (!redirect && fromViewer && darfNachDraussen(text)) return 'outside'
   return 'block'
+}
+
+// What the shell does with a link a person clicked in a page, as linkclicks.js
+// reported it: 'outside' (the default browser opens it), 'allow' (one of our
+// own pages: the shell does nothing, the page goes there itself) or 'block'
+// (nothing opens). Only a foreign http(s) address leaves, and never at the
+// request of the developer tools (`tools`): they are not a page that shows
+// links of ours.
+function linkVerdict(address, port, { tools = false } = {}) {
+  const text = String(address)
+  if (tools) return 'block'
+  if (istEigeneSeite(text, port)) return 'allow'
+  return darfNachDraussen(text) ? 'outside' : 'block'
 }
 
 // How a stopped navigation is named in the log: the place only, never the
@@ -156,6 +191,8 @@ module.exports = {
   HANDBUCH_PFAD,
   darfNachDraussen,
   istEigeneSeite,
+  isPdfViewer,
   istHandbuch,
+  linkVerdict,
   navigationVerdict,
 }

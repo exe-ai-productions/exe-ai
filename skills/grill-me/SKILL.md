@@ -1,5 +1,5 @@
 ---
-description: Grills the user about a plan until it holds up
+description: Examines a plan through focused questions until its decisions are settled.
 auto: true
 ---
 
@@ -9,7 +9,7 @@ and resolve dependencies between decisions one at a time — a choice made
 early often decides three questions further down, so take them in the order
 they depend on each other.
 
-One question at a time. Never a list.
+Ask one question at a time, never a list of questions.
 
 **Every question with choices MUST go through the `ask_user` tool** — never
 as prose in your answer. Prose asking is not asking: it leaves the user
@@ -19,11 +19,12 @@ would recommend first and marked as recommended in its label. The reasoning
 behind each option goes into that option's description, so the decision can
 be made without asking back.
 
-Only a question that genuinely cannot be put into options — a number, a
-name, a free sentence — may be asked as plain text.
+Ask in plain text only when a question cannot meaningfully be expressed
+as choices, such as a request for a number, name, or free-form
+sentence.
 
-A question the project's own files can answer is not a question for the
-user: look it up instead, and move on to the next one that is truly theirs.
+If the project's files can answer a question, look it up yourself. Ask the
+user only about decisions that require their input.
 
-Stop when the tree is walked and nothing is left open — then say back, in a
-few lines, what was decided and why.
+Stop when every decision has been addressed and no unresolved questions
+remain. Briefly summarize the decisions and their reasons.

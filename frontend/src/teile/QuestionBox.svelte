@@ -28,8 +28,9 @@
 
   /* `answerTool(allowed, always, words)` and `answerAsk(text)` are the two
      ways an answer leaves — an agent's question answers the way the model's
-     does; `onLater` takes the card away. */
-  let { kind, question, modelName = '', answerTool, answerAsk, onLater } = $props()
+     does; `onLater` takes the card away. `position` and `total` are the
+     place of this question in the row of everything waiting in the chat. */
+  let { kind, question, position = 1, total = 1, modelName = '', answerTool, answerAsk, onLater } = $props()
 
   let box = $state(null)
   let ownField = $state(null)
@@ -122,11 +123,9 @@
   /* What stands in the pill over the heading: for a tool that this is a
      permission, for a question which one it is. */
   const pill = $derived.by(() => {
+    // Several things waiting at once: one after the other.
+    if (total > 1) return t('question_box.agent_position', { n: position, total })
     if (kind === 'tool') return t('werkzeug.permission_label')
-    // Several agents asking at once: one after the other.
-    if (kind === 'agent' && question.total > 1) {
-      return t('question_box.agent_position', { n: question.position, total: question.total })
-    }
     return question.nummer ? t('benutzerfrage.nummer', { zahl: question.nummer }) : ''
   })
   const ownPlaceholder = $derived(

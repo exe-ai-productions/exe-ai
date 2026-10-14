@@ -28,6 +28,7 @@ from typing import Any, AsyncIterator, Protocol, TypeVar
 import httpx
 
 from app import (
+    answer_limit_resend,
     antwortende,
     denkdopplung,
     dialekterkennung,
@@ -141,6 +142,22 @@ def _tempo_zahl(wert: Any) -> float | None:
     if not math.isfinite(wert) or wert <= 0:
         return None
     return round(float(wert), 2)
+
+
+# The OpenAI model families that refuse ``max_tokens`` and take the answer
+# limit only as ``max_completion_tokens`` — whoever serves them. Behind a
+# proxy or a gateway the host is somebody else's; the model is still the
+# same, and it refuses the old name there as well.
+COMPLETION_TOKEN_FAMILIES: tuple[str, ...] = ("gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4")
+
+
+def wants_completion_tokens(model: str | None) -> bool:
+    """Does a model of this name take the answer limit only under the newer
+    name? Asked of the name without a vendor prefix, so ``openai/gpt-5-mini``
+    counts like ``gpt-5-mini``; a name that merely contains a family's does
+    not count."""
+    name = (model or "").strip().lower().rsplit("/", 1)[-1]
+    return name.startswith(COMPLETION_TOKEN_FAMILIES)
 
 
 def display_model(wert: str | None) -> str | None:
@@ -793,6 +810,11 @@ class _WerkzeugSammler:
 # had a number to give".
 _UNGEFRAGT = object()
 
+# A model on this machine may stay silent for many minutes while it reads a
+# long prompt before the first word comes, so its read timeout is wider than
+# the 600 s of a cloud endpoint.
+LOCAL_READ_TIMEOUT = 1800.0
+
 
 class _Paketquelle(Protocol):
     """What both wires have in common: one event in, the packets it is worth.
@@ -876,6 +898,9 @@ class OpenAIKompatiblerProvider(Provider):
         # under. Without this the endpoint would carry the size of whatever
         # happened to be loaded at the first look, for ever.
         self._kontext_fuer: str | None = None
+        # Whether the number the last call to ``kontextgroesse`` returned is
+        # one that is not kept because loading the model changes it.
+        self._kontext_vorlaeufig = False
         # Whether the answers seen along the way carry a local serving
         # stack's fingerprints (app/dialektverdacht.py). Noted while the
         # context search is already reading them, never fetched for its own
@@ -1088,6 +1113,9 @@ class OpenAIKompatiblerProvider(Provider):
     def ortsspuren(self) -> bool:
         return self._ortsspuren
 
+    def kontext_vorlaeufig(self) -> bool:
+        return self._kontext_vorlaeufig
+
     async def kontextgroesse(
         self, timeout: float = 3.0, modellname: str | None = None
     ) -> int | None:
@@ -1121,25 +1149,45 @@ class OpenAIKompatiblerProvider(Provider):
         carrying the number nowhere used to cost. Once per MODEL, not once
         per provider — swapping the model on the server changes the window,
         and an answer kept past that swap would be somebody else's number.
+
+        One kind of answer is not kept: one that changes with the loading.
+        LM Studio names a model that is not loaded with the most it can take,
+        and loaded it has a smaller window; Ollama's list of running models
+        is empty before the first chat. Those hold for this pass only, and
+        the next one asks again.
         """
+        # A number that is entered or kept is final: whatever an earlier
+        # search of another model found provisional says nothing about it.
         if self.endpunkt.context_tokens:
+            self._kontext_vorlaeufig = False
             return self.endpunkt.context_tokens
         gefragt_fuer = (modellname or "").strip() or None
         if self._kontext is not _UNGEFRAGT and self._kontext_fuer == gefragt_fuer:
+            self._kontext_vorlaeufig = False
             return self._kontext
         # The lock, not just the check above: filled in only once the search
         # is through, so a second caller during it waits for the answer
         # rather than starting the same three requests beside it.
         async with self._kontext_schloss:
             if self._kontext is _UNGEFRAGT or self._kontext_fuer != gefragt_fuer:
-                self._kontext = await self._kontext_suchen(timeout, gefragt_fuer)
+                zahl, merken = await self._kontext_suchen(timeout, gefragt_fuer)
+                # What is not kept is provisional: discovery asks again on
+                # the next pass, so the loaded model's own window replaces it.
+                self._kontext_vorlaeufig = not merken
+                if not merken:
+                    return zahl
+                self._kontext = zahl
                 self._kontext_fuer = gefragt_fuer
+            else:
+                self._kontext_vorlaeufig = False
             return self._kontext
 
     async def _kontext_suchen(
         self, timeout: float, modellname: str | None = None
-    ) -> int | None:
-        """The three sources, asked in turn. ``None`` when none carries one."""
+    ) -> tuple[int | None, bool]:
+        """The sources, asked in turn: the number (``None`` when none carries
+        one) and whether it may be kept — ``False`` for an answer that
+        changes once the model is loaded."""
         wurzel = re.sub(r"/v\d+$", "", self.endpunkt.base_url)
         daten = await self._json_holen(f"{wurzel}/props", timeout)
         if isinstance(daten, dict):
@@ -1147,14 +1195,14 @@ class OpenAIKompatiblerProvider(Provider):
                 "n_ctx"
             )
             if (zahl := self._zahl(wert)) is not None:
-                return zahl
+                return zahl, True
 
         liste = await self._json_holen(f"{self.endpunkt.base_url}/models", timeout)
         self._ortsspuren = self._ortsspuren or dialektverdacht.spuren_lesen(liste, None)
         eintrag = self._modelleintrag(liste, modellname)
         if eintrag is not None:
             if (zahl := self._zahl(eintrag.get("max_model_len"))) is not None:
-                return zahl
+                return zahl, True
             # Finding the ROW is not finding the NUMBER. A bare entry carrying
             # nothing but an id says only that the model exists, and the
             # status route beside it is where such a server keeps the size.
@@ -1168,7 +1216,7 @@ class OpenAIKompatiblerProvider(Provider):
         eintrag = self._statuseintrag(stand, modellname)
         if eintrag is not None:
             if (zahl := self._zahl(eintrag.get("max_context_window"))) is not None:
-                return zahl
+                return zahl, True
 
         # LM Studio's own model list: the window the model was loaded with,
         # otherwise the most it can take. Its OpenAI-shaped list beside it
@@ -1176,9 +1224,12 @@ class OpenAIKompatiblerProvider(Provider):
         lmstudio = await self._json_holen(f"{wurzel}/api/v0/models", timeout)
         eintrag = self._modelleintrag(lmstudio, modellname)
         if eintrag is not None:
+            # A model that is not loaded names the most it can take, which is
+            # no promise of the window it will have once it is loaded.
+            not_loaded = str(eintrag.get("state") or "").strip().lower() == "not-loaded"
             for feld in ("loaded_context_length", "max_context_length"):
                 if (zahl := self._zahl(eintrag.get(feld))) is not None:
-                    return zahl
+                    return zahl, not not_loaded
 
         # Ollama's running models: the window the loaded one was started
         # with. Its /v1/models carries no size either. Only the row of the
@@ -1195,8 +1246,11 @@ class OpenAIKompatiblerProvider(Provider):
                 and isinstance(row, dict)
                 and wanted in (_ollama_name(row.get("model")), _ollama_name(row.get("name")))
             ):
-                return self._zahl(row.get("context_length"))
-        return None
+                return self._zahl(row.get("context_length")), True
+        # A list that answered and does not name the model: it is not loaded
+        # yet, and the row comes with the first chat. A server with no such
+        # route at all gave no list, and that "no number" is kept.
+        return None, not isinstance(rows, list)
 
     async def context_per_model(self, timeout: float = 3.0) -> dict[str, int] | None:
         """The window of every model the list names: ``max_model_len`` on
@@ -1469,16 +1523,21 @@ class OpenAIKompatiblerProvider(Provider):
             eigene["max_tokens"] = anfrage.max_tokens
         koerper.update(uebersetzen(self.endpunkt.parameter_dialect, eigene))
         # OpenAI's newer chat models reject max_tokens and expect
-        # max_completion_tokens; every current OpenAI model accepts the new
-        # name. Other OpenAI-compatible servers still want max_tokens, so
-        # only OpenAI's own HOST is rewritten — a proxy whose path carries
+        # max_completion_tokens. Two things say a request reaches one: the
+        # HOST is OpenAI's own — every current model there accepts the new
+        # name — or the MODEL is of a family that refuses the old one,
+        # whoever serves it (`wants_completion_tokens`). Every other
+        # request keeps max_tokens, the name other OpenAI-compatible servers
+        # want. The host is asked as a host: a proxy whose path carries
         # `api.openai.com` and a server named `api.openai.com.example.net`
-        # are somebody else's machine and keep the name they were written
-        # for. Which address is OpenAI's own is read once, for this rewrite
-        # and for the route to its other wire
+        # are somebody else's machine, and there only the model can ask for
+        # the new name. Which address is OpenAI's own is read once, for this
+        # rewrite and for the route to its other wire
         # (app/providers/openai_responses.py).
         wirt = wirt_von(self.endpunkt.base_url)
-        if openai_responses.ist_openai(wirt) and "max_tokens" in koerper:
+        if "max_tokens" in koerper and (
+            openai_responses.ist_openai(wirt) or wants_completion_tokens(anfrage.modell)
+        ):
             koerper["max_completion_tokens"] = koerper.pop("max_tokens")
         # Only when the server has reported an id. Without one the field is
         # dropped: llama.cpp ignores it anyway, and mlx_lm.server answers an
@@ -1550,6 +1609,10 @@ class OpenAIKompatiblerProvider(Provider):
             name=self.name,
             status_code=code if code not in (None, "") else (kind or "error"),
             text=str(message)[:400],
+            # The packet as it came, the way a refused request carries its
+            # body: the `type` ("exceed_context_size_error") is what says a
+            # full context where the sentence names no context at all.
+            rohtext=json.dumps(paket, ensure_ascii=False),
         )
 
     async def _oeffnen(
@@ -1561,20 +1624,39 @@ class OpenAIKompatiblerProvider(Provider):
     ) -> httpx.Response:
         """The open stream of one request — or the error that ends it.
 
-        One case is answered by sending again: OpenAI refusing the thinking
-        summary on its Responses API (a 400 naming ``summary``, which the
-        documentation ties to an unverified organisation). The same request
-        then goes out once more without the summary; when that one goes
-        through, this endpoint sends none from now on. Raised before the
-        first packet, so nothing of the refused attempt has reached the
-        caller.
+        Two cases are answered by sending again, each exactly once:
+
+        * OpenAI refusing the thinking summary on its Responses API (a 400
+          naming ``summary``, which the documentation ties to an unverified
+          organisation). The same request then goes out once more without
+          the summary; when that one goes through, this endpoint sends none
+          from now on.
+        * A server refusing ``max_tokens`` on the chat route (a 400 naming
+          the field: a newer model under a name of its own). The same
+          request then goes out once more with the same limit as
+          ``max_completion_tokens``. Nothing is remembered: every request
+          goes out first as it always did.
+
+        Raised before the first packet, so nothing of the refused attempt has
+        reached the caller.
         """
         antwort = await client.send(client.build_request("POST", adresse, json=koerper), stream=True)
         if antwort.status_code < 400:
             return antwort
         rohtext = (await antwort.aread()).decode("utf-8", "replace")
         await antwort.aclose()
-        if antwortenweg and openai_responses.lehnt_zusammenfassung_ab(
+        # The two refusals cannot meet: the old limit field exists on the
+        # chat route only, the summary on the Responses route only.
+        again: dict[str, Any] | None = None
+        summary_refused = False
+        if answer_limit_resend.refused_max_tokens(antwort.status_code, rohtext, koerper):
+            log.warning(
+                "%s refused max_tokens; asking once more with max_completion_tokens: %s",
+                self.name,
+                rohtext[:200],
+            )
+            again = answer_limit_resend.with_completion_tokens(koerper)
+        elif antwortenweg and openai_responses.lehnt_zusammenfassung_ab(
             antwort.status_code, rohtext, koerper
         ):
             log.warning(
@@ -1582,15 +1664,18 @@ class OpenAIKompatiblerProvider(Provider):
                 self.name,
                 rohtext[:200],
             )
-            koerper = openai_responses.ohne_zusammenfassung(koerper)
+            again = openai_responses.ohne_zusammenfassung(koerper)
+            summary_refused = True
+        if again is not None:
             antwort = await client.send(
-                client.build_request("POST", adresse, json=koerper), stream=True
+                client.build_request("POST", adresse, json=again), stream=True
             )
             if antwort.status_code < 400:
-                # Remembered only once the request without it went through:
-                # a 400 that merely mentions the word must not take the
-                # summary away for good.
-                self._ohne_zusammenfassung = True
+                if summary_refused:
+                    # Remembered only once the request without it went
+                    # through: a 400 that merely mentions the word must not
+                    # take the summary away for good.
+                    self._ohne_zusammenfassung = True
                 return antwort
             rohtext = (await antwort.aread()).decode("utf-8", "replace")
             await antwort.aclose()
@@ -1710,7 +1795,11 @@ class OpenAIKompatiblerProvider(Provider):
 
         try:
             async with httpx.AsyncClient(
-                timeout=zeitlimit(self.timeout, self.endpunkt.timeout_enabled),
+                timeout=zeitlimit(
+                    self.timeout,
+                    self.endpunkt.timeout_enabled,
+                    LOCAL_READ_TIMEOUT if self.endpunkt.group == "local" else None,
+                ),
                 headers=self._kopfzeilen,
             ) as client:
                 antwort = await self._oeffnen(client, adresse, koerper, antwortenweg)
@@ -2012,6 +2101,19 @@ class OpenAIKompatiblerProvider(Provider):
                 ),
                 **einlesen_ermitteln(stand.timings, stand.usage),
                 **_cache_share(stand.timings, stand.usage),
+                # What the context count at the round's end needs and the
+                # speed must not take: whether `prompt_tokens` above is the
+                # whole prompt (the reader the live readings use), and every
+                # token the model produced — the server's own count where it
+                # names one, else the answer's and the thinking's pieces,
+                # which is what the live reading counts. `erzeugte_tokens`
+                # keeps its meaning for the speed.
+                "prompt_genau": bool(whole_prompt(stand.timings, stand.usage)),
+                "kontext_erzeugte_tokens": (
+                    zaehlung(zeitmessung.get("predicted_n"))
+                    or (token_gezaehlt + denk_gezaehlt)
+                    or None
+                ),
                 "nutzung": nutzung or None,
                 "endpunkt": self.id,
                 # The model that answered. A server that names none leaves

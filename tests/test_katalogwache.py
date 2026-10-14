@@ -60,6 +60,16 @@ QUELLEN = (WURZEL / "app", WURZEL / "frontend" / "src")
 # `.json` is NOT: the catalogues are JSON, and a key would then prove itself.
 ENDUNGEN = {".py", ".js", ".mjs", ".cjs", ".ts", ".svelte", ".html", ".yaml", ".yml"}
 
+# The terminal client reads the catalogue as well. It is kept apart from the
+# sources above on purpose: its files are searched for keys written out
+# whole, between quotes, and for nothing else — so a string it happens to
+# build never counts as a piece of a key for the rest of the tree, and a
+# key never counts because a longer one begins with it. It is not part of every tree
+# either. Where it is left out, the texts kept for it are not judged — there
+# is nobody to ask whether they are read. All of them stand under one prefix.
+CLIENT = WURZEL / "cli"
+CLIENT_PREFIX = "cli."
+
 # What a key is made of, so a piece of one can be recognised in the source.
 _STUECK = r"[A-Za-z0-9_.]"
 
@@ -1035,6 +1045,26 @@ def _teile(hinten: bool) -> frozenset[str]:
     return _feste_teile(HINTEN if hinten else VORN)
 
 
+@lru_cache(maxsize=1)
+def _client_text() -> str | None:
+    """The terminal client's sources as one string, or ``None`` in a tree
+    that comes without it."""
+    if not CLIENT.is_dir():
+        return None
+    return "\n".join(
+        file.read_text("utf-8", "replace") for file in sorted(CLIENT.rglob("*.py"))
+    )
+
+
+def _client_reads(key: str) -> bool:
+    """Whether the terminal client accounts for this key: it names it — or,
+    in a tree without the client, the key is one of those kept for it."""
+    text = _client_text()
+    if text is None:
+        return key.startswith(CLIENT_PREFIX)
+    return f'"{key}"' in text or f"'{key}'" in text
+
+
 def tote_schluessel(schluessel: Iterable[str]) -> list[str]:
     """Those of ``schluessel`` that no line of source code asks for."""
     text = _quelltext()
@@ -1043,6 +1073,7 @@ def tote_schluessel(schluessel: Iterable[str]) -> list[str]:
         s
         for s in schluessel
         if s not in text
+        and not _client_reads(s)
         and not _durch_vorlage(s)
         and not any(s.startswith(v) for v in vorn)
         and not any(s.endswith(h) for h in hinten)
@@ -1075,6 +1106,21 @@ def test_kein_katalogtext_ist_tot():
         "either be used or be deleted from app/locales/de.json AND en.json:"
         "\n  " + "\n  ".join(tot)
     )
+
+
+def test_the_terminal_client_counts_as_a_reader():
+    """A key only the terminal client names is read, and an invented one
+    under its prefix is not. In a tree without the client nothing under that
+    prefix is judged — and every other key still is."""
+    invented = "cli.made_up_for_this_test"
+    if _client_text() is None:
+        assert tote_schluessel([invented]) == []
+    else:
+        assert tote_schluessel(["cli.cmd_help"]) == []
+        assert tote_schluessel([invented]) == [invented]
+        # The beginning of a key the client names is no key it names.
+        assert tote_schluessel(["cli.cmd_hel"]) == ["cli.cmd_hel"]
+    assert tote_schluessel(["made_up.for_this_test"]) == ["made_up.for_this_test"]
 
 
 def test_die_wache_faellt_bei_einem_erfundenen_schluessel_um():

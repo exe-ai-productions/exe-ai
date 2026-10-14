@@ -108,6 +108,31 @@ def test_nach_einer_minute_darf_die_seite_wieder_neu_laden():
 
 
 @ohne_node
+def test_a_page_without_a_key_never_reloads_on_a_refusal():
+    """A page that never had a key — the service demands a password and
+    the sign-in is still open — has no stale key to heal: a 401 there is the
+    wrong password, which the sign-in shows, and the page stays. Once the
+    sign-in has handed the key in (`setSessionKey`), the guard is back."""
+    ergebnis = _node(f"""
+{UMGEBUNG}
+globalThis.window.__SITZUNGSSCHLUESSEL__ = null
+{_modul()}
+;(async () => {{
+  const status = await ruf('/models').catch((f) => f.status)
+  const meldung = await ruf('/models').catch((f) => f.message)
+  const ohne = globalThis.__reloads
+  setSessionKey('neu')
+  await ruf('/models').catch(() => null)
+  console.log(JSON.stringify({{ status, meldung, ohne, mit: globalThis.__reloads }}))
+}})()
+""")
+    assert ergebnis["status"] == 401
+    assert ergebnis["meldung"] == "Sitzungsschlüssel ungültig"
+    assert ergebnis["ohne"] == 0
+    assert ergebnis["mit"] == 1
+
+
+@ohne_node
 def test_ein_anderer_fehler_laedt_nichts_neu():
     ergebnis = _node(f"""
 {UMGEBUNG}

@@ -32,9 +32,14 @@ from app.events import Ereignisse, bus
 
 # The chat model server — the one the header and the input bar report on.
 CHAT = "chat"
+# The four others, named the way the window's own pages are.
+AGENT = "agent"
+EMBEDDING = "embedding"
+SPEECH = "speech"
+CLEANUP = "cleanup"
 
 
-def melder(runner: str) -> Callable[[bool, bool | None, str | None], None]:
+def melder(runner: str) -> Callable[[bool, bool | None, str | None, str | None], None]:
     """Builds the callback a model runner reports its state through.
 
     ``runner`` names the server this callback speaks for and travels with
@@ -42,7 +47,10 @@ def melder(runner: str) -> Callable[[bool, bool | None, str | None], None]:
     """
 
     def melden(
-        laeuft: bool, flash_aktiv: bool | None, mtp_aktiv: str | None
+        laeuft: bool,
+        flash_aktiv: bool | None,
+        mtp_aktiv: str | None,
+        unknown_architecture: str | None = None,
     ) -> None:
         bus.veroeffentlichen_ohne_warten(
             Ereignisse.MODELLSERVER_ZUSTAND,
@@ -50,6 +58,7 @@ def melder(runner: str) -> Callable[[bool, bool | None, str | None], None]:
             laeuft=laeuft,
             flash_aktiv=flash_aktiv,
             mtp_aktiv=mtp_aktiv,
+            unknown_architecture=unknown_architecture,
         )
 
     return melden

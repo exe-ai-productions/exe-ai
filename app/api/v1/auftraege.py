@@ -29,7 +29,9 @@ import asyncio
 import dataclasses
 import json
 import logging
+import os
 import time
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
@@ -46,6 +48,7 @@ from app import (
     antwortende,
     antwortgrenze,
     arbeitsordnerpruefung,
+    atomic_file,
     auftragdenklaengewahl,
     auftragsende,
     auftragsfrage,
@@ -90,6 +93,7 @@ from app.api.v1.generierung import (
     # One sender for both streams: every event carries `zeitpunkt_ms`, so a
     # reattached job's tool clock starts from when the call began.
     _auf_entscheidung_warten,
+    _display_name,
     _sse,
     _werkzeug_ausfuehren,
     hole_discovery,
@@ -109,6 +113,8 @@ from app.api.v1.schemas import (
     LaufmodellAntwort,
     werk_von,
 )
+from app.own_folder_line import with_own_folder_last
+from app.previous_version import set_beside
 from app.db import Repositories
 from app.db.repositories.auftraege import ENDZUSTAENDE
 from app.events import Ereignisse, bus
@@ -116,14 +122,16 @@ from app.discovery import Discovery, denklaenge_erlaubt, refusal_key
 from app.generationen import Generierung, Generierungsverwaltung
 from app import i18n
 from app.i18n import t
-from app import faltversuche, helper, kontextvoll, round_end, stop_note, task_images
+from app import (
+    faltversuche, helper, kontextvoll, no_agent, round_end, run_chain, stop_note, task_images,
+)
 from app.providers import ChatNachricht, Generierungsanfrage, ProviderFehler, openai_responses
 from app.schleifenwaechter import Schleifenwaechter
 from app.tools import agentendock as ablage_werkzeug
 from app.tools import registry as tool_registry
 from app.tools import (
     bild_werkzeug,
-    auftrag_werkzeug, datei_aendern, datei_schreiben, dateiwerkzeuge,
+    auftrag_werkzeug, cronjob, datei_aendern, datei_schreiben, dateiwerkzeuge,
     frage_werkzeug, hintergrund, memory, shell, skill, ziel_werkzeug,
 )
 
@@ -149,14 +157,16 @@ class Refusal(HTTPException):
         self.model = t(key, i18n.STANDARDSPRACHE, **values)
 
 
-def job_could_not_start(text: str) -> str:
+def job_could_not_start(text: str, sprache: str = i18n.STANDARDSPRACHE) -> str:
     """The frame around a refused job start, written once.
 
     Three places say it — the chat's window copy, the chat's model copy and a
     running job that tried to start another — and a frame written out three
-    times is how one of them ends up carrying the wrong language.
+    times is how one of them ends up carrying the wrong language. The window
+    copy names the user's language; a copy a model reads names none and is
+    English.
     """
-    return f"The job could not start: {text}"
+    return t("jobs.could_not_start", sprache, text=text)
 
 
 router = APIRouter(tags=["auftraege"])
@@ -192,16 +202,63 @@ def agenten_auflisten(request: Request) -> list[AgentAntwort]:
     return [AgentAntwort.aus(agent) for agent in agenten.values()]
 
 
-# Agent names are file names. This check is the barrier against path tricks
+# Agent names are file names. The pattern is the barrier against path tricks
 # ('../', absolute paths) — whatever doesn't match here never reaches the
-# filesystem in the first place.
+# filesystem in the first place. What lies under a name that does match is
+# judged by ``_gewoehnliche_datei``.
 AGENT_NAME_MUSTER = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+
+
+def _gewoehnliche_datei(datei: Path, ordner: Path) -> bool:
+    """Whether ``datei`` may be read, written and deleted as an agent file:
+    nothing lies under the name yet, or a regular file whose real path is in
+    the agents folder. A link out of the folder, a dead link, a folder and
+    anything else that is no regular file are not — writing through them
+    would reach a file that is not the user's agent."""
+    try:
+        if not (datei.exists() or datei.is_symlink()):
+            return True
+        echt = Path(os.path.realpath(datei))
+        if echt.parent != Path(os.path.realpath(ordner)):
+            return False
+        return not echt.exists() or echt.is_file()
+    except OSError:
+        # A folder nobody may enter: reading and writing meet that error
+        # themselves and say it in their own sentence.
+        return True
 
 
 def _agenten_datei(request: Request, name: str, sprache: str):
     if not AGENT_NAME_MUSTER.match(name):
         raise HTTPException(400, t("fehler.agent_name_ungueltig", sprache))
-    return _agenten_verzeichnis(request) / f"{name}.md"
+    ordner = _agenten_verzeichnis(request)
+    datei = ordner / f"{name}.md"
+    if not _gewoehnliche_datei(datei, ordner):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            kaputte_datei_satz(datei.name, t("agent_file.not_regular", sprache)),
+        )
+    return datei
+
+
+def _agentendatei_speichern(datei: Path, text: str, sprache: str) -> None:
+    """Writes the user's agent file whole or not at all (``app/atomic_file.py``),
+    the previous version set beside it first (``app/previous_version.py``):
+    a folder that cannot be made or written to, a version that cannot be set
+    beside the file, or a disk that fills up is said in the page's language
+    and leaves the old file as it was."""
+    try:
+        datei.parent.mkdir(parents=True, exist_ok=True)
+        set_beside(datei)
+        atomic_file.write(datei, text)
+    except OSError as fehler:
+        # The system's own line is English and names the private path — it
+        # goes to the log, the window is told in its own language.
+        log.warning("Agent file cannot be saved: %s", fehler)
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            kaputte_datei_satz(datei.name, t("agent_file.not_saved", sprache)),
+        ) from fehler
 
 
 
@@ -221,7 +278,7 @@ def _datei_antwort(name: str, text: str, sprache: str) -> AgentDatei:
 @router.get(
     "/agent-files",
     response_model=list[AgentDateiEintrag],
-    summary="All agent files, broken ones too (for the editing window)",
+    summary="All agent files, including invalid files (for the editing window)",
 )
 def agent_dateien_auflisten(
     request: Request, sprache: str = Depends(hole_sprache)
@@ -265,7 +322,7 @@ def agent_dateien_auflisten(
 @router.get(
     "/agents/{name}",
     response_model=AgentDatei,
-    summary="The raw agent file (for the editing window)",
+    summary="Raw agent file (for the editing window)",
 )
 def agent_datei_lesen(
     name: str, request: Request, sprache: str = Depends(hole_sprache)
@@ -338,8 +395,7 @@ def agent_datei_schreiben(
     Same approach as when loading (6.3), just visible earlier.
     """
     datei = _agenten_datei(request, name, sprache)
-    datei.parent.mkdir(parents=True, exist_ok=True)
-    datei.write_text(daten.content, encoding="utf-8")
+    _agentendatei_speichern(datei, daten.content, sprache)
     # A fresh save beats an old deletion — otherwise the file would exist
     # and the agent still count as gone.
     loeschung_vergessen(datei.parent, name)
@@ -414,8 +470,7 @@ def agent_felder_schreiben(
             kaputte_datei_satz(quelle.name, t("agent_file.unreadable", sprache)),
         ) from fehler
 
-    datei.parent.mkdir(parents=True, exist_ok=True)
-    datei.write_text(text, encoding="utf-8")
+    _agentendatei_speichern(datei, text, sprache)
     loeschung_vergessen(datei.parent, name)
     return _datei_antwort(name, text, sprache)
 
@@ -465,7 +520,7 @@ def agent_datei_loeschen(
     "/jobs",
     response_model=AuftragAntwort,
     status_code=status.HTTP_201_CREATED,
-    summary="Give an agent a job",
+    summary="Assign a job to an agent",
 )
 async def auftrag_starten(
     daten: AuftragAnlegen,
@@ -560,8 +615,8 @@ def previous_run_of_work(
 # usual wait. That one call is refused; the run goes on. The model is told
 # plainly that nobody can approve the request and not to retry it.
 NOBODY_APPROVED = (
-    "Nobody was there to approve '{name}', so it did not run. "
-    "Do not try this call again; carry on without it."
+    "No one was available to approve '{name}', so the call was not executed. Do not retry it; "
+    "continue without it."
 )
 
 
@@ -609,7 +664,7 @@ async def _ask_in_chat(
     generierung.melden(
         _sse(
             "tool_confirm",
-            name=aufruf.name,
+            name=_display_name(registry, aufruf.name),
             argumente=aufruf.argumente,
             # The window's sentence, in the window's language.
             grund=t(anlass[0], sprache, **{anlass[1]: anlass[2]}) if anlass else "",
@@ -660,15 +715,24 @@ def chat_run_folders(data_dir, chat, agent: Agent) -> tuple[list[str] | None, st
     dock, which the run gets behind them like every run.
 
     They win the way a pick in the start window wins over the agent's own.
-    Only a chat that shares nothing leaves an agent the folders its file
-    names: None then, and ``run_folders`` answers with those.
+    A chat that shares nothing leaves an agent with folders of its own those
+    folders, in front: a relative path of the run lands where the agent's
+    file says. The chat's own folder stands behind them once it exists — the
+    uploads of the chat and the run's delivery are there, and the run has to
+    reach them. None where there is nothing to add, and ``run_folders``
+    answers with the agent's own.
 
     The chat's own folder is named apart, as it is in the chat: the program
     made it, the user did not share it — unless they did, and then it is a
     share like any other and the second answer is None.
     """
-    if agent.ordner and not chat.working_dirs:
-        return None, None
+    shared = list(chat.working_dirs or [])
+    if agent.ordner and not shared:
+        own = list(agent.ordner)
+        folders = dokumentablage.ordner_dieses_chats(data_dir, own, chat.id)
+        if folders == own:
+            return None, None
+        return folders, dokumentablage.own_folder_in(data_dir, chat.id, own, folders)
     folders = dokumentablage.ordner_dieses_chats(data_dir, chat.working_dirs, chat.id)
     return folders, dokumentablage.own_folder_in(data_dir, chat.id, chat.working_dirs, folders)
 
@@ -742,8 +806,10 @@ def auftrag_anstossen(
     every restart.
 
     Extracted from the route because the scheduler (6.7) takes the same path —
-    errors come as ``HTTPException``: the route passes them through, the
-    scheduler catches them and tries again on the next pass.
+    a start that is refused comes as ``Refusal``, an ``HTTPException`` with
+    the model's English copy beside the sentence: the route passes it
+    through, the scheduler catches it and tries again on the next pass, and
+    a model that asked for the start reads the English copy.
 
     ``ordner`` are the folders picked for this run: in the start window, or
     by the chat that sends it off (``chat_run_folders``). They win over the
@@ -782,9 +848,9 @@ def auftrag_anstossen(
     # asked for it. A continuation is exempt: it carries on work whose run
     # has just ended, and refusing it would drop that work.
     if helper.is_helper(agent.name) and cronjob_id is None:
-        reason = helper.refusal(repositories)
-        if reason:
-            raise HTTPException(status.HTTP_409_CONFLICT, reason)
+        reached = helper.limit_reached(repositories)
+        if reached:
+            raise Refusal(status.HTTP_409_CONFLICT, "jobs.helper_limit", sprache, **reached)
     # The run the work began with, looked up once: the folders below and the
     # stop note further down both read it.
     origin = None
@@ -874,14 +940,19 @@ def auftrag_anstossen(
     # The picture folder rides along the same way, after the dock: a run is
     # handed a picture by its path, and draws its own into it.
     dock, image_folder = dokumentablage.program_folders(config)
+    # A scheduled run with no agent has no folders at all: no file tool of
+    # it can reach into anything, the dock and the picture folder included.
+    # The shelf's own tool still takes text it is given, which needs no
+    # folder of the run.
+    without_folders = no_agent.is_no_agent(agent.name)
     # Whether the program added it — and not the start window or the agent
     # file, which share it like any other folder. Only an added dock is
     # named apart in the prompt and kept out of the folder notes: it is the
     # program's place for handed-over files, not a folder the user shared.
-    dock_added = dock not in ordner_effektiv
+    dock_added = not without_folders and dock not in ordner_effektiv
     if dock_added:
         ordner_effektiv.append(dock)
-    images_added = image_folder not in ordner_effektiv
+    images_added = not without_folders and image_folder not in ordner_effektiv
     if images_added:
         ordner_effektiv.append(image_folder)
     # A schedule that watches for a goal lends this run the `goal` tool, on
@@ -1073,6 +1144,7 @@ def auftrag_anstossen(
         # what happens to be typed by hand.
         werkzeugwahl.anwenden(registry, repositories)
         genannt = set(agent.werkzeuge) if agent.werkzeuge is not None else None
+        below_a_run = run_chain.started_by_a_run(eltern_id, origin)
         # The chat this run came from, and its picture window: a job draws
         # with the same image model a question in that chat would use, and
         # the description has to say which one that is (one reading, see
@@ -1098,6 +1170,13 @@ def auftrag_anstossen(
             # (app/helper.py).
             helpers=False,
             memory_shown=mit_gedaechtnis,
+            # And a run another run started is one level below that run: a
+            # chain of runs starting runs has no end of its own, so the
+            # second link is not offered the tool at all.
+            start_job_offered=not below_a_run,
+            # The same rule keeps a schedule from being made by it, whose
+            # runs would carry the chain on over the clock.
+            cronjob_offered=not below_a_run,
         )
         # Nothing is filtered out of a job's list any more.
         #
@@ -1133,8 +1212,11 @@ def auftrag_anstossen(
     repositories.auftraege.schritt_anlegen(
         auftrag.id,
         "status",
-        "Werkzeuge angeboten: "
-        + (", ".join(sorted(angebotene_namen)) if angebotene_namen else "keine"),
+        t(
+            "jobs.werkzeuge_angeboten",
+            sprache,
+            liste=", ".join(sorted(angebotene_namen)) or t("jobs.keine_werkzeuge", sprache),
+        ),
     )
 
     # Stacked: global prompt, then agent prompt. A single
@@ -1280,7 +1362,16 @@ def auftrag_anstossen(
         config.memory_lesen() if mit_gedaechtnis else "",
     )
     system_teile = [teil for teil in (basis, agent.prompt) if teil]
-    nachrichten = [ChatNachricht(role="system", content="\n\n".join(system_teile))]
+    # The chat's own folder is named behind everything else, the way a chat
+    # prompt ends on it (app/own_folder_line.py).
+    system_text = with_own_folder_last(
+        "\n\n".join(system_teile),
+        ordner_effektiv,
+        own_folder,
+        dock if dock_added else None,
+        image_folder if images_added else None,
+    )
+    nachrichten = [ChatNachricht(role="system", content=system_text)]
     # Work carried on after its previous run was stopped: the model is told
     # so in front of the task, the way a chat turn after a stopped reply is
     # (app/stop_note.py) — in this request only; the task as stored stays
@@ -1375,7 +1466,7 @@ def auftrag_anstossen(
             repositories.auftraege.schritt_anlegen(
                 auftrag.id,
                 "status",
-                f"Werkzeuge nicht verfügbar: {', '.join(sorted(fehlend))}",
+                t("jobs.werkzeuge_fehlen", sprache, liste=", ".join(sorted(fehlend))),
             )
 
     lauf = generierungen.starten(
@@ -1467,7 +1558,7 @@ def _kettendaten(repositories: Repositories, auftrag) -> tuple[str, str | None]:
 @router.get(
     "/jobs/laufmodell",
     response_model=LaufmodellAntwort,
-    summary="Which model a job would take",
+    summary="The model a job would use",
 )
 def laufmodell(
     repositories: Repositories = Depends(hole_repositories),
@@ -1582,7 +1673,7 @@ def auftraege_auflisten(
 @router.get(
     "/jobs/{auftrag_id}",
     response_model=AuftragDetail,
-    summary="One job with its log",
+    summary="A job and its log",
 )
 def auftrag_holen(
     auftrag_id: str,
@@ -1723,7 +1814,7 @@ def _lauf_abbrechen(
 @router.post(
     "/jobs/{auftrag_id}/answer",
     response_model=AuftragAntwort,
-    summary="Answer a job's question",
+    summary="Answer a question from a job",
 )
 def auftrag_beantworten(
     auftrag_id: str,
@@ -1841,6 +1932,15 @@ def auftrag_loeschen(
 # --- The run itself ---------------------------------------------------------
 
 
+def _is_below_a_run(repositories: Repositories, run) -> bool:
+    """Whether a run is one level below another run. The chat's own run is
+    the first level, and a continuation carries on the level of the run its
+    work began with (``work_origin``)."""
+    return run is not None and run_chain.started_by_a_run(
+        run.eltern_id, work_origin(repositories, run.cronjob_id)
+    )
+
+
 def _kind_starten(
     *,
     aufruf,
@@ -1868,6 +1968,10 @@ def _kind_starten(
     can see is a branch nobody can stop.
     """
     eltern = repositories.auftraege.holen(eltern_id)
+    # A run another run started starts none: the offer leaves the tool out,
+    # and a call made anyway is answered here.
+    if _is_below_a_run(repositories, eltern):
+        return run_chain.NO_RUN_UNDER_A_RUN, True
     # A helper is one level below the chat: it starts nothing, and a run
     # starts no helper (app/helper.py).
     refused = helper.refused_call(eltern.agent if eltern else None, aufruf.name)
@@ -1881,7 +1985,7 @@ def _kind_starten(
         kind_agent = agenten.get(agent_name)
         if kind_agent is None:
             raise auftrag_werkzeug.AuftragVerboten(
-                f"No agent named '{agent_name}'. Available: "
+                f"No agent named '{agent_name}' was found. Available agents: "
                 f"{', '.join(sorted(agenten)) or 'none'}."
             )
     except auftrag_werkzeug.AuftragVerboten as fehler:
@@ -1922,14 +2026,13 @@ def _kind_starten(
             fehler.model if isinstance(fehler, Refusal) else fehler.detail
         ), True
 
-    protokoll("status", f"Started job {kind.id} ('{agent_name}').")
+    protokoll("status", t("jobs.kind_gestartet", sprache, id=kind.id, agent=agent_name))
     repositories.auftraege.schritt_anlegen(
-        kind.id, "status", f"Started by job {eltern_id}."
+        kind.id, "status", t("jobs.gestartet_durch", sprache, id=eltern_id)
     )
     return (
-        f"Job started: agent '{agent_name}', id {kind.id}. It runs under this "
-        "one — it stops when this run is stopped, and its report lands in the "
-        "agents panel.",
+        f"Job started: agent '{agent_name}', ID {kind.id}. It is a child of this run: stopping "
+        "this run also stops the job. Its report appears in the agents panel.",
         False,
     )
 
@@ -2285,6 +2388,7 @@ def _auftragslauf(
                             einstellungen=repositories.einstellungen,
                             endpoint_id=refusal_id,
                             erzwungen=True,
+                            stopp=generierung.signal,
                         )
                     except Exception:  # noqa: BLE001 - a failed fold must not end the run here
                         # Not the run's end, and not a smaller step either: a
@@ -2297,7 +2401,7 @@ def _auftragslauf(
                         notfall_gefaltet = True
                         continue
                     if faltergebnis.notfall:
-                        protokoll("status", "fold failed — the history stays unfolded")
+                        protokoll("status", t("jobs.faltung_gescheitert", sprache))
                         # Asked here as well as at the round's end, for the
                         # same reason the refusal path asks it: a forced fold
                         # can complete the run of failures that switches
@@ -2305,7 +2409,7 @@ def _auftragslauf(
                         # round-end path never runs again — so the notice
                         # would never be given at all.
                         if faltpause.hinweis_faellig(auftrag_id):
-                            protokoll("status", "automatic folding stopped for this run")
+                            protokoll("status", t("jobs.faltung_abgeschaltet", sprache))
                     if not faltergebnis.angewendet:
                         # A step whose tail budget covers this history whole
                         # folds nothing. On to the next, smaller one without
@@ -2318,8 +2422,12 @@ def _auftragslauf(
                         continue
                     protokoll(
                         "status",
-                        "The input left no room for an answer: compacted the history "
-                        f"(attempt {zu_lang_versuche}/{kontextvoll.FALTVERSUCHE}).",
+                        t(
+                            "jobs.eingabe_zu_lang",
+                            sprache,
+                            versuch=zu_lang_versuche,
+                            versuche=kontextvoll.FALTVERSUCHE,
+                        ),
                     )
                     # Folded: the ceiling is worked out again from what is
                     # left, the same question asked of a smaller input.
@@ -2341,6 +2449,10 @@ def _auftragslauf(
                     break
                 ausfall_erschoepft = False
                 ausfall_text = ""
+                # The status the last failed attempt came back with, where
+                # the server answered at all: what tells an answer that said
+                # "no" from a server that did not answer.
+                failure_status: int | None = None
                 while True:
                     versuch += 1
                     runden_text = []
@@ -2502,7 +2614,7 @@ def _auftragslauf(
                             # silently drop it behind the bare refusal text.
                             bisher = "".join(antwort_text)
                             zwischenstand_ergebnis = text + (
-                                f"\n\nProduced so far:\n{bisher}" if bisher else ""
+                                t("jobs.bisher_erzeugt", sprache, bisher=bisher) if bisher else ""
                             )
                             ende_grund = "modell_nicht_gefunden"
                             abgebrochen = False
@@ -2536,10 +2648,18 @@ def _auftragslauf(
                             # Where nothing cures it, the outage handling
                             # further down applies, unchanged; a stop while
                             # folding ends the run as the abort it is.
+                            # What the request weighs: the one refusal that
+                            # names the ceiling and the window without the
+                            # input is answered from it (kontextvoll.abhilfe),
+                            # and a fold below is measured against it.
+                            estimated_input = antwortgrenze.eingabe_schaetzen(
+                                anfrage.nachrichten, anfrage.werkzeuge
+                            )
                             weg, frei = kontextvoll.abhilfe(
                                 fehler,
                                 eingestellte_grenze=eingestellte_grenze,
                                 fenster=zustand.context_tokens,
+                                input_tokens=estimated_input,
                             )
                             if weg == kontextvoll.LIMIT_TOO_LARGE:
                                 # The answer length somebody set is as large
@@ -2566,15 +2686,20 @@ def _auftragslauf(
                                     raise
                                 zu_lang_versuche += 1
                                 zug.lower_round(frei)
-                                meldung = (
-                                    f"answer ceiling lowered to {zug.held()} for this round "
-                                    f"(attempt {zu_lang_versuche}/{kontextvoll.FALTVERSUCHE})"
+                                meldung = t(
+                                    "jobs.antwortgrenze_gesenkt",
+                                    sprache,
+                                    grenze=zug.held(),
+                                    versuch=zu_lang_versuche,
+                                    versuche=kontextvoll.FALTVERSUCHE,
                                 )
-                                log.info("Job %s: %s", auftrag_id, meldung)
+                                log.info(
+                                    "Job %s: answer ceiling lowered to %d for this round (attempt %d/%d)",
+                                    auftrag_id, zug.held(), zu_lang_versuche, kontextvoll.FALTVERSUCHE,
+                                )
                                 protokoll(
                                     "status",
-                                    f"The provider called the request too long: {meldung}, "
-                                    "sending the round again.",
+                                    t("jobs.anfrage_zu_lang_erneut", sprache, meldung=meldung),
                                 )
                                 versuch -= 1
                                 continue
@@ -2591,9 +2716,7 @@ def _auftragslauf(
                                 )
                                 raise
                             gefaltet = False
-                            vor_der_faltung = antwortgrenze.eingabe_schaetzen(
-                                anfrage.nachrichten, anfrage.werkzeuge
-                            )
+                            vor_der_faltung = estimated_input
                             while (
                                 not gefaltet
                                 and not notfall_gefaltet
@@ -2621,6 +2744,7 @@ def _auftragslauf(
                                         einstellungen=repositories.einstellungen,
                                         endpoint_id=refusal_id,
                                         erzwungen=True,
+                                        stopp=generierung.signal,
                                     )
                                 except Exception:  # noqa: BLE001 - a failed fold ends as context-full, not as a crash
                                     log.warning(
@@ -2638,7 +2762,7 @@ def _auftragslauf(
                                 )
                                 if faltergebnis.notfall:
                                     protokoll(
-                                        "status", "fold failed — the history stays unfolded"
+                                        "status", t("jobs.faltung_gescheitert", sprache)
                                     )
                                     # Asked here as well as at the round's
                                     # end: the run of failures that switches
@@ -2649,7 +2773,7 @@ def _auftragslauf(
                                     if faltpause.hinweis_faellig(auftrag_id):
                                         protokoll(
                                             "status",
-                                            "automatic folding stopped for this run",
+                                            t("jobs.faltung_abgeschaltet", sprache),
                                         )
                             if generierung.soll_abbrechen:
                                 abgebrochen = True
@@ -2658,9 +2782,12 @@ def _auftragslauf(
                                 raise
                             protokoll(
                                 "status",
-                                f"The provider called the request too long: compacted the "
-                                f"history (attempt {zu_lang_versuche}/{kontextvoll.FALTVERSUCHE}) "
-                                "and sending the round again.",
+                                t(
+                                    "jobs.anfrage_zu_lang_gefaltet",
+                                    sprache,
+                                    versuch=zu_lang_versuche,
+                                    versuche=kontextvoll.FALTVERSUCHE,
+                                ),
                             )
                             # Folded: a ceiling a refusal brought this round
                             # down to was the room left beside the input
@@ -2687,11 +2814,17 @@ def _auftragslauf(
                         if versuch >= wiederversuch.VERSUCHE:
                             ausfall_erschoepft = True
                             ausfall_text = text
+                            failure_status = fehler.status
                             break
                         protokoll(
                             "status",
-                            f"Anbieter nicht erreichbar (Versuch {versuch}/"
-                            f"{wiederversuch.VERSUCHE}): {fenstertext}",
+                            t(
+                                "jobs.anbieter_versuch",
+                                sprache,
+                                versuch=versuch,
+                                versuche=wiederversuch.VERSUCHE,
+                                text=fenstertext,
+                            ),
                         )
                         # Races the backoff against the same stop signal
                         # instead of a plain sleep, so a stop mid-wait ends
@@ -2707,6 +2840,26 @@ def _auftragslauf(
                             abgebrochen = True
                             break
 
+                if ausfall_erschoepft and failure_status is not None:
+                    # The server ANSWERED, five times, with an error — 400 or
+                    # 500, whatever code: it is there and says no, which is
+                    # no outage a later run could wait out, and handing the
+                    # work on would put the same request on the clock again.
+                    # A server that did not answer at all has no status and
+                    # takes the way below. The run ends with a report whose
+                    # last line is the error — the code and the server's own
+                    # sentence (``text`` is the English one, the model's) —
+                    # and the person's red line carries the same in the
+                    # window's language. What the run had written stands
+                    # above it.
+                    written_so_far = "".join(antwort_text)
+                    closing_line = " ".join(ausfall_text.split())
+                    zwischenstand_ergebnis = (
+                        f"{written_so_far}\n\n{closing_line}" if written_so_far else closing_line
+                    )
+                    fehlertext = ausfall_text
+                    fehlertext_fenster = fenstertext
+                    break
                 # No separate check for `abgebrochen` here: every place that
                 # sets it breaks the retry loop immediately, before
                 # `ausfall_erschoepft` could also end up true — an aborted
@@ -2716,19 +2869,24 @@ def _auftragslauf(
                 if ausfall_erschoepft:
                     protokoll(
                         "status",
-                        f"Anbieter nach {wiederversuch.VERSUCHE} Versuchen weiter "
-                        f"nicht erreichbar: {fenstertext}",
+                        t(
+                            "jobs.anbieter_erschoepft",
+                            sprache,
+                            versuche=wiederversuch.VERSUCHE,
+                            text=fenstertext,
+                        ),
                     )
                     vorheriger = (
                         repositories.cronjobs.holen(cronjob_id) if cronjob_id else None
                     )
                     neustarts = (vorheriger.neustarts if vorheriger else 0) + 1
                     bisher = "".join(antwort_text)
-                    status = (
-                        f"The model server was unreachable after "
-                        f"{wiederversuch.VERSUCHE} attempts ({ausfall_text})."
-                        + (f"\n\nProduced so far:\n{bisher}" if bisher else "")
-                    )
+                    status = t(
+                        "jobs.modellserver_erschoepft",
+                        sprache,
+                        versuche=wiederversuch.VERSUCHE,
+                        text=ausfall_text,
+                    ) + (t("jobs.bisher_erzeugt", sprache, bisher=bisher) if bisher else "")
                     zwischenstand_ergebnis = status
                     if neustarts < zwischenstand.MAX_NEUSTARTS:
                         basis = zwischenstand.urspruengliche_aufgabe(vorheriger, task)
@@ -3125,7 +3283,7 @@ def _auftragslauf(
                     generierung.melden(
                         _sse(
                             "tool_result",
-                            name=aufruf.name,
+                            name=_display_name(registry, aufruf.name),
                             aufruf_id=aufruf.id,
                             fehlgeschlagen=fehlgeschlagen,
                             text=ergebnis[:ERGEBNIS_KUERZUNG],
@@ -3140,7 +3298,7 @@ def _auftragslauf(
                             # The short fields first: the transcript shows
                             # each line cut to one row, and the text is long.
                             {
-                                "name": aufruf.name,
+                                "name": _display_name(registry, aufruf.name),
                                 "server": server,
                                 "fehlgeschlagen": fehlgeschlagen,
                                 "dauer_sekunden": dauer,
@@ -3159,7 +3317,7 @@ def _auftragslauf(
                     generierung.melden(
                         _sse(
                             "tool_call",
-                            name=aufruf.name,
+                            name=_display_name(registry, aufruf.name),
                             server=server,
                             argumente=aufruf.argumente,
                             aufruf_id=aufruf.id,
@@ -3169,7 +3327,7 @@ def _auftragslauf(
                     protokoll(
                         "tool_call",
                         json.dumps(
-                            {"name": aufruf.name, "server": server, "argumente": aufruf.argumente},
+                            {"name": _display_name(registry, aufruf.name), "server": server, "argumente": aufruf.argumente},
                             ensure_ascii=False,
                         ),
                     )
@@ -3180,19 +3338,30 @@ def _auftragslauf(
                     # chat's own interception has (app/api/v1/generierung.py):
                     # the child is a part of the assignment THIS run was
                     # given.
-                    if aufruf.name == auftrag_werkzeug.WERKZEUG_NAME:
-                        ergebnis, fehlgeschlagen = _kind_starten(
-                            aufruf=aufruf,
-                            eltern_id=auftrag_id,
-                            config=config,
-                            repositories=repositories,
-                            discovery=discovery,
-                            generierungen=generierungen,
-                            registry=registry,
-                            user_id=user_id,
-                            sprache=sprache,
-                            protokoll=protokoll,
-                        )
+                    #
+                    # ``cronjob`` is answered here too when this run is one
+                    # level below another run (app/run_chain.py): the tool
+                    # is not in its list, and a call made anyway creates no
+                    # schedule.
+                    if aufruf.name == auftrag_werkzeug.WERKZEUG_NAME or (
+                        aufruf.name == cronjob.WERKZEUG_NAME
+                        and _is_below_a_run(repositories, repositories.auftraege.holen(auftrag_id))
+                    ):
+                        if aufruf.name == auftrag_werkzeug.WERKZEUG_NAME:
+                            ergebnis, fehlgeschlagen = _kind_starten(
+                                aufruf=aufruf,
+                                eltern_id=auftrag_id,
+                                config=config,
+                                repositories=repositories,
+                                discovery=discovery,
+                                generierungen=generierungen,
+                                registry=registry,
+                                user_id=user_id,
+                                sprache=sprache,
+                                protokoll=protokoll,
+                            )
+                        else:
+                            ergebnis, fehlgeschlagen = run_chain.NO_SCHEDULE_UNDER_A_RUN, True
                         report_result(
                             aufruf, server, ergebnis, fehlgeschlagen,
                             round(time.monotonic() - aufruf_beginn, 3),
@@ -3477,9 +3646,12 @@ def _auftragslauf(
                     if schleifenwaechter.aufruf(aufruf.name, aufruf.argumente, abgelehnt=abgelehnt):
                         protokoll(
                             "status",
-                            f"'{aufruf.name}' was rejected the same way "
-                            f"{Schleifenwaechter.GRENZE} times in a row — ending the run "
-                            "instead of burning the remaining rounds against it.",
+                            t(
+                                "jobs.schleife_beendet",
+                                sprache,
+                                werkzeug=aufruf.name,
+                                n=Schleifenwaechter.GRENZE,
+                            ),
                         )
                         ende_grund = "wiederholte_ablehnung"
                         break
@@ -3556,14 +3728,14 @@ def _auftragslauf(
                         key=auftrag_id,
                         settings=repositories.einstellungen,
                         endpoint_id=refusal_id,
+                        stop=generierung.signal,
                     ):
                         if isinstance(schritt, kontextverbrauch.Kontextstand):
                             kontext_protokollieren(schritt)
                         elif isinstance(schritt, round_end.Cleared):
                             protokoll(
                                 "status",
-                                f"Cleared {schritt.count} old tool results from the "
-                                "request to save context space.",
+                                t("jobs.ergebnisse_entfernt", sprache, n=schritt.count),
                             )
                         elif schritt.result.notfall:
                             # One the model failed to write leaves the history
@@ -3571,25 +3743,23 @@ def _auftragslauf(
                             # — a fold that fails has never been a reason to
                             # end it.
                             protokoll(
-                                "status", "fold failed — the history stays unfolded"
+                                "status", t("jobs.faltung_gescheitert", sprache)
                             )
                             if faltpause.hinweis_faellig(auftrag_id):
                                 protokoll(
                                     "status",
-                                    "automatic folding stopped for this run",
+                                    t("jobs.faltung_abgeschaltet", sprache),
                                 )
                         elif schritt.result.angewendet:
                             protokoll(
                                 "status",
-                                "Compacted the history to keep the context from "
-                                "filling up.",
+                                t("jobs.verlauf_komprimiert", sprache),
                             )
                         elif schritt.result.ohne_ersparnis:
                             verdichtung_abgeschaltet = True
                             protokoll(
                                 "status",
-                                "Compacting stopped for this run: the last attempt "
-                                "did not shrink the history.",
+                                t("jobs.komprimierung_gestoppt", sprache),
                             )
 
         except ProviderFehler as fehler:
@@ -3749,6 +3919,7 @@ def _auftragslauf(
                             "status",
                             kurzlauf.hinweis(
                                 runden_benutzt, agent.runden, minuten_benutzt, agent.minuten,
+                                sprache,
                             ),
                         )
                 if (
@@ -3764,8 +3935,7 @@ def _auftragslauf(
                     # one, and this run has no way to know that.
                     protokoll(
                         "status",
-                        "This run wrote no file — if this job restarted, an "
-                        "earlier run may already have.",
+                        t("jobs.keine_datei_geschrieben", sprache),
                     )
                 if (
                     cronjob_id
@@ -3896,6 +4066,12 @@ def _auftragslauf(
                     angehalten = await cronablauf.ausgang_verbuchen(
                         repositories, cronjob_id, meldetext,
                         erfolgreich=zaehlt_als_erfolg,
+                        # Why this run ended: on the run that reaches the
+                        # failure limit the limit's sentence is the only
+                        # notification there is (``schon_gemeldet`` below),
+                        # so the reason has to travel in it.
+                        grund=grund,
+                        sprache=sprache,
                     )
                 # Then the goal: the stamp, the switch-off once it
                 # is reached, and the count of runs that stayed quiet. It
@@ -3911,6 +4087,7 @@ def _auftragslauf(
                     # clock.
                     fortsetzung_geplant=fortsetzung_geplant,
                     schon_gemeldet=angehalten,
+                    sprache=sprache,
                 )
                 # And last the blanket announcement, which an entry with a
                 # goal no longer gets at all — and which a run that handed
@@ -3924,6 +4101,7 @@ def _auftragslauf(
                     repositories, cronjob_id, meldetext,
                     erfolgreich=zustand_ende == "fertig",
                     fortsetzung_geplant=fortsetzung_geplant,
+                    sprache=sprache,
                     # Why it ended, into the same notification: without it
                     # an announcing entry said "Failed — <task>" and
                     # nothing else, and the reason lived only in a step log
@@ -3939,7 +4117,8 @@ def _auftragslauf(
                     # One piece of work says its piece once; the sentence
                     # that survives is the limit's, because it carries the
                     # one fact the other does not: this schedule has
-                    # stopped.
+                    # stopped. The reason is in it as well, so nothing this
+                    # call would have said goes unsaid.
                     schon_gemeldet=angehalten,
                 )
 

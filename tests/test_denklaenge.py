@@ -14,6 +14,7 @@ from app import (
 )
 from app.agenten import AgentDateiKaputt, agent_aus_text
 from app.config import Capabilities
+from app.i18n import t
 from app.parameter import (
     DIALEKTE, GRUND_ALLGEMEIN, MODELL_OHNE_REASONING, pruefen, uebersetzen, unterstuetzte,
 )
@@ -246,7 +247,7 @@ def test_der_regler_folgt_backend_und_modell_zugleich():
     gesperrt = _regler("llama_cpp", False)
     assert gesperrt["aktiv"] is False
     assert gesperrt["grund"] == (
-        "Dieses Modell unterstützt kein Reasoning – daher ist keine Denklänge einstellbar."
+        "Dieses Modell unterstützt kein Reasoning. Daher lässt sich keine Denklänge einstellen."
     )
     # The three dialects whose wire carries no such number: locked with and
     # without reasoning in the model, and the reason names the SERVER.
@@ -267,7 +268,7 @@ def test_die_beiden_gruende_sagen_verschiedenes():
 
 def test_der_modell_grund_steht_auch_englisch():
     assert _regler("llama_cpp", False, "en")["grund"] == (
-        "This model does not support reasoning — so no thinking length can be set."
+        "This model does not support reasoning, so its thinking length cannot be configured."
     )
 
 
@@ -333,8 +334,8 @@ async def test_der_agentenkopf_bekommt_die_reihe_des_laufmodells(client):
     """
     lagen = (
         ("llama_cpp", True, True, None),
-        ("llama_cpp", False, False, MODELL_OHNE_REASONING[0]),
-        ("mlx", True, False, GRUND_ALLGEMEIN[0]),
+        ("llama_cpp", False, False, t(MODELL_OHNE_REASONING, "de")),
+        ("mlx", True, False, t(GRUND_ALLGEMEIN, "de")),
     )
     for dialekt, denkt, aktiv, grund in lagen:
         faehigkeiten = Capabilities(streaming=True, tool_calls=True, thinking=denkt)

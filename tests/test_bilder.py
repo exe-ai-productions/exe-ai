@@ -135,9 +135,9 @@ def test_bild_info_weist_ein_grosses_bild_nicht_mehr_ab(client):
     assert antwort.status_code in (200, 503), antwort.text
 
 
-def _bild_hochladen(client) -> str:
+def _bild_hochladen(client, extra: bytes = b"") -> str:
     return client.post(
-        "/api/v1/images", content=PNG_BYTES, headers={"Content-Type": "image/png"}
+        "/api/v1/images", content=PNG_BYTES + extra, headers={"Content-Type": "image/png"}
     ).json()["bild"]
 
 
@@ -150,7 +150,8 @@ def test_bilder_eines_chats_und_eines_projekts(client):
     fremd = client.post("/api/v1/chats", json={"title": "C"}).json()["id"]
     for chat in (chat_a, chat_b):
         assert client.patch(f"/api/v1/chats/{chat}", json={"project_id": projekt}).status_code == 200
-    a1, a2, b1, c1 = (_bild_hochladen(client) for _ in range(4))
+    # Four pictures of their own: the same bytes would be one file.
+    a1, a2, b1, c1 = (_bild_hochladen(client, bytes([i])) for i in range(4))
     nachrichten = client.app.state.repositories.messages
     nachrichten.speichern(chat_id=chat_a, role="user", content="x", bild=a1)
     nachrichten.speichern(chat_id=chat_a, role="assistant", content="", art="bild", bild=a2)
@@ -176,10 +177,10 @@ def _folders(config):
     return bilder_verzeichnis(config), scratch_pictures_dir(config)
 
 
-def _upload(client, *, scratch: bool = False) -> str:
+def _upload(client, *, scratch: bool = False, extra: bytes = b"") -> str:
     answer = client.post(
         "/api/v1/images" + ("?scratch=true" if scratch else ""),
-        content=PNG_BYTES, headers={"Content-Type": "image/png"},
+        content=PNG_BYTES + extra, headers={"Content-Type": "image/png"},
     )
     assert answer.status_code == 201
     return answer.json()["bild"]
@@ -201,8 +202,9 @@ def test_a_working_picture_lies_outside_the_picture_folder(client):
     assert _startbild(config, frame, "en") == scratch / frame
 
     # Silence probe: an ordinary picture lies in the picture folder as
-    # before, on the wall, and is read from there.
-    ordinary = _upload(client)
+    # before, on the wall, and is read from there. Other bytes, so that it
+    # is not the file of the frame: the same bytes are one name.
+    ordinary = _upload(client, extra=b"-ordinary")
     assert (pictures / ordinary).is_file()
     assert not (scratch / ordinary).exists()
     assert ordinary in client.get("/api/v1/bilder").json()["bilder"]
@@ -269,3 +271,103 @@ def test_the_studio_sends_its_working_pictures_as_such():
     assert "const cut = wieEs ? null : aufDenBereich(bildKnoten, place)" in canvas
     assert "const startbild = cut ? await hochladen(cut, 'startbild.png') : name" in canvas
     assert "await api.bildHochladen(datei)" in canvas
+
+
+# --- The same bytes are one file ------------------------------------------
+
+
+def _png_with_text(text: bytes) -> bytes:
+    """A real, parseable PNG with a text chunk the metadata switch strips."""
+    import struct
+    import zlib
+
+    from tests.test_bildschutz import _block
+
+    ihdr = _block(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+    idat = _block(b"IDAT", zlib.compress(b"\x00\x11\x22\x33"))
+    return b"\x89PNG\r\n\x1a\n" + ihdr + _block(b"tEXt", b"parameters\x00" + text) + idat + _block(
+        b"IEND", b""
+    )
+
+
+def _files(folder: Path) -> int:
+    return len(list(folder.iterdir())) if folder.exists() else 0
+
+
+def test_the_same_bytes_twice_are_one_file(client):
+    """A message the service refused goes up again with the same pictures:
+    the second upload names the first file and writes nothing."""
+    from app.bildfensterwahl import BILDNAME
+
+    pictures, _ = _folders(client.app.state.config)
+    before = _files(pictures)
+
+    first, second = _upload(client), _upload(client)
+
+    assert first == second
+    assert BILDNAME.fullmatch(first)
+    assert _files(pictures) == before + 1
+    assert (pictures / first).read_bytes() == PNG_BYTES
+
+
+def test_other_bytes_are_another_file_and_every_name_has_the_shape(client):
+    from app.bildfensterwahl import BILDNAME
+
+    jpeg = client.post(
+        "/api/v1/images", content=b"\xff\xd8\xff" + b"jpeg", headers={"Content-Type": "image/jpeg"}
+    ).json()["bild"]
+    first, second = _upload(client), _upload(client, extra=b"-other")
+
+    assert len({first, second, jpeg}) == 3
+    assert all(BILDNAME.fullmatch(name) for name in (first, second, jpeg))
+    assert jpeg.endswith(".jpg")
+
+
+def test_two_photos_that_differ_only_in_metadata_are_one_file_once_it_is_stripped(client):
+    """The name comes from the bytes as they are stored: with the switch on,
+    the text chunk is gone before the name is made."""
+    from app.bildschutz import SCHLUESSEL
+
+    settings = client.app.state.repositories.einstellungen
+    one, other = _png_with_text(b"first-prompt"), _png_with_text(b"another-prompt!!")
+    assert one != other
+
+    def up(content: bytes) -> str:
+        answer = client.post("/api/v1/images", content=content, headers={"Content-Type": "image/png"})
+        assert answer.status_code == 201
+        return answer.json()["bild"]
+
+    settings.setzen("global", SCHLUESSEL, {"an": True})
+    assert up(one) == up(other)
+    # Silence probe: with the switch off the pictures are stored as they
+    # came, so two different files stay two.
+    settings.setzen("global", SCHLUESSEL, {"an": False})
+    assert up(one) != up(other)
+
+
+def test_a_picture_two_chats_name_stays_when_one_of_them_goes(client):
+    """Two sends of the same picture are one file, named by a row of each
+    chat: the delete of one chat leaves it to the other."""
+    pictures, _ = _folders(client.app.state.config)
+    name = _upload(client)
+    assert _upload(client) == name
+    chat_a = client.post("/api/v1/chats", json={"title": "A"}).json()["id"]
+    chat_b = client.post("/api/v1/chats", json={"title": "B"}).json()["id"]
+    messages = client.app.state.repositories.messages
+    messages.speichern(chat_id=chat_a, role="user", content="x", bild=name)
+    messages.speichern(chat_id=chat_b, role="user", content="x", bild=name)
+
+    assert client.delete(f"/api/v1/chats/{chat_a}").status_code == 204
+    assert (pictures / name).is_file()
+    # Silence probe: the last chat that names it takes it along.
+    assert client.delete(f"/api/v1/chats/{chat_b}").status_code == 204
+    assert not (pictures / name).exists()
+
+
+def test_a_cut_off_file_of_the_same_name_is_written_again(client):
+    pictures, _ = _folders(client.app.state.config)
+    name = _upload(client)
+    (pictures / name).write_bytes(PNG_BYTES[:5])
+
+    assert _upload(client) == name
+    assert (pictures / name).read_bytes() == PNG_BYTES

@@ -8,6 +8,9 @@
 
      The field is as wide as what stands in it and no wider, the number in
      its middle, and it keeps to the right end of the place it is given. */
+  import { texte } from '../lib/texte.svelte.js'
+  import { fractionDigits, formatNumber, parseNumber } from '../lib/numberDisplay.js'
+
   let {
     wert = $bindable(null),
     min = 0,
@@ -45,6 +48,14 @@
   } = $props()
 
   let fokus = $state(false)
+  /* A field with a fractional step is a text field: the number stands with
+     its fractional digit and the decimal sign of the language, which a
+     native number field cannot do (it shows 1 for 1.0 and picks its sign
+     from the browser). While it has the focus, what is typed stands as it
+     is. A whole step keeps the native field. */
+  const digits = $derived(ganzzahlig ? 0 : fractionDigits(schritt))
+  const decimal = $derived(digits > 0)
+  let typed = $state('')
   /* Nothing in the field. Svelte's number binding hands back `null` for an
      empty input; '' and `undefined` arrive from callers that start their
      state out that way. */
@@ -75,6 +86,33 @@
     setzen(Number.isFinite(zahl) ? zahl : min)
   }
 
+  const shown = $derived(
+    !decimal || leer(wert) ? '' : formatNumber(wert, digits, texte.sprache),
+  )
+
+  function takeFocus() {
+    fokus = true
+    typed = shown
+  }
+
+  /* The same commit as above for the typed text: nothing in the field is the
+     empty value, anything that is no number goes to the minimum. */
+  function commitText() {
+    const zahl = parseNumber(typed)
+    if (zahl === null) {
+      wert = nullwort ? null : min
+      return
+    }
+    setzen(Number.isFinite(zahl) ? zahl : min)
+  }
+
+  function textKey(ereignis) {
+    if (ereignis.key !== 'ArrowUp' && ereignis.key !== 'ArrowDown') return
+    ereignis.preventDefault()
+    stufen(ereignis.key === 'ArrowUp' ? +1 : -1)
+    typed = leer(wert) ? '' : formatNumber(wert, digits, texte.sprache)
+  }
+
   /* A chevron on an empty field starts at the minimum rather than at zero:
      the field says nothing yet, and the minimum is the first thing it could
      say. */
@@ -91,21 +129,44 @@
   {#if wortDa}
     <span class="nullwort">{nullwort}</span>
   {/if}
-  <input
-    {id}
-    type="number"
-    aria-label={beschriftung || undefined}
-    class:versteckt={wortDa}
-    style:min-width={wortDa ? `${nullwort.length + 1}ch` : null}
-    bind:value={wert}
-    {min}
-    {max}
-    step={schritt}
-    disabled={gesperrt}
-    onchange={eingerastet}
-    onfocus={() => (fokus = true)}
-    onblur={() => (fokus = false)}
-  />
+  {#if decimal}
+    <input
+      {id}
+      type="text"
+      inputmode="decimal"
+      autocomplete="off"
+      aria-label={beschriftung || undefined}
+      class:versteckt={wortDa}
+      style:min-width={wortDa ? `${nullwort.length + 1}ch` : null}
+      value={fokus ? typed : shown}
+      role="spinbutton"
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={leer(wert) ? undefined : Number(wert)}
+      disabled={gesperrt}
+      oninput={(e) => (typed = e.currentTarget.value)}
+      onchange={commitText}
+      onkeydown={textKey}
+      onfocus={takeFocus}
+      onblur={() => (fokus = false)}
+    />
+  {:else}
+    <input
+      {id}
+      type="number"
+      aria-label={beschriftung || undefined}
+      class:versteckt={wortDa}
+      style:min-width={wortDa ? `${nullwort.length + 1}ch` : null}
+      bind:value={wert}
+      {min}
+      {max}
+      step={schritt}
+      disabled={gesperrt}
+      onchange={eingerastet}
+      onfocus={() => (fokus = true)}
+      onblur={() => (fokus = false)}
+    />
+  {/if}
   <span class="treppe">
     <button
       type="button"

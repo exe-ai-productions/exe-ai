@@ -44,6 +44,10 @@
 
    Cost: a few getBoundingClientRect every 100 ms. Nothing. */
 
+// The sentences of the small window come from the catalogue, in the
+// interface's language; the signal words in them stay as they are.
+import { t } from './texte.svelte.js'
+
 const TAKT_MS = 100
 const LAYOUT_TAKT_MS = 500
 const SCHLUESSEL = 'geometriewache'
@@ -137,17 +141,25 @@ function fensterZeigen() {
   const f = fensterchen()
   const zeilen = wichtig.slice(-6).map((e) => {
     if (e.art === 'RUECKWURF') {
-      return `${e.zeit} THROW-BACK ${e.sprung_nach_oben}px up, height lost ${e.hoehe_verloren}px\n  ${e.ursache}`
+      return t('geometry_watch.throw_back', {
+        zeit: e.zeit, sprung_nach_oben: e.sprung_nach_oben, hoehe_verloren: e.hoehe_verloren, ursache: e.ursache,
+      })
     }
     if (e.art === 'FOLGE-VERLOREN') {
-      return `${e.zeit} FOLLOWING LOST ${e.abstand}px above the floor while writing\n  before: ${e.spur.map((s) => s.top + '/' + s.hoehe).join(' ')}`
+      return t('geometry_watch.following_lost', {
+        zeit: e.zeit, abstand: e.abstand, spur: e.spur.map((s) => s.top + '/' + s.hoehe).join(' '),
+      })
     }
     if (e.art === 'JS-FEHLER') return `${e.zeit} JS ERROR ${e.text}`
-    return `${e.zeit} ${e.art} overlap ${e.ueberlappung}px scroll ${e.scroll?.join('/')}`
+    return t('geometry_watch.overlap', {
+      // As strings: not every kind of entry measures both, and a missing
+      // value would otherwise be read as "no separator given".
+      zeit: e.zeit, art: e.art, ueberlappung: String(e.ueberlappung), scroll: String(e.scroll?.join('/')),
+    })
   })
-  f.textContent = `Geometry watch — ${wichtig.length} event(s)\n\n` + zeilen.join('\n\n')
+  f.textContent = t('geometry_watch.title', { anzahl: wichtig.length }) + '\n\n' + zeilen.join('\n\n')
   const knopf = document.createElement('button')
-  knopf.textContent = 'copy report · clear'
+  knopf.textContent = t('geometry_watch.buttons')
   knopf.style.cssText = 'margin-top:8px;font:12px ui-monospace,monospace'
   knopf.onclick = () => {
     const text = JSON.stringify(alles, null, 1)
@@ -251,9 +263,7 @@ function rueckwurfWache(ablegenFn, zeigenFn, meldenFn) {
         sprung_nach_oben: Math.round(nachOben),
         hoehe_verloren: hoeheWeg,
         schreibt,
-        ursache: hoeheWeg > HOPSER
-          ? 'total height shrank — content fell away under the view'
-          : 'height stayed — somebody set the position, or the browser moved it (anchoring, or the box grew)',
+        ursache: t(hoeheWeg > HOPSER ? 'geometry_watch.cause_height_lost' : 'geometry_watch.cause_position_set'),
         von: { top: Math.round(vorher.top), hoehe: vorher.hoehe },
         zu: { top: Math.round(top), hoehe },
         abstand_danach: Math.round(abstand),

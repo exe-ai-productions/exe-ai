@@ -239,7 +239,7 @@ def gemeldet(monkeypatch):
     aufrufe: list[tuple[str, bool]] = []
     monkeypatch.setattr(
         cronablauf.cronmeldung, "melden",
-        lambda text, *, erfolgreich: aufrufe.append((text, erfolgreich)),
+        lambda text, *, erfolgreich, sprache=None: aufrufe.append((text, erfolgreich)),
     )
     return aufrufe
 
@@ -270,7 +270,7 @@ async def test_ein_skript_meldet_woran_es_gescheitert_ist(client, skriptordner, 
 
     await feuern(client, MORGEN.replace(hour=8, minute=1))
 
-    assert gemeldet == [("kaputt.py — ging schief — script ended with an error", False)]
+    assert gemeldet == [("kaputt.py — ging schief — Skript mit Fehler beendet", False)]
     lauf = repos.auftraege.laeufe_fuer_cronjob(eintrag.id)[0]
     assert lauf.ende_grund == skriptlauf.GRUND_FEHLGESCHLAGEN
 
@@ -305,7 +305,9 @@ async def test_ein_skript_an_seiner_fehlergrenze_meldet_sich_einmal(
     await feuern(client, MORGEN.replace(hour=8, minute=1))
 
     assert repos.cronjobs.holen(eintrag.id).aktiv is False
-    assert gemeldet == [("kaputt.py — stopped after 1 failed runs", False)]
+    assert gemeldet == [
+        ("kaputt.py — nach 1 fehlgeschlagenen Durchläufen gestoppt — Skript mit Fehler beendet", False)
+    ]
 
 
 async def test_die_grenze_schweigt_die_zweite_mitteilung_weg(repos, monkeypatch):
@@ -314,7 +316,7 @@ async def test_die_grenze_schweigt_die_zweite_mitteilung_weg(repos, monkeypatch)
     aufrufe: list[str] = []
     monkeypatch.setattr(
         cronablauf.cronmeldung, "melden",
-        lambda text, *, erfolgreich: aufrufe.append(text),
+        lambda text, *, erfolgreich, sprache=None: aufrufe.append(text),
     )
     eintrag = repos.cronjobs.erstellen(
         agent="a", task="Postfach lesen", zeitplan="08:00", herkunft="chat",

@@ -18,7 +18,7 @@ from uuid import uuid4
 
 import pytest
 
-from app import cronablauf
+from app import cronablauf, zwischenstand
 from app.i18n import t
 from app.providers import MockProvider, mock_endpunkt
 from tests.conftest import provider_setzen
@@ -100,7 +100,6 @@ def test_an_unknown_entry_is_answered_in_the_readers_language(client, language):
     for answer in (
         client.post("/api/v1/cronjobs/phantom/pause", headers=headers),
         client.post("/api/v1/cronjobs/phantom/resume", headers=headers),
-        client.post("/api/v1/cronjobs/phantom/run", headers=headers),
         client.delete("/api/v1/cronjobs/phantom", headers=headers),
     ):
         assert answer.status_code == 404
@@ -159,7 +158,7 @@ def test_the_model_still_reads_english(client):
                 herkunft="chat",
             )
         )
-    assert str(refusal.value) == "'task' is empty — nothing to run."
+    assert str(refusal.value) == "'task' is empty; there is no task to run."
     assert refusal.value.schluessel == "cronjob_refusal.task_empty"
 
 
@@ -269,3 +268,139 @@ def test_a_next_run_is_named_on_the_services_clock(browser_zone, config_zone):
     result = json.loads(run.stdout)
     # 23:30 UTC on the 27th is already the 28th in Tokyo.
     assert result == {"shown": "28.09. 08:00", "day": "2026-09-28"}
+
+
+# --- The failure limit says why the last run failed --------------------------
+
+TASK = "Check the inbox"
+
+
+@pytest.fixture
+def announced(monkeypatch):
+    """Announcements, collected instead of played — nothing may pop up a
+    notification or make a sound during a test run."""
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        cronablauf.cronmeldung, "melden",
+        lambda text, *, erfolgreich, sprache=None: calls.append((text, erfolgreich)),
+    )
+    return calls
+
+
+def _entry(repos, **fields):
+    """An announcing entry; one on the default 'log' would stay silent at
+    the gate and prove nothing about the sentence."""
+    fields.setdefault("deliver", "announce")
+    return repos.cronjobs.erstellen(
+        agent="a", task=TASK, zeitplan="*/15 * * * *", herkunft="chat", **fields
+    )
+
+
+def _limit(n: int, language: str | None = None) -> str:
+    """The limit's own sentence, as the catalogue has it."""
+    return t("cronjobs.nach_fehlversuchen_gestoppt", language, aufgabe=TASK, n=n)
+
+
+@pytest.mark.parametrize("language", ["en", "de"])
+async def test_the_failure_limit_names_the_reason_of_the_last_run(repos, announced, language):
+    """The run that reaches the limit gets this one notification, so it has
+    to say what was wrong — in the reader's language, and it is the LAST
+    run's reason, not an earlier one's."""
+    entry = _entry(repos, fehlergrenze=2)
+
+    first = await cronablauf.ausgang_verbuchen(
+        repos, entry.id, TASK, erfolgreich=False, grund="zeitgrenze", sprache=language
+    )
+    second = await cronablauf.ausgang_verbuchen(
+        repos, entry.id, TASK, erfolgreich=False, grund="anbieter_ausfall", sprache=language
+    )
+
+    assert (first, second) == (False, True)
+    reason = t("jobs.grund.anbieter_ausfall", language)
+    assert reason != "jobs.grund.anbieter_ausfall"
+    assert announced == [(f"{_limit(2, language)} — {reason}", False)]
+    assert repos.cronjobs.holen(entry.id).aktiv is False
+
+
+async def test_the_reason_stands_behind_the_limits_sentence(repos, announced):
+    """The words as somebody reads them: the task, that the schedule has
+    stopped, and then why."""
+    entry = _entry(repos, fehlergrenze=1)
+
+    await cronablauf.ausgang_verbuchen(
+        repos, entry.id, TASK, erfolgreich=False, grund="zeitgrenze", sprache="en"
+    )
+
+    assert announced == [
+        ("Check the inbox — stopped after 1 failed runs — time limit reached", False)
+    ]
+
+
+@pytest.mark.parametrize("reason", [None, "", "fertig"])
+async def test_a_failure_without_a_reason_leaves_the_limits_sentence_as_it_was(
+    repos, announced, reason
+):
+    """Silence probe: nothing to explain, nothing added — the sentence ends
+    where it always did."""
+    entry = _entry(repos, fehlergrenze=1)
+
+    await cronablauf.ausgang_verbuchen(
+        repos, entry.id, TASK, erfolgreich=False, grund=reason, sprache="en"
+    )
+
+    assert announced == [(_limit(1, "en"), False)]
+
+
+async def test_a_reason_without_a_catalogue_entry_shows_itself(repos, announced):
+    """A run that died on an error carries the message inline; it has no
+    entry and must not come out as a catalogue key."""
+    entry = _entry(repos, fehlergrenze=1)
+
+    await cronablauf.ausgang_verbuchen(
+        repos, entry.id, TASK, erfolgreich=False, grund="fehler: connection reset",
+        sprache="en",
+    )
+
+    assert announced == [(f"{_limit(1, 'en')} — fehler: connection reset", False)]
+
+
+async def test_the_origin_speaks_with_the_reason_of_the_chains_run(repos, announced):
+    """A continuation's last run fails: the origin is the row that says so,
+    and what it says ends with why THAT run failed."""
+    origin = _entry(repos, fehlergrenze=1)
+    chain = repos.cronjobs.erstellen(
+        agent=origin.agent, task=f"Continue this job. Original task: {origin.task}",
+        zeitplan="08:00", herkunft="agent", basisaufgabe=origin.task,
+        **zwischenstand.kettenfelder(origin, "erstlauf"),
+    )
+
+    said = await cronablauf.ausgang_verbuchen(
+        repos, chain.id, TASK, erfolgreich=False, grund="anbieter_ausfall", sprache="en"
+    )
+
+    assert said is True
+    assert announced == [
+        (f"{_limit(1, 'en')} — {t('jobs.grund.anbieter_ausfall', 'en')}", False)
+    ]
+
+
+async def test_a_reason_changes_nothing_below_the_limit_or_on_a_quiet_entry(repos, announced):
+    """Silence probe: the reason only ever rides in the limit's sentence. A
+    failed run below the limit announces nothing here, a successful run
+    nothing, and an entry on 'log' stops in silence as before."""
+    below = _entry(repos, fehlergrenze=3)
+    quiet = _entry(repos, fehlergrenze=1, deliver="log")
+
+    assert await cronablauf.ausgang_verbuchen(
+        repos, below.id, TASK, erfolgreich=False, grund="zeitgrenze"
+    ) is False
+    assert await cronablauf.ausgang_verbuchen(
+        repos, below.id, TASK, erfolgreich=True, grund="fertig"
+    ) is False
+    assert await cronablauf.ausgang_verbuchen(
+        repos, quiet.id, TASK, erfolgreich=False, grund="zeitgrenze"
+    ) is False
+
+    assert announced == []
+    assert repos.cronjobs.holen(below.id).aktiv is True
+    assert repos.cronjobs.holen(quiet.id).aktiv is False

@@ -52,8 +52,9 @@ from app.tools import (
 )
 from app.tools import agentendock as ablage_werkzeug
 from app.tools import auftrag_werkzeug
-from app.tools.mcp_client import MCPFehler, MCPStdioClient, MCPWerkzeug
+from app.tools.mcp_client import CALL_TIMEOUT, MCPFehler, MCPStdioClient, MCPWerkzeug
 from app.tools.mcp_http import MCPHttpClient
+from app.tools.mcp_names import model_name
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +96,10 @@ class ServerEintrag:
     # the same pattern as with the model and image endpoints. If missing,
     # OAuth is attempted (next build step).
     api_key_env: str | None = None
+    # How many seconds one call to this server's tools may take; left out
+    # means the default of ``CALL_TIMEOUT``. Starting the server keeps its
+    # own, shorter limit.
+    timeout: float | None = None
 
     def __post_init__(self) -> None:
         self.args = self.args or []
@@ -102,13 +107,57 @@ class ServerEintrag:
         self.needs_confirmation = self.needs_confirmation or []
 
 
+def read_server_file(path: Path, language: str) -> tuple[str, str | None]:
+    """The one reading of the server file: ``(text, reason)``.
+
+    Every reader of the file goes through here — the start, the rebuild after
+    a save, the gallery's list, the sign-in and each way the gallery writes —
+    so a file that cannot be used is judged the same everywhere. ``reason``
+    is ``None`` for a file that can: missing or empty (it holds no server),
+    or one that passes the check of the editor form
+    (:func:`konfiguration_pruefen`). Otherwise it is the check's sentence in
+    the language of the page (``language``): for a file that is no JSON or an
+    entry that is no object, and for a file whose bytes are no UTF-8, the
+    sentence for invalid JSON with the decoder's own words.
+
+    A byte order mark at the start does not count. The file is never written
+    here. ``text`` is what stands in the file — for a file that is no UTF-8,
+    with the bytes that are none replaced, so a form can still show it.
+    """
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return "", None
+    except OSError as error:
+        return "", t("mcp_datei.json", language, fehler=error)
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as error:
+        return raw.decode("utf-8-sig", errors="replace"), t(
+            "mcp_datei.json", language, fehler=error
+        )
+    if not text.strip():
+        return text, None
+    return text, konfiguration_pruefen(text, language)
+
+
 def server_lesen(pfad: Path) -> list[ServerEintrag]:
-    """Reads mcp_servers.json. If the file is missing, there are simply no tools."""
+    """Reads mcp_servers.json. A file that is missing or empty holds no tools;
+    one that cannot be used (:func:`read_server_file`) loads no server, says
+    why in the log, and the service goes on with its own tools — the file is
+    the user's and is never touched here."""
     if not pfad.exists():
         log.info("No MCP configuration under %s — no tools active", pfad)
         return []
 
-    rohdaten = json.loads(pfad.read_text(encoding="utf-8"))
+    text, reason = read_server_file(pfad, "en")
+    if reason is not None:
+        log.warning("MCP configuration %s cannot be used, no server is loaded from it: %s", pfad, reason)
+        return []
+    if not text.strip():
+        log.info("MCP configuration %s is empty — no tools active", pfad)
+        return []
+    rohdaten = json.loads(text)
     eintraege = rohdaten.get("mcpServers") or {}
     return [
         ServerEintrag(name=name, **felder)
@@ -123,14 +172,15 @@ def server_lesen(pfad: Path) -> list[ServerEintrag]:
 # A hyphen after the first character carries no such risk — python-dotenv
 # reads an unquoted key with one — and entries named like `github-token`
 # are already on file and have to stay readable and writable.
-_UMGEBUNGSNAME = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+ENV_NAME_PATTERN = r"[A-Za-z_][A-Za-z0-9_-]*"
+_UMGEBUNGSNAME = re.compile(ENV_NAME_PATTERN)
 
 # The fields of a server entry as the editor form (A6) checks them.
 # Deliberately its own list instead of derived from the dataclass: `name` is
 # a field there, but in the file it is the key.
 _ERLAUBTE_FELDER = {
     "type", "command", "args", "env", "enabled",
-    "allowed_tools", "needs_confirmation", "url", "api_key_env",
+    "allowed_tools", "needs_confirmation", "url", "api_key_env", "timeout",
 }
 
 
@@ -189,6 +239,13 @@ def konfiguration_pruefen(text: str, sprache: str) -> str | None:
             return t("mcp_datei.env", sprache, name=name)
         if not isinstance(felder.get("enabled", True), bool):
             return t("mcp_datei.enabled", sprache, name=name)
+        time_limit = felder.get("timeout")
+        if time_limit is not None and (
+            isinstance(time_limit, bool)
+            or not isinstance(time_limit, (int, float))
+            or not time_limit > 0
+        ):
+            return t("mcp_datei.timeout", sprache, name=name)
         for listenfeld in ("allowed_tools", "needs_confirmation"):
             wert = felder.get(listenfeld)
             if wert is None:
@@ -317,8 +374,14 @@ class WerkzeugRegistry:
         skripte_ordner: Any | None = None,
         folder_share: Any | None = None,
         chat_delivery: Any | None = None,
+        on_tool_list: Callable[[str, list[str]], None] | None = None,
     ) -> None:
         self.eintraege = eintraege
+        # Called with a server's name and the names of ALL the tools it
+        # reported, once it has started and its tools are taken over: where
+        # the stored lists and rules are moved to the names the model is
+        # offered (``app/mcp_name_move.py``). None means nothing is moved.
+        self.on_tool_list = on_tool_list
         self.arbeitsverzeichnis = arbeitsverzeichnis
         # The shell tool is built in, not an MCP server (see app/tools/shell.py):
         # its working folders belong to the chat and change while the program
@@ -448,6 +511,13 @@ class WerkzeugRegistry:
 
             self.clients[eintrag.name] = client
             self._werkzeuge_uebernehmen(eintrag, client)
+            if self.on_tool_list is not None:
+                try:
+                    self.on_tool_list(eintrag.name, [w.name for w in client.werkzeuge])
+                except Exception:  # noqa: BLE001 - a failed move must not take the server down
+                    log.exception(
+                        "The stored tool names of '%s' could not be moved", eintrag.name
+                    )
 
         log.info(
             "Tools ready: %d from %d MCP server(s)",
@@ -481,6 +551,7 @@ class WerkzeugRegistry:
                     for schluessel, wert in eintrag.env.items()
                 },
                 arbeitsverzeichnis=str(self.arbeitsverzeichnis) if self.arbeitsverzeichnis else None,
+                timeout=eintrag.timeout or CALL_TIMEOUT,
             )
 
         if eintrag.type == "http":
@@ -507,7 +578,12 @@ class WerkzeugRegistry:
             # Without api_key_env, the connection is made unauthenticated —
             # servers that demand OAuth visibly reject that with a 401 until
             # the sign-in flow (next build step) is in place.
-            return MCPHttpClient(name=eintrag.name, url=eintrag.url, api_key=schluessel)
+            return MCPHttpClient(
+                name=eintrag.name,
+                url=eintrag.url,
+                api_key=schluessel,
+                timeout=eintrag.timeout or CALL_TIMEOUT,
+            )
 
         log.warning(
             "MCP server '%s' has type '%s' — there is 'stdio' and 'http', "
@@ -518,6 +594,11 @@ class WerkzeugRegistry:
         return None
 
     def _werkzeuge_uebernehmen(self, eintrag: ServerEintrag, client: MCPClient) -> None:
+        """Takes the server's picked tools into the offer, each under the
+        name the model calls it by (``app/tools/mcp_names.py``): that name is
+        the key everywhere below — the offer, the switches, the permission
+        rules — and the server is called with the name it gave the tool
+        itself."""
         for werkzeug in client.werkzeuge:
             if eintrag.allowed_tools is not None:
                 if werkzeug.name not in eintrag.allowed_tools:
@@ -527,31 +608,15 @@ class WerkzeugRegistry:
                         eintrag.name,
                     )
                     continue
-            # The video tool comes and goes with the model folder while
-            # this registry lives, so its name is kept free from the start:
-            # a server's tool of that name taken over today would stand
-            # beside the built-in one the day a video model arrives.
-            if werkzeug.name in self.builtin_names() or (
-                werkzeug.name == video_tool.WERKZEUG_NAME
-                and self.bild_zugang is not None and self.video_ready is not None
-            ):
-                log.warning(
-                    "Tool name '%s' belongs to a built-in tool of this run — the "
-                    "entry of '%s' is skipped. Otherwise the name would stand twice in the "
-                    "offer (strict OpenAI servers answer that with 400), and only the built-in "
-                    "one would be reachable anyway.",
-                    werkzeug.name,
-                    eintrag.name,
-                )
-                continue
-            if werkzeug.name in self._werkzeuge:
+            name = model_name(eintrag.name, werkzeug.name)
+            if name in self._werkzeuge:
                 log.warning(
                     "Tool name '%s' is given twice — the entry of '%s' wins",
-                    werkzeug.name,
-                    self._werkzeuge[werkzeug.name][1].server,
+                    name,
+                    self._werkzeuge[name][1].server,
                 )
                 continue
-            self._werkzeuge[werkzeug.name] = (
+            self._werkzeuge[name] = (
                 client,
                 werkzeug,
                 werkzeug.name in eintrag.needs_confirmation,
@@ -628,6 +693,13 @@ class WerkzeugRegistry:
             namen.append(skill.SCHREIBEN)
         return namen
 
+    def display_name(self, name: str) -> str:
+        """The name a window and a log show for a call: what the server calls
+        its tool (the server itself is shown beside it); any other tool is
+        shown as it is called."""
+        eintrag = self._werkzeuge.get(name)
+        return eintrag[1].name if eintrag else name
+
     def known_names(self) -> set[str] | None:
         """Every tool name this run could resolve — or ``None`` for "open".
 
@@ -654,7 +726,12 @@ class WerkzeugRegistry:
         for eintrag in self.eintraege:
             if not eintrag.allowed_tools:
                 return None
+            # Both: the name the model is offered, and the one the server
+            # gave it, which a list written before the names changed still
+            # carries until the server's first start moves it over
+            # (``app/mcp_name_move.py``).
             namen.update(eintrag.allowed_tools)
+            namen.update(model_name(eintrag.name, w) for w in eintrag.allowed_tools)
         return namen
 
     def uebersicht(self, shell_zeitgrenze: int | None = None) -> list[dict[str, Any]]:
@@ -674,6 +751,9 @@ class WerkzeugRegistry:
         eintraege = [
             {
                 "name": name,
+                # What the server calls it: what the window shows, while the
+                # switch writes ``name``.
+                "anzeige": werkzeug.name,
                 "beschreibung": werkzeug.beschreibung,
                 "server": werkzeug.server,
                 "needs_confirmation": bestaetigung,
@@ -890,6 +970,8 @@ class WerkzeugRegistry:
         helpers: bool = True,
         bild_fenster: Any | None = None,
         memory_shown: bool = True,
+        start_job_offered: bool = True,
+        cronjob_offered: bool = True,
     ) -> list[dict[str, Any]]:
         """The tool list in the form that goes to the model.
 
@@ -932,6 +1014,14 @@ class WerkzeugRegistry:
         agent (app/helper.py). A chat's list may; the one place a job's list
         is built says it may not.
 
+        ``start_job_offered`` is whether this list carries ``start_job`` at
+        all. A run another run started is not offered it: one level below the
+        run that started it, it starts none (app/run_chain.py). On by default, because the chat and a run
+        nobody started are offered it.
+
+        ``cronjob_offered`` is the same for ``cronjob``: a run another run
+        started creates no schedule, whose runs would have no run above them.
+
         ``shell_zeitgrenze`` is the command time limit that applies to this
         run (app/befehlszeitwahl.py) — the shell's description names it, and
         it must name the value that actually holds, not the shipped default.
@@ -944,7 +1034,7 @@ class WerkzeugRegistry:
         agenten = self.agentenverzeichnis
 
         liste = [
-            werkzeug.als_openai_werkzeug()
+            werkzeug.als_openai_werkzeug(name)
             for name, (_, werkzeug, _) in self._werkzeuge.items()
             if (nur is None or name in nur) and name not in self.abgeschaltet
         ]
@@ -1038,7 +1128,8 @@ class WerkzeugRegistry:
                 video_tool.werkzeug_beschreibung(in_chat=not for_job).als_openai_werkzeug()
             )
         if (
-            self.cronjobs_repo is not None
+            cronjob_offered
+            and self.cronjobs_repo is not None
             and (nur is None or cronjob.WERKZEUG_NAME in nur)
             and cronjob.WERKZEUG_NAME not in self.abgeschaltet
         ):
@@ -1067,7 +1158,8 @@ class WerkzeugRegistry:
                 ablage_werkzeug.werkzeug_beschreibung(in_chat=not for_job).als_openai_werkzeug()
             )
         if (
-            self.agenten_orte is not None
+            start_job_offered
+            and self.agenten_orte is not None
             and (nur is None or auftrag_werkzeug.WERKZEUG_NAME in nur)
             and auftrag_werkzeug.WERKZEUG_NAME not in self.abgeschaltet
         ):
@@ -1170,11 +1262,24 @@ class WerkzeugRegistry:
         from app.berechtigungsregeln import laden as regeln_laden
 
         eintrag = self._werkzeuge.get(name)
+        private = self._private_check(ordner or [])
         return berechtigungen.urteil(
             name, argumente or {}, ordner or [], herkunft, agent,
             regeln=regeln_laden(self.berechtigungen_pfad),
             statisch_bestaetigen=bool(eintrag and eintrag[2]),
             rules_of=rules_of,
+            private=private,
+        )
+
+    def _private_check(self, ordner: list[str]):
+        """The test for the program's private places, for a run with these
+        folders (``grenzen.private_check``): the place the rules file lives
+        in is the settings folder, and the data folder is the one the chat's
+        run was started with."""
+        return grenzen.private_check(
+            ordner,
+            getattr(self.folder_share, "data_dir", None),
+            self.berechtigungen_pfad.parent if self.berechtigungen_pfad else None,
         )
 
     def braucht_bestaetigung(
@@ -1274,8 +1379,8 @@ class WerkzeugRegistry:
             raise WerkzeugVerboten(str(error)) from error
         if not grenzen.liegt_innerhalb(target, grenzen.wurzeln(folders)):
             raise WerkzeugVerboten(
-                f"'{path}' lies outside the shared folders and the pictures "
-                "folder — only a picture inside them can be drawn from."
+                f"'{path}' is outside the shared folders and the pictures folder. Only images "
+                "within those folders can be used as input."
             )
         if not target.is_file():
             raise WerkzeugVerboten(f"'{path}' is not a file.")
@@ -1444,8 +1549,8 @@ class WerkzeugRegistry:
             # holding it open, and there is nothing here to execute. A
             # question has no result but an answer.
             raise WerkzeugVerboten(
-                "ask_user is answered by the user, not executed. Nothing is "
-                "holding this call open."
+                "ask_user requires a user response rather than execution. No active request "
+                "is waiting for this call."
             )
 
         if name == auftrag_werkzeug.WERKZEUG_NAME:
@@ -1532,6 +1637,7 @@ class WerkzeugRegistry:
                 return await dateiwerkzeuge.ausfuehren(
                     name, argumente, ordner if ordner is not None else [], modellbild, share,
                     getattr(self.folder_share, "data_dir", None),
+                    private=self._private_check(ordner or []),
                 )
             except grenzen.GrenzeVerletzt as fehler:
                 raise WerkzeugVerboten(str(fehler), about_path=True) from fehler
@@ -1539,8 +1645,8 @@ class WerkzeugRegistry:
         eintrag = self._werkzeuge.get(name)
         if eintrag is None:
             raise WerkzeugVerboten(
-                f"Tool '{name}' is not enabled. "
-                f"Available: {', '.join(self.namen()) or 'none'}"
+                f"Tool '{name}' is not enabled. Available tools: "
+                f"{', '.join(self.namen()) or 'none'}"
             )
-        client, _, _ = eintrag
-        return await client.werkzeug_aufrufen(name, argumente, bild_senke)
+        client, werkzeug, _ = eintrag
+        return await client.werkzeug_aufrufen(werkzeug.name, argumente, bild_senke)

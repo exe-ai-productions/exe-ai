@@ -178,22 +178,72 @@ def test_ein_gescheiterter_wechsel_laesst_alles_wie_es_war():
         let gefallen = false
         try { await m.spracheWaehlen('en') } catch { gefallen = true }
         await api.modelle()
-        return { gesehen, gefallen, sprache: m.texte.sprache }
+        return { gesehen, gefallen, sprache: m.texte.sprache, wahl: m.texte.wahl }
         """
     )
     assert bericht["gefallen"] is True
     assert bericht["sprache"] == "de"
-    # Written on the way in, taken back after the failure — and the language
-    # of the requests never moved.
+    assert bericht["wahl"] == "de"
+    # The choice is stored only after its catalogue arrived: the failed
+    # switch writes nothing, so there is nothing to take back — and the
+    # language of the requests never moved.
     assert bericht["gesehen"] == [
-        # Nothing claimed yet, so the first write carries no language header.
-        ["/settings/global/sprache", None, "de"],
         ["/translations/de", "de", None],
-        ["/settings/global/sprache", "de", "en"],
-        ["/translations/en", "en", None],
         ["/settings/global/sprache", "de", "de"],
+        ["/translations/en", "en", None],
         ["/models", "de", None],
     ]
+
+
+@node_da
+def test_ein_haengender_wechsel_aendert_weder_wahl_noch_gespeichertes():
+    """German window, the English catalogue never answers: the pill's value
+    (`texte.wahl`) stays German and `en` is never stored. Before, both were
+    written ahead of the request and stayed — English over a German window,
+    and the next start loaded English."""
+    bericht = _lauf(
+        """
+        globalThis.__antworten = (pfad) => pfad.includes('/translations/en')
+          ? 'haengt'
+          : ({ texte: { gruss: 'Hallo' }, sprache: 'de' })
+        await m.spracheWaehlen('de')
+        const unterwegs = m.spracheWaehlen('en')
+        await new Promise((fertig) => setTimeout(fertig, 50))
+        return { gesehen, wahl: m.texte.wahl, sprache: m.texte.sprache }
+        """
+    )
+    assert bericht["wahl"] == "de"
+    assert bericht["sprache"] == "de"
+    assert ["/settings/global/sprache", "de", "en"] not in bericht["gesehen"]
+    assert bericht["gesehen"][-1] == ["/translations/en", "en", None]
+
+
+@node_da
+def test_der_juengere_wechsel_gewinnt_auch_wenn_der_aeltere_katalog_spaeter_kommt():
+    """Two switches shortly after each other, the older catalogue arrives
+    last: the newer catalogue, the newer choice and the newer stored value
+    stand — the late one changes nothing."""
+    bericht = _lauf(
+        """
+        let freigeben
+        const spaet = new Promise((fertig) => { freigeben = fertig })
+        globalThis.__antworten = (pfad) => {
+          if (pfad.includes('/translations/en')) return spaet.then(() => ({ texte: { gruss: 'Hello' }, sprache: 'en' }))
+          return ({ texte: { gruss: 'Hallo' }, sprache: 'de' })
+        }
+        const aelter = m.spracheWaehlen('en')
+        await m.spracheWaehlen('de')
+        freigeben()
+        await aelter
+        return { gesehen, wahl: m.texte.wahl, sprache: m.texte.sprache, gruss: m.texte.katalog.gruss }
+        """
+    )
+    assert bericht["wahl"] == "de"
+    assert bericht["sprache"] == "de"
+    assert bericht["gruss"] == "Hallo"
+    # Only the newer choice was ever stored.
+    gespeichert = [z[2] for z in bericht["gesehen"] if z[0] == "/settings/global/sprache"]
+    assert gespeichert == ["de"]
 
 
 @node_da
@@ -233,3 +283,12 @@ def test_die_gemerkte_wahl_steht_im_reaktiven_zustand():
     )
     assert bericht["wahl"] == "de"
     assert bericht["eigen"] is True
+
+
+def test_die_pille_liest_nur_die_gespeicherte_wahl():
+    """The pill is a field that, left to itself, keeps the entry that was
+    clicked. Bound for reading only, it shows `texte.wahl` and nothing else:
+    a switch that never arrives leaves the pill where it was."""
+    huelle = (QUELLE / "teile" / "SystemPrompt.svelte").read_text(encoding="utf-8")
+    assert "bind:wert={() => sprachwahl, () => {}}" in huelle
+    assert "const sprachwahl = $derived(texte.wahl)" in huelle

@@ -79,6 +79,10 @@ export function tabOeffnen(chatId, { name, art, inhalt, pfad = '' }, aufdraengen
     if (stelle >= 0) neu[stelle] = eintrag
     else neu.push(eintrag)
     tabs.proChat[chatId] = neu
+  } else if (!liste[stelle].pfad && pfad) {
+    /* The same content, and now a place for it: the tab keeps everything it
+       holds and takes the path it did not know. */
+    tabs.proChat[chatId] = liste.map((e, i) => (i === stelle ? { ...e, pfad } : e))
   }
   /* `aufdraengen` false files the tab without opening a panel over the
      conversation. The newest file still steps to the FRONT of its own
@@ -99,16 +103,28 @@ export function tabOeffnen(chatId, { name, art, inhalt, pfad = '' }, aufdraengen
  *
  * Fills gaps only: an id that is already filed keeps whatever it holds
  * (an older message's card must not shove its version over a newer one),
- * and an id the user closed stays closed. Writes nothing at all in either
- * case, which is what lets a card call this from an $effect without
- * feeding its own dependencies.
+ * and an id the user closed stays closed. The one gap it fills in a tab
+ * that is already there is the path: a tab filed without one takes the
+ * path a card knows. Otherwise it writes nothing at all, which is what
+ * lets a card call this from an $effect without feeding its own
+ * dependencies.
  */
 export function tabEinsortieren(chatId, { name, art, inhalt, pfad = '', adresse = '', fakten = '' }) {
   if (!chatId || !name) return
   const id = schluessel(name, art)
   if (tabs.zu[chatId]?.[id]) return
   const liste = tabsVon(chatId)
-  if (liste.some((e) => e.id === id)) return
+  const index = liste.findIndex((e) => e.id === id)
+  if (index >= 0) {
+    /* A gap is the one thing a card fills: a tab filed without a path takes
+       the one this card knows. Content, place in the rail and the chosen
+       tab stay; a path that stands is not replaced, and nothing is written
+       when there is nothing to fill. */
+    if (!liste[index].pfad && pfad) {
+      tabs.proChat[chatId] = liste.map((e, i) => (i === index ? { ...e, pfad } : e))
+    }
+    return
+  }
   const eintrag = { id, name, art, inhalt, pfad, ...(adresse ? { adresse, fakten } : {}) }
   tabs.proChat[chatId] = [...liste, eintrag]
   if (!tabs.aktiv[chatId]) tabs.aktiv[chatId] = id
@@ -161,6 +177,28 @@ export function tabWriter(chatId, firstSight = () => true) {
 
 export function tabWaehlen(chatId, id) {
   tabs.aktiv[chatId] = id
+}
+
+/**
+ * Takes the tab of a file that no longer exists out of the rail.
+ *
+ * Not the user's closing: nothing is remembered in `tabs.zu`, so a file of
+ * the same name that is written or shown again files its tab as usual. The
+ * tab is found by the address the file is fetched from (`adresse`), which
+ * only a file drawn in a frame carries; a tab without one — a text file,
+ * which keeps its own text — is not touched. When it was the chosen tab the
+ * last remaining one is chosen, as when the user closes it. Where no tab
+ * carries the address nothing is written.
+ */
+export function tabRemoveByAddress(chatId, address) {
+  if (!chatId || !address) return
+  const liste = tabsVon(chatId)
+  if (!liste.some((e) => e.adresse === address)) return
+  const rest = liste.filter((e) => e.adresse !== address)
+  tabs.proChat[chatId] = rest
+  if (!rest.some((e) => e.id === tabs.aktiv[chatId])) {
+    tabs.aktiv[chatId] = rest[rest.length - 1]?.id ?? null
+  }
 }
 
 export function tabSchliessen(chatId, id) {

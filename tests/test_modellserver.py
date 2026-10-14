@@ -48,7 +48,7 @@ def test_mtp_bausteine_sind_eigene_liste(tmp_path):
 
 def test_mtp_drafter_bekommt_eigenen_modus(tmp_path):
     # A prediction module needs --spec-type draft-mtp; a sibling model
-    # must stay on the plain draft path.
+    # drafts by the plain path, --spec-type draft-simple.
     from app.modellrunner import Modellrunner
 
     (tmp_path / "mtp").mkdir()
@@ -66,7 +66,8 @@ def test_mtp_drafter_bekommt_eigenen_modus(tmp_path):
         "Bonsai-27B-Q1_0.gguf", 8192, 99, 8080,
         drafter="Bonsai-1.7B-Q1_0.gguf",
     )
-    assert "--spec-type" not in mit_geschwister
+    # The plain path, named: without a type the engine drafts with nothing.
+    assert mit_geschwister[mit_geschwister.index("--spec-type") + 1] == "draft-simple"
     assert "--model-draft" in mit_geschwister
 
 

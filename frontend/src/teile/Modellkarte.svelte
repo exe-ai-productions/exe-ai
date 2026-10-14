@@ -82,7 +82,7 @@
     </span>
     <div class="zlogo" style={`color:${farbe}`}>{karte.logo}</div>
     <div class="zname">
-      {karte.name}
+      {karte.nameKey ? t(karte.nameKey) : karte.name}
       {#if karte.klasse}
         <!-- Class-bound accessories (LoRA, VAE) name their class in full
              text colour — an SD-1.5 file on an XL model was a real mishap,

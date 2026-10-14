@@ -1308,8 +1308,11 @@ def test_der_laufzustand_wird_wieder_abgeraeumt():
 
     # And the reading itself still has to ask the row, not its position --
     # that half is what the whole change set replaced.
-    assert re.search(r"laeuft=\{nachricht\.zustand === 'laeuft'", quelle), (
+    assert re.search(r"laeuft=\{zeileLaeuft\(nachricht\)", quelle), (
         "the running mark no longer asks the row itself"
+    )
+    assert re.search(r"function zeileLaeuft\(zeile\) \{\s*return \(\s*zeile\.zustand === 'laeuft'", quelle), (
+        "the one reading of a running row no longer starts from the row's own word"
     )
     assert not re.search(r"laeuft=\{[^}]*i === zustand\.nachrichten\.length - 1", quelle), (
         "the running mark goes by position again -- every foreign row behind the "
@@ -1417,7 +1420,7 @@ def _p662_stueck(quelle: str, muster: str, name: str) -> str:
 #               is a run the next fetch can bring back. Whether it does is
 #               exactly what the ordering decides.
 P662_FAHRER = """
-import { anhalten, ausreihen, einreihen, haelt, fuerChat } from './p662.warteschlange.mjs'
+import { anhalten, ausreihen, einreihen, haelt, fuerChat, zurueckEinreihen } from './p662.warteschlange.mjs'
 import { untrack, flushSync } from 'svelte'
 
 const zustand = $state({
@@ -1448,7 +1451,15 @@ const dienst = []
 // The input bar, as far as the queue touches it: a message the queue
 // dispatches is not the bar's own, so the bar is told to forget what it
 // still remembers of an earlier send (App.svelte, `warteschlangeWeiter`).
-const eingabe = { vergessen: () => protokoll.push('eingabe.vergessen') }
+const eingabe = {
+  vergessen: () => protokoll.push('eingabe.vergessen'),
+  zurueckgeben: (...args) => protokoll.push(['zurueckgegeben', ...args]),
+}
+const chatOeffnen = async (chatId) => { protokoll.push(['chatOeffnen', chatId]) }
+// The claims the stop button can cut short, by chat (App.svelte).
+const anspruchWarten = new Map()
+// The chats the window folds by hand right now (`/compact`).
+const compactSince = {}
 
 // Both of these are a request to the service, so both are at least one turn
 // of the event loop -- and one turn is all the effect needs.
@@ -1460,12 +1471,18 @@ const chatsLaden = async () => {
 // at a time ({ laufend, gehalten }); without it every answer carries
 // `__laufend` and no claim.
 const api = {
+  abbrechen: async (generationId, chatId) => {
+    protokoll.push(['stop', generationId, chatId])
+    return { abgebrochen: 1 }
+  },
   nachrichten: async () => {
     protokoll.push('api.nachrichten')
     await new Promise((frei) => setTimeout(frei, 0))
     const claim = globalThis.__claims?.length ? globalThis.__claims.shift() : null
     if (claim === 'offline') throw new Error('offline')
     if (claim?.add) dienst.push(claim.add)
+    // The service's rows as they stand after this answer: a stop that lands.
+    if (claim?.ersetze) dienst.splice(0, dienst.length, ...claim.ersetze)
     return {
       nachrichten: dienst.map((zeile) => ({ ...zeile })),
       laufend: claim ? claim.laufend ?? null : globalThis.__laufend ?? null,
@@ -1499,7 +1516,8 @@ function senden(inhalt) {
 }
 %s
 
-async function laufEnde({ zielChat, abgebrochen, gescheitert, belegt = false, platzhalter, drawing = false, verdichtetZu, zeileNachladen = false, schlussZustand = 'fertig', lauf = { generationId: 'eigen' }, fremderLauf = null, heldWithoutRun = false, wiederanhang = null }) {
+async function laufEnde({ zielChat, abgebrochen, gescheitert, belegt = false, platzhalter, drawing = false, verdichtetZu, zeileNachladen = false, schlussZustand = 'fertig', lauf = { generationId: 'eigen' }, fremderLauf = null, heldWithoutRun = false, wiederanhang = null, redo = null, retried = null, retriedState = null, begun = true, replacedId = null, discarded = false, doneSeen = false, zurueckInReihe = false, inhalt = 'zwei', nachrichtId = null, ausReihe = null }) {
+%s
 %s
 }
 
@@ -1578,10 +1596,14 @@ def _p662_lauf(quelle: str, szenario: str) -> dict:
         r"\n      const fertigerChat = zielChat\n.*?\n      warteschlangeWeiter\(\)\n",
         "das Laufende in antwortHolen",
     )
-    fahrer = P662_FRONTEND / "p662.fahrer.svelte.js"
-    treiber = P662_FRONTEND / "p662.pruefung.mjs"
-    ws_gebaut = P662_FRONTEND / "p662.warteschlange.mjs"
-    fahrer_gebaut = P662_FRONTEND / "p662.fahrer.mjs"
+    # The five files of this run carry a token of their own: two workers of
+    # one test session run this driver side by side, and under shared names
+    # each wrote over the other's files and read the other's scenario.
+    run_token = uuid4().hex[:10]
+    fahrer = P662_FRONTEND / f"p662.{run_token}.fahrer.svelte.js"
+    treiber = P662_FRONTEND / f"p662.{run_token}.pruefung.mjs"
+    ws_gebaut = P662_FRONTEND / f"p662.{run_token}.warteschlange.mjs"
+    fahrer_gebaut = P662_FRONTEND / f"p662.{run_token}.fahrer.mjs"
     # The bound the reconcile puts on its fetch, lifted with the stretch
     # that uses it: the real number, so a driver never runs on a made-up one.
     frist = _p662_stueck(
@@ -1591,18 +1613,37 @@ def _p662_lauf(quelle: str, szenario: str) -> dict:
     )
     # The claim question the end of the run asks, with its two helpers.
     fragen = _p662_stueck(quelle, _WITH_DEADLINE, "claimOutcome")
-    echt = P662_FRONTEND / "p662.echt.mjs"
+    # The stop button's own two functions: the wait for a claim is cut by it.
+    stopp = _p662_stueck(
+        quelle,
+        r"\n  async function stoppWiederholen\(lauf\) \{.*?\n  \}\n"
+        r".*?\n  async function abbrechen\(\) \{.*?\n  \}\n",
+        "abbrechen",
+    )
+    # What the end does when the service turned the send away (409).
+    belegt_ende = _p662_stueck(
+        quelle,
+        r"\n      if \(belegt\) \{\n        /\* The bubble and its placeholder.*?\n      \}\n"
+        r"(?=      // If the answer aborts while the confirmation stands)",
+        "the 409 end",
+    )
+    echt = P662_FRONTEND / f"p662.{run_token}.echt.mjs"
     fahrer.write_text(
-        P662_FAHRER % (frist + weiter + fragen, ende, szenario, effekt), encoding="utf-8"
+        (P662_FAHRER % (frist + weiter + fragen + stopp, belegt_ende, ende, szenario, effekt)).replace(
+            "./p662.warteschlange.mjs", "./" + ws_gebaut.name
+        ),
+        encoding="utf-8",
     )
     echt.write_text(P662_ECHT, encoding="utf-8")
     treiber.write_text(
-        P662_TREIBER
-        % (
-            str(P662_WARTESCHLANGE), str(ws_gebaut),
-            str(fahrer), str(fahrer_gebaut),
-            "./" + fahrer_gebaut.name,
-        ),
+        (
+            P662_TREIBER
+            % (
+                str(P662_WARTESCHLANGE), str(ws_gebaut),
+                str(fahrer), str(fahrer_gebaut),
+                "./" + fahrer_gebaut.name,
+            )
+        ).replace("./p662.echt.mjs", "./" + echt.name),
         encoding="utf-8",
     )
     try:
@@ -1659,6 +1700,175 @@ def test_ein_fremder_lauf_im_nachladen_wird_angehaengt_statt_ueberrannt():
     )
     assert bericht["laeuft"], "the foreign run was not registered in the window"
     assert bericht["wartet"] == 1, "the queued message was lost"
+
+
+@p662_braucht_node
+def test_a_queued_message_the_service_turned_away_goes_back_in_line_and_leaves_once_free():
+    """Another window holds the chat (it folds), the queue's send meets the
+    409: the message goes back to the front of its own line and not into the
+    field, waits for the claim the way the end of a held chat does, and is
+    sent — once — when the chat is free."""
+    bericht = _p662_lauf(
+        _p662_quelle(),
+        P662_AUFBAU
+        + """
+    globalThis.__claims = [
+      { laufend: null, gehalten: true },    // the claim stands
+      { laufend: null, gehalten: false },   // gone: the wait is over
+      { laufend: null, gehalten: false },
+    ]
+    // The queue took the entry out for sending (the chat was free for it).
+    const eintrag = ausreihen('A')
+    zustand.nachrichten.push({ id: 'eigen-x', role: 'user', content: 'zwei' })
+    const nachDemAbweis = []
+    const ende = laufEnde({
+      zielChat: 'A', abgebrochen: false, gescheitert: false, belegt: true,
+      platzhalter: { id: 'platzhalter-A', role: 'assistant', content: '' },
+      inhalt: 'zwei', nachrichtId: 'x', ausReihe: eintrag, begun: false,
+      lauf: { generationId: null },
+    })
+    await new Promise((frei) => setTimeout(frei, 0))
+    nachDemAbweis.push({ inReihe: fuerChat('A').map((e) => e.inhalt), gehalten: Boolean(zustand.sendet.A) })
+    await ende
+    await new Promise((frei) => setTimeout(frei, 20))
+    return {
+      protokoll, nachDemAbweis, gesendet: protokoll.filter((p) => p === 'senden').length,
+      wartet: fuerChat('A').map((e) => e.inhalt),
+    }
+        """,
+    )
+    assert bericht["nachDemAbweis"][0]["inReihe"] == ["zwei"], bericht
+    assert not any(isinstance(p, list) and p[0] == "zurueckgegeben" for p in bericht["protokoll"]), (
+        f"the message was handed back to the field: {bericht['protokoll']}"
+    )
+    assert bericht["gesendet"] == 1, f"sent {bericht['gesendet']} times: {bericht['protokoll']}"
+    assert bericht["wartet"] == []
+
+
+@p662_braucht_node
+def test_a_typed_message_the_service_turned_away_still_goes_back_to_the_field():
+    """Silence probe: no entry of the queue, the words go back to the field
+    as they always did and nothing waits."""
+    bericht = _p662_lauf(
+        _p662_quelle(),
+        P662_AUFBAU
+        + """
+    ausreihen('A')
+    await laufEnde({
+      zielChat: 'A', abgebrochen: false, gescheitert: false, belegt: true,
+      platzhalter: { id: 'platzhalter-A', role: 'assistant', content: '' },
+      inhalt: 'getippt', nachrichtId: 'y', ausReihe: null, begun: false,
+      lauf: { generationId: null },
+    })
+    return { protokoll, wartet: fuerChat('A').length }
+        """,
+    )
+    assert ["zurueckgegeben", "getippt", "A", "y"] in bericht["protokoll"], bericht["protokoll"]
+    assert bericht["wartet"] == 0
+
+
+@p662_braucht_node
+def test_two_queued_messages_keep_their_order_when_the_first_is_turned_away():
+    bericht = _p662_lauf(
+        _p662_quelle(),
+        P662_AUFBAU
+        + """
+    einreihen('A', { inhalt: 'drei' })
+    globalThis.__claims = [{ laufend: null, gehalten: true }, { laufend: null, gehalten: false }]
+    const eintrag = ausreihen('A')               // 'zwei'
+    const ende = laufEnde({
+      zielChat: 'A', abgebrochen: false, gescheitert: false, belegt: true,
+      platzhalter: { id: 'platzhalter-A', role: 'assistant', content: '' },
+      inhalt: 'zwei', nachrichtId: 'x', ausReihe: eintrag, begun: false,
+      lauf: { generationId: null },
+    })
+    await new Promise((frei) => setTimeout(frei, 0))
+    const reihe = fuerChat('A').map((e) => e.inhalt)
+    await ende
+    return { reihe }
+        """,
+    )
+    assert bericht["reihe"] == ["zwei", "drei"], bericht
+
+
+@p662_braucht_node
+def test_a_message_turned_away_twice_in_a_row_goes_back_to_the_field():
+    """Silence probe for the loop guard: refused again before one check of
+    the claim's clock has passed, it is no claim that ends — the words go
+    back to the field and nothing is sent in a circle."""
+    bericht = _p662_lauf(
+        _p662_quelle(),
+        P662_AUFBAU
+        + """
+    const eintrag = ausreihen('A')
+    eintrag.abgewiesenUm = Date.now()            // refused a moment ago already
+    await laufEnde({
+      zielChat: 'A', abgebrochen: false, gescheitert: false, belegt: true,
+      platzhalter: { id: 'platzhalter-A', role: 'assistant', content: '' },
+      inhalt: 'zwei', nachrichtId: 'x', ausReihe: eintrag, begun: false,
+      lauf: { generationId: null },
+    })
+    return { protokoll, wartet: fuerChat('A').length }
+        """,
+    )
+    assert ["zurueckgegeben", "zwei", "A", "x"] in bericht["protokoll"], bericht["protokoll"]
+    assert bericht["wartet"] == 0
+    assert "senden" not in bericht["protokoll"]
+
+
+@p662_braucht_node
+def test_stop_cuts_the_wait_for_a_foreign_claim_short_and_the_line_holds():
+    """The end of an answer waits for another window's claim on the chat.
+    The stop button reaches the claim through the chat's id, the wait ends at
+    once — long before the check interval — and the queue does not send."""
+    bericht = _p662_lauf(
+        _p662_quelle(),
+        P662_AUFBAU
+        + """
+    globalThis.__claims = Array.from({ length: 50 }, () => ({ laufend: null, gehalten: true }))
+    const begonnen = Date.now()
+    const ende = laufEnde({
+      zielChat: 'A', abgebrochen: false, gescheitert: false,
+      platzhalter: p1, verdichtetZu: 'naht', heldWithoutRun: true,
+    })
+    await new Promise((frei) => setTimeout(frei, 50))
+    const wartetVorStopp = anspruchWarten.has('A')
+    await abbrechen()
+    await ende
+    return {
+      protokoll, wartetVorStopp, dauer: Date.now() - begonnen,
+      wartetNachStopp: anspruchWarten.has('A'),
+      haelt: fuerChat('A').map((e) => e.haelt),
+      gesendet: protokoll.filter((p) => p === 'senden').length,
+      gehalten: Boolean(zustand.sendet.A),
+    }
+        """,
+    )
+    assert bericht["wartetVorStopp"] is True
+    assert ["stop", None, "A"] in bericht["protokoll"], bericht["protokoll"]
+    assert bericht["dauer"] < 400, f"the wait outlived the stop: {bericht['dauer']} ms"
+    assert bericht["wartetNachStopp"] is False
+    assert bericht["haelt"] == [True], "the queue does not hold after the stop"
+    assert bericht["gesendet"] == 0
+    assert bericht["gehalten"] is False
+
+
+@p662_braucht_node
+def test_stop_without_a_run_and_without_a_waiting_claim_does_nothing():
+    """Silence probe: no claim is waited for, no run — no request goes out."""
+    bericht = _p662_lauf(
+        _p662_quelle(),
+        P662_AUFBAU
+        + """
+    ausreihen('A')                                // nothing in line to send
+    delete zustand.laeuft.A
+    delete zustand.laufenderPlatzhalter.A
+    flushSync()
+    await abbrechen()
+    return { protokoll: protokoll.filter((p) => Array.isArray(p) && p[0] === 'stop') }
+        """,
+    )
+    assert bericht["protokoll"] == []
 
 
 @p662_braucht_node
@@ -2222,6 +2432,8 @@ P666_STUMPFE = {
         "export function darstellungSpeichern() {}\n"
         "export function layoutSpeichern() {}\n"
         "export function modellSpeichern() {}\n"
+        "export function keptModelName() { return '' }\n"
+        "export async function storedModelId() { return '' }\n"
     ),
     "chatanzeige.mjs": (
         "export const chatanzeige = { chatId: null, geladen: false }\n"
@@ -2618,11 +2830,11 @@ def test_ein_neustart_mitten_im_lauf_haengt_weiterhin_wieder_an():
 
 
 @P666_BRAUCHT_NODE
-def test_eine_gescheiterte_dritte_oeffnung_laesst_die_kennung_falsch_stehen():
-    """A -> B -> A, third fetch failing: `aktiverChat` goes back to B, but
-    the list was never touched by the failed attempt and still carries A's
-    own tag from the very first, successful open. The mismatch is the
-    point -- it is what tells the display nothing here is B's to show."""
+def test_a_failed_third_open_ends_on_the_start_page():
+    """A -> B -> A, the third fetch failing while B's fetch is still held:
+    no chat is selected and no row stands — neither A's from the first,
+    successful open nor B's, whose fetch arrives afterwards and is dropped.
+    The start page, as after "New chat"; the notice stays."""
     bericht = _p666_lauf(
         _p666_zustand(),
         """
@@ -2631,43 +2843,103 @@ def test_eine_gescheiterte_dritte_oeffnung_laesst_die_kennung_falsch_stehen():
       B: { zeilen: [{ id: 'b-echt', role: 'user', content: 'b' }], laufend: null },
     }
     // A clean first open of A: it settles, and tags the list as its own.
-    const ersteA = chatOeffnen('A')
+    const firstA = chatOeffnen('A')
     await aufloesen()
-    await ersteA
+    await firstA
 
     // B starts opening -- its fetch is queued but not yet answered --
-    // and before it is, A is opened a third time. This one is the one
-    // that fails.
-    const bOffen = chatOeffnen('B')
+    // and before it is, A is opened a third time. This one fails.
+    const bOpen = chatOeffnen('B')
     globalThis.__naechsterFehlschlag = true
-    const dritteA = chatOeffnen('A')
+    const thirdA = chatOeffnen('A')
     await aufloesen()
-    await bOffen
-    await dritteA
+    await bOpen
+    await thirdA
     return {
       aktiverChat: zustand.aktiverChat,
       nachrichtenChatId: zustand.nachrichtenChatId,
-      liste: zustand.nachrichten.map((n) => n.id),
+      rows: zustand.nachrichten.map((n) => n.id),
     }
         """,
     )
-    assert bericht["aktiverChat"] == "B", (
-        f"the failed reopen of A did not fall back to B: {bericht}"
+    assert bericht["aktiverChat"] is None, f"a chat is still selected: {bericht}"
+    assert bericht["rows"] == [], f"rows of another chat still stand: {bericht['rows']}"
+    assert bericht["nachrichtenChatId"] is None, f"the list's own tag lies: {bericht}"
+    assert ["melde", "fehler"] in bericht["protokoll"], "the notice is gone"
+
+
+@P666_BRAUCHT_NODE
+def test_a_failed_switch_from_an_open_chat_ends_on_the_start_page_with_the_model_from_before():
+    """A is open, B is asked for and the service does not answer: the start
+    page, no row of A under B's name, the model the reader had before the
+    click (it is set for B when the click is made)."""
+    bericht = _p666_lauf(
+        _p666_zustand(),
+        """
+    zustand.modelle = [{ id: 'm-a' }, { id: 'm-b' }]
+    zustand.chats = [{ id: 'A', endpoint_id: 'm-a' }, { id: 'B', endpoint_id: 'm-b' }]
+    zustand.modellId = 'm-a'
+    dienst = {
+      A: { zeilen: [{ id: 'a-echt', role: 'user', content: 'a' }], laufend: null },
+    }
+    const firstA = chatOeffnen('A')
+    await aufloesen()
+    await firstA
+    const rowsBefore = zustand.nachrichten.map((n) => n.id)
+
+    globalThis.__naechsterFehlschlag = true
+    const bOpen = chatOeffnen('B')
+    await aufloesen()
+    await bOpen
+    return {
+      rowsBefore,
+      aktiverChat: zustand.aktiverChat,
+      rows: zustand.nachrichten.map((n) => n.id),
+      modellId: zustand.modellId,
+    }
+        """,
     )
-    assert bericht["nachrichtenChatId"] == "A", (
-        f"the list's own tag no longer says A, although its rows are still "
-        f"A's from the first, successful open -- the tag itself now lies: "
-        f"{bericht}"
+    assert bericht["rowsBefore"] == ["a-echt"]
+    assert bericht["aktiverChat"] is None
+    assert bericht["rows"] == [], f"a row stands under no chat: {bericht['rows']}"
+    assert bericht["modellId"] == "m-a", f"the model is not the one from before: {bericht}"
+    assert ["melde", "fehler"] in bericht["protokoll"]
+
+
+@P666_BRAUCHT_NODE
+def test_a_failed_second_look_at_the_open_chat_leaves_chat_and_list_standing():
+    """Silence probe: no switch, so nothing changes — the chat stays
+    selected, its list keeps standing, the notice comes. And a successful
+    open shows its list as before."""
+    bericht = _p666_lauf(
+        _p666_zustand(),
+        """
+    dienst = {
+      A: { zeilen: [{ id: 'a-echt', role: 'user', content: 'a' }], laufend: null },
+    }
+    const firstA = chatOeffnen('A')
+    await aufloesen()
+    await firstA
+    const opened = {
+      aktiverChat: zustand.aktiverChat,
+      rows: zustand.nachrichten.map((n) => n.id),
+    }
+
+    globalThis.__naechsterFehlschlag = true
+    const again = chatOeffnen('A')
+    await aufloesen()
+    await again
+    return {
+      opened,
+      aktiverChat: zustand.aktiverChat,
+      rows: zustand.nachrichten.map((n) => n.id),
+    }
+        """,
     )
-    assert bericht["nachrichtenChatId"] != bericht["aktiverChat"], (
-        f"the list's own tag agrees with the selected chat although its "
-        f"rows are A's, not B's -- a display comparing the two would show "
-        f"them: {bericht}"
-    )
-    assert bericht["liste"] == ["a-echt"], (
-        f"the standing list changed even though the failed fetch never "
-        f"touched it: {bericht['liste']}"
-    )
+    assert bericht["opened"] == {"aktiverChat": "A", "rows": ["a-echt"]}
+    assert bericht["aktiverChat"] == "A", f"the open chat was left: {bericht}"
+    assert bericht["rows"] == ["a-echt"], f"the standing list changed: {bericht['rows']}"
+    assert ["melde", "fehler"] in bericht["protokoll"]
 
 
 # --- A second, still-unsaved question is not the first one again ---------
@@ -2809,6 +3081,8 @@ def test_das_fenster_hat_nur_die_leiste_links_und_keine_kopfleiste():
     assert marke in app, "the chat has no head of its own"
     kopf = app.split(marke, 1)[1].split("</div>\n      <!--", 1)[0]
     assert "ToolSigns" not in kopf, "tool buttons stand in the chat's head again"
+    assert "<button" not in kopf, "the chat's head carries a button again"
+    assert "cliknopf" not in app, "the head's button for the CLI, or its style, is back"
     assert "ToolSigns" not in app, "the tool signs belong to the column"
     assert '<div class="fusszeile">\n      <ToolSigns />' in spalte, "the column lost its row"
     assert '<nav class="zeichenleiste">' in spalte, "the folded column lost its bar"
@@ -2820,7 +3094,9 @@ def test_das_fenster_hat_nur_die_leiste_links_und_keine_kopfleiste():
     assert 'class="fensterzeile"' in seitenleiste, "the window row is gone"
     # The windows open from the sidebar only; the tool row opens tools only.
     assert "menueFensterOeffnen" not in rand
-    assert "'cli'" not in rand, "the CLI came back among the tools"
+    # The CLI is a tool of the column again — the terminal client in the
+    # window, beside the terminal that logs the chat's tool calls.
+    assert "'cli'" in rand and "'terminal'" in rand, "the CLI or the terminal left the tools"
 
 
 def test_the_folders_live_only_in_the_bar_chip():
@@ -3051,6 +3327,55 @@ def _node(skript: str) -> dict:
     return json.loads(lauf.stdout.strip().splitlines()[-1])
 
 
+def _thinking_stage_shown(denken: dict, entry: dict | None, model_id: str = "m1"):
+    """The stage the switch shows, evaluated as the bar really writes it."""
+    stueck = _stueck(
+        EINGABELEISTE, r"\n  const denkStufe = \$derived\(.*?\n  \)\n", "denkStufe"
+    ).strip()
+    expression = stueck.replace("const denkStufe = $derived(", "", 1).removesuffix(")").strip()
+    stueck = f"const denkStufe = {expression.removesuffix(',')}"
+    return _node(f"""
+const zustand = {{ modellId: {json.dumps(model_id)} }}
+const denken = {json.dumps(denken)}
+const modellEintrag = {json.dumps(entry)}
+const denkprofil = modellEintrag?.denkprofil ?? null
+{stueck}
+console.log(JSON.stringify(denkStufe))
+""")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_the_switch_shows_the_stage_the_service_sends_for_a_dropped_one():
+    """Stored `xhigh`, offered low/medium/high with `medium` as the default:
+    the service sends `high`, so the switch shows `high` — the list carries
+    it and the window works nothing out."""
+    entry = {
+        "denkprofil": {"stufen": ["low", "medium", "high"], "standard": "medium"},
+        "thinking_sent": "high",
+    }
+    assert _thinking_stage_shown({"modell": "m1", "stufe": "xhigh", "picked": False}, entry) == "high"
+    # Before the stored stage has been read, the list's word stands already.
+    assert _thinking_stage_shown({"modell": None, "stufe": None, "picked": False}, entry) == "high"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_the_switch_keeps_a_stage_the_model_still_offers_and_a_hand_pick():
+    """Silence probe: a stored or picked stage that is offered is shown as it
+    was, and a list without the word falls back to the default."""
+    entry = {
+        "denkprofil": {"stufen": ["low", "medium", "high"], "standard": "medium"},
+        "thinking_sent": "high",
+    }
+    assert _thinking_stage_shown({"modell": "m1", "stufe": "low", "picked": False}, entry) == "low"
+    assert _thinking_stage_shown({"modell": "m1", "stufe": "low", "picked": True}, entry) == "low"
+    # Another model's stored stage never applies here.
+    assert _thinking_stage_shown({"modell": "m2", "stufe": "low", "picked": False}, entry) == "high"
+    # An older service that does not carry the word: the default, as before.
+    older = {"denkprofil": entry["denkprofil"]}
+    assert _thinking_stage_shown({"modell": "m1", "stufe": "xhigh", "picked": False}, older) == "medium"
+    assert _thinking_stage_shown({"modell": None, "stufe": None, "picked": False}, None) is None
+
+
 def _leiste(fall: str) -> dict:
     """The bar with `zurueckgeben` and `anhangSetzen` as they really stand."""
     zurueckgeben = _stueck(
@@ -3182,12 +3507,13 @@ def test_the_bar_hands_its_message_id_to_the_send_and_drops_it_after():
     goes out with — the refusal names that id — and the entry goes once the
     send is over."""
     leiste = EINGABELEISTE.read_text(encoding="utf-8")
-    assert "zurueckbehalten.set(messageId, kept)" in leiste
+    assert "const release = keep(messageId, kept)" in leiste
     assert "senden(auftrag.inhalt, bilder, dokumente, auftrag.denken, skill, false, messageId)" in leiste
-    assert ".finally(() => zurueckbehalten.delete(messageId))" in leiste
+    assert ".finally(release)" in leiste
     app = APP.read_text(encoding="utf-8")
-    assert "gespraech = false,\n    messageId = null,\n  ) {" in app
-    assert "const frageKennung = messageId ?? Math.random().toString(36).slice(2, 9)" in app
+    assert "gespraech = false,\n    messageId = null, kept = null, ausReihe = null,\n  ) {" in app
+    assert "const sendId = messageId ?? Math.random().toString(36).slice(2, 9)" in app
+    assert "const frageKennung = sendId" in app
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
@@ -3205,15 +3531,59 @@ def test_die_grenze_bleibt_fuer_das_was_der_nutzer_anhaengt():
 
 def _abbrechen(lauf_js: str) -> list:
     """The stop button's own function, with the service call recorded."""
-    abbrechen = _stueck(APP, r"\n  async function abbrechen\(\) \{.*?\n  \}\n", "abbrechen")
+    return [e[1:] for e in _stop_events(lauf_js, [0], ends_after=1) if e[0] == "stop"]
+
+
+def _stop_events(
+    lauf_js: str, counts: list, ends_after: int | None = None, presses: int = 1
+) -> list:
+    """The stop button's own two functions, with every service call and the
+    local cut of the send recorded in the order they happen.
+
+    ``counts`` is what the service answers to the stops, one after the
+    other (the last one repeats); ``ends_after`` ends the send — the chat has
+    no run any more — once that many stops have gone out."""
+    funktionen = _stueck(
+        APP,
+        r"\n  async function stoppWiederholen\(lauf\) \{.*?\n  \}\n"
+        r".*?\n  async function abbrechen\(\) \{.*?\n  \}\n",
+        "abbrechen",
+    )
     skript = f"""
-const gerufen = []
-const api = {{ abbrechen: async (generationId, chatId) => {{ gerufen.push([generationId, chatId]) }} }}
-const laufVon = () => ({lauf_js})
+const ereignisse = []
+const antworten = {json.dumps(counts)}
+const endetNach = {json.dumps(ends_after)}
+let gestoppt = 0
+let laeuft = true
+const lauf = ({lauf_js})
+lauf.abbruch = {{
+  signal: {{ aborted: false }},
+  abort() {{ this.signal.aborted = true; ereignisse.push(['abort']) }},
+}}
+const api = {{
+  abbrechen: async (generationId, chatId) => {{
+    ereignisse.push(['stop', generationId, chatId])
+    const antwort = antworten[Math.min(gestoppt, antworten.length - 1)]
+    gestoppt += 1
+    if (endetNach !== null && gestoppt >= endetNach) laeuft = false
+    return {{ abgebrochen: antwort }}
+  }},
+}}
+const HALTEPRUEFUNG_MS = 1
+const laufVon = () => (laeuft ? lauf : null)
+const anspruchWarten = new Map()
+const compactSince = {{}}
+const anhalten = () => {{ throw new Error('the queue is not held by a stop of a run') }}
 const zustand = {{ aktiverChat: 'A' }}
-{abbrechen}
-await abbrechen()
-console.log(JSON.stringify(gerufen))
+{funktionen}
+for (let i = 0; i < {presses}; i += 1) await abbrechen()
+// Until the send is cut (a loaded machine is slow, not wrong), then a moment
+// longer so a stop that should not exist has time to show up.
+for (let i = 0; i < 400 && !ereignisse.some((e) => e[0] === 'abort'); i += 1) {{
+  await new Promise((frei) => setTimeout(frei, 5))
+}}
+await new Promise((frei) => setTimeout(frei, 30))
+console.log(JSON.stringify(ereignisse))
 """
     lauf = subprocess.run(
         ["node", "--input-type=module", "-e", skript],
@@ -3228,14 +3598,84 @@ def test_der_stopp_geht_mit_beiden_kennungen_hinaus():
     """Before the stream's `start` the window has no run id — the chat id is
     all it has, and the service needs it to reach the claim it took. Sent
     with the run's id alone, the press reached nothing."""
-    assert _abbrechen("{ generationId: 'g1', chatId: 'A', abbruch: { abort() {} } }") == [["g1", "A"]]
-    assert _abbrechen("{ generationId: null, chatId: 'A', abbruch: { abort() {} } }") == [[None, "A"]]
+    assert _abbrechen("{ generationId: 'g1', chatId: 'A' }") == [["g1", "A"]]
+    assert _abbrechen("{ generationId: null, chatId: 'A' }") == [[None, "A"]]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
 def test_ohne_lauf_wird_gar_nicht_gestoppt():
     """Silence probe: nothing running in this chat, nothing to stop."""
-    assert _abbrechen("null") == []
+    skript = """
+const api = { abbrechen: async () => { throw new Error('no stop expected') } }
+const laufVon = () => null
+const anspruchWarten = new Map()
+const compactSince = {}
+const anhalten = () => { throw new Error('nothing to hold') }
+const zustand = { aktiverChat: 'A' }
+const HALTEPRUEFUNG_MS = 1
+FUNKTIONEN
+await abbrechen()
+console.log(JSON.stringify([]))
+""".replace(
+        "FUNKTIONEN",
+        _stueck(
+            APP,
+            r"\n  async function stoppWiederholen\(lauf\) \{.*?\n  \}\n"
+            r".*?\n  async function abbrechen\(\) \{.*?\n  \}\n",
+            "abbrechen",
+        ),
+    )
+    assert _node(skript) == []
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_a_stop_that_arrives_before_the_claim_is_repeated_until_it_lands():
+    """The service counts 0, 0, 1: three stops go out, and the send is cut
+    only after the third (without the repetition: one stop, the cut at once,
+    and the answer begins a moment later)."""
+    events = _stop_events("{ generationId: null, chatId: 'A' }", [0, 0, 1])
+    assert events == [["stop", None, "A"]] * 3 + [["abort"]]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_a_stop_that_counts_zero_ends_with_the_send_without_another_stop():
+    events = _stop_events("{ generationId: null, chatId: 'A' }", [0], ends_after=1)
+    assert [e[0] for e in events] == ["stop", "abort"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_a_stop_that_lands_at_once_is_sent_once_and_cuts_the_send():
+    """Silence probe: no second stop where the first one hit."""
+    events = _stop_events("{ generationId: null, chatId: 'A' }", [1])
+    assert events == [["stop", None, "A"], ["abort"]]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_a_named_run_is_cut_and_stopped_once_as_before():
+    """Silence probe: with the run's id one stop goes out and the cut comes
+    at once, whatever the count."""
+    events = _stop_events("{ generationId: 'g1', chatId: 'A' }", [0])
+    assert events[0] == ["abort"]
+    assert [e for e in events if e[0] == "stop"] == [["stop", "g1", "A"]]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_a_second_press_starts_no_second_repetition():
+    events = _stop_events("{ generationId: null, chatId: 'A' }", [0, 0, 1], presses=2)
+    assert events == [["stop", None, "A"]] * 3 + [["abort"]]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_the_repetition_names_the_run_once_the_stream_has():
+    """The run is named while the stops count 0: the next one carries its id."""
+    events = _stop_events(
+        "(() => { const l = { generationId: null, chatId: 'A' }; "
+        "setTimeout(() => { l.generationId = 'g7' }, 0); return l })()",
+        [0, 0, 1],
+    )
+    ids = [e[1] for e in events if e[0] == "stop"]
+    assert ids[0] is None and ids[-1] == "g7"
+    assert events[-1] == ["abort"]
 
 
 _WITH_DEADLINE = (
@@ -3245,21 +3685,30 @@ _WITH_DEADLINE = (
 )
 
 
-def _nachholen(antworten: list, own_question: str | None = None) -> dict:
+def _nachholen(
+    antworten: list, own_question: str | None = None, redo: dict | None = None
+) -> dict:
     """Where a send whose line broke before `start` looks for its answer.
 
     `antworten` are the service's answers, one per question (`null` = no
-    answer at all); `own_question` is the id this send gave its question."""
+    answer at all); `own_question` is the id this send gave its question;
+    `redo` is the regeneration this send is for (`{"replaces": id}`)."""
     stueck = _stueck(
         APP,
         r"\n    async function nachholen\(laufJetzt, chatId, signal\) \{.*?\n    \}\n",
         "nachholen",
+    )
+    eigene = _stueck(
+        APP,
+        r"\n    async function antwortetAufEigene\(chatId, antwortId, signal\) \{.*?\n    \}\n",
+        "antwortetAufEigene",
     )
     deadline = _stueck(APP, _WITH_DEADLINE, "withDeadline")
     skript = f"""
 const HALTEPRUEFUNG_MS = 1
 const NACHLADE_FRIST_MS = 60_000
 const nachrichtId = {json.dumps(own_question)}
+const redo = {json.dumps(redo)}
 let zeileNachladen = false
 const gefragt = []
 const folge = {json.dumps(antworten)}
@@ -3272,6 +3721,7 @@ const api = {{
   }},
 }}
 {deadline}
+{eigene}
 {stueck}
 const lauf = {{ generationId: null }}
 const gefunden = await nachholen(lauf, 'A', undefined)
@@ -3367,6 +3817,99 @@ def test_without_its_own_question_id_a_send_is_not_looked_up():
     assert stand["gefragt"] == [1]
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_a_regeneration_whose_run_ended_between_two_questions_is_stored_not_failed():
+    """Held, then neither run nor claim, and the replaced answer is gone from
+    the newest rows with a new answer standing last: the service stored the
+    new one in the step that took the old one away. No red notice, the
+    queue goes on, the stored list is fetched."""
+    stand = _nachholen(
+        [{"laufend": None, "gehalten": True}, {"laufend": None, "gehalten": False},
+         {"nachrichten": [{"id": "q0", "role": "user"},
+                          {"id": "a2", "role": "assistant", "art": "nachricht",
+                           "zustand": "fertig"}]}],
+        redo={"replaces": "a1"},
+    )
+    assert stand["gefunden"] == "stored"
+    assert stand["zeileNachladen"] is True
+    assert stand["gefragt"] == [1, 1, 50]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_a_regeneration_whose_replaced_answer_still_stands_is_a_failed_send():
+    """Silence probe: nothing was written, the old answer is still there."""
+    stand = _nachholen(
+        [{"laufend": None, "gehalten": False},
+         {"nachrichten": [{"id": "q0", "role": "user"},
+                          {"id": "a1", "role": "assistant", "art": "nachricht",
+                           "zustand": "fertig"}]}],
+        redo={"replaces": "a1"},
+    )
+    assert stand["gefunden"] is False
+    assert stand["zeileNachladen"] is False
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_a_regeneration_concludes_nothing_where_the_service_does_not_answer():
+    """Silence probe: no answer at all, or no row at all — nothing is
+    concluded."""
+    stand = _nachholen(
+        [{"laufend": None, "gehalten": False}, None], redo={"replaces": "a1"}
+    )
+    assert stand["gefunden"] is False
+    assert stand["zeileNachladen"] is False
+    stand = _nachholen(
+        [{"laufend": None, "gehalten": False}, {"nachrichten": []}], redo={"replaces": "a1"}
+    )
+    assert stand["gefunden"] is False
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_a_run_that_answers_another_question_is_not_attached_to():
+    """The service names a run for the chat, but its row stands behind a
+    question of another window: its answer would stream into this bubble.
+    The send ends as a failed one, the queue holds, and nothing is attached."""
+    stand = _nachholen(
+        [{"laufend": {"generation_id": "g2", "message_id": "a2"}, "gehalten": False},
+         {"nachrichten": [{"id": "q1", "role": "user"}, {"id": "q2", "role": "user"},
+                          {"id": "a2", "role": "assistant", "art": "nachricht",
+                           "zustand": "laeuft"}]}],
+        own_question="q1",
+    )
+    assert stand["gefunden"] is False
+    assert stand["generationId"] is None
+    assert stand["gefragt"] == [1, 50]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_a_run_that_answers_the_own_question_is_attached_to():
+    """Silence probe: the row stands directly behind the own question, or
+    behind it with a tool report between (no other question)."""
+    for between in ([], [{"id": "t1", "role": "assistant", "art": "werkzeugmeldung"}]):
+        stand = _nachholen(
+            [{"laufend": {"generation_id": "g1", "message_id": "a1"}, "gehalten": False},
+             {"nachrichten": [{"id": "q0", "role": "user"}, {"id": "q1", "role": "user"}, *between,
+                              {"id": "a1", "role": "assistant", "art": "nachricht",
+                               "zustand": "laeuft"}]}],
+            own_question="q1",
+        )
+        assert stand["gefunden"] == "run"
+        assert stand["generationId"] == "g1"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_a_run_is_attached_to_where_it_cannot_be_compared():
+    """Silence probe: no row named, a row not among the newest, a list that
+    cannot be read — nothing says it is a foreign one, and it stays attached
+    as it did."""
+    named = {"laufend": {"generation_id": "g1", "message_id": "a1"}, "gehalten": False}
+    assert _nachholen([{**named, "laufend": {"generation_id": "g1", "message_id": None}}],
+                      own_question="q1")["gefunden"] == "run"
+    assert _nachholen([named, {"nachrichten": [{"id": "q1", "role": "user"}]}],
+                      own_question="q1")["gefunden"] == "run"
+    assert _nachholen([named, None], own_question="q1")["gefunden"] == "run"
+
+
 def _catch_up_and_watch(antworten: list, breaks: int, own_question: str | None = None) -> dict:
     """The catch's whole way for a line broken before `start`: `nachholen`
     finds the run, and the caller watches it through `weiterZusehen` — the
@@ -3376,6 +3919,11 @@ def _catch_up_and_watch(antworten: list, breaks: int, own_question: str | None =
         APP,
         r"\n    async function nachholen\(laufJetzt, chatId, signal\) \{.*?\n    \}\n",
         "nachholen",
+    )
+    eigene = _stueck(
+        APP,
+        r"\n    async function antwortetAufEigene\(chatId, antwortId, signal\) \{.*?\n    \}\n",
+        "antwortetAufEigene",
     )
     deadline = _stueck(APP, _WITH_DEADLINE, "withDeadline")
     weiter = _stueck(
@@ -3396,6 +3944,7 @@ const HALTEPRUEFUNG_MS = 1
 const NACHLADE_FRIST_MS = 60_000
 {limits}
 const nachrichtId = {json.dumps(own_question)}
+const redo = null
 let zeileNachladen = false
 const protokoll = []
 let offen = {breaks}
@@ -3419,6 +3968,7 @@ const ereignisVerarbeiten = async (strom) => {{
 }}
 globalThis.setTimeout = ((echt) => (f, ms) => echt(f, 0))(globalThis.setTimeout)
 {deadline}
+{eigene}
 {nachholen}
 {weiter}
 const lauf = {{ generationId: null }}
@@ -3798,26 +4348,22 @@ def test_the_product_is_named_exe_ai_where_the_user_reads_it():
     # The silence check: the data folder keeps its name, the page under "/"
     # its sentence, and the folder of the service's bundle its name — the
     # packaging addresses it by that.
-    assert "<p>Phase 1 — Fundament. Die Oberfläche entsteht in Phase 2.</p>" in (
-        WURZEL / "static" / "index.html"
-    ).read_text(encoding="utf-8")
+    start_page = (WURZEL / "static" / "index.html").read_text(encoding="utf-8")
+    assert '<p lang="en">Phase 1 — Foundation. The interface will be built in Phase 2.</p>' in start_page
+    assert "<p>Phase 1 — Grundlage. Die Oberfläche entsteht in Phase 2.</p>" in start_page
     assert 'name="Exe AI Terminal.app",' in (WURZEL / "deploy" / "exe-ai-terminal.spec").read_text(encoding="utf-8")
     packaging = (WURZEL / "app" / "paketierung.py").read_text(encoding="utf-8")
     assert '"Library" / "Application Support" / "Exe AI Terminal"' in packaging
     assert '"AppData" / "Roaming" / "Exe AI Terminal"' in packaging
-    # The welcome sentence and the hint under the form of address call the
-    # program by its name too, not by the word left over from the former one.
+    # The welcome sentence calls the program by its name too, not by the word
+    # left over from the former one.
     texts = {
         language: json.loads((WURZEL / "app" / "locales" / f"{language}.json").read_text(encoding="utf-8"))
         for language in ("de", "en")
     }
     assert {language: catalogue["erststart"]["satz"] for language, catalogue in texts.items()} == {
-        "de": "Drei Dinge, dann gehört Exe AI dir.",
-        "en": "Three things, then Exe AI is yours.",
-    }
-    assert {language: catalogue["editor"]["anrede_unter"] for language, catalogue in texts.items()} == {
-        "de": "Wie Exe AI dich nennt",
-        "en": "What Exe AI calls you",
+        "de": "Drei Einstellungen, mit denen du Exe AI auf dich abstimmst.",
+        "en": "Three choices to make Exe AI your own.",
     }
 
 
@@ -3833,9 +4379,9 @@ def test_the_drawing_area_is_named_images_and_the_module_of_all_pictures_gallery
         "de": "Bilder", "en": "Images"}
     assert {language: texts["bilder"]["titel"] for language, texts in catalogues.items()} == {
         "de": "Galerie", "en": "Gallery"}
-    # The silence check: the neighbouring words are as they were.
+    # The silence check: the neighbouring words keep their own wording.
     de, en = catalogues["de"], catalogues["en"]
-    assert (de["studio"]["bilder"], en["studio"]["bilder"]) == ("Bilder", "Pictures")
+    assert (de["studio"]["bilder"], en["studio"]["bilder"]) == ("Bilder", "Images")
     assert (de["werkzeug"]["art_bilder"], en["werkzeug"]["art_bilder"]) == ("Bilder", "Images")
     assert (de["bild"]["bilder_zahl"], en["bild"]["bilder_zahl"]) == ("Bilder", "Images")
     assert (de["bilder"]["bildordner"], en["bilder"]["bildordner"]) == ("Bildordner", "Image folder")
@@ -3894,7 +4440,7 @@ def test_a_german_route_description_is_told_from_an_english_one():
     for text in ("Chat anlegen", "Bildmodelle", "Was der Server sagt", "Chat holen", "Image-Turbo — Zustand",
                  "Auto Setzen", "Zuruecksetzen"):
         assert _reads_german(text), text
-    for text in ("Create a chat", "What the server says", "Stop one running command", "Image-Turbo — state",
+    for text in ("Create a chat", "Server messages", "Stop a running command", "Image-Turbo — status",
                  "Get a chat", "List projects", "Model files", "Whoever wears the hat"):
         assert not _reads_german(text), text
 
@@ -3942,9 +4488,13 @@ def test_no_section_the_manual_moves_the_focus_onto_draws_a_focus_ring(page):
     text = (WURZEL / page).read_text(encoding="utf-8")
     focused = set(re.findall(r'<section class="([^"]+)"[^>]*\btabindex="-1"', text))
     assert {"home", "chapter"} <= {name for names in focused for name in names.split()}, (page, focused)
+    # The selectors in front of the rule, from the brace before them on. The
+    # look behind makes the search start a selector list only there: without
+    # it every character of the page is tried as a start and read up to the
+    # next brace, and the page's text is one long stretch without one.
     silenced = {
         selector.strip()
-        for selectors in re.findall(r"([^{}]+)\{outline:none\}", text)
+        for selectors in re.findall(r"(?:^|(?<=[{}]))([^{}]+)\{outline:none\}", text)
         for selector in selectors.split(",")
     }
     for names in sorted(focused):

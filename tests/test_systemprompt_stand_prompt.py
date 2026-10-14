@@ -79,7 +79,7 @@ def test_the_cost_of_a_second_run_names_no_slots_and_no_half():
 def test_a_run_the_chat_sent_off_is_told_its_calls_are_asked_about():
     asked = _flat(grundprompt.bauen(werkzeuge=True, agentenlauf=_job(ask_in_chat=True)))
     assert "put to them in the chat this job was started from" in asked
-    assert "refused outright rather than put to anyone" not in asked
+    assert "rejected outright" not in asked
     assert "no confirmation prompt in a job" not in asked
 
 
@@ -87,7 +87,7 @@ def test_any_other_run_is_still_told_its_calls_are_refused():
     """The silence probe: started by hand, by a schedule or by another run,
     nobody is asked."""
     refused = _flat(grundprompt.bauen(werkzeuge=True, agentenlauf=_job()))
-    assert "refused outright rather than put to anyone" in refused
+    assert "rejected outright" in refused
     assert "put to them in the chat" not in refused
 
 
@@ -113,7 +113,7 @@ def test_replacing_an_entry_is_asked_for_only_where_the_entries_are_in_sight():
 def test_the_memory_tool_says_when_an_entry_is_in_front_of_the_model():
     shown = memory.werkzeug_beschreibung(True).beschreibung
     assert "every conversation from now on" not in shown
-    assert "from the next conversation on, not right away" in shown
+    assert "in the next conversation, not immediately" in shown
     assert "lists the entries you have stored" in shown
 
 
@@ -123,7 +123,7 @@ def test_the_memory_tool_promises_no_sight_where_the_memory_stays_away():
     assert "in front of you" not in hidden
     assert "lists the entries" not in hidden
     assert "a short part of" not in hidden
-    assert "whole text" in hidden
+    assert "full existing text" in hidden
 
 
 def test_the_offer_carries_the_description_for_this_side(tmp_path):
@@ -150,7 +150,7 @@ def test_the_dock_is_named_apart_and_last():
     )
     shared = text.split("The user has shared these working folders with you:\n\n")[1]
     assert shared.split("\n\n")[0] == "- /u/a"
-    assert "The dock folder is where finished files are handed over" in text
+    assert "The dock folder holds finished files delivered to the user" in text
     # Listed after the share, so "the first one" is the user's folder.
     assert text.index("- /u/a") < text.index("- /d/dock")
 
@@ -183,7 +183,7 @@ def test_delivered_files_are_in_the_doc_folder_not_on_a_shelf():
         agentenlauf=_job(ablegen=True),
     ))
     assert "shelf" not in text
-    assert "hand files over into the Doc folder" in text
+    assert "deliver files to the Doc folder" in text
     assert "appear in the Doc folder" in text
     assert "finds them in the Doc folder" in text
 
@@ -307,11 +307,11 @@ def test_a_job_is_told_where_its_picture_is_and_how_to_hand_it_on(tmp_path, monk
     text = _draw(
         tmp_path, monkeypatch, job_id="j1", deliver_with=agentendock.WERKZEUG_NAME
     )
-    assert "attached to this answer" not in text
+    assert "attached to this response" not in text
     assert f"saved as {tmp_path / 'out.png'}" in text
     assert (
-        " When it is meant for the user as a result of this job, deliver it with "
-        f"{agentendock.WERKZEUG_NAME}, passing this path."
+        " If this image is a deliverable for the user, deliver it using "
+        f"{agentendock.WERKZEUG_NAME} with this path."
     ) in text
 
 
@@ -326,8 +326,8 @@ def test_a_chat_still_gets_its_picture_on_the_answer(tmp_path, monkeypatch):
     stands under the answer — and the model reads where its file lies, so
     it can name the picture to a later tool."""
     text = _draw(tmp_path, monkeypatch, chat_id="c1", antwort_id="a1")
-    assert f"is attached to this answer and saved as {tmp_path / 'out.png'}." in text
-    assert "deliver it with" not in text
+    assert f"attached to this response, and saved as {tmp_path / 'out.png'}." in text
+    assert "deliver it using" not in text
 
 
 def test_the_job_description_does_not_promise_the_answer():

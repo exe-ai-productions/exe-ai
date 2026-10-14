@@ -24,14 +24,24 @@
   /* Filtered even before the selection has arrived: unfiltered means every
      model of every catalogue, and one provider alone reports 124. */
   $effect(() => {
-    if (!modellwahl.geladen) auswahlLaden()
+    if (open || !modellwahl.geladen) auswahlLaden()
   })
   const offered = $derived(sichtbare())
-  const chosen = $derived(offered.find((m) => m.id === zustand.modellId) ?? null)
   /* The chosen model missing from the list has two causes, and the empty
      text tells them apart: switched off in the model window reads "Model
      disabled", anything else keeps the broader "No model reachable". */
   const disabled = $derived(chosenModelOff())
+  /* The chosen model is the one on offer or, while it is not reachable, the
+     entry the window keeps of it: the list offers reachable models only,
+     but the button goes on naming the model that is in use. One that is
+     switched off is not named, and neither is one that has no name: the
+     service gives none for it and none was stored with the choice. */
+  const unlisted = $derived(
+    !disabled && zustand.unlistedModel?.id === zustand.modellId && zustand.unlistedModel.name
+      ? zustand.unlistedModel
+      : null,
+  )
+  const chosen = $derived(offered.find((m) => m.id === zustand.modellId) ?? unlisted)
   const emptyText = $derived(
     t(disabled ? 'fehler.modell_deaktiviert' : 'fehler.kein_modell_verfuegbar'),
   )
@@ -207,6 +217,7 @@
     padding: 6px 9px;
     border-radius: 9px;
     background: var(--bg-hoch);
+    box-shadow: inset 0 0 0 1px var(--feldstrich);
     color: var(--text-still);
   }
   .search input {

@@ -15,7 +15,7 @@ chat's answer row ends in the state "abgebrochen", and so does a job run.
 
 from __future__ import annotations
 
-STOP_NOTE = "[Note: the user stopped your previous reply before it finished.]"
+STOP_NOTE = "[Note: the user stopped your previous response before it finished.]"
 
 
 # The ending a job run records when a person pressed its stop

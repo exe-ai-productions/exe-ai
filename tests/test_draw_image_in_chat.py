@@ -110,7 +110,7 @@ def test_each_drawn_picture_joins_the_answers_run_at_once(painter, client, chat_
     repositories = client.app.state.repositories
 
     text = _draw(client, tmp_path, chat_id, antwort.id)
-    assert text.startswith("The picture was drawn"), text
+    assert text.startswith("The image was generated"), text
     run = repositories.messages.run_row(chat_id=chat_id, lauf_kennung=antwort.id)
     assert run is not None
     assert run.art == "bildlauf"
@@ -149,10 +149,10 @@ def test_the_answer_names_a_path_that_points_at_the_drawn_file(
         {"prompt": "a dog"}, "/api/v1", ort(config, "images"), key,
         job_id="a-job-no-chat-started", deliver_with="deliver_file",
     ))
-    assert "is attached to this answer and saved as " in in_chat
+    assert "attached to this response, and saved as " in in_chat
     assert in_job.endswith(
-        " When it is meant for the user as a result of this job, deliver it with "
-        "deliver_file, passing this path."
+        " If this image is a deliverable for the user, deliver it using "
+        "deliver_file with this path."
     )
     assert "is attached" not in in_job.replace("it is not attached", "")
     roots = grenzen.wurzeln(dokumentablage.program_folders(config))
@@ -235,7 +235,7 @@ def test_a_chat_draw_names_its_chat_and_answer(tmp_path, monkeypatch):
     koerper = dienst.gezeichnet[0]
     assert koerper["chat_id"] == "c1"
     assert koerper["lauf_kennung"] == "answer-1"
-    assert "attached to this answer" in text
+    assert "attached to this response" in text
 
 
 # --- The chat run hands its answer to the drawing, and nothing else ----------
@@ -366,7 +366,7 @@ def test_a_named_picture_goes_to_the_route_as_its_content(tmp_path, monkeypatch)
     body = dienst.gezeichnet[-1]
     assert body["startbild"] == "handed-in.png"
     assert "maske" not in body and "ref_bilder" not in body
-    assert "drawn from dog.png" in text
+    assert "generated from dog.png" in text
     assert not (tmp_path / "pictures").exists()
 
 
@@ -410,8 +410,8 @@ def test_a_family_that_draws_from_no_picture_says_so(tmp_path, monkeypatch):
     )
     text = asyncio.run(call())
     assert text == (
-        "The picture was not drawn: the image model in use — SD3, SD3.5 — "
-        "cannot draw from a picture. Call again without an image."
+        "The image was not generated: the selected model, SD3, SD3.5, "
+        "cannot use an image as input. Call again without an image."
     )
     assert dienst.handed_in == [] and dienst.gezeichnet == []
 
@@ -424,11 +424,10 @@ def test_a_family_that_draws_from_no_text_names_where_the_user_changes_it(tmp_pa
     dienst, call = _draw_from(tmp_path, monkeypatch, "", folders=[], family="wan")
     text = asyncio.run(call())
     assert text == (
-        f"The picture was not drawn: the image model in use — {family.label} — cannot "
-        "draw from text; it edits an existing picture or makes video. Ask the user to "
-        "pick a text-to-image model and try again — under Images for this chat, or as "
-        "the default model on the picture server page when the run has no chat of its "
-        "own."
+        f"The image was not generated: the selected model, {family.label}, cannot "
+        "generate images from text. It edits existing images or creates videos. Ask the "
+        "user to select a text-to-image model and try again: under Images for this chat, "
+        "or as the default on the picture server page if the run has no chat."
     )
     assert "picture window" not in text
     assert dienst.gezeichnet == []
@@ -461,7 +460,7 @@ def test_a_picture_outside_the_run_s_folders_is_refused(tmp_path, monkeypatch):
         assert dienst.aufrufe == []
     dienst, call = _draw_from(tmp_path, monkeypatch, str(shared / "notes.txt"), folders=[shared])
     text = asyncio.run(call())
-    assert "not a PNG, JPEG or WebP picture" in text
+    assert "not a PNG, JPEG, or WebP image" in text
     assert dienst.handed_in == [] and dienst.gezeichnet == []
 
 
@@ -501,7 +500,7 @@ def test_each_field_defaults_to_the_value_the_next_picture_is_drawn_with(
 
     answer = _answer_being_written(client, chat_id)
     text = _draw(client, tmp_path, chat_id, answer.id)
-    assert text.startswith("The picture was drawn"), text
+    assert text.startswith("The image was generated"), text
     job = painter["jobs"][-1]
     assert (job.breite, job.hoehe, job.schritte) == (512, 512, 8)
     assert job.cfg == fields["cfg"]["default"]
@@ -522,7 +521,7 @@ def test_a_size_the_user_asked_for_is_still_drawn_and_changes_no_setting(
             client.app.state.sitzungsschluessel, antwort_id=answer.id, chat_id=chat_id,
         )
     )
-    assert text.startswith("The picture was drawn"), text
+    assert text.startswith("The image was generated"), text
     job = painter["jobs"][-1]
     assert (job.breite, job.hoehe, job.schritte) == (768, 512, 8)
     fields = _fields(client, config, chat_id)
@@ -550,7 +549,7 @@ def test_a_value_set_for_the_model_itself_is_the_default_where_the_chat_sets_non
     assert (fields["steps"]["default"], fields["cfg"]["default"]) == (6, 1)
     start = image_families.get("sdxl").start
     assert (fields["width"]["default"], fields["height"]["default"]) == (start.width, start.height)
-    assert "At CFG 1 the negative prompt has no effect — leave it out." in tool.beschreibung
+    assert "At CFG 1, the negative prompt has no effect. Omit it." in tool.beschreibung
     # Silence: without the model's own CFG the family's start decides, as before.
     plain = bild_werkzeug.werkzeug_beschreibung(window.familie)
     assert "At CFG 1" not in plain.beschreibung
@@ -558,7 +557,7 @@ def test_a_value_set_for_the_model_itself_is_the_default_where_the_chat_sets_non
 
     answer = _answer_being_written(client, chat_id)
     text = _draw(client, tmp_path, chat_id, answer.id)
-    assert text.startswith("The picture was drawn"), text
+    assert text.startswith("The image was generated"), text
     job = painter["jobs"][-1]
     assert (job.schritte, job.cfg) == (6, 1)
     assert (job.breite, job.hoehe) == (start.width, start.height)
@@ -587,23 +586,23 @@ def test_the_sentences_and_fields_of_draw_image_stand_word_for_word(tmp_path, mo
     part of the interface that is not there."""
     family = image_families.get("flux")
     tool = bild_werkzeug.werkzeug_beschreibung(family)
-    setting = "Defaults to this chat's current setting."
+    setting = "Uses this chat's current setting by default."
     assert {name: entry["description"] for name, entry in tool.schema["properties"].items()
             if name not in ("prompt", "negative_prompt", "image")} == {
-        "width": f"The picture's width in pixels. {setting} Omit unless the user asks for a width.",
-        "height": f"The picture's height in pixels. {setting} Omit unless the user asks for a height.",
-        "steps": f"The number of sampling steps. {setting} Omit unless the user asks for a step count.",
-        "cfg": f"The CFG scale. {setting} Omit unless the user asks for one.",
-        "sampler": f"The sampler, e.g. euler_a. {setting} Omit unless the user asks for a sampler.",
-        "scheduler": f"The scheduler, e.g. discrete. {setting} Omit unless the user asks for a scheduler.",
-        "seed": "The seed. Random by default. Omit unless the user names a seed.",
-        "guidance": f"The distilled guidance (Flux only). {setting} Omit unless the user asks for one.",
+        "width": f"Image width in pixels. {setting} Omit unless the user requests a specific width.",
+        "height": f"Image height in pixels. {setting} Omit unless the user requests a specific height.",
+        "steps": f"Number of sampling steps. {setting} Omit unless the user requests a step count.",
+        "cfg": f"CFG scale. {setting} Omit unless the user requests a specific value.",
+        "sampler": f"Sampler, e.g. euler_a. {setting} Omit unless the user requests a sampler.",
+        "scheduler": f"Scheduler, e.g. discrete. {setting} Omit unless the user requests a scheduler.",
+        "seed": "Seed. Random by default. Omit unless the user specifies a seed.",
+        "guidance": f"Distilled guidance (Flux only). {setting} Omit unless the user requests a specific value.",
     }
-    assert f"Draws a picture with {family.label}, the image model this chat is set to." in tool.beschreibung
+    assert f"Generates an image using {family.label}, the image model selected for this chat." in tool.beschreibung
     assert (
-        "Size, steps, CFG, sampler and seed default to this chat's current settings. Send "
-        "one only when the user asks for it; it applies to this picture only and does not "
-        "change the settings."
+        "Size, steps, CFG, sampler, and seed use this chat's current settings by default. "
+        "Specify a value only when the user requests it. It applies to this image only and "
+        "does not change the settings."
     ) in tool.beschreibung
     assert "picture window" not in json.dumps(tool.als_openai_werkzeug())
     # Silence probe: a family without a distilled guidance has no such field.
@@ -618,12 +617,12 @@ def test_the_sentences_and_fields_of_draw_image_stand_word_for_word(tmp_path, mo
         )
 
     assert answer(Bilddienst({}), {"prompt": "a dog", "width": "wide", "steps": "many"}) == (
-        "The picture was not drawn: these values were not usable: width, steps. Send "
-        "numbers (and a known sampler or scheduler), or omit them to use this chat's "
-        "current settings."
+        "The image was not generated because these values were invalid: width, steps. "
+        "Provide numbers and a supported sampler or scheduler, or omit them to use this "
+        "chat's current settings."
     )
     assert answer(Bilddienst(modelle=[], programm_da=False), {"prompt": "a dog"}) == (
-        "No image generator is installed. The user can fetch it under Images (plus menu)."
+        "No image generator is installed. The user can download it from the plus menu under Images."
     )
     assert answer(Bilddienst(modelle=[]), {"prompt": "a dog"}) == (
         "No image model is installed. The user can add one under Images or from the "
@@ -637,6 +636,6 @@ def test_the_description_names_the_input_picture_and_the_path_it_answers_with():
     for family in (None, image_families.get("sdxl")):
         tool = bild_werkzeug.werkzeug_beschreibung(family)
         assert tool.schema["properties"]["image"] == bild_werkzeug.INPUT_PICTURE
-        assert "the result names its file and path" in tool.beschreibung
+        assert "the result includes its filename and path" in tool.beschreibung
         assert tool.schema["required"] == ["prompt"]
 

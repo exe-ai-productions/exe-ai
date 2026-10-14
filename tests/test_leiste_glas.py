@@ -22,7 +22,7 @@ FRONTEND = Path(__file__).resolve().parent.parent / "frontend/src"
 # The tools of the rail, the parts they share, and the wall of tiles.
 FILES = [
     "teile/ModulAgenten.svelte", "teile/ModulTerminal.svelte", "teile/ModulVorschau.svelte",
-    "teile/DocFolder.svelte", "teile/Agentenverlauf.svelte", "teile/Benutzerfrage.svelte",
+    "teile/DocFolder.svelte", "teile/Agentenverlauf.svelte",
     "teile/Speicherortzeile.svelte", "stil/tiles.css",
 ]
 FLAT = ("var(--bg-erhoben)", "var(--bg-hoch)", "var(--bg)")
@@ -93,14 +93,6 @@ def test_a_tile_of_the_wall_is_card_glass():
     assert "background: none;" in bare and "border-color: transparent;" in bare
 
 
-def test_the_question_is_a_glass_card_in_its_own_frame():
-    """The frame that says "this waits for you" stays; only its ground
-    changes."""
-    body = _rule("teile/Benutzerfrage.svelte", ".frage")
-    assert "background: var(--glass-card);" in body
-    assert "border: 1px solid var(--text-leise);" in body
-
-
 @pytest.mark.parametrize(
     ("path", "selector", "edge"),
     [
@@ -108,8 +100,6 @@ def test_the_question_is_a_glass_card_in_its_own_frame():
         ("teile/ModulTerminal.svelte", ".stop", "box-shadow: inset 0 0 0 1px var(--glass-button-edge);"),
         ("teile/Speicherortzeile.svelte", ".ordnerknopf", "box-shadow: inset 0 0 0 1px var(--glass-button-edge);"),
         ("teile/ModulVorschau.svelte", ".zeichenknopf", "border: 1px solid var(--glass-button-edge);"),
-        ("teile/Benutzerfrage.svelte", ".option", "border: 1px solid var(--glass-button-edge);"),
-        ("teile/Benutzerfrage.svelte", ".eigenesenden", "border: 1px solid var(--glass-button-edge);"),
         ("teile/DocFolder.svelte", ".modul.dropTarget", "box-shadow: inset 0 0 0 1px var(--glass-button-edge);"),
     ],
 )
@@ -132,7 +122,6 @@ def test_a_tab_is_an_outline_and_the_shown_one_is_filled():
     ("path", "selector"),
     [
         ("teile/ModulVorschau.svelte", ".adresse"),
-        ("teile/Benutzerfrage.svelte", ".eigenesfeld"),
     ],
 )
 def test_a_field_is_glass_with_the_field_outline(path, selector):
@@ -150,8 +139,6 @@ def test_a_field_is_glass_with_the_field_outline(path, selector):
         ("teile/ModulTerminal.svelte", ".copy:hover"),
         ("teile/ModulVorschau.svelte", ".reiter-eintrag:hover"),
         ("teile/ModulVorschau.svelte", ".zeichenknopf:hover"),
-        ("teile/Benutzerfrage.svelte", ".option:hover"),
-        ("teile/Benutzerfrage.svelte", ".eigenesenden:hover:not(:disabled)"),
         ("teile/Speicherortzeile.svelte", ".ordnerknopf:hover"),
     ],
 )
@@ -173,8 +160,6 @@ def test_what_floats_is_dense_glass(path, selector):
 
 
 def test_a_state_is_mixed_over_the_glass_it_lies_on():
-    banner = _rule("teile/ModulAgenten.svelte", ".wartebanner")
-    assert "background: color-mix(in srgb, var(--gelb) 12%, var(--glass-card));" in banner
     pressed = _rule("teile/ModulVorschau.svelte", ".zeichenknopf.gedrueckt")
     assert "background: color-mix(in srgb, var(--blau) 12%, var(--glass-button));" in pressed
     stop = _rule("teile/ModulAgenten.svelte", ".stopp:hover")

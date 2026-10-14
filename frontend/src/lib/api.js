@@ -19,7 +19,15 @@ const SEITE = 500
    sees it happen. Every /api/v1 call needs it now, reading included —
    without it, any program on this machine could call the API directly and
    read every chat, the same way curl could before this. */
-const SCHLUESSEL = typeof window !== 'undefined' ? window.__SITZUNGSSCHLUESSEL__ : undefined
+let SCHLUESSEL = typeof window !== 'undefined' ? window.__SITZUNGSSCHLUESSEL__ : undefined
+
+/* A page served without a key — the service demands a password and the
+   key is not in the page — gets it from the sign-in (teile/Anmeldung.svelte)
+   and keeps it here from then on: for every call, and for the two
+   addresses the browser loads itself. */
+export function setSessionKey(key) {
+  SCHLUESSEL = key || undefined
+}
 
 /* For the two places a browser cannot attach a custom header at all —
    EventSource and a plain <img src>/href. */
@@ -51,6 +59,10 @@ const NEULADE_FENSTER_MS = 10 * 60_000
 const NEULADE_HOECHSTENS = 3
 export function sitzungNeuLaden() {
   if (typeof window === 'undefined') return false
+  /* A page that never had a key has none to be stale: a refusal there is a
+     wrong password at the sign-in, which the sign-in shows — a reload would
+     only throw the typed word away and ask it again. */
+  if (!SCHLUESSEL) return false
   let bisher = []
   try {
     const gemerkt = JSON.parse(sessionStorage.getItem(NEULADE_MARKE) || '[]')
@@ -149,7 +161,7 @@ let statusText = (status) => fillSentence(PRE_CATALOGUE.status, 'status', status
    failed. Before that sentence is there, the English one stands — a
    sentence in the wrong language would be worse. */
 function abrissText() {
-  return PRE_CATALOGUE.strom_abriss || 'The connection to the answer broke off'
+  return PRE_CATALOGUE.strom_abriss || 'The connection was lost while receiving the response.'
 }
 
 export function rememberStatusText(neuer) {
@@ -221,6 +233,39 @@ async function ruf(pfad, optionen = {}) {
 
 const alsText = (wert) => JSON.stringify(wert)
 
+/* The most rows one request for a list may ask for: the chat route allows
+   500 at most (`le=500`, app/api/v1/chats.py). Asking for that many keeps
+   a list of up to 500 rows a single request. */
+const LIST_PAGE = 500
+
+/* Reads a whole list from a route that hands it out one page at a time.
+   The chat and job lists answer with their newest rows only, so a window
+   that asks once misses every older one: an old chat of a project, the tail
+   of the archive, a waiting agent's question behind many newer jobs. Pages
+   are asked for until one comes back shorter than asked for — the service's
+   way of saying "that was the last one". `fetchPage(limit, offset)` resolves
+   to one page, newest first. Rows are told apart by `id`: a row touched
+   between two requests moves to the front and would show up on two pages. */
+export async function allPages(fetchPage, size = LIST_PAGE) {
+  const rows = []
+  const seen = new Set()
+  let offset = 0
+  for (;;) {
+    const page = await fetchPage(size, offset)
+    let added = 0
+    for (const row of page) {
+      if (seen.has(row.id)) continue
+      seen.add(row.id)
+      rows.push(row)
+      added += 1
+    }
+    /* A full page that brought nothing new means the service ignores
+       `offset`, which would ask for ever. */
+    if (page.length < size || added === 0) return rows
+    offset += page.length
+  }
+}
+
 /* The storage-location list is read by every folder row — the pictures
    module and the three server panels — which mount together. Share one
    in-flight request so their near-simultaneous reads collapse into a single
@@ -229,10 +274,22 @@ const alsText = (wert) => JSON.stringify(wert)
 let orteLauf = null
 
 export const api = {
+  /* Signs in to a service that demands a password and keeps the key it
+     answers with. Through the one door every call takes: a refusal is the
+     wrong password, read like any other refusal — and the reload guard
+     stays out of it on a page that has no key yet. */
+  signIn: async (password) => {
+    const daten = await ruf('/login', { method: 'POST', body: alsText({ password }) })
+    setSessionKey(daten.key)
+    return daten.key
+  },
   /* `frisch` asks the server to knock on every candidate first — for the
      moment right after something was started or added, when the regular
      check has not come around yet. */
   modelle: (frisch = false) => ruf(frisch ? '/models?jetzt_pruefen=true' : '/models'),
+  /* Every server the service carries, the unreachable ones too — asked
+     only where the chosen model is missing from the list above. */
+  modelleAlle: () => ruf('/models?alle=true'),
   meta: () => ruf('/meta'),
   /* The one call that already speaks the language being switched TO: it asks
      for exactly those texts, and the window still shows the old ones while
@@ -313,8 +370,9 @@ export const api = {
   /* Asks the loaded LANGUAGE model to rewrite a picture prompt in English.
      Nothing to do with the generator — it only happens to serve the same
      window. */
-  /* The running picture's honest step counter — feeds the filling frame. */
-  bildFortschritt: () => ruf('/bild/fortschritt'),
+  /* The running picture's honest step counter — feeds the filling frame.
+     `signal` lets the caller give up on a question that does not answer. */
+  bildFortschritt: (signal) => ruf('/bild/fortschritt', { signal }),
 
   /* The prompt preparation: the server chosen in the picture server writes
      the prompt for the picture model's family. `cfg` decides whether a
@@ -458,6 +516,8 @@ export const api = {
     const query = params.toString()
     return ruf(`/doc-folder${query ? `?${query}` : ''}`)
   },
+  /* Where an open chat's own files lie: what its folder row names. */
+  docFolderPlace: (chat) => ruf(`/doc-folder/place?chat=${encodeURIComponent(chat)}`),
   docFolderAddress: (path) => mitSchluessel(`${BASIS}${path}`),
   docFolderBlob: (path) => rufRoh(path).then((answer) => answer.blob()),
 
@@ -483,10 +543,10 @@ export const api = {
   /* The second live line, and the one that belongs to no chat: what the
      program as a whole has to say (app/ereignisstrom.py). */
   ereignisStrom: () => mitSchluessel(`${BASIS}/events/stream`),
-  /* One command from the CLI module — same runner, folders and limits as
-     the model's. */
-  befehlAusfuehren: (chatId, command) =>
-    ruf(`/laeufe/${chatId}/befehl`, { method: 'POST', body: alsText({ command }) }),
+  /* What the window shows now — its look, its language, or both — told to
+     the terminal client inside it. */
+  fensterMelden: (felder) =>
+    ruf('/events/window-theme', { method: 'POST', body: alsText(felder) }),
   skills: () => ruf('/skills'),
   skillsVerwaltung: () => ruf('/skills/verwaltung'),
   skillSchreiben: (name, inhalt) =>
@@ -575,6 +635,19 @@ export const api = {
      `art` is the tab it was found in; it decides which file forms count. */
   modellDateien: (repo, art) =>
     ruf(`/models/files?repo=${encodeURIComponent(repo)}&art=${art}`),
+  /* One row of a picture repository's list with what its own head says:
+     what the file is, and its kit. Asked per row once the list stands. */
+  fileHead: (repo, row) =>
+    ruf('/models/files/head', {
+      method: 'POST',
+      body: alsText({
+        repo,
+        datei: {
+          datei: row.datei, groesse_gb: row.groesse_gb, bytes: row.bytes ?? 0,
+          teile: row.teile ?? 1,
+        },
+      }),
+    }),
   /* The Hugging Face token: set once, never handed back out. */
   hfTokenStand: () => ruf('/models/token'),
   hfTokenSetzen: (token) => ruf('/models/token', { method: 'POST', body: alsText({ token }) }),
@@ -651,6 +724,7 @@ export const api = {
      switched on from the plus menu, which then keeps the model loaded so
      every picture after the first skips the load. */
   turboStand: () => ruf('/bild/turbo'),
+  turboReason: (daten) => ruf('/bild/turbo/reason', { method: 'POST', body: alsText(daten) }),
   turboStarten: (modell) => ruf('/bild/turbo/start', { method: 'POST', body: alsText({ modell }) }),
   turboStoppen: () => ruf('/bild/turbo/stop', { method: 'POST' }),
   werkzeugKonfiguration: () => ruf('/tools/config'),
@@ -663,12 +737,19 @@ export const api = {
     ruf('/tools/mcp/sondieren', { method: 'POST', body: alsText({ url }) }),
   serverUebersicht: () => ruf('/tools/servers'),
   /* `neu`: a server being added — the service refuses an id already on file
-     instead of merging into it. */
-  serverSchreiben: (name, daten, { neu = false } = {}) =>
-    ruf(`/tools/servers/${encodeURIComponent(name)}${neu ? '?neu=true' : ''}`, {
+     instead of merging into it. `shipped`: a server the program starts
+     itself — with no entry on file, the one the program ships is put back
+     and the fields go on top of it. */
+  serverSchreiben: (name, daten, { neu = false, shipped = false } = {}) => {
+    const params = new URLSearchParams()
+    if (neu) params.set('neu', 'true')
+    if (shipped) params.set('shipped', 'true')
+    const query = params.toString()
+    return ruf(`/tools/servers/${encodeURIComponent(name)}${query ? `?${query}` : ''}`, {
       method: 'PUT',
       body: alsText(daten),
-    }),
+    })
+  },
   serverEntfernen: (name) =>
     ruf(`/tools/servers/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   oauthStart: (daten) =>
@@ -729,12 +810,23 @@ export const api = {
       body: alsText({ wert }),
     }),
 
-  chats: (suche) => ruf('/chats' + (suche ? `?suche=${encodeURIComponent(suche)}` : '')),
+  /* Every chat, not just the newest 100: the sidebar groups them by project
+     and day, so a chat left out of the list is a chat that is not there. */
+  chats: (suche) =>
+    allPages((limit, offset) =>
+      ruf(`/chats?limit=${limit}&offset=${offset}${suche ? `&suche=${encodeURIComponent(suche)}` : ''}`),
+    ),
   chatAnlegen: (daten) => ruf('/chats', { method: 'POST', body: alsText(daten) }),
   chatAendern: (id, daten) => ruf(`/chats/${id}`, { method: 'PATCH', body: alsText(daten) }),
   chatLoeschen: (id) => ruf(`/chats/${id}`, { method: 'DELETE' }),
+  /* Folds the middle of a chat once, now. The answer is one word —
+     `folded` with how many messages it replaced, `too_short`, `no_saving`
+     or `failed` — and the request lasts as long as the summary takes. */
+  chatCompact: (id, daten) =>
+    ruf(`/chats/${id}/compact`, { method: 'POST', body: alsText(daten) }),
   // The archive: the chats put away one by one.
-  archivedChats: () => ruf('/chats?archived=true'),
+  archivedChats: () =>
+    allPages((limit, offset) => ruf(`/chats?archived=true&limit=${limit}&offset=${offset}`)),
   projects: (archived = false) => ruf(`/projects${archived ? '?archived=true' : ''}`),
   projectCreate: (name) => ruf('/projects', { method: 'POST', body: alsText({ name }) }),
   projectUpdate: (id, data) => ruf(`/projects/${id}`, { method: 'PATCH', body: alsText(data) }),
@@ -784,7 +876,6 @@ export const api = {
       ausgelassen: Math.max(0, gesamt - seite.nachrichten.length - offset),
     }
   },
-  nachrichtLoeschen: (chatId, id) => ruf(`/chats/${chatId}/messages/${id}`, { method: 'DELETE' }),
 
   /* Both ids travel, and the service takes which one it needs: the run's
      own id while there is one, the chat's while there is not yet. Before
@@ -818,7 +909,7 @@ export const api = {
       }),
     }),
 
-  /* The rules "immer erlauben" wrote (Schritt 12) — seen and taken back. */
+  /* Rules saved by "Always allow" (step 12) — seen and taken back. */
   immerErlaubteWerkzeuge: () => ruf('/permissions/always-allow'),
   immerErlaubenEntfernen: (name) =>
     ruf(`/permissions/always-allow/${encodeURIComponent(name)}`, { method: 'DELETE' }),
@@ -848,14 +939,16 @@ export const api = {
       method: 'PUT', body: alsText({ context_tokens: tokens }),
     }),
 
-  /* The "Zeitgrenze" switch of an endpoint — on cuts a model call off after
+  /* The endpoint's "Timeout" setting — on cuts a model call off after
      600 s of silence, off leaves it running as long as the server takes. */
   anbieterZeitgrenze: (id, an) =>
     ruf(`/providers/${encodeURIComponent(id)}/timeout`, {
       method: 'PUT', body: alsText({ timeout_enabled: an }),
     }),
 
-  auftraege: () => ruf('/jobs'),
+  /* Every job: a waiting agent's question must stay in its chat's box however
+     many jobs were touched after it. */
+  auftraege: () => allPages((limit, offset) => ruf(`/jobs?limit=${limit}&offset=${offset}`)),
   auftragStarten: (daten) => ruf('/jobs', { method: 'POST', body: alsText(daten) }),
   /* Which model a run started now would land on. The SAME answer the server
      books the run with — the window shows it instead of working it out for

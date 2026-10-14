@@ -139,6 +139,13 @@ async def discard(future: "asyncio.Future") -> "BaseException | None":
 # lives in the database, this here is only the display window.
 VERGANGENE_LAEUFE = 50
 
+# How long a deleted chat waits for its runs to deregister, and how often it
+# looks. A stopped run reads the signal at its next piece and lets a tool that
+# is mid-run finish, so it ends in a moment — but not at once, and the wait has
+# to be long enough for that tool and the run's closing write.
+RUN_END_TIMEOUT_SECONDS = 45.0
+RUN_END_POLL_SECONDS = 0.1
+
 
 @dataclass
 class Generierung:
@@ -174,6 +181,11 @@ class Generierung:
     _zuschauer: set[asyncio.Queue] = field(default_factory=set)
     fertig: asyncio.Event = field(default_factory=asyncio.Event)
     aufgabe: asyncio.Task | None = None
+    # The one step of this run that waits for the stop signal: made with the
+    # first piece the run reads, ended with the run (`beenden`). A step per
+    # piece was a new task, and a new one thrown away, for every piece of
+    # an answer — thousands for a long one.
+    _stop_watcher: "asyncio.Future[bool] | None" = field(default=None, repr=False)
 
     @property
     def soll_abbrechen(self) -> bool:
@@ -218,7 +230,9 @@ class Generierung:
         from that same tie, on purpose: nothing of it was ever discarded,
         so a stop landing at that exact moment changes nothing about it.
         """
-        abbruch = asyncio.ensure_future(self.signal.wait())
+        if self._stop_watcher is None:
+            self._stop_watcher = asyncio.ensure_future(self.signal.wait())
+        abbruch = self._stop_watcher
         naechstes = asyncio.ensure_future(anext(quelle, None))
         try:
             await asyncio.wait({naechstes, abbruch}, return_when=asyncio.FIRST_COMPLETED)
@@ -235,12 +249,12 @@ class Generierung:
             return None, True
         finally:
             # Cancelling the wait itself (the caller torn down from the
-            # outside, not this method's own race) leaves both futures
-            # exactly where the race left them, win or not — so both are
+            # outside, not this method's own race) leaves the wait for the
+            # piece exactly where the race left it, win or not — so it is
             # cleaned up here unconditionally, not only on the branch above
-            # that returns normally.
+            # that returns normally. The wait for the stop is the run's
+            # own and stays until the run ends.
             await discard(naechstes)
-            await discard(abbruch)
 
     # --- Confirmation prompts --------------------------------------------
 
@@ -267,6 +281,10 @@ class Generierung:
         if self.fertig.is_set():
             return
         self.fertig.set()
+        if self._stop_watcher is not None:
+            if not self._stop_watcher.done():
+                self._stop_watcher.cancel()
+            self._stop_watcher = None
         for schlange in self._zuschauer:
             schlange.put_nowait(None)
 
@@ -471,6 +489,11 @@ class Generierungsverwaltung:
     def laufende(self) -> list[Generierung]:
         return list(self._laufende.values())
 
+    def active_endpoints(self) -> set[str]:
+        """The endpoints an answer is being written on right now — what
+        makes a server `active` (app/server_state.py)."""
+        return {generierung.endpoint_id for generierung in self.laufende()}
+
     def _im_chat(self, chat_id: str) -> list[Generierung]:
         """Every run going for this chat — walked over the SNAPSHOT that
         ``laufende()`` hands out, never over the live dict.
@@ -541,6 +564,40 @@ class Generierungsverwaltung:
             anspruch.set()
             anzahl += 1
         return anzahl
+
+    async def wait_for_chat_runs(self, chat_id: str) -> bool:
+        """Waits until no run of this chat is registered any more — True when
+        that happened, False when one was still there after
+        ``RUN_END_TIMEOUT_SECONDS``.
+
+        Sending the stop signal is not the end of a run: it reads the signal
+        at its next piece, then writes its closing rows into the chat and
+        deregisters. Whoever deletes the chat must let that happen first,
+        or the closing write meets a chat that is gone and the run never
+        deregisters.
+
+        A run whose task has already finished without deregistering will
+        never do it any more, so it is dropped here rather than waited for:
+        it would otherwise keep the chat from ever being deleted. A run that
+        started after the stop signal went out (a woken answer, a send from
+        another window) gets the signal here, so it does not have to be
+        outwaited to its natural end.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + RUN_END_TIMEOUT_SECONDS
+        while True:
+            still_running = []
+            for run in self._im_chat(chat_id):
+                if run.aufgabe is not None and run.aufgabe.done():
+                    self.abmelden(run.id)
+                else:
+                    run.signal.set()
+                    still_running.append(run)
+            if not still_running:
+                return True
+            if loop.time() >= deadline:
+                return False
+            await asyncio.sleep(RUN_END_POLL_SECONDS)
 
     def bestaetigen(
         self, generierung_id: str, aufruf_id: str, erlaubt: bool,

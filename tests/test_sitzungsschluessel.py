@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app import sprachwahl
@@ -331,3 +332,125 @@ def test_a_catalogue_text_cannot_end_the_script_block(client, monkeypatch):
     assert "x</script>y" not in response.text
     assert "x\\u003c/script>y" in response.text
 
+
+
+# --- A service beyond the loopback address: password first -------------------
+#
+# Bound to 0.0.0.0 — or any address but this machine's own — the page would
+# hand the key, and with it every right, to whoever reaches the address. So
+# such a service runs only with a password (app/anmeldung.py) and gives the
+# key out only against it (app/api/v1/anmeldung.py).
+
+
+def _beyond(config, tmp_path, password: str | None = "open-sesame"):
+    """The config bound beyond this machine, with a password file where
+    one is given."""
+    config.app.host = "0.0.0.0"
+    if password is not None:
+        file = tmp_path / "password.txt"
+        file.write_text(password + "\n", encoding="utf-8")
+        config.app.password_file = str(file)
+    return config
+
+
+def test_a_service_beyond_the_loopback_address_refuses_to_start_without_a_password(
+    config, tmp_path
+):
+    app = app_erstellen(_beyond(config, tmp_path, password=None))
+    with pytest.raises(RuntimeError, match="0.0.0.0"):
+        with TestClient(app):
+            pass
+
+
+def test_an_empty_or_unreadable_password_file_counts_as_no_password(config, tmp_path):
+    from app import anmeldung
+
+    config.app.password_file = str(tmp_path / "missing.txt")
+    assert anmeldung.read_password(config) is None
+    (tmp_path / "empty.txt").write_text("  \n", encoding="utf-8")
+    config.app.password_file = str(tmp_path / "empty.txt")
+    assert anmeldung.read_password(config) is None
+    config.app.password_file = ""
+    assert anmeldung.read_password(config) is None
+
+
+@pytest.mark.parametrize(
+    ("host", "own"),
+    [
+        ("127.0.0.1", True),
+        ("localhost", True),
+        ("::1", True),
+        ("[::1]", True),
+        ("127.0.0.2", True),
+        ("0.0.0.0", False),
+        ("::", False),
+        ("100.100.0.9", False),
+        ("exe.example", False),
+    ],
+)
+def test_which_bind_addresses_are_this_machines_alone(host, own):
+    from app import anmeldung
+
+    assert anmeldung.is_loopback(host) is own
+
+
+def test_beyond_the_loopback_address_the_page_carries_no_key_and_asks_to_sign_in(
+    config, tmp_path
+):
+    app = app_erstellen(_beyond(config, tmp_path))
+    with TestClient(app) as client:
+        seite = client.get("/app/").text
+        assert "window.__SITZUNGSSCHLUESSEL__=null;" in seite
+        assert "window.__ANMELDUNG__=true;" in seite
+        assert app.state.sitzungsschluessel not in seite
+        # The sign-in's own words travel with the page: there is no
+        # catalogue before the key.
+        assert '"anmeldung_titel":' in seite
+        assert '"anmeldung_passwort":' in seite
+        assert '"anmeldung_knopf":' in seite
+        # And without the key the API stays shut, reading included.
+        assert client.get("/api/v1/chats").status_code == 401
+
+
+def test_the_password_buys_the_key_and_a_wrong_one_is_refused(config, tmp_path):
+    app = app_erstellen(_beyond(config, tmp_path))
+    with TestClient(app) as client:
+        wrong = client.post("/api/v1/login", json={"password": "open-sesam"})
+        assert wrong.status_code == 401
+        assert wrong.json()["detail"] == t("fehler.anmeldung", "de")
+        assert "key" not in wrong.json()
+
+        right = client.post("/api/v1/login", json={"password": "open-sesame"})
+        assert right.status_code == 200
+        key = right.json()["key"]
+        assert key == app.state.sitzungsschluessel
+
+        answered = client.get("/api/v1/chats", headers={"X-Sitzungsschluessel": key})
+        assert answered.status_code == 200
+
+
+def test_the_refusal_of_a_wrong_password_speaks_the_requests_language(config, tmp_path):
+    app = app_erstellen(_beyond(config, tmp_path))
+    with TestClient(app) as client:
+        wrong = client.post(
+            "/api/v1/login", json={"password": "nope"}, headers={"X-Ui-Language": "en"}
+        )
+        assert wrong.status_code == 401
+        assert wrong.json()["detail"] == t("fehler.anmeldung", "en")
+
+
+def test_on_the_loopback_address_nothing_changes_and_there_is_nothing_to_sign_in_to(client):
+    """The quiet case: the page carries the key as it always did, and the
+    sign-in route gives nothing out — not even for the right-looking word."""
+    seite = client.get("/app/").text
+    assert "window.__ANMELDUNG__=false;" in seite
+    assert client.app.state.sitzungsschluessel in seite
+    client.headers.pop("X-Sitzungsschluessel", None)
+    assert client.post("/api/v1/login", json={"password": ""}).status_code == 401
+    assert client.post("/api/v1/login", json={"password": "anything"}).status_code == 401
+
+
+def test_the_sign_in_route_is_the_only_api_route_without_a_key_besides_the_oauth_return():
+    from app.sitzungsschluessel import AUSGENOMMEN
+
+    assert AUSGENOMMEN == {"/api/v1/tools/oauth/callback", "/api/v1/login"}

@@ -36,6 +36,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 MODULE = FRONTEND / "src" / "lib" / "werkzeuge.svelte.js"
+NAMES = FRONTEND / "src" / "lib" / "mcpWerkzeuge.js"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None or not (FRONTEND / "node_modules").is_dir(),
@@ -102,6 +103,8 @@ def _run(scenario: str):
     with _workdir() as folder:
         (folder / "api.mjs").write_text(API_STUB, encoding="utf-8")
         (folder / "katalog.mjs").write_text(CATALOGUE_STUB, encoding="utf-8")
+        # The name helper the module imports, as it ships.
+        (folder / "mcp.mjs").write_text(NAMES.read_text(encoding="utf-8"), encoding="utf-8")
         driver = folder / "driver.mjs"
         driver.write_text(
             textwrap.dedent(
@@ -114,7 +117,8 @@ def _run(scenario: str):
                 })
                 writeFileSync('./built.mjs', built.js.code
                   .replace("'./api.js'", "'./api.mjs'")
-                  .replace("'./serverkatalog.js'", "'./katalog.mjs'"))
+                  .replace("'./serverkatalog.js'", "'./katalog.mjs'")
+                  .replace("'./mcpWerkzeuge.js'", "'./mcp.mjs'"))
                 const m = await import('./built.mjs')
                 const stub = await import('./api.mjs')
                 const report = (value) =>
@@ -286,13 +290,13 @@ def test_a_server_and_its_tool_of_the_same_name_are_told_apart():
         """
         report({
           source: show({ art: 'quelle', id: 'mcp:fetch' }),
-          tool: show({ art: 'werkzeug', name: 'fetch', quelle: 'mcp:fetch' }),
+          tool: show({ art: 'werkzeug', name: 'mcp__fetch__fetch', quelle: 'mcp:fetch' }),
         })
         """
     )
     assert result == {
         "source": {"tool": None, "source": "mcp:fetch"},
-        "tool": {"tool": "fetch", "source": "mcp:fetch"},
+        "tool": {"tool": "mcp__fetch__fetch", "source": "mcp:fetch"},
     }
 
 
@@ -300,14 +304,14 @@ def test_two_servers_with_a_tool_of_the_same_name_each_open_their_own():
     result = _selection(
         """
         report([
-          show({ art: 'werkzeug', name: 'fetch', quelle: 'mcp:fetch' }),
-          show({ art: 'werkzeug', name: 'fetch', quelle: 'mcp:mirror' }),
+          show({ art: 'werkzeug', name: 'mcp__fetch__fetch', quelle: 'mcp:fetch' }),
+          show({ art: 'werkzeug', name: 'mcp__mirror__fetch', quelle: 'mcp:mirror' }),
         ])
         """
     )
     assert result == [
-        {"tool": "fetch", "source": "mcp:fetch"},
-        {"tool": "fetch", "source": "mcp:mirror"},
+        {"tool": "mcp__fetch__fetch", "source": "mcp:fetch"},
+        {"tool": "mcp__mirror__fetch", "source": "mcp:mirror"},
     ]
 
 
@@ -318,7 +322,7 @@ def test_a_built_in_source_and_a_server_of_the_same_name_stay_apart():
           show({ art: 'quelle', id: 'builtin:clock' }),
           show({ art: 'quelle', id: 'mcp:clock' }),
           show({ art: 'werkzeug', name: 'get_current_time', quelle: 'builtin:clock' }),
-          show({ art: 'werkzeug', name: 'now', quelle: 'mcp:clock' }),
+          show({ art: 'werkzeug', name: 'mcp__clock__now', quelle: 'mcp:clock' }),
         ])
         """
     )
@@ -326,7 +330,7 @@ def test_a_built_in_source_and_a_server_of_the_same_name_stay_apart():
         {"tool": None, "source": "builtin:clock"},
         {"tool": None, "source": "mcp:clock"},
         {"tool": "get_current_time", "source": "builtin:clock"},
-        {"tool": "now", "source": "mcp:clock"},
+        {"tool": "mcp__clock__now", "source": "mcp:clock"},
     ]
 
 

@@ -179,8 +179,8 @@
     bind:this={feld}
     bind:value={pfadfeld}
     onkeydown={feldTaste}
-    placeholder={t('arbeitsordner.pfad_platzhalter')}
-    aria-label={t('arbeitsordner.pfad_platzhalter')}
+    placeholder={system === 'mac' ? t('arbeitsordner.pfad_platzhalter') : undefined}
+    aria-label={t('arbeitsordner.oder')}
     spellcheck="false"
   />
   <p class="hilfe">
@@ -188,10 +188,10 @@
   </p>
 
   <div class="knopfreihe">
-    <button class="knopf" onclick={() => (ordnerZustand.maskeOffen = false)}>
+    <button class="button" onclick={() => (ordnerZustand.maskeOffen = false)}>
       {t('app.abbrechen')}
     </button>
-    <button class="knopf stark" disabled={!pfadfeld.trim()}
+    <button class="button primary" disabled={!pfadfeld.trim()}
             onclick={() => ordnerHinzufuegen(pfadfeld.trim())}>
       {t('arbeitsordner.setzen')}
     </button>
@@ -411,19 +411,5 @@
   }
   .knopf:hover {
     background: var(--linie);
-  }
-  /* The main button is button glass with its fine edge, as every main
-     button of a window is; only sending stays filled. */
-  .knopf.stark {
-    background: var(--glass-button);
-    color: var(--text);
-    border-color: var(--glass-button-edge);
-  }
-  .knopf.stark:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--text) 6%, var(--glass-button));
-  }
-  .knopf.stark:disabled {
-    opacity: 0.4;
-    cursor: default;
   }
 </style>

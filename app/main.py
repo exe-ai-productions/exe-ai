@@ -18,6 +18,7 @@ import os
 import time
 import socket
 import sqlite3
+import sys
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,11 +28,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import atomic_file
+from app import anmeldung, atomic_file
 from app import __version__
 from app import input_errors, model_image, sprachwahl
 from app import folder_names
 from app.i18n import t
+from app.login_limit import LoginLimit
 from app import agent_report, instanzschloss
 from app.api.v1 import router as api_v1_router
 from app.api.v1.bilder import empty_scratch_pictures
@@ -43,6 +45,8 @@ from app.bildturbo import Bildturbo
 from app.modellrunner import Modellrunner, begleiter_einsortieren
 from app import modellvorlauf
 from app import runnerzustand
+from app import stoppmarke
+from app import server_state
 from app.sddownload import Sddownload
 from app.serverdownload import Serverdownload
 from app.config import Config, abgelegte_schluessel_melden, get_config
@@ -62,7 +66,7 @@ from app.inhaltssicherheit import (
 from app.protokoll import ProtokollMiddleware, logging_einrichten, speicher_mb
 from app.speicherorte import bildkopien_verzeichnis, ort
 from app.tools import WerkzeugRegistry
-from app.tools.aufbau import registry_bauen
+from app.tools.aufbau import dial_host, registry_bauen
 from app.tools.hintergrund import laeufe
 from app.tools.mcp_auth import AuthSpeicher, OAuthVermittler
 from app.wecker import Wecker
@@ -118,8 +122,9 @@ def _instanzschloss(config: Config, port: int) -> Path:
     return config.datenverzeichnis / f"{INSTANZNOTIZ}-{int(port)}.lock"
 
 
-def _antwortet(port: int, frist: float = 0.4) -> bool:
-    """Is a service listening on that port?
+def _antwortet(port: int, frist: float = 0.4, host: str = "127.0.0.1") -> bool:
+    """Is a service listening on that port, on the address this folder's
+    configuration binds to (a wildcard is reached on loopback)?
 
     The window's own test for "one is already answering", down to its 400 ms
     (fenster-electron/main.js) — and the one thing a recycled process id
@@ -131,10 +136,12 @@ def _antwortet(port: int, frist: float = 0.4) -> bool:
     before it serves is blocking. It costs nothing at all where nobody left
     a note, which is every ordinary installation.
     """
-    with socket.socket() as dose:
+    erreicht = dial_host(host)
+    familie = socket.AF_INET6 if ":" in erreicht else socket.AF_INET
+    with socket.socket(familie) as dose:
         dose.settimeout(frist)
         try:
-            return dose.connect_ex(("127.0.0.1", port)) == 0
+            return dose.connect_ex((erreicht, port)) == 0
         except OSError:
             return False
 
@@ -205,7 +212,7 @@ def _lebende_instanz(config: Config) -> int | None:
                 return port
             _lock_file_removed(schloss)
             continue
-        if _service_alive(schloss, lambda: True) or _antwortet(port):
+        if _service_alive(schloss, lambda: True) or _antwortet(port, host=config.app.host):
             return port
         notiz.unlink(missing_ok=True)
         _lock_file_removed(schloss)
@@ -640,6 +647,9 @@ def _standard_abonnenten_anmelden() -> None:
 @asynccontextmanager
 async def lebenszyklus(app: FastAPI):
     config: Config = app.state.config
+    # First of all: a service in a network without a password does not
+    # come up, whatever else is ready (app/anmeldung.py).
+    anmeldung.check_at_start(config, getattr(app.state, "passwort", None))
     config.datenverzeichnis.mkdir(parents=True, exist_ok=True)
     # Am I the only service on this data folder? Asked once, here at the top,
     # and the answer travels down: the claim written just below decides on it,
@@ -798,7 +808,11 @@ async def lebenszyklus(app: FastAPI):
             # now. The second covers the service that left no lock behind —
             # an older build, or one whose lock could not be taken.
             foreign_now = _foreign_lock(config)
-            if foreign_now is None and fremder_port is not None and _antwortet(fremder_port):
+            if (
+                foreign_now is None
+                and fremder_port is not None
+                and _antwortet(fremder_port, host=config.app.host)
+            ):
                 foreign_now = fremder_port
             _startbereinigung(app, config, nur_eigene=foreign_now is not None)
             if foreign_now is not None:
@@ -842,6 +856,9 @@ async def lebenszyklus(app: FastAPI):
 
         discovery = Discovery(config, bus, app.state.repositories)
         app.state.discovery = discovery
+        # The word for the server behind each model — announced whenever it
+        # may have changed; needs both registries above (app/server_state.py).
+        server_state.subscribe(app)
 
         # The model runner. Built here and not per request: it holds a running
         # process, and a second instance would not know about the first.
@@ -985,9 +1002,20 @@ async def lebenszyklus(app: FastAPI):
                 "speicher_mb": speicher_mb(),
             },
         )
+        # Where the system has no polite way to ask a process to end (Windows:
+        # a termination signal is the end of the process, its shutdown never
+        # runs), the client lays a marker file beside the note and the service
+        # ends itself through the ordinary shutdown below.
+        stop_watch = None
+        if sys.platform == "win32":
+            marker = stoppmarke.marker_file(config.datenverzeichnis, config.app.port)
+            stoppmarke.clear(marker)
+            stop_watch = asyncio.create_task(stoppmarke.watch(marker))
         try:
             yield
         finally:
+            if stop_watch is not None:
+                stop_watch.cancel()
             # No server outlives the program. The model, embedding, slot and
             # image-turbo servers each run in their OWN session (so a crash of the
             # service does not take them with it), which means they also do NOT die
@@ -1053,7 +1081,7 @@ def app_erstellen(config: Config | None = None) -> FastAPI:
     app = FastAPI(
         title="Exe AI Terminal",
         version=__version__,
-        description="Its own interface to local and remote language models.",
+        description="A dedicated interface to local and remote language models.",
         lifespan=lebenszyklus,
         docs_url=None,
         redoc_url=None,
@@ -1063,6 +1091,13 @@ def app_erstellen(config: Config | None = None) -> FastAPI:
     # cannot outlive this process. See app/sitzungsschluessel.py.
     from app.sitzungsschluessel import neuer_schluessel
     app.state.sitzungsschluessel = neuer_schluessel()
+    # Beyond the loopback address the key is handed out only against the
+    # password; read now, so that the start below can refuse without one
+    # (app/anmeldung.py). The page says which of the two it is.
+    app.state.anmeldung = anmeldung.required(config)
+    app.state.passwort = anmeldung.read_password(config)
+    # Wrong passwords are counted per service (app/login_limit.py).
+    app.state.login_limit = LoginLimit()
 
     # Outermost, so every request gets an id — including those that abort
     # with an error along the way.
@@ -1114,7 +1149,7 @@ def app_erstellen(config: Config | None = None) -> FastAPI:
     )
 
     # Unversioned health check — fixed address for monitoring/systemd.
-    @app.get("/health", tags=["health"], summary="State of the service")
+    @app.get("/health", tags=["health"], summary="Service status")
     def health():
         return _health_ermitteln(config, app.state.repositories)
 
@@ -1164,7 +1199,16 @@ def app_erstellen(config: Config | None = None) -> FastAPI:
             "dienst_antwortet_nicht": t("fehler.dienst_antwortet_nicht", sprache),
             "status": t("fehler.status", sprache),
             "strom_abriss": t("fehler.strom_abriss", sprache),
+            # The sign-in the page shows before it has a key, where the
+            # service demands a password (frontend/src/teile/Anmeldung.svelte).
+            "anmeldung_titel": t("anmeldung.titel", sprache),
+            "anmeldung_passwort": t("anmeldung.passwort", sprache),
+            "anmeldung_knopf": t("anmeldung.knopf", sprache),
         }
+        # Beyond the loopback address the page carries no key: whoever
+        # reaches the address would hold every right. The page then signs in
+        # first (app/api/v1/anmeldung.py) and fetches the key that way.
+        schluessel = None if app.state.anmeldung else app.state.sitzungsschluessel
         # ``<`` never travels as itself into the script block: JSON does not
         # escape it, and a catalogue text carrying "</script>" would end the
         # element early — the page would come without key, diagnosis flag and
@@ -1182,7 +1226,8 @@ def app_erstellen(config: Config | None = None) -> FastAPI:
             .replace(
                 "</head>",
                 f"<script>window.__SITZUNGSSCHLUESSEL__="
-                f"{json.dumps(app.state.sitzungsschluessel)};"
+                f"{json.dumps(schluessel)};"
+                f"window.__ANMELDUNG__={json.dumps(bool(app.state.anmeldung))};"
                 f"window.__DIAGNOSE__={json.dumps(bool(config.app.diagnose))};"
                 f"window.__TEXTE__={texte_json}"
                 f"</script></head>",

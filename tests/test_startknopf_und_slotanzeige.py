@@ -246,7 +246,8 @@ def test_die_slotseite_haelt_den_projektor_waehrend_des_laufs():
 
     Written as ``||`` here and corrected to ``??`` the same day: ``""`` is a
     third answer, not a missing one. It means "started mute", and ``||`` threw
-    it away with the ``null`` — see test_kleinkram_und_cli.py.
+    it away with the ``null`` — see
+    test_chosen_none_and_remembered_model.py.
     """
     quelle = ohne_kommentare(AGENTSERVER.read_text(encoding="utf-8"))
     koerper = rumpf(quelle, "async function laden()")
@@ -269,12 +270,13 @@ def test_die_slotseite_nimmt_die_felder_nach_dem_lauf_zurueck():
     assert "liefVorher" in koerper
     # The hand-back happens in this branch, and the branch has moved twice.
     # It first pinned "and nothing before it" and went red on the fresh read
-    # the branch grew the same day (test_kleinkram_und_cli.py) — a read that
-    # is the whole point of "the STORED choice takes the fields back", as
-    # opposed to this window's copy of it. It then pinned "the read, then the
-    # hand-back", and the read moved again: the fields are put on this
-    # window's copy BEFORE the read as well, which is what makes the wait
-    # harmless without a lock (test_stoppfenster_und_cli.py).
+    # the branch grew the same day (test_chosen_none_and_remembered_model.py)
+    # — a read that is the whole point of "the STORED choice takes the fields
+    # back", as opposed to this window's copy of it. It then pinned "the read,
+    # then the hand-back", and the read moved again: the fields are put on
+    # this window's copy BEFORE the read as well, which is what makes the
+    # wait harmless without a lock
+    # (test_stop_window_and_remembered_choice.py).
     #
     # What has been true through all three shapes, and is what this guard is
     # for: the branch hands the fields back, it reads the setting rather than

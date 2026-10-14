@@ -244,6 +244,58 @@ def test_eine_lora_ist_nie_ein_pfad(daten: Path):
         assert fehler.value.grund == "bild.lora_unbekannt"
 
 
+_SQLITE_HEAD = b"SQLite format 3\x00" + b"\x00" * 84
+
+
+def test_a_sqlite_file_under_a_checkpoint_extension_is_in_no_list(daten: Path):
+    """A tool that keeps its weights in a SQLite database under a `.ckpt`
+    name leaves a file the loader cannot read: it would be offered, chosen
+    and then silently left out of the picture. Whatever the folder, such a
+    file is told by its head and is listed nowhere."""
+    kinds = {
+        "lora": bildrunner.loras,
+        "vae": bildrunner.vaes,
+        "controlnet": bildrunner.controlnets,
+        "adetailer": bildrunner.yolos,
+        "pulid": bildrunner.pulids,
+        "upscaler": bildrunner.upscalers,
+        "text_encoders": bildrunner.textversteher,
+        "taesd": bildrunner.taesd_files,
+    }
+    for folder in kinds:
+        (daten / folder).mkdir()
+        (daten / folder / "x_f16.ckpt").write_bytes(_SQLITE_HEAD)
+        (daten / folder / "real.safetensors").write_bytes(b"x")
+    for folder, listing in kinds.items():
+        assert listing(daten) == ["real.safetensors"], folder
+
+
+def test_every_other_checkpoint_stays_in_the_lists(daten: Path):
+    """The silence probe: a `.safetensors`, a `.ckpt` with a zip head, a
+    `.pt`, an empty file and a file shorter than the SQLite head stay
+    listed — only the SQLite head itself takes a file out."""
+    (daten / "lora").mkdir()
+    (daten / "lora" / "a.safetensors").write_bytes(b"x")
+    (daten / "lora" / "b.ckpt").write_bytes(b"PK\x03\x04" + b"\x00" * 20)
+    (daten / "lora" / "c.pt").write_bytes(b"x")
+    (daten / "lora" / "d.ckpt").write_bytes(b"")
+    (daten / "lora" / "e.ckpt").write_bytes(b"SQLite")
+    (daten / "lora" / "f.ckpt").write_bytes(b"SQLite format 4\x00" + b"\x00" * 8)
+    assert bildrunner.loras(daten) == [
+        "a.safetensors", "b.ckpt", "c.pt", "d.ckpt", "e.ckpt", "f.ckpt",
+    ]
+
+
+def test_a_sqlite_lora_is_no_name_the_draw_accepts(daten: Path):
+    """A chat that kept the name of such a file draws as it does with a
+    LoRA that is no longer in the folder."""
+    (daten / "lora").mkdir()
+    (daten / "lora" / "x_f16.ckpt").write_bytes(_SQLITE_HEAD)
+    with pytest.raises(BildFehler) as fehler:
+        bildrunner.lora_pfad(daten, "x_f16.ckpt")
+    assert fehler.value.grund == "bild.lora_unbekannt"
+
+
 def test_die_staerke_reist_nur_neben_einem_startbild(daten: Path, monkeypatch):
     """A control that does nothing is worse than no control."""
     monkeypatch.setattr(bildrunner.shutil, "which", lambda _: "/irgendwo/sd-cli")
@@ -1952,7 +2004,7 @@ def test_a_stop_ends_a_running_conversion_and_frees_the_lock(converting, client,
         thread.join(timeout=20)
     assert not thread.is_alive()
     assert answers[0].status_code == 499
-    assert answers[0].json()["detail"] in ("Zeichnen abgebrochen", "Drawing stopped")
+    assert answers[0].json()["detail"] in ("Bilderzeugung abgebrochen", "Image generation cancelled")
     assert not out.exists()
     assert "Converting m.safetensors to q8_0 was stopped" in caplog.text
     assert not runner.laeuft()
@@ -2007,6 +2059,49 @@ def test_a_conversion_past_its_time_is_ended(converting, client, monkeypatch):
     assert answers[0].status_code == 503
     assert not out.exists()
     assert not client.app.state.bildrunner.laeuft()
+
+
+def _sleeper(monkeypatch, seconds: float) -> None:
+    monkeypatch.setattr(
+        Bildrunner, "befehl",
+        lambda self, job, target: [sys.executable, "-c", f"import time\ntime.sleep({seconds})\n"],
+    )
+
+
+def test_a_picture_over_its_time_limit_is_ended_and_says_so(daten: Path, monkeypatch):
+    """The limit is the machine's setting, in seconds: the generator that
+    draws longer is ended after it and the picture reports that the time
+    limit has passed — it does not wait out a fixed quarter of an hour."""
+    _sleeper(monkeypatch, 60)
+    runner = Bildrunner(daten)
+    began = time.monotonic()
+
+    with pytest.raises(BildFehler) as error:
+        runner.erzeugen(
+            Auftrag(modell=daten / "klein.gguf", prompt="x", zeitgrenze=2), daten / "out.png"
+        )
+
+    assert error.value.grund == "bild.zeit_abgelaufen"
+    assert time.monotonic() - began < 30
+    assert not runner.laeuft()
+
+
+@pytest.mark.parametrize("video", [False, True])
+def test_a_picture_without_a_limit_is_not_cut_off(daten: Path, monkeypatch, video):
+    """Empty means no limit — and a video has none whatever is set: the
+    generator that ends by itself after a few seconds is waited for, and
+    whatever it says is its own, never the time limit."""
+    _sleeper(monkeypatch, 3)
+    runner = Bildrunner(daten)
+    zeitgrenze = 1 if video else None
+
+    with pytest.raises(BildFehler) as error:
+        runner.erzeugen(
+            Auftrag(modell=daten / "klein.gguf", prompt="x", zeitgrenze=zeitgrenze, video=video),
+            daten / "out.png",
+        )
+
+    assert error.value.grund != "bild.zeit_abgelaufen"
 
 
 def test_a_picture_still_stops_as_before(daten: Path, monkeypatch):

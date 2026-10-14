@@ -400,3 +400,143 @@ async def test_the_cached_half_alone_is_no_prompt(modellserver):
     first = _live(await _readings(modellserver, {"cache_n": 977}))[0]
     assert first["prompt_tokens"] is None
     assert first["prompt_genau"] is False
+
+
+# --- The round's end counts the whole prompt and the thinking -----------------
+#
+# Without a usage block the round's own stats are all there is. The prompt is
+# whole where both halves stand in `timings` (the reader the live readings
+# use), and the generated tokens are every token the model produced: thinking
+# included.
+
+
+async def _thinking_round(stub, *, timings: dict | None = None, thoughts: int = 40, pieces: int = 10):
+    packets = [
+        {"choices": [{"delta": {"reasoning_content": f"g{n} "}, "index": 0}]}
+        for n in range(thoughts)
+    ] + [
+        {"choices": [{"delta": {"content": f"t{n} "}, "index": 0}]}
+        for n in range(pieces)
+    ]
+    if timings:
+        packets[-1]["timings"] = timings
+    stub.rohpakete(packets)
+    return [c.daten for c in await _einsammeln(_provider(stub.basis)) if c.sorte == "stats"][-1]
+
+
+@pytest.mark.asyncio
+async def test_the_stats_call_a_prompt_whole_where_both_halves_stand(modellserver):
+    stats = await _thinking_round(modellserver, timings={"prompt_n": 524, "cache_n": 977})
+    assert stats["prompt_tokens"] == 1501
+    assert stats["prompt_genau"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_stats_keep_prompt_n_alone_a_floor(modellserver):
+    stats = await _thinking_round(
+        modellserver, timings={"prompt_n": 524, "predicted_n": 2, "predicted_ms": 40}
+    )
+    assert stats["prompt_tokens"] == 524
+    assert stats["prompt_genau"] is False
+
+
+@pytest.mark.asyncio
+async def test_the_stats_count_the_thinking_in_what_the_context_took(modellserver):
+    """40 thought pieces and 10 answer pieces, and the server names no
+    count: the context count is 50, the speed's count stays the answer's 10."""
+    stats = await _thinking_round(modellserver)
+    assert stats["kontext_erzeugte_tokens"] == 50
+    assert stats["erzeugte_tokens"] == 10
+
+
+@pytest.mark.asyncio
+async def test_the_stats_take_the_servers_count_where_it_names_one(modellserver):
+    stats = await _thinking_round(
+        modellserver, timings={"predicted_n": 77, "predicted_ms": 900}
+    )
+    assert stats["kontext_erzeugte_tokens"] == 77
+
+
+class _EndsOnStats(MockProvider):
+    """Writes one piece and ends on exactly these stats — what a server
+    without a usage block leaves the service with."""
+
+    def __init__(self, stats: dict):
+        super().__init__(haeppchen=["eins "])
+        self.stats = stats
+
+    async def streamen(self, anfrage):
+        from app.providers.base import Stueck
+
+        yield Stueck("content", text="eins ")
+        yield Stueck("stats", daten={"dauer_sekunden": 0.0, "endpunkt": self.id, **self.stats})
+
+
+def _last_reading(antwort) -> int:
+    return _kontexte(antwort)[-1]["gesamt_tokens"]
+
+
+def test_the_round_end_takes_a_whole_prompt_over_an_older_larger_reading(client, chat_id):
+    """9000 stands in the chat; the server names both halves of a 1501-token
+    prompt and no usage block. The round ends on 1501 plus the answer, not
+    on 9000 plus the answer."""
+    client.app.state.repositories.messages.speichern(
+        chat_id=chat_id, role="assistant", content="Vorher", gesamt_tokens=9000
+    )
+    provider_setzen(client, _EndsOnStats({
+        "prompt_tokens": 1501, "prompt_genau": True, "erzeugte_tokens": 2,
+        "kontext_erzeugte_tokens": 2,
+    }))
+    antwort = _losschicken(client, chat_id)
+    assert _last_reading(antwort) == 1503
+    seite = client.get(f"/api/v1/chats/{chat_id}/messages").json()
+    answer = next(
+        n for n in seite["nachrichten"]
+        if n["role"] == "assistant" and n["content"] != "Vorher"
+    )
+    assert answer["gesamt_tokens"] == 1503
+
+
+def test_silence_the_round_end_raises_a_floor_as_before(client, chat_id):
+    """`prompt_n` alone is a floor: the older, larger reading still raises it."""
+    client.app.state.repositories.messages.speichern(
+        chat_id=chat_id, role="assistant", content="Vorher", gesamt_tokens=9000
+    )
+    provider_setzen(client, _EndsOnStats({
+        "prompt_tokens": 524, "prompt_genau": False, "erzeugte_tokens": 2,
+        "kontext_erzeugte_tokens": 2,
+    }))
+    assert _last_reading(_losschicken(client, chat_id)) == 9002
+
+
+def test_the_round_end_counts_the_thinking(client, chat_id):
+    """10 answer pieces and 40 thought pieces: the context grew by 50."""
+    client.app.state.repositories.messages.speichern(
+        chat_id=chat_id, role="assistant", content="Vorher", gesamt_tokens=2000
+    )
+    provider_setzen(client, _EndsOnStats({
+        "prompt_tokens": None, "prompt_genau": False, "erzeugte_tokens": 10,
+        "kontext_erzeugte_tokens": 50,
+    }))
+    assert _last_reading(_losschicken(client, chat_id)) == 2050
+
+
+def test_silence_without_thinking_the_round_end_is_as_before(client, chat_id):
+    client.app.state.repositories.messages.speichern(
+        chat_id=chat_id, role="assistant", content="Vorher", gesamt_tokens=2000
+    )
+    provider_setzen(client, _EndsOnStats({
+        "prompt_tokens": None, "prompt_genau": False, "erzeugte_tokens": 10,
+        "kontext_erzeugte_tokens": 10,
+    }))
+    assert _last_reading(_losschicken(client, chat_id)) == 2010
+
+
+def test_silence_a_provider_without_the_new_fields_ends_as_before(client, chat_id):
+    """A provider that sends neither new field (every other provider) is read
+    exactly the way it was."""
+    client.app.state.repositories.messages.speichern(
+        chat_id=chat_id, role="assistant", content="Vorher", gesamt_tokens=2000
+    )
+    provider_setzen(client, _EndsOnStats({"prompt_tokens": None, "erzeugte_tokens": 10}))
+    assert _last_reading(_losschicken(client, chat_id)) == 2010

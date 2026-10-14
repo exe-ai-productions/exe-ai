@@ -1,29 +1,33 @@
 <script>
   import { rollfade } from '../lib/rollfade.js'
   import { slide } from 'svelte/transition'
-  import { codeKopierKlick, dateiTeile, dateienZahl } from '../lib/markdown.js'
+  import { adressTeile, codeKopierKlick, dateiTeile, dateienZahl } from '../lib/markdown.js'
+  import { setContext } from 'svelte'
   import { lebendHtml } from '../lib/lebendhtml.js'
   import { hervorheben, maskieren } from '../lib/einfaerben.js'
   import { dateiFakten, dateizeichen, writingFacts } from '../lib/dateiarten.js'
   import { api } from '../lib/api.js'
-  import { melde, zustand } from '../lib/zustand.svelte.js'
+  import { drawingMakesVideo, melde, zustand } from '../lib/zustand.svelte.js'
   import { studioWithPicture } from '../lib/studio.svelte.js'
   import { t, teile as textPieces, texte } from '../lib/texte.svelte.js'
   import { stoppuhr } from '../lib/dauer.js'
-  import { aufrufZahl, buendeln, laufenderAufruf, schlechtesterPunkt } from '../lib/werkzeugbuendel.js'
+  import { aufrufZahl, buendeln, openCall, schlechtesterPunkt } from '../lib/werkzeugbuendel.js'
   import { tempoGemessen, tempoTitelSchluessel } from '../lib/tempoquelle.js'
   import { takt, taktHalten } from '../lib/sekundentakt.svelte.js'
   import { skillAmAnfang } from '../lib/skills.svelte.js'
   import { bildZeigen } from '../lib/bildschau.svelte.js'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import { terminal } from '../lib/terminalfenster.svelte.js'
+  import { tabRemoveByAddress } from '../lib/vorschautabs.svelte.js'
   import { laufampel } from '../lib/laufampel.js'
+  import { answerEnding } from '../lib/answerEnding.js'
   import { punktAtmet, punktPulsiert } from '../lib/meldewesen.svelte.js'
   import Bildfuellung from './Bildfuellung.svelte'
   import PictureMenu from './PictureMenu.svelte'
   import Videokachel from './Videokachel.svelte'
-  import { isVideo } from '../lib/media.js'
+  import { isPicture, isVideo } from '../lib/media.js'
   import Dateikarte from './Dateikarte.svelte'
+  import ThoughtLine from './ThoughtLine.svelte'
   import Agentenmarke from './Agentenmarke.svelte'
   import { chatJob, openTranscript } from '../lib/agentchat.svelte.js'
 
@@ -33,6 +37,10 @@
   let {
     nachricht, istLetzte = false, laeuft = false, neuErzeugen,
     istLetzteFrage = false, neuSenden, bildDeckel = 540, marke = null,
+    /* How many files the answers before this one carry (`dateienDavor` in
+       lib/markdown.js): file names count across the whole chat, so a
+       second answer's first document is not "markdown-1.md" again. */
+    dateienVorher = 0,
   } = $props()
 
   /* Which sections are unfolded, by position in the drawn list — thinking
@@ -195,6 +203,24 @@
      gets the file's address, and files its tab under this chat. */
   const isPdf = (karte) => String(karte.typ || '').toLowerCase() === 'pdf'
   const fileAddressOf = (karte) => (karte.id ? api.documentFileAddress(karte.id) : null)
+  /* The working tile says what is being made: its answer's running drawing
+     call is the video tool, or a picture is on its way. */
+  const drawingWord = $derived(
+    drawingMakesVideo(nachricht.answerId) ? t('nachricht.video_laeuft') : t('nachricht.bild_laeuft'),
+  )
+  // The filling inside the tile reads the same word for readers of a screen.
+  setContext('tileWord', () => drawingWord)
+  /* The files whose picture would not load (a text under a picture's name,
+     a file that is gone): they stand as the card every other file wears,
+     with name, kind and size and the way into the reader. */
+  let pictureFailed = $state({})
+  /* A picture a tool handed into the chat stands as a picture, the way a
+     generated one does; every other file keeps its card. The picture is
+     drawn from the file's address, so a row without one stays a card. */
+  const isDeliveredPicture = (karte) =>
+    Boolean(karte.id) && isPicture(karte.name) && !pictureFailed[karte.id]
+  const deliveredPictures = $derived(dokumentKarten.filter(isDeliveredPicture))
+  const deliveredFiles = $derived(dokumentKarten.filter((karte) => !isDeliveredPicture(karte)))
   const DOK_ZEICHEN =
     '<svg class="dok-zeichen" width="22" height="22" viewBox="0 0 64 64" fill="none" ' +
     'stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">' +
@@ -221,6 +247,10 @@
     if (!karte.id) return
     try {
       await api.anhangEntfernen(zustand.aktiverChat, nachricht.id, { dokument: karte.id })
+      /* The file is gone: a PDF's tab in the rail would only show the
+         service's refusal. Removed after the call went through, so a failed
+         removal leaves the tab as it is. */
+      tabRemoveByAddress(chatId, fileAddressOf(karte))
       const rest = dokumentKarten.filter((k) => k.id !== karte.id)
       nachricht.dokument = rest.length === 1 ? rest[0] : null
       nachricht.dokumente = rest.length > 1 ? rest : null
@@ -288,7 +318,7 @@
      ever read — and it is the one section that grows under the scan. */
   const versaetze = $derived.by(() => {
     const liste = []
-    let bisher = 0
+    let bisher = dateienVorher
     for (let i = 0; i < teile.length; i++) {
       liste.push(bisher)
       const teil = teile[i]
@@ -316,11 +346,9 @@
      row written by somebody else looked like an answer in progress.
 
      The blob is still read where the column is empty, so a message stored
-     before the column existed keeps saying what it always said. */
-  const laufzustand = $derived(
-    nachricht.zustand
-      ?? (stats.fehler ? 'fehler' : stats.abgebrochen ? 'abgebrochen' : null),
-  )
+     before the column existed keeps saying what it always said — the one
+     reading the arrow under the last answer shares (lib/answerEnding.js). */
+  const laufzustand = $derived(answerEnding(nachricht))
 
   /* The finished mark: the model has called the `goal` tool and said what
      it reached. Live it arrives on the message itself (App.svelte, SSE
@@ -454,14 +482,18 @@
     return beginn != null && ende != null ? stoppuhr(ende - beginn) : null
   }
 
-  /* The newest thought, for the one line under a running thinking head:
-     the last sentence, or the one still being written. */
-  function letzterGedanke(text) {
-    const saetze = String(text || '').split(/(?<=[.!?])\s+|\n+/)
-    for (let i = saetze.length - 1; i >= 0; i--) {
-      if (saetze[i].trim()) return saetze[i].trim()
+  /* Whether the thinking stretch at `i` still carries its line with the
+     newest thought. It stands from the stretch's first moment to the moment
+     something visible stands behind it — text, or a tool row — or the
+     answer ends. A piece of only white space draws nothing and ends
+     nothing: a line that left with it left the answer shorter by its height
+     and grew again with the first word. */
+  function gedankeZeileSteht(i) {
+    if (!laeuft) return false
+    for (let k = i + 1; k < teile.length; k++) {
+      if (teile[k].art !== 'content' || teile[k].text.trim()) return false
     }
-    return ''
+    return true
   }
 
   /* A tool call's dot on the line — it carries the call's whole state, the
@@ -474,7 +506,11 @@
      green once it has run. */
   function werkzeugPunkt(werkzeug, stand) {
     if (werkzeug.fehlgeschlagen) return { farbe: 'rot', atmet: false }
-    if (wartetAufNutzer(werkzeug.aufruf_id)) return { farbe: 'gelb', atmet: punktPulsiert('chat') }
+    /* Only a call without a result waits: one id can stand for several
+       calls, and the finished ones of that id are not the one asked about. */
+    if (werkzeug.ergebnis === null && wartetAufNutzer(werkzeug.aufruf_id)) {
+      return { farbe: 'gelb', atmet: punktPulsiert('chat') }
+    }
     if (werkzeug.ergebnis === null) return { farbe: 'blau', atmet: punktPulsiert('chat') }
     if (stand) return { farbe: stand.farbe, atmet: stand.atmet && punktAtmet('terminal', stand.farbe) }
     /* A background run keeps how it ended, now steady — red if it broke,
@@ -498,6 +534,28 @@
       (fragen) => aufrufId && fragen?.[chatId]?.aufrufId === aufrufId,
     )
   }
+
+  /* Whether anything at all came of this answer: thinking, a tool row,
+     text, a picture or a file. A stopped answer that has one of them is said
+     to be stopped by the foot alone — the red line below is for the answer
+     of which nothing came. */
+  const etwasKam = $derived(
+    Boolean(
+      (nachricht.reasoning || '').trim()
+        || teile.some((teil) => teil.art === 'werkzeug' || teil.text?.trim?.())
+        || nachricht.bild
+        || nachricht.bildLaeuft
+        || dokumentKarten.length,
+    ),
+  )
+  /* The red line under an answer with no text: failed, silent, or stopped
+     before ANYTHING came. Not an image answer (its text is empty by nature),
+     not one cut off at the ceiling (the line below says that), and not a
+     stopped answer that got somewhere — the foot says "abgebrochen". */
+  const leereAntwort = $derived(
+    !hatInhalt && !laeuft && !nachricht.bild && !nachricht.bildLaeuft && !abgeschnitten
+      && !(laufzustand === 'abgebrochen' && etwasKam),
+  )
 
   /* An aborted or failed answer must not remain standing as an empty
      box (3.7) — it says what happened. */
@@ -611,13 +669,22 @@
     const live = nachricht.abschnitte?.length > 0
     const eigene = live ? nachricht.abschnitte : storedSections()
     if (eigene?.length) {
-      /* A stored section takes the first entry with its call id that no
-         section before it took: a server without ids numbers every round
-         from zero, so the same id can stand for several calls. A stored
-         entry keeps its call id as `kennung`. The live list keeps the
-         first match by `aufruf_id`, the entry its results are written into
-         (App.svelte, `tool_result`), exactly as before. */
+      /* A section takes the first entry with its call id that no section
+         before it took: a server without ids numbers every round from zero,
+         so the same id can stand for several calls. A stored entry keeps
+         its call id as `kennung`. The live list does the same with
+         `aufruf_id`, in the order the entries are written into
+         (App.svelte, `tool_result`), so a running answer shows each row
+         with its own result. */
       if (live) {
+        const takenLive = new Set()
+        const entryOf = (aufrufId) => {
+          const werkzeug = werkzeuge.find(
+            (w) => w && !takenLive.has(w) && w.aufruf_id === aufrufId,
+          )
+          if (werkzeug) takenLive.add(werkzeug)
+          return werkzeug
+        }
         return eigene
           /* The stored answer's rule for blank sections, so a running answer
              bundles the way it does after reload: blank thinking and blank
@@ -634,7 +701,7 @@
               ? a
               : a.writing
                 ? { ...a, werkzeug: unbegunCall(a.writing) }
-                : { ...a, werkzeug: werkzeuge.find((w) => w?.aufruf_id === a.aufruf_id) },
+                : { ...a, werkzeug: entryOf(a.aufruf_id) },
           )
           // A live tool section whose entry is missing draws nothing rather
           // than an empty row — can only happen if the two lists drift apart.
@@ -801,9 +868,16 @@
      stream in App.svelte), and once the answer is done the figure the
      service measured over it. Only a reading the service MEASURED is shown,
      with what it counted as its hint (lib/tempoquelle.js). Whole numbers. */
+  /* While the answer runs, ONLY the reading of the running round stands
+     here, and with none there is no number. The `stats` a row carries
+     while it runs are the service's snapshot of the rounds so far added
+     together (a window that fetched the row fresh holds exactly that), so
+     they are not this round's speed and must not read as if they were. */
   const speedReading = $derived(
-    laeuft && nachricht.liveSpeed?.wert
-      ? nachricht.liveSpeed
+    laeuft
+      ? nachricht.liveSpeed?.wert
+        ? nachricht.liveSpeed
+        : { wert: null, quelle: null }
       : { wert: stats.tokens_pro_sekunde, quelle: stats.tempo_quelle },
   )
   /* A measured zero is a measurement: `0 TPS` is what a stalled answer
@@ -827,8 +901,10 @@
      No reading, no part; a server that really reports nothing gets no
      share, and one that reports a zero gets a real "0 %". */
   const cachePercent = $derived(
-    laeuft && typeof nachricht.liveShare === 'number'
-      ? nachricht.liveShare
+    laeuft
+      ? typeof nachricht.liveShare === 'number'
+        ? nachricht.liveShare
+        : null
       : typeof stats.prompt_cache_percent === 'number'
         ? stats.prompt_cache_percent
         : typeof stats.cache_tokens !== 'number'
@@ -863,6 +939,27 @@
         : { zahl: `${cachePercent} %`, wort: t('nachricht.cache'), titel: null },
     ].filter(Boolean),
   )
+  /* The row of readings keeps its place while the answer runs, once it has
+     stood. At every round border the live readings are cleared and the row
+     would be gone — and copy and regenerate beside it slid left by its
+     width, to jump back with the first new reading. So the last row stays,
+     invisible and as wide as it was, until a new reading comes; it shows no
+     number that is no longer true. Before the first reading there is no row
+     to keep, and a finished answer shows what was measured, as it always
+     did. */
+  let zuletztGemessen = []
+  const fussMessungen = $derived.by(() => {
+    if (!laeuft) {
+      zuletztGemessen = []
+      return messungen
+    }
+    if (messungen.length) {
+      zuletztGemessen = messungen
+      return messungen
+    }
+    return zuletztGemessen
+  })
+  const messungenHaelt = $derived(laeuft && !messungen.length && fussMessungen.length > 0)
   /* What is not a reading: how the run ended, and the error it died of.
      Through `laufzustand`, the one reading of how the run ended, and not the
      blob: a row the service stamped aborted after a crash carries the column
@@ -929,6 +1026,12 @@
      the arguments. On its own it has its dot on the line;
      inside a bundle (`imBuendel`) the bundle's dot stands for all of them
      and the row has none. -->
+<!-- The own message as it was typed. An address with http:// or https:// in
+     it is a link that opens like one in an answer (in the shell's window in
+     the system's browser, in the browser in a new tab); everything else
+     stays text, character for character. -->
+{#snippet eigenerText(inhalt)}{#each adressTeile(inhalt) as teil}{#if teil.href}<a class="eigenlink" href={teil.href} target="_blank" rel="noopener noreferrer">{teil.text}</a>{:else}{teil.text}{/if}{/each}{/snippet}
+
 {#snippet werkzeugEintrag(teil, i, imBuendel)}
   {@const stand = hintergrundStand(teil.werkzeug)}
   {@const wzPunkt = werkzeugPunkt(teil.werkzeug, stand)}
@@ -1071,8 +1174,8 @@
            high, the rest melting out at the bottom and scrolling
            inside without a bar (lib/rollfade.js). -->
       <div class="gedanke-text" use:rollfade transition:slide={{ duration: 200 }}>{teil.text}</div>
-    {:else if laeuftHier}
-      <div class="mitlesen">{letzterGedanke(teil.text)}</div>
+    {:else if gedankeZeileSteht(i)}
+      <ThoughtLine text={teil.text} />
     {/if}
   </div>
 {/snippet}
@@ -1174,12 +1277,12 @@
         <PictureMenu entries={anhangMenue(bildname)} />
       </div>
     {/each}{#if anhangBilder.length || dokumentKarten.length}
-      {#if nachricht.content}<div class="bildtext">{nachricht.content}</div>{/if}
+      {#if nachricht.content}<div class="bildtext">{@render eigenerText(nachricht.content)}</div>{/if}
     {:else if skillTeil}
       <!-- Brightness only, no colour: which instruction was used is a fact
            about the message, not a state it is in. -->
-      <span class="skillpille">/{skillTeil.name}</span>{#if ohneSkill}{' '}{ohneSkill}{/if}
-    {:else}{nachricht.content}{/if}
+      <span class="skillpille">/{skillTeil.name}</span>{#if ohneSkill}{' '}{@render eigenerText(ohneSkill)}{/if}
+    {:else}{@render eigenerText(nachricht.content)}{/if}
   </div>
   <!-- The same actions as under the answers, just under one's own
        bubble: copy, and send-again only on the last question — in the
@@ -1254,7 +1357,7 @@
                   <Bildfuellung fuellen />
                 {/if}
                 {#if nachricht.bildLaeuft}
-                  <span class="bild-kopf">{t('nachricht.bild_laeuft')}</span>
+                  <span class="bild-kopf">{drawingWord}</span>
                 {/if}
               </div>
             {:else}
@@ -1284,13 +1387,18 @@
         {#if eintrag.art === 'buendel'}
           {@const offen = offeneTeile.has(eintrag.schluessel)}
           {@const punktStand = buendelPunkt(eintrag)}
-          {@const laufend = laufenderAufruf(eintrag.eintraege.filter(({ teil }) => !teil.werkzeug?.unbegun))}
+          {@const open = openCall(
+            eintrag.eintraege.filter(({ teil }) => !teil.werkzeug?.unbegun),
+            wartetAufNutzer,
+            (werkzeug) => Boolean(hintergrundStand(werkzeug)?.laeuft),
+          )}
           {@const written = eintrag.eintraege.findLast(({ teil }) => teil.werkzeug?.written != null)?.teil.werkzeug}
           <!-- Two or more tool calls in a row, with the thinking before and
                between them: one row, always closed. It names the number of
-               calls — while one runs, that call's name and "running"; while
-               one is being written, that, the way its own row says it — and
-               its dot is the worst state among the calls. Opened, the calls
+               calls — while one runs, that call's name and "running" (a call
+               that waits for the reader has its name alone, its dot says the
+               waiting); while one is being written, that, the way its own
+               row says it — and its dot is the worst state among the calls. Opened, the calls
                and the thinking stand as they always did, without a dot
                each. -->
           <div class="ereignis werkzeugzeile buendel">
@@ -1310,9 +1418,11 @@
               </svg>
               {#if written}
                 {@render beingWritten(written)}
-              {:else if laufend}
-                <span class="wz-vorschau werkzeugname">{laufend.name}</span>
-                <span class="wz-rechts"><span class="wz-dauer">{t('werkzeug.buendel_laeuft')}</span></span>
+              {:else if open}
+                <span class="wz-vorschau werkzeugname">{open.name}</span>
+                {#if open.going}
+                  <span class="wz-rechts"><span class="wz-dauer">{t(open.background ? 'werkzeug.hintergrund_laeuft' : 'werkzeug.buendel_laeuft')}</span></span>
+                {/if}
               {/if}
             </button>
             {#if offen}
@@ -1418,17 +1528,42 @@
         {/if}
       {/each}
 
-      <!-- The files a tool handed into the chat with this answer: the same
-           card a written file and an attachment wear, in a row that wraps.
-           They belong to the answer, so each files its tab under this
-           chat. Their text is the file itself, and saving one saves that
-           file. Nothing of its own for this branch. -->
-      {#if dokumentKarten.length}
+      <!-- The pictures a tool handed into the chat with this answer: each
+           in the frame of a generated picture, side by side in a row that
+           wraps. A click enlarges the picture under its own name; "···"
+           saves the file. The name is what a screen reader hears at the
+           picture and at its click face — nothing of it is seen. A picture
+           that will not load goes back to the file card. -->
+      {#if deliveredPictures.length}
+        <div class="ereignis">
+          {@render punkt('antwort')}
+          <div class="picture-row">
+            {#each deliveredPictures as karte (karte.id)}
+              {@const address = fileAddressOf(karte)}
+              <div class="erzeugt">
+                <button class="erzeugt-bild" onclick={() => bildZeigen(address, { name: karte.name })}
+                        aria-label={karte.name}>
+                  <img class="bildanhang" src={address} alt={karte.name} loading="lazy"
+                       onerror={() => (pictureFailed[karte.id] = true)} />
+                </button>
+                <PictureMenu entries={[{ text: t('nachricht.bild_sichern'), href: address, download: karte.name }]} />
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <!-- The other files a tool handed into the chat with this answer: the
+           same card a written file and an attachment wear, in a row that
+           wraps. They belong to the answer, so each files its tab under
+           this chat. Their text is the file itself, and saving one saves
+           that file. Nothing of its own for this branch. -->
+      {#if deliveredFiles.length}
         <div class="ereignis textzeile">
           {@render punkt('antwort')}
           <div class="antwort">
             <div class="file-row">
-              {#each dokumentKarten as karte (karte.id || karte.name)}
+              {#each deliveredFiles as karte (karte.id || karte.name)}
                 <Dateikarte
                   zeichenHtml={DOK_ZEICHEN}
                   name={karte.name}
@@ -1473,7 +1608,7 @@
            standing where the thing happened — at the end, because that is
            where a run stops. Their dot says the state, so the row itself is
            only quiet text. -->
-      {#if !hatInhalt && !laeuft && !nachricht.bild && !nachricht.bildLaeuft && !abgeschnitten}
+      {#if leereAntwort}
         <!-- An image answer has empty text — that is its normal state, not
              a "wrote nothing". The frame of a running picture stands above
              already; it needs no second word down here.
@@ -1551,14 +1686,15 @@
     </div>
 
     <div class="fuss">
-      {#if messungen.length}
+      {#if fussMessungen.length}
         <!-- One row of its own: the dot between two readings belongs to
              them (8 px apart), and the 14 px the footer keeps between its
              children would otherwise sit around the dot too. The dot wears
              the footer's ink as it is: dimmed, it fell under the contrast
-             text needs. -->
-        <span class="messungen">
-          {#each messungen as messung, nummer}
+             text needs. Kept invisible between two rounds (see `haelt`). -->
+        <span class="messungen" class:haelt={messungenHaelt}
+              aria-hidden={messungenHaelt ? 'true' : undefined}>
+          {#each fussMessungen as messung, nummer}
             {#if nummer > 0}<span class="trenner" aria-hidden="true">·</span>{/if}
             <span class="messung" title={messung.titel}>
               <span class="zahl">{messung.zahl}</span> {messung.wort}
@@ -1574,9 +1710,15 @@
         </svg>
       </button>
       <!-- Regenerate exists only on the last answer: recomputing one in
-           the middle would invalidate everything after it (3.4). -->
+           the middle would invalidate everything after it (3.4). Under a
+           failed answer the same arrow asks the failed call again and says
+           so; what a press does is decided where it lands (App.svelte,
+           `neuErzeugen`), by the same reading of how the run ended. -->
       {#if istLetzte && nachricht.id}
-        <button class="tat" title={t('nachricht.neu_erzeugen')} aria-label={t('nachricht.neu_erzeugen')}
+        {@const arrowLabel = laufzustand === 'fehler'
+          ? t('nachricht.erneut_versuchen')
+          : t('nachricht.neu_erzeugen')}
+        <button class="tat" title={arrowLabel} aria-label={arrowLabel}
                 onclick={() => neuErzeugen(nachricht.id)}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round">
@@ -1787,6 +1929,16 @@
     border-radius: 9px;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0.02) 42%, rgba(0, 0, 0, 0.4));
     box-shadow: 0 14px 34px -16px rgba(0, 0, 0, 0.6);
+  }
+  /* Pictures handed into the chat: their frames side by side, the gap
+     between two the one between two file cards. A frame keeps its own
+     height, and the room it leaves under itself is the room between two
+     lines of the row. */
+  .picture-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 0 8px;
   }
   .erzeugt-bild {
     display: block;
@@ -2091,15 +2243,6 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .leucht { animation: none; background: none; color: inherit; }
-  }
-  /* One line with the newest thought while the stretch runs. */
-  .mitlesen {
-    font-size: 12.5px;
-    line-height: 20px;
-    color: var(--text-still);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   /* The whole text, unfolded: quiet, at the line, no card and no rule of
      its own. Ten lines at most; the rest scrolls inside without a bar and
@@ -2412,6 +2555,10 @@
     align-items: baseline;
     gap: 8px;
   }
+  /* Between two rounds: the place of the last reading, none of its ink. */
+  .messungen.haelt {
+    visibility: hidden;
+  }
   .messung {
     font-family: var(--schrift-fest);
   }
@@ -2477,6 +2624,8 @@
     border-left: 2px solid var(--linie-stark); color: var(--text-leise);
   }
   .antwort :global(hr) { border: none; border-top: 1px solid var(--linie); margin: 1.4em 0; }
+  /* A markdown image is at most as wide as the text it stands in. */
+  .antwort :global(img.md-bild) { max-width: 100%; height: auto; }
   /* The files of an answer: cards side by side, wrapping, with the room
      below that a paragraph has. The card's own spacing is the row's. */
   .file-row {
@@ -2491,6 +2640,8 @@
   /* A link has to read as one: the blue of the look, and the line under it
      in the same blue (the colour the text itself wears). */
   .antwort :global(a) { color: var(--blau); text-underline-offset: 3px; }
+  /* The same link in one's own bubble. */
+  .eigenlink { color: var(--blau); text-underline-offset: 3px; }
   .antwort :global(table) {
     border-collapse: collapse; margin: 0 0 0.95em; font-size: 0.94em; display: block; overflow-x: auto;
   }

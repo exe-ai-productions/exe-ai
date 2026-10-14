@@ -56,12 +56,28 @@ export function serverKennung(name) {
     preselected tools, and whether it is on. A key typed in and sent with
     "connect" switches the server on — that is what the button names. Left
     as it was, a switched-off server would never start, and the sheet would
-    report it unreachable though the key was taken. */
-export function grundfelder(quelle, eintrag, { mitSchluessel = false } = {}) {
-  const felder = {
-    type: 'http',
-    url: quelle.url,
-    enabled: mitSchluessel ? true : (eintrag?.enabled ?? true),
+    report it unreachable though the key was taken.
+
+    A tile without an address is a server that starts a program here: it
+    writes no kind and no address, so the kind it has stays the kind it has
+    — written as `http` it would be an address-less server the registry
+    refuses. One that names its program (`command`) has no entry anywhere
+    until this write, so — with no entry on file — it writes the program as
+    well, and the address the person typed, which the program reads from the
+    variable the tile names (`address_env`), into the entry's own
+    environment. An entry already on file keeps its program and its
+    environment. */
+export function grundfelder(quelle, eintrag, { mitSchluessel = false, adresse = '' } = {}) {
+  const felder = { enabled: mitSchluessel ? true : (eintrag?.enabled ?? true) }
+  if (quelle.url) {
+    felder.type = 'http'
+    felder.url = quelle.url
+  }
+  if (quelle.command && !eintrag) {
+    felder.type = 'stdio'
+    felder.command = quelle.command
+    felder.args = quelle.args ?? []
+    if (quelle.address_env && adresse) felder.env = { [quelle.address_env]: adresse }
   }
   if (quelle.vorauswahl) felder.allowed_tools = quelle.vorauswahl
   return felder
@@ -72,4 +88,30 @@ export function grundfelder(quelle, eintrag, { mitSchluessel = false } = {}) {
 export function apiKeyUmgebungsname(kennung) {
   const name = `${kennung.toUpperCase().replace(/-/g, '_')}_API_KEY`
   return /^[0-9]/.test(name) ? `_${name}` : name
+}
+
+/** What the model calls a server's tool by: `mcp__<server>__<tool>`, a
+    character outside letters, digits and the underscore becoming `_`. The
+    same name app/tools/mcp_names.py makes — the switches and the lists of an
+    agent are written by it. */
+export function modelName(server, tool) {
+  const clean = (part) => String(part).replace(/[^A-Za-z0-9_]/g, '_')
+  return `mcp__${clean(server)}__${clean(tool)}`
+}
+
+/** The server's own word for a tool: `read_file` for `mcp__fs__read_file`
+    of the server `fs`. A name that does not carry the server's prefix is
+    returned as it is. The catalogue marks are looked up by this word. */
+export function ownName(name, server) {
+  const prefix = modelName(server ?? '', '')
+  return server && typeof name === 'string' && name.startsWith(prefix)
+    ? name.slice(prefix.length)
+    : name
+}
+
+/** The seconds a field holds: a number above zero, else `null` — which
+    removes the field from the entry, so the default holds again. */
+export function timeLimitFromField(value) {
+  const seconds = typeof value === 'number' ? value : Number(String(value ?? '').trim())
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null
 }

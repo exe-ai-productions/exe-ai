@@ -459,19 +459,22 @@ def test_die_verdrahtung_der_leser_hoerer_steht_im_markup():
 # --- The place a chat was left, put back on opening it --------------------
 
 
-def _zurueck_programm(stelle: dict, *, folgt: bool, hoehe: int = 1000) -> str:
+def _zurueck_programm(stelle: dict, *, folgt: bool, hoehe: int = 1000, bilder_max: int | None = None) -> str:
     """The real `stelleZurueck` and `stelleNachsetzen`, lifted out of the
     component, against a stand-in list of `hoehe` pixels, 200 of them
     visible, scrolled to its floor, with following as the previous chat left
     it. Ends with the call; what follows is up to the test."""
     quelle = QUELLE.read_text()
     stuecke = []
-    for name in ("stelleZurueck", "stelleNachsetzen"):
+    for name in ("stelleZurueck", "stelleBild", "stelleNachsetzen"):
         treffer = re.search(rf"\n  function {name}\(.*?\n  \}}\n", quelle, re.S)
         assert treffer, f"{name}() not found"
         stuecke.append(treffer.group(0))
     boden = re.search(r"\n  const AM_BODEN = (\d+)\n", quelle)
     assert boden, "AM_BODEN not found"
+    gesetzt = re.search(r"\n  const STELLE_BILDER_MAX = (\d+)\n", quelle)
+    assert gesetzt, "STELLE_BILDER_MAX not found"
+    bilder_max = bilder_max or int(gesetzt.group(1))
     return (
         f"const AM_BODEN = {boden.group(1)};\n"
         f"let folgtMit = {json.dumps(folgt)};\n"
@@ -481,9 +484,14 @@ def _zurueck_programm(stelle: dict, *, folgt: bool, hoehe: int = 1000) -> str:
         "  get scrollTop() { return this._oben },\n"
         "  set scrollTop(v) { this._oben = Math.max(0, Math.min(this.scrollHeight - this.clientHeight, v)) } };\n"
         "const zustand = { aktiverChat: 'c1' };\n"
-        "const requestAnimationFrame = (f) => f();\n"
+        "const STELLE_BILDER_MAX = " + str(bilder_max) + ";\n"
+        "const gemerkt = [];\nconst stelleMerken = () => gemerkt.push({ oben: verlauf.scrollTop, folgt: folgtMit });\n"
+        "// The frames are a queue the test steps through; the first one runs\n"
+        "// at once, as the single frame of the place's setting always did.\n"
+        "const bilder = [];\nconst requestAnimationFrame = (f) => { bilder.push(f); return bilder.length };\n"
+        "const bild = () => { const f = bilder.shift(); if (f) f() };\n"
         + "".join(stuecke)
-        + f"\nstelleZurueck({json.dumps(stelle)}, 'c1');\n"
+        + f"\nstelleZurueck({json.dumps(stelle)}, 'c1');\nbild();\n"
     )
 
 
@@ -584,3 +592,73 @@ def test_ohne_offenen_chat_wird_die_gesetzte_stelle_vergessen():
     )
     assert quelle.count("selbstGerolltChat = zustand.aktiverChat") == 3, "a listener no longer marks the hand"
     assert "ResizeObserver(() => {\n      stelleNachsetzen()" in quelle, "the observer no longer sets the place again"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node on this machine")
+def test_a_place_behind_the_end_is_given_up_after_thirty_frames():
+    """The chat is shorter than the place it was left at. The wait ends after
+    the last frame: the view stays at what exists, the remembered place is
+    brought to it, following is on again — and a list that grows past the old
+    place much later does not set the view back there."""
+    stand = _ausfuehren(
+        _zurueck_programm({"am_boden": False, "versatz": 2000}, folgt=False, hoehe=1000)
+        + """
+        const vor = { ziel: nachsetzenZiel !== null, folgt: folgtMit, bilder: bilder.length };
+        for (let i = 0; i < 28; i += 1) bild();           // frames 2 .. 29: still waiting
+        const nach29 = { ziel: nachsetzenZiel !== null, folgt: folgtMit };
+        bild();                                          // frame 30: given up
+        const nach30 = { ziel: nachsetzenZiel !== null, folgt: folgtMit, oben: verlauf.scrollTop, gemerkt };
+        verlauf.scrollHeight = 4461; stelleNachsetzen(); // a growth in one step, much later
+        console.log(JSON.stringify({ vor, nach29, nach30, spaeter: verlauf.scrollTop }));
+        """
+    )
+    assert stand["vor"] == {"ziel": True, "folgt": False, "bilder": 1}
+    assert stand["nach29"] == {"ziel": True, "folgt": False}
+    assert stand["nach30"]["ziel"] is False and stand["nach30"]["folgt"] is True
+    assert stand["nach30"]["oben"] == 800
+    assert stand["nach30"]["gemerkt"] == [{"oben": 800, "folgt": True}]
+    assert stand["spaeter"] == 800, "the old place was set again after the wait had ended"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node on this machine")
+def test_a_place_that_becomes_reachable_in_time_is_set_as_before():
+    """Silence probe: the list grows at the fifth frame; the place is set
+    there, the wait is over, nothing is given up or remembered anew."""
+    stand = _ausfuehren(
+        _zurueck_programm({"am_boden": False, "versatz": 2000}, folgt=False, hoehe=1000)
+        + """
+        for (let i = 0; i < 3; i += 1) bild();           // frames 2 .. 4
+        verlauf.scrollHeight = 4461;
+        bild();                                          // frame 5
+        console.log(JSON.stringify({ ziel: nachsetzenZiel !== null, oben: verlauf.scrollTop,
+                                     folgt: folgtMit, gemerkt, uebrig: bilder.length }));
+        """
+    )
+    assert stand == {"ziel": False, "oben": 2000, "folgt": False, "gemerkt": [], "uebrig": 0}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node on this machine")
+def test_the_observer_of_the_list_costs_no_frame():
+    """Silence probe: `stelleNachsetzen` called by the size observer as often
+    as it likes does not count towards the thirty."""
+    stand = _ausfuehren(
+        _zurueck_programm({"am_boden": False, "versatz": 2000}, folgt=False, hoehe=1000)
+        + """
+        for (let i = 0; i < 100; i += 1) stelleNachsetzen();
+        console.log(JSON.stringify({ ziel: nachsetzenZiel !== null, folgt: folgtMit, bilder: bilder.length }));
+        """
+    )
+    assert stand == {"ziel": True, "folgt": False, "bilder": 1}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node on this machine")
+def test_the_hand_ends_the_wait_before_the_frames_run_out():
+    stand = _ausfuehren(
+        _zurueck_programm({"am_boden": False, "versatz": 2000}, folgt=False, hoehe=1000)
+        + """
+        selbstGerolltChat = 'c1';
+        bild();
+        console.log(JSON.stringify({ ziel: nachsetzenZiel !== null, bilder: bilder.length, gemerkt }));
+        """
+    )
+    assert stand == {"ziel": False, "bilder": 0, "gemerkt": []}

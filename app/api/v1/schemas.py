@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.agenten import Agent
 from app.db.models import Auftrag, AuftragSchritt, Chat, Cronjob, Document, Message
@@ -21,6 +21,34 @@ log = logging.getLogger(__name__)
 class ChatAnlegen(BaseModel):
     title: str | None = Field(default=None, max_length=300)
     endpoint_id: str | None = None
+
+
+class ChatCompact(BaseModel):
+    """Compacts a chat by hand.
+
+    ``endpoint_id`` names the model that writes the summary, as a chat
+    request does; absent, the chat's own model is used. ``topic`` is the
+    focus the user typed behind the command — the summary records what
+    relates to it in full and the rest briefly.
+    """
+
+    endpoint_id: str | None = None
+    topic: str | None = None
+
+
+class ChatCompactResult(BaseModel):
+    """What a manual compaction did, as one word.
+
+    ``folded`` says the middle of the chat is now one summary and ``replaced``
+    how many messages it replaced; the other three leave the chat as it was:
+    ``too_short`` (there is no middle to fold), ``no_saving`` (the summary
+    would not have been shorter than what it replaces) and ``failed`` (no
+    summary came back). ``stopped`` says the person pressed stop while the
+    summary was being written: nothing was folded and nothing was booked.
+    """
+
+    result: Literal["folded", "too_short", "no_saving", "failed", "stopped"]
+    replaced: int = 0
 
 
 class OrdnerOeffnen(BaseModel):
@@ -52,12 +80,6 @@ class OrdnerStand(BaseModel):
     """Which of a chat's shared folders are no longer there."""
 
     fehlend: list[str] = Field(default_factory=list)
-
-
-class BefehlAusfuehren(BaseModel):
-    """One command from the CLI module. The folders come from the chat."""
-
-    command: str = Field(max_length=10_000)
 
 
 class ChatAendern(BaseModel):
@@ -242,7 +264,7 @@ class LaufendeGenerierung(BaseModel):
 class OffeneFrageOption(BaseModel):
     """One button of an open question — the shape `frage_werkzeug.
     gepruefte_frage` produces, the live `user_ask` SSE event already
-    carries, and `Benutzerfrage.svelte` renders (label plus an optional
+    carries, and the question card renders (label plus an optional
     explaining sentence)."""
 
     label: str
@@ -300,6 +322,10 @@ class ModellAntwort(BaseModel):
     anbieter: str = ""
     anbieter_name: str = ""
     modell: str | None = None
+    # Whether `name` is the model's own — reported by its server or taken
+    # from its catalogue — and not the one the configuration gives the
+    # server. A client keeps a name with its choice only from a name that is.
+    name_gemeldet: bool = False
     # Named by the configuration — picked without anyone having to tick it.
     angeheftet: bool = False
     # Second line in the picker menu. Derived, not maintained.
@@ -308,6 +334,10 @@ class ModellAntwort(BaseModel):
     dialekt: str = "openai"
     reasoning_format: str
     erreichbar: bool
+    # The server behind this model in one word — active, idle or offline
+    # (app/server_state.py): the same word the live line announces, carried
+    # here so a client has it before the first announcement.
+    server_state: str = ""
     zuletzt_geprueft: str | None
     context_tokens: int | None = None
     # Of the two, the one the configuration itself carries. Empty means
@@ -330,6 +360,11 @@ class ModellAntwort(BaseModel):
     # native word each stage travels under. The window draws its pill from
     # this and keeps no list of its own.
     denkprofil: dict[str, Any] = Field(default_factory=dict)
+    # The stage a request carries for this model when nobody names one: the
+    # stored stage as far as the model still offers it, else the depth
+    # standing in for it. Empty where there is nothing to set. The window
+    # shows it, so it never works the rule out again.
+    thinking_sent: str | None = None
     # local | cloud | extra - the model picker groups by this so it is
     # visible at a glance whether a request leaves the machine. Local are
     # only the two servers this program starts itself (app/config.py
@@ -345,6 +380,10 @@ class ModellAntwort(BaseModel):
     # is filled. Never the key itself.
     schluessel_env: str | None = None
     schluessel_gesetzt: bool = False
+    # Whether removing the provider takes that key line along — false while
+    # another provider reads the same variable. Decides the question the
+    # window puts before the removal.
+    key_goes_with_provider: bool = False
     parameter: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -355,8 +394,8 @@ class GenerierungAnfrage(BaseModel):
     endpoint_id: str | None = None
     content: str | None = Field(
         default=None,
-        description="Neue Benutzernachricht. Fehlt sie, wird auf dem "
-        "vorhandenen Verlauf weitergearbeitet (z. B. beim Neu-Erzeugen).",
+        description="New user message. If omitted, processing continues with the existing "
+                    "history, for example when regenerating a response.",
     )
     # The id the interface already gave its own bubble for this question,
     # so the row it becomes here carries the same one. A reload landing
@@ -399,7 +438,7 @@ class GenerierungAnfrage(BaseModel):
     # turn stay exactly as said.
     gespraech: bool = Field(
         default=False,
-        description="Ob diese Nachricht der gesprochene Teil eines Gesprächs ist.",
+        description="Whether this message is the spoken part of a conversation.",
     )
     # Whether the user cut the previous spoken answer short. Only read on a
     # conversation turn: it puts one line before the conversation instruction
@@ -408,6 +447,39 @@ class GenerierungAnfrage(BaseModel):
         default=False,
         description="Whether the previous spoken answer was interrupted.",
     )
+    # The regenerate arrow under a finished or stopped answer: the id of the
+    # chat's last answer this request writes a new one for. The new answer
+    # is written on the history without that row, and the row stays stored
+    # until the new answer is finished and stored — the same step deletes
+    # it. A new answer that fails or is stopped leaves it as it was and
+    # leaves no row of its own.
+    replaces: str | None = Field(
+        default=None,
+        description="Id of the chat's last answer that a new answer takes the place of "
+                    "once it is finished.",
+    )
+    # The arrow under a failed answer: the id of the chat's last answer whose
+    # failed model call is asked again. The request carries what that run
+    # had already done — its tool calls with their results and its text —
+    # and the run goes on in the same row. Nothing is deleted and no tool
+    # call of the run is carried out a second time.
+    retries: str | None = Field(
+        default=None,
+        description="Id of the chat's last answer, a failed one, whose failed model "
+                    "call is asked again in the same answer.",
+    )
+
+    @model_validator(mode="after")
+    def _one_answer_named_and_no_new_turn(self) -> "GenerierungAnfrage":
+        """Both fields work on the history as it stands: a request naming an
+        answer brings no turn of its own, and it names one answer."""
+        if not (self.replaces or self.retries):
+            return self
+        if self.replaces and self.retries:
+            raise ValueError("replaces and retries cannot be sent together")
+        if self.content or self.bild or self.dokument or self.bilder or self.dokumente:
+            raise ValueError("a request naming an answer carries no message of its own")
+        return self
 
 
 class AbbruchAnfrage(BaseModel):
@@ -461,8 +533,8 @@ class GedaechtnisAnfrage(BaseModel):
 
 class BestaetigungAntwort(BaseModel):
     zugestellt: bool = Field(
-        description="False, wenn niemand mehr auf diese Antwort wartet — "
-        "die Generierung ist vorbei oder es wurde schon entschieden."
+        description="False if no one is waiting for this answer anymore: generation has ended "
+                    "or a decision has already been made."
     )
 
 

@@ -19,8 +19,10 @@ from typing import AsyncIterator
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field, model_validator
 
 from app.ereignisstrom import strom
+from app.i18n import verfuegbare_sprachen
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -46,7 +48,7 @@ async def _sse_strom(quelle: AsyncIterator[dict | None]) -> AsyncIterator[str]:
         await quelle.aclose()
 
 
-@router.get("/stream", summary="Watch the whole program (SSE)")
+@router.get("/stream", summary="Monitor application-wide events (SSE)")
 async def zusehen() -> StreamingResponse:
     return StreamingResponse(
         _sse_strom(strom.zuschauen()),
@@ -57,3 +59,34 @@ async def zusehen() -> StreamingResponse:
             "Connection": "keep-alive",
         },
     )
+
+
+class FensterThema(BaseModel):
+    """What the window page shows now, as the terminal client inside the
+    window calls it: the look by its short lower-case name, and the language
+    by its code. Either one alone, or both; neither is no announcement."""
+
+    theme: str | None = Field(default=None, pattern=r"^[a-z]{1,16}$")
+    language: str | None = None
+
+    @model_validator(mode="after")
+    def _etwas_gemeldet(self) -> "FensterThema":
+        if self.theme is None and self.language is None:
+            raise ValueError("a look or a language is needed")
+        if self.language is not None and self.language not in verfuegbare_sprachen():
+            raise ValueError("unknown language")
+        return self
+
+
+@router.post("/window-theme", summary="Announce the look and language the window shows now")
+async def fenster_thema(wunsch: FensterThema) -> dict[str, str]:
+    """The window page tells that the look or the language it shows has
+    changed; the terminal client inside the window follows. Nothing is
+    stored here: what changed goes to whoever watches the stream, once."""
+    gemeldet = {
+        name: wert
+        for name, wert in (("theme", wunsch.theme), ("language", wunsch.language))
+        if wert is not None
+    }
+    strom.melden("window_theme", **gemeldet)
+    return gemeldet

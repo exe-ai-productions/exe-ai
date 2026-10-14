@@ -1070,6 +1070,55 @@ def test_repairing_faces_alone_keeps_its_seed(mode_run, client: TestClient, chat
     assert _info(client, answer["bild"])["seed"] == 77
 
 
+def test_enlarging_without_a_prompt_is_drawn_and_keeps_none(
+    mode_run, bild_senden, client: TestClient, chat_id,
+):
+    """The upscaler reads no prompt: a picture that was uploaded is enlarged
+    with none, writes no question into the chat, and its values name none."""
+    mode_run(chat_id, "upscale")
+    answer = bild_senden(
+        chat_id, prompt="", startbild="finished.png", mode="upscale",
+        upscale_model="big.pth", frage_erstellen=False,
+    )
+    assert answer["seed"] is None
+    rows = _nachrichten(client, chat_id)
+    new = next(m for m in rows if m.get("bild") == answer["bild"])
+    assert new["role"] == "assistant"
+    # The first run of the fixture wrote its pair; this one wrote only its answer.
+    assert [m["role"] for m in rows].count("user") == 1
+    assert "prompt" not in _info(client, answer["bild"])
+
+
+def test_enlarging_with_a_prompt_keeps_it_and_writes_its_question(
+    mode_run, bild_senden, client: TestClient, chat_id,
+):
+    """The silence check: the prompt of an enlarging stands in the chat and
+    in the values kept for the new picture, as it did."""
+    mode_run(chat_id, "upscale")
+    answer = bild_senden(
+        chat_id, prompt="a red car", startbild="finished.png", mode="upscale", upscale_model="big.pth",
+    )
+    asked = [m["content"] for m in _nachrichten(client, chat_id) if m["role"] == "user"]
+    assert asked[-1] == "a red car"
+    assert _info(client, answer["bild"])["prompt"] == "a red car"
+
+
+@pytest.mark.parametrize("mode", ["", "adetailer"])
+def test_a_drawing_or_a_repair_without_a_prompt_is_still_refused(
+    mode_run, client: TestClient, chat_id, mode,
+):
+    """Only the enlarging goes without a prompt: the other modes and the
+    drawing are refused as before, with the length sentence."""
+    mode_run(chat_id, "upscale")
+    answer = client.post("/api/v1/bild", json={
+        "prompt": "", "modell": "base.safetensors", "chat_id": chat_id,
+        "startbild": "finished.png", "mode": mode, "ad_modell": "face.pt",
+    })
+    assert answer.status_code == 422, answer.text
+    entry = answer.json()["detail"][0]
+    assert entry["type"] == "string_too_short" and entry["ctx"] == {"min_length": 1}
+
+
 # --- A failed picture's run says why ------------------------------------------
 
 

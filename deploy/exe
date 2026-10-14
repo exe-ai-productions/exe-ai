@@ -1,0 +1,18 @@
+#!/bin/sh
+# The command on the path. A link in /usr/local/bin points at this file
+# inside the installed program, and this file hands everything over to the
+# program in the folder beside it, in its client role.
+#
+# Found through its links: started through one, $0 is the link's path and
+# readlink gives where it points — which may be a link again, so the chain
+# is followed to its end. A relative link counts from the folder it lies
+# in. Started directly, there is no link to follow and $0 is the file.
+self=$0
+while target=$(readlink "$self" 2>/dev/null) && [ -n "$target" ]; do
+  case "$target" in
+    /*) self=$target ;;
+    *) self=$(dirname "$self")/$target ;;
+  esac
+done
+here=$(dirname "$self")
+exec "$here/../exe-ai-terminal/Exe AI" --cli "$@"

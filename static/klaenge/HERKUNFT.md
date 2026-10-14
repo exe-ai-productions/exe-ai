@@ -15,7 +15,7 @@ answer instead of a guess.
 
 | File | Meaning | Notes |
 |---|---|---|
-| `fertig.wav` | The answer is there | D5 → G5, a rising fourth |
+| `fertig.wav` | Response complete | D5 → G5, a rising fourth |
 | `wartet.wav` | The program is waiting for the user | E5 twice, like a knock |
 | `fehler.wav` | Something failed | G4 → F4 → E♭4, three steps down |
 | `cron-fertig.wav` | A scheduled job finished | C5 → E5 → G5 → C6, a major triad up to the octave |

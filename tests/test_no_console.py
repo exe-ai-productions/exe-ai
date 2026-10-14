@@ -26,7 +26,9 @@ CREATE_NO_WINDOW = 0x08000000
 
 # The ways this program starts a child process.
 _SUBPROCESS = {"Popen", "run", "call", "check_call", "check_output"}
-_ASYNCIO = {"create_subprocess_exec", "create_subprocess_shell"}
+# ``_process_from_line`` is the Windows command line's own start
+# (app/tools/shell.py): the whole line as one string, no shell around it.
+_ASYNCIO = {"create_subprocess_exec", "create_subprocess_shell", "_process_from_line"}
 
 # The two files that open a program for its own window — the browser and
 # the file manager. Their windows are the point, so their calls stay as
@@ -173,9 +175,14 @@ def test_a_shell_command_and_a_script_start_without_a_window(windows, monkeypatc
     the flag is passed the same way."""
     names = {name for calls in _child_starts().values() for call in calls
              if isinstance(call.func, ast.Attribute) and (name := call.func.attr) in _ASYNCIO}
-    # Both ways: the command processor on Windows is handed its line as one
-    # string (app/tools/shell.py, ``_starten``), every other child as a list.
-    assert names == {"create_subprocess_exec", "create_subprocess_shell"}
+    # The command processor on Windows is handed its line as one string by the
+    # start of its own (``_process_from_line``, called by ``_starten``, which
+    # passes the flag like every other start); every other child goes by a
+    # list through ``create_subprocess_exec``.
+    assert names == {"create_subprocess_exec"}
+    shell_calls = _child_starts()["tools/shell.py"]
+    line_starts = [c for c in shell_calls if isinstance(c.func, ast.Name) and c.func.id == "_process_from_line"]
+    assert len(line_starts) == 1 and _through_the_one_place(line_starts[0])
     for module in (shell, skriptlauf):
         assert module.no_window is no_console.no_window
     seen: list[dict] = []

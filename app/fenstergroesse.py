@@ -4,25 +4,30 @@ the order decided for it, so no caller works it out a second way.
 The first of these that has an answer wins:
 
 1. a configured value, entered by hand;
-2. what the server itself reports (llama.cpp ``/props``, oMLX, a provider's
+2. a size learned from an earlier "too long" refusal
+   (``app/kontextvoll.py``), remembered per endpoint and model — taken only
+   where it is smaller than the window in force at that moment, whichever
+   source that came from;
+3. what the server itself reports (llama.cpp ``/props``, oMLX, a provider's
    own model list);
-3. a size learned from an earlier "too long" refusal (``app/kontextvoll.py``),
-   remembered per endpoint and model — taken only where it is smaller than
-   a window learned before, the table's entry or the fallback, whichever
-   is in force at that moment;
 4. the shipped table of known models (``app/modellkontextgroessen.py``);
 5. otherwise the fallback below.
 
-Learned wins over the table: a provider that has already said "too long, my
-limit is 32,768" is a truer answer than any table entry, and putting the
-table first would run every following request into the very same refusal.
-A refusal only ever lowers the window, never raises it — over a table entry
-and the fallback alike: a number larger than the
-window in force is not taken, so a window larger than the table's or the
-fallback's is never learned this way. Only a configured value and the
-server's own answer are never touched by a refusal at all.
-The server wins over the learned value because the server answers live; a
-learned number can be stale once the model behind it has been swapped.
+One exception to 2 before 3: where the endpoint is on this machine or its
+own network (:func:`is_local_endpoint`), the server's own answer comes first
+and replaces a learned size that differs from it — such a server is
+restarted with another context size under the same model name, and its
+live answer is the true one.
+
+Learned wins over the server: a provider that has already said "too long,
+my limit is 32,768" is a truer answer than a larger number its model list
+reports for the model in general (a plan or an account can carry a lower
+limit than the model), and putting the server first would run every
+following request into the very same refusal. The learned size is keyed by
+endpoint and model name, so a model swapped behind the same address finds
+none. A refusal only ever lowers the window, never raises it: a number
+larger than the window in force is not taken. Only a configured value is
+never touched by a refusal at all.
 
 Nothing here ever asks a server or a database itself — the callers already
 have to reach both for their own reasons, and handing the three numbers in
@@ -32,7 +37,9 @@ of them were obtained.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+from urllib.parse import urlsplit
 
 from app import kontextvoll
 from app.db.repositories.einstellungen import GELERNTE_FENSTERGROESSEN
@@ -45,11 +52,50 @@ log = logging.getLogger(__name__)
 # the safer side to guess wrong on.
 ERSATZ = 128_000
 
+# Names and ranges that are on this machine or its own network: the machine
+# itself, the DNS names container runtimes give their host, and Tailscale's
+# shared address range (100.64.0.0/10), which ``ipaddress`` does not count as
+# private.
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+_CONTAINER_LOCAL_SUFFIXES = (".docker.internal", ".containers.internal", ".lima.internal")
+_TAILSCALE_ADDRESSES = ipaddress.IPv4Network("100.64.0.0/10")
+
 QUELLE_EINGETRAGEN = "eingetragen"
 QUELLE_SERVER = "server"
 QUELLE_GELERNT = "gelernt"
 QUELLE_TABELLE = "tabelle"
 QUELLE_ERSATZ = "ersatz"
+
+
+def is_local_endpoint(base_url: str | None) -> bool:
+    """Whether this address is on this machine or its own network: loopback,
+    a private or link-local address, Tailscale's shared range, a name
+    without a dot (a container's service name, an entry of the hosts file)
+    and ``*.local``. A name with dots that is not one of those — a provider's
+    domain, a Tailscale MagicDNS name — is not, even where it leads to
+    this very machine: nothing about the name says so."""
+    if not base_url:
+        return False
+    try:
+        host = urlsplit(base_url if "//" in base_url else f"//{base_url}").hostname
+    except ValueError:
+        return False
+    if not host:
+        return False
+    if host in _LOCAL_HOSTS or host.endswith(_CONTAINER_LOCAL_SUFFIXES) or host.endswith(".local"):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        # An IPv6 literal has no dot and was handled above as an address; a
+        # name without a dot is one on this network by definition.
+        return "." not in host
+    return (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or (isinstance(address, ipaddress.IPv4Address) and address in _TAILSCALE_ADDRESSES)
+    )
 
 
 def aufloesen(
@@ -58,15 +104,21 @@ def aufloesen(
     eingetragen: int | None,
     server: int | None,
     gelernt: int | None,
+    local: bool = False,
 ) -> tuple[int, str]:
     """The context window in force, and which of the five sources it came
-    from — the window is never ``None``, the fallback sees to that."""
+    from — the window is never ``None``, the fallback sees to that.
+
+    ``local`` is :func:`is_local_endpoint` of the endpoint's address: there,
+    and only there, the server's own answer goes before a learned size."""
     if eingetragen:
         return eingetragen, QUELLE_EINGETRAGEN
-    if server:
+    if server and local:
         return server, QUELLE_SERVER
     if gelernt:
         return gelernt, QUELLE_GELERNT
+    if server:
+        return server, QUELLE_SERVER
     tabelle = nachschlagen(modell)
     if tabelle:
         return tabelle, QUELLE_TABELLE
@@ -81,7 +133,38 @@ def modellschluessel(zustand) -> str | None:
     question itself and for where a learned window lives, so a size learned
     from a refusal and the size a later poll looks for agree on the key.
     """
-    return zustand.gemeldeter_name or zustand.endpunkt.modell
+    return (
+        getattr(zustand, "fenster_modell", None)
+        or zustand.gemeldeter_name
+        or zustand.endpunkt.modell
+    )
+
+
+def fuer_modell(zustand, modell: str | None, repositories) -> tuple[int, str] | None:
+    """The window of one model of a catalogue, with the source it came from —
+    ``None`` where the endpoint's own number is the one to use.
+
+    That is so for the model the endpoint resolved its window for, for a
+    request that names no model, and for an endpoint whose window was entered
+    by hand (it holds for every model behind the address, and a refusal never
+    touches it). For every other model the order of :func:`aufloesen` runs
+    again, fed with what is known of THAT model: the window learned for it,
+    the number the server's list names for it, the table, the fallback.
+    """
+    if not modell or modell == modellschluessel(zustand):
+        return None
+    if zustand.endpunkt.context_tokens:
+        return None
+    gelernt = None
+    if repositories is not None:
+        gelernt = _read_learned(repositories, zustand.endpunkt.id, modell)
+    return aufloesen(
+        modell,
+        eingetragen=None,
+        server=(zustand.context_per_model or {}).get(modell),
+        gelernt=gelernt,
+        local=is_local_endpoint(zustand.endpunkt.base_url),
+    )
 
 
 def _schluessel(endpoint_id: str, modell: str | None) -> str:
@@ -125,20 +208,22 @@ def aus_fehler_lernen(repositories, zustand, fehler: BaseException) -> None:
     never asks for again on a catalogue endpoint (no ``modell:`` pinned),
     and get silently discarded the very next pass.
 
-    A no-op where a configured value or the server's own answer is already
-    in force: neither is worth overriding with a number read out of an
-    error message, and the priority order in :func:`aufloesen` says so on
-    its own — this check only spares the caller a discovery poll's wait for
-    the very same conclusion.
+    A no-op where a configured value is already in force: it is never
+    overridden with a number read out of an error message, and the priority
+    order in :func:`aufloesen` says so on its own — this check only spares
+    the caller a discovery poll's wait for the very same conclusion.
 
     Otherwise a number is taken only where it is smaller than the window in
-    force — whether that came from an earlier refusal, the table or the
-    fallback. Where the endpoint holds no
+    force — whether that came from an earlier refusal, the server, the table
+    or the fallback. A smaller number than the server's own answer is
+    learned and goes before it from the next poll on, except on a local
+    endpoint where the server's answer replaces it again
+    (:func:`aufloesen`). Where the endpoint holds no
     window yet, the one compared against is what applies without a server:
     a window learned before, else the table, else the fallback
     (:func:`aufloesen`). A larger number is never learned.
     """
-    if zustand.kontext_quelle in (QUELLE_EINGETRAGEN, QUELLE_SERVER):
+    if zustand.kontext_quelle == QUELLE_EINGETRAGEN:
         return
     tokens = kontextvoll.grenze_aus_fehler(fehler)
     if not tokens:
@@ -198,4 +283,5 @@ async def serverseitig_aufloesen(zustand, repositories, timeout: float) -> tuple
         eingetragen=zustand.endpunkt.context_tokens,
         server=server_wert,
         gelernt=gelernt,
+        local=is_local_endpoint(zustand.endpunkt.base_url),
     )

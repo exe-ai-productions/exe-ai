@@ -11,6 +11,7 @@
      A line with a dot on it, as in the chat: the sentence wears the empty
      ring, a row of tools the dot of its worst state. */
   import { slide } from 'svelte/transition'
+  import { slideIfDrawn } from '../lib/slideIfDrawn.js'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import { rohText, verlaufBauen } from '../lib/agentenverlauf.js'
   import { t } from '../lib/texte.svelte.js'
@@ -83,7 +84,7 @@
                   <span class="sinhalt">{schritt.inhalt}</span>
                 </button>
                 {#if offeneRohdaten.has(schritt.nummer)}
-                  <pre class="roh">{rohText(schritt.inhalt)}</pre>
+                  <pre class="roh" transition:slideIfDrawn={{ duration: 200 }}>{rohText(schritt.inhalt)}</pre>
                 {/if}
               {:else}
                 <div class="schritt" title={schritt.inhalt}>
@@ -193,6 +194,7 @@
   .vorschau {
     flex: 1;
     min-width: 0;
+    padding-right: 12px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -234,6 +236,7 @@
   .sinhalt {
     flex: 1;
     min-width: 0;
+    padding-right: 12px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

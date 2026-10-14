@@ -1034,23 +1034,125 @@ def test_a_stop_that_falls_into_the_takeover_is_taken_up_by_the_draw(tmp_path: P
     assert ended == []
 
 
-def test_the_job_is_ended_after_the_deadline(tmp_path: Path, monkeypatch):
-    """The same fifteen minutes the sd-cli path allows; after them the job
-    is ended, so nothing keeps drawing for nobody."""
+class _Clock:
+    """A clock that has run ``step`` seconds further at every look."""
+
+    def __init__(self, step: float = 100.0):
+        self.now = 0.0
+        self.step = step
+
+    def __call__(self) -> float:
+        self.now += self.step
+        return self.now
+
+
+def test_the_job_is_ended_after_the_time_limit(tmp_path: Path, monkeypatch):
+    """A picture that takes longer than the limit set for it is ended, so
+    nothing keeps drawing for nobody, and it says that the time limit has
+    passed — not that the picture failed."""
     from app import bildturbo as bt
 
     server = _JobServer(before=["generating"] * 3)
     server.install(monkeypatch, bt)
     monkeypatch.setattr(bt.time, "sleep", lambda s: None)
-    monkeypatch.setattr(bt, "ZEICHENFRIST", -1.0)
+    monkeypatch.setattr(bt.time, "monotonic", _Clock(step=100.0))
     turbo = Bildturbo(tmp_path)
     turbo._prozess = _LebtImmer()
     turbo._war_bereit = True
 
     with pytest.raises(BildturboFehler) as error:
-        turbo.zeichnen({"prompt": "x"})
-    assert error.value.grund == "bild.gescheitert"
+        turbo.zeichnen({"prompt": "x"}, zeitgrenze=5)
+    assert error.value.grund == "bild.zeit_abgelaufen"
     assert any(u.endswith("/jobs/job_1/cancel") for u in server.calls)
+
+
+@pytest.mark.parametrize("zeitgrenze, video", [(None, False), (5, True)])
+def test_a_picture_without_a_limit_is_waited_for_to_its_end(
+    tmp_path: Path, monkeypatch, zeitgrenze, video
+):
+    """No limit set — or a video, which has none — and the draw waits as
+    long as the server draws, however many looks that takes."""
+    from app import bildturbo as bt
+
+    server = _JobServer(before=["generating"] * 40)
+    server.install(monkeypatch, bt)
+    monkeypatch.setattr(bt.time, "sleep", lambda s: None)
+    monkeypatch.setattr(bt.time, "monotonic", _Clock(step=100.0))
+    turbo = Bildturbo(tmp_path)
+    turbo._prozess = _LebtImmer()
+    turbo._war_bereit = True
+
+    data = turbo.zeichnen({"prompt": "x"}, zeitgrenze=zeitgrenze, video=video)
+
+    assert data == b"PNG"
+    assert not any(u.endswith("/cancel") for u in server.calls)
+
+
+def test_a_picture_that_ends_inside_its_limit_ends_as_before(tmp_path: Path, monkeypatch):
+    """Silence probe: a short picture with a limit set comes back."""
+    from app import bildturbo as bt
+
+    server = _JobServer(before=["generating"])
+    server.install(monkeypatch, bt)
+    monkeypatch.setattr(bt.time, "sleep", lambda s: None)
+    monkeypatch.setattr(bt.time, "monotonic", _Clock(step=1.0))
+    turbo = Bildturbo(tmp_path)
+    turbo._prozess = _LebtImmer()
+    turbo._war_bereit = True
+
+    assert turbo.zeichnen({"prompt": "x"}, zeitgrenze=300) == b"PNG"
+
+
+class _UpscaleAnswer:
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        import base64
+
+        return {"images": [{"b64_json": base64.b64encode(b"UP").decode()}]}
+
+
+def _upscale_turbo(tmp_path: Path, monkeypatch, post) -> Bildturbo:
+    from app import bildturbo as bt
+
+    monkeypatch.setattr(bt.httpx, "post", post)
+    turbo = Bildturbo(tmp_path)
+    turbo._prozess = _LebtImmer()
+    monkeypatch.setattr(turbo, "bereit_abwarten", lambda frist: True)
+    return turbo
+
+
+def test_upscaling_waits_for_the_limit_set_and_reports_it(tmp_path: Path, monkeypatch):
+    import httpx
+
+    waits: list[object] = []
+
+    def post(url, json=None, timeout=None, **kw):
+        waits.append(timeout)
+        raise httpx.ReadTimeout("slow")
+
+    turbo = _upscale_turbo(tmp_path, monkeypatch, post)
+    with pytest.raises(BildturboFehler) as error:
+        turbo.upscale("AAAA", "x4", zeitgrenze=7)
+
+    assert waits == [7]
+    assert error.value.grund == "bild.zeit_abgelaufen"
+
+
+def test_upscaling_without_a_limit_waits_without_one(tmp_path: Path, monkeypatch):
+    waits: list[object] = []
+
+    def post(url, json=None, timeout=None, **kw):
+        waits.append(timeout)
+        return _UpscaleAnswer()
+
+    turbo = _upscale_turbo(tmp_path, monkeypatch, post)
+
+    assert turbo.upscale("AAAA", "x4") == b"UP"
+    assert waits == [None]
 
 
 def test_an_unknown_end_status_does_not_wait_out_the_deadline(tmp_path: Path, monkeypatch):
@@ -1887,7 +1989,7 @@ class _JobServer:
 
     def post(self, url, json=None, timeout=None, **kw):
         self.calls.append(url)
-        if url.endswith("/img_gen"):
+        if url.endswith("/img_gen") or url.endswith("/vid_gen"):
             self.bodies.append(json)
             if self._on_submit:
                 self._on_submit()
@@ -1907,7 +2009,9 @@ class _JobServer:
             return _Answer(200, {"id": "job_1", "status": self._before.pop(0)})
         job = {"id": "job_1", "status": self._status}
         if self._status == "completed":
-            job["result"] = {"images": [{"index": 0, "b64_json": self._image}]}
+            # A picture's result lists its images, a video's is the one
+            # encoded container.
+            job["result"] = {"images": [{"index": 0, "b64_json": self._image}], "b64_json": self._image}
         else:
             job["error"] = {"code": self._status, "message": self._error_text}
         return _Answer(200, job)

@@ -9,6 +9,7 @@ import unicodedata
 from pathlib import Path
 
 from app import dokumentablage
+from app.db.folding import FOLD_FUNCTION, fold_text
 from app.db.models import Chat, folders_from_column, folders_to_column
 from app.db.repositories.base import Repository, neue_id
 
@@ -205,7 +206,9 @@ class ChatRepository(Repository):
             #
             # The title is still asked as a substring, so a piece of a word
             # inside it counts; the content is asked as a prefix, because
-            # that is what an index of words can answer.
+            # that is what an index of words can answer. Both sides of the
+            # title are folded the way the index folds (case and accents),
+            # so a word is found in a title whichever way it was typed.
             #
             # Through `messages` rather than reading `chat_id` off the index:
             # an external-content table stores no column but the indexed
@@ -230,11 +233,11 @@ class ChatRepository(Repository):
             ]
             for wort in worte:
                 sql += (
-                    " AND (title LIKE ? ESCAPE '\\'"
+                    f" AND ({FOLD_FUNCTION}(title) LIKE ? ESCAPE '\\'"
                     " OR chats.id IN (SELECT chat_id FROM messages WHERE rowid IN"
                     " (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)))"
                 )
-                parameter.extend([like_muster(wort), fts_wort(wort)])
+                parameter.extend([like_muster(fold_text(wort)), fts_wort(wort)])
             if not worte:
                 # Not one usable word — a single letter, or nothing but
                 # punctuation. Then the line is looked for as it stands, and
@@ -242,8 +245,8 @@ class ChatRepository(Repository):
                 # quietly matched everything would say the opposite. The
                 # title answers it, which is where a one-letter search was
                 # always answered and costs nothing.
-                sql += " AND title LIKE ? ESCAPE '\\'"
-                parameter.append(like_muster(suche))
+                sql += f" AND {FOLD_FUNCTION}(title) LIKE ? ESCAPE '\\'"
+                parameter.append(like_muster(fold_text(suche)))
         # Pinned ones always sit on top. rowid as tiebreaker: equal
         # timestamps must not lead to a random order.
         sql += " ORDER BY pinned DESC, chats.updated_at DESC, chats.rowid DESC LIMIT ? OFFSET ?"
@@ -271,7 +274,7 @@ class ChatRepository(Repository):
             felder["working_dirs"] = folders_to_column(folders)
         unbekannt = set(felder) - erlaubt
         if unbekannt:
-            raise ValueError(f"Unbekannte Felder: {', '.join(sorted(unbekannt))}")
+            raise ValueError(f"Unknown fields: {', '.join(sorted(unbekannt))}")
         if not felder:
             return self.holen(chat_id)
 

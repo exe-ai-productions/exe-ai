@@ -483,8 +483,8 @@ def test_every_switch_is_one_sd_cli_knows():
 def test_a_sound_file_goes_to_sd_cli():
     """The server reads no sound file; a video with one is drawn by sd-cli."""
     for key in ("audio", "ref_audio", "ref_video_audio"):
-        assert image_switches.cli_only_reason({key: "voice.wav"})
-    assert image_switches.cli_only_reason({"video_format": "webm"}) is None
+        assert image_switches.cli_only({key: "voice.wav"})
+    assert image_switches.cli_only({"video_format": "webm"}) is None
 
 
 def test_hunyuan_video_is_given_no_flux_t5(client: TestClient, picture_folder: Path):

@@ -100,8 +100,8 @@ def _schriften_laden() -> dict[str, Any]:
         emoji = TTFont(SCHRIFT_EMOJI, str(_SCHRIFTDATEI_EMOJI))
     except TTFError as fehler:
         raise grenzen.GrenzeVerletzt(
-            f"PDFs cannot be written: a shipped font failed to load ({fehler}). "
-            "Write the text under a different extension instead."
+            f"PDF creation failed because a bundled font could not be loaded ({fehler}). Save "
+            "the text with a different file extension."
         ) from fehler
     pdfmetrics.registerFont(text)
     pdfmetrics.registerFont(emoji)
@@ -240,10 +240,9 @@ def _pdf_schreiben(ziel: Path, inhalt: str) -> None:
     if unbekannt:
         zeichenliste = ", ".join(f"'{zeichen}'" for zeichen in sorted(unbekannt))
         raise grenzen.GrenzeVerletzt(
-            f"'{ziel}' was not written: the character(s) {zeichenliste} have no "
-            "glyph in either font this tool ships (Noto Sans, Noto Emoji), so a "
-            "PDF cannot carry them. Write this content under a different "
-            "extension instead."
+            f"'{ziel}' was not written: neither bundled font (Noto Sans, Noto Emoji) contains "
+            f"glyphs for {zeichenliste}, so these characters cannot be included in a PDF. Save "
+            "the content with a different file extension."
         )
 
     blatt = canvas.Canvas(str(ziel), pagesize=SEITE)
@@ -410,11 +409,11 @@ def werkzeug_beschreibung() -> MCPWerkzeug:
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "The file to write, e.g. \"notes/todo.md\".",
+                    "description": 'File to write, e.g. "notes/todo.md".',
                 },
                 "content": {
                     "type": "string",
-                    "description": "The full text the file should hold afterwards.",
+                    "description": "The complete text the file should contain after writing.",
                 },
             },
             "required": ["path", "content"],
@@ -436,10 +435,10 @@ async def ausfuehren(
 ) -> str:
     roh = str(argumente.get("path") or "").strip()
     if not roh:
-        raise grenzen.GrenzeVerletzt("No path given.")
+        raise grenzen.GrenzeVerletzt("No path provided.")
     inhalt = argumente.get("content")
     if inhalt is None:
-        raise grenzen.GrenzeVerletzt("No content given.")
+        raise grenzen.GrenzeVerletzt("No content provided.")
     inhalt = str(inhalt)
 
     ziel = grenzen.ziel(roh, ordner, data_dir)
@@ -456,9 +455,9 @@ async def ausfuehren(
     # this tool's work: the check only fires on a file that is there.
     if ziel.exists() and ordnerwissen.ist_notiz(ziel, ordner):
         raise grenzen.GrenzeVerletzt(
-            f"'{ziel}' already exists and is not overwritten — writing it back "
-            "whole would throw away what is in it. If you have edit_file, use "
-            "it to add to it or change a passage."
+            f"'{ziel}' already exists and was not overwritten, because replacing the entire "
+            "file would discard its contents. If edit_file is available, use it to add "
+            "content or change a passage."
         )
 
     gab_es_schon = ziel.exists()
@@ -498,8 +497,8 @@ async def ausfuehren(
         # or whose reportlab cannot load its own dependencies — says so, with
         # the import error named, instead of writing text under a .pdf name.
         raise grenzen.GrenzeVerletzt(
-            f"'{ziel}' was not written: this installation cannot make PDFs "
-            f"({fehler}). Write the text under a different extension."
+            f"'{ziel}' was not written because this installation cannot create PDFs ({fehler}). "
+            "Save the text with a different file extension."
         ) from fehler
     except OSError as fehler:
         raise grenzen.GrenzeVerletzt(f"'{ziel}' could not be written ({fehler}).") from fehler
@@ -508,7 +507,7 @@ async def ausfuehren(
     was = "Overwrote" if gab_es_schon else "Created"
     antwort = f"{was} {ziel} — {zeilen} lines, {len(inhalt):,} characters."
     if ist_pdf:
-        antwort += " Written as a PDF."
+        antwort += " Saved as a PDF."
     if voriger_inhalt is not None:
         block = aenderungsblock.bauen(voriger_inhalt, inhalt)
         if block:

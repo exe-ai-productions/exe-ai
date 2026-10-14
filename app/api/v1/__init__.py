@@ -10,6 +10,7 @@ from app.api.v1 import (
     agentendock,
     agentenserver,
     anbieter,
+    anmeldung,
     arbeitsordner,
     ordnerwissen,
     befehle,
@@ -49,6 +50,7 @@ from app.api.v1 import (
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(health.router)
+router.include_router(anmeldung.router)
 router.include_router(meta.router)
 router.include_router(einstellungen.router)
 router.include_router(ereignisse.router)

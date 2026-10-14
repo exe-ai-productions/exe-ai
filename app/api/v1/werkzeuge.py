@@ -33,7 +33,7 @@ from app.tools.aufbau import registry_bauen
 from app.tools.mcp_auth import MCPAnmeldeFehler, OAuthVermittler
 from app.tools.mcp_client import MCPFehler
 from app.tools.mcp_sondierung import sondieren
-from app.tools.registry import konfiguration_pruefen
+from app.tools.registry import ENV_NAME_PATTERN, konfiguration_pruefen, read_server_file
 
 log = logging.getLogger(__name__)
 
@@ -42,14 +42,22 @@ router = APIRouter(tags=["werkzeuge"])
 # If the file does not exist yet, the editor form shows this skeleton.
 KONFIG_VORLAGE = '{\n  "mcpServers": {}\n}\n'
 
-PLATZHALTER_MUSTER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+# A placeholder takes the name an environment variable may have — the same
+# rule ``api_key_env`` is checked by (app/tools/registry.py), hyphen included.
+PLATZHALTER_MUSTER = re.compile(r"\$\{(" + ENV_NAME_PATTERN + r")\}")
 
 # Two quick saves in a row must not brawl over app.state.
 _neustart_sperre = asyncio.Lock()
 
 
 class WerkzeugAntwort(BaseModel):
+    # What the model calls the tool by — and what the switches and the
+    # permission rules name it by. For a server's tool that is
+    # ``mcp__<server>__<tool>`` (app/tools/mcp_names.py).
     name: str
+    # What the server calls it: the word the window shows. Only a server's
+    # tool carries one; any other is shown by its ``name``.
+    anzeige: str | None = None
     beschreibung: str
     server: str
     needs_confirmation: bool
@@ -153,14 +161,23 @@ def _konfig_antwort(text: str, sprache: str) -> WerkzeugKonfiguration:
 @router.get(
     "/tools/config",
     response_model=WerkzeugKonfiguration,
-    summary="The raw tool configuration (for the form)",
+    summary="Raw tool configuration (for the form)",
 )
 def werkzeug_konfiguration(
     config: Config = Depends(hole_config),
     sprache: str = Depends(hole_sprache),
 ) -> WerkzeugKonfiguration:
     pfad = config.pfad(config.mcp.servers_file)
-    text = pfad.read_text(encoding="utf-8") if pfad.exists() else KONFIG_VORLAGE
+    if not pfad.exists():
+        return _konfig_antwort(KONFIG_VORLAGE, sprache)
+    text, reason = read_server_file(pfad, sprache)
+    if reason is not None:
+        # Shown as it stands, the reason beside it: a file of bytes that are
+        # no UTF-8 reads here with those replaced, and the form can save it
+        # anew.
+        return WerkzeugKonfiguration(
+            content=text, kaputt=reason, platzhalter=_platzhalter(text)
+        )
     return _konfig_antwort(text, sprache)
 
 
@@ -217,6 +234,8 @@ class ServerUebersicht(BaseModel):
     laeuft: bool
     # Only with api_key_env: is the key present in the .env?
     schluessel_gesetzt: bool | None
+    # How many seconds one call may take; None: the default.
+    timeout: float | None = None
     # If it is running: ALL tools the server offers — the checkbox list
     # shows them in full, approved is the intersection.
     alle_werkzeuge: list[WerkzeugKurz]
@@ -235,7 +254,7 @@ class MCPSondierungAntwort(BaseModel):
 @router.post(
     "/tools/mcp/sondieren",
     response_model=MCPSondierungAntwort,
-    summary="Ask an MCP address that is not entered yet what it requires",
+    summary="Query the requirements of an MCP address that has not yet been added",
 )
 async def mcp_sondieren(daten: MCPSondierungAnfrage) -> MCPSondierungAntwort:
     try:
@@ -250,10 +269,17 @@ class ServerSchreiben(BaseModel):
     url: str | None = None
     command: str | None = None
     args: list[str] | None = None
+    # The environment of a program the entry starts, written whole: the
+    # gallery sets it once, when it creates the entry of a server that asks
+    # for the address of one's own instance.
+    env: dict[str, str] | None = None
     enabled: bool | None = None
     api_key_env: str | None = None
     allowed_tools: list[str] | None = None
     needs_confirmation: list[str] | None = None
+    # How many seconds one call to this server's tools may take. An explicit
+    # null removes the field: the default holds again.
+    timeout: float | None = None
     # Never stored: written straight to .env and left out of the file, the
     # same split the provider window already keeps between config.yaml and
     # .env (app/api/v1/anbieter.py). `api_key_env` is what lands in the file.
@@ -265,25 +291,28 @@ class ServerSchreiben(BaseModel):
 def _rohdaten_lesen(config: Config, sprache: str) -> dict:
     """The server file, for a change made through the gallery.
 
-    A file this side cannot read (no JSON, no object `mcpServers`) is
-    refused, never read as empty: written back from an empty start, every
-    other entry in it would be gone. The answer is the check's own reason,
-    the one the text field shows for the same file.
+    A file this side cannot use (:func:`read_server_file`: no JSON, no
+    object ``mcpServers``, an entry that is no object, bytes that are no
+    UTF-8) is refused, never read as empty: written back from an empty
+    start, every other entry in it would be gone. The answer is the check's
+    own reason, the one the text field shows for the same file.
     """
-    pfad = config.pfad(config.mcp.servers_file)
-    if not pfad.exists():
-        return {"mcpServers": {}}
-    text = pfad.read_text(encoding="utf-8")
+    text, reason = read_server_file(config.pfad(config.mcp.servers_file), sprache)
+    if reason is not None:
+        raise HTTPException(409, reason)
     if not text.strip():
-        # An empty file holds nothing that could be lost.
+        # A missing or empty file holds nothing that could be lost.
         return {"mcpServers": {}}
-    try:
-        daten = json.loads(text)
-    except json.JSONDecodeError:
-        daten = None
-    if not isinstance(daten, dict) or not isinstance(daten.get("mcpServers"), dict):
-        raise HTTPException(409, konfiguration_pruefen(text, sprache))
-    return daten
+    return json.loads(text)
+
+
+def _server_file_usable(config: Config, language: str) -> None:
+    """Says no (409, the reason in the page's language) where the server file
+    cannot be used — the one question the list and the sign-in ask before
+    they read it."""
+    _, reason = read_server_file(config.pfad(config.mcp.servers_file), language)
+    if reason is not None:
+        raise HTTPException(409, reason)
 
 
 def _schluessel_gesetzt(name: str | None) -> bool | None:
@@ -296,12 +325,14 @@ def _schluessel_gesetzt(name: str | None) -> bool | None:
 @router.get(
     "/tools/servers",
     response_model=list[ServerUebersicht],
-    summary="The server entries with their live state (for the gallery)",
+    summary="Server entries and their current status (for the gallery)",
 )
 def server_uebersicht(
     registry: WerkzeugRegistry | None = Depends(hole_registry),
     config: Config = Depends(hole_config),
+    sprache: str = Depends(hole_sprache),
 ) -> list[ServerUebersicht]:
+    _server_file_usable(config, sprache)
     uebersicht = []
     for eintrag in server_lesen(config.pfad(config.mcp.servers_file)):
         client = registry.clients.get(eintrag.name) if registry else None
@@ -316,6 +347,7 @@ def server_uebersicht(
                 needs_confirmation=eintrag.needs_confirmation,
                 laeuft=client is not None,
                 schluessel_gesetzt=_schluessel_gesetzt(eintrag.api_key_env),
+                timeout=eintrag.timeout,
                 alle_werkzeuge=[
                     WerkzeugKurz(name=w.name, beschreibung=w.beschreibung)
                     for w in (client.werkzeuge if client else [])
@@ -323,6 +355,17 @@ def server_uebersicht(
             )
         )
     return sorted(uebersicht, key=lambda e: e.name)
+
+
+def _shipped_entry(name: str) -> dict | None:
+    """The entry the program ships under this name, as it stands there — or
+    None where it ships none (or the shipped list cannot be read)."""
+    try:
+        text = aufloesen("mcp_servers.example.json").read_text(encoding="utf-8")
+        eintrag = json.loads(text)["mcpServers"][name]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return eintrag if isinstance(eintrag, dict) else None
 
 
 @router.put(
@@ -335,6 +378,7 @@ async def server_schreiben(
     daten: ServerSchreiben,
     request: Request,
     neu: bool = Query(default=False),
+    shipped: bool = Query(default=False),
     config: Config = Depends(hole_config),
     sprache: str = Depends(hole_sprache),
 ) -> WerkzeugKonfiguration:
@@ -347,6 +391,13 @@ async def server_schreiben(
     stand side by side without a word. A new one is refused instead, naming
     the id that is taken.
 
+    ``shipped`` is a server this program starts itself, connected again after
+    its entry was removed: it has no address to write, so the entry the
+    program ships under that name is put back first and the named fields go
+    on top of it. An entry already on file is never replaced — its own
+    fields stay and only the named ones change. A name the program ships
+    nothing under is refused as not registered.
+
     Unlike the raw text field, what would be broken is NOT saved here —
     the gallery types no JSON, so there is no honest reason to accept a
     broken file.
@@ -354,6 +405,11 @@ async def server_schreiben(
     rohdaten = _rohdaten_lesen(config, sprache)
     if neu and name in rohdaten["mcpServers"]:
         raise HTTPException(409, t("mcp_datei.schon_eingetragen", sprache, name=name))
+    if shipped and name not in rohdaten["mcpServers"]:
+        entry = _shipped_entry(name)
+        if entry is None:
+            raise HTTPException(404, t("mcp_datei.nicht_eingetragen", sprache, name=name))
+        rohdaten["mcpServers"][name] = entry
     eintrag = rohdaten["mcpServers"].setdefault(name, {})
     felder = daten.model_dump(exclude_unset=True)
     api_key = felder.pop("api_key", None)
@@ -391,7 +447,7 @@ async def server_schreiben(
     status_code=204,
     response_model=None,
     response_class=Response,
-    summary="Remove a server entry (with its access)",
+    summary="Remove a server entry and its access credentials",
 )
 async def server_entfernen(
     name: str,
@@ -455,6 +511,7 @@ async def oauth_start(
 
     The UI does the opening — the server opens no windows.
     """
+    _server_file_usable(config, sprache)
     eintraege = {
         e.name: e for e in server_lesen(config.pfad(config.mcp.servers_file))
     }
@@ -562,7 +619,7 @@ async def oauth_rueckruf(
 @router.get(
     "/tools/oauth/status",
     response_model=list[OAuthStatusAntwort],
-    summary="Which hosted servers are connected (never the values)",
+    summary="Connected hosted servers (without credential values)",
 )
 def oauth_status(
     vermittler: OAuthVermittler = Depends(hole_oauth),
@@ -580,7 +637,7 @@ def oauth_status(
     # "-> None" annotation as a NoneType model and refuses with 204.
     response_model=None,
     response_class=Response,
-    summary="Disconnect and forget the access",
+    summary="Disconnect and remove access credentials",
 )
 async def oauth_vergessen(
     server: str,

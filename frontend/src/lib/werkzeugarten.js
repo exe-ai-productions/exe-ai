@@ -15,6 +15,8 @@
   that changes there changes here.
 */
 
+import { ownName } from './mcpWerkzeuge.js'
+
 /* In the order they are shown. `zeichen` is the tool and server whose mark the
    kind draws; `weitere` borrows nothing and gets the catalogue's fallback. */
 export const ARTEN = [
@@ -42,6 +44,7 @@ const NACH_WERKZEUG = {
   deliver_file: 'dateien',
   search_files: 'suche',
   draw_image: 'bilder',
+  draw_video: 'bilder',
   generate_image: 'bilder',
   image_to_image: 'bilder',
   inpaint_image: 'bilder',
@@ -60,7 +63,7 @@ const NACH_SERVER = {
 
 /** The kind a tool belongs to; a tool nobody entered belongs to `weitere`. */
 export function artFuer(name = '', server = '') {
-  return NACH_WERKZEUG[name] ?? NACH_SERVER[server] ?? 'weitere'
+  return NACH_WERKZEUG[ownName(name, server)] ?? NACH_SERVER[server] ?? 'weitere'
 }
 
 /**
@@ -73,7 +76,7 @@ export function werkzeugarten(werkzeuge = []) {
   for (const werkzeug of werkzeuge) {
     const art = artFuer(werkzeug.name, werkzeug.server)
     if (!gruppen.has(art)) gruppen.set(art, [])
-    gruppen.get(art).push(werkzeug.name)
+    gruppen.get(art).push(werkzeug.anzeige ?? werkzeug.name)
   }
   return ARTEN.filter(({ art }) => gruppen.has(art)).map(({ art, zeichen }) => ({
     art,

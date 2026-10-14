@@ -57,7 +57,7 @@ def _reason_text(grund: str) -> str:
     if satz == schluessel:
         # An ending this program does not know: say that much rather than
         # hand the model a key.
-        return "the run ended without a named reason"
+        return "the run ended without a stated reason"
     return satz
 
 # What this module has hung on the bus, so a second lifecycle in the same
@@ -80,10 +80,10 @@ def report_text(auftrag: Auftrag) -> str:
     if len(report) > WERKZEUGERGEBNIS_GRENZE:
         report = (
             report[:WERKZEUGERGEBNIS_GRENZE]
-            + "\n[The report goes on; the whole of it stands in the agents view.]"
+            + "\n[The report continues; the full report is available in the agents view.]"
         )
     lines.append("")
-    lines.append(f"Report:\n{report}" if report else "The agent left no report.")
+    lines.append(f"Report:\n{report}" if report else "The agent did not provide a report.")
     return "\n".join(lines)
 
 

@@ -24,11 +24,11 @@
   import Schalter from './Schalter.svelte'
   import Fenster from './Fenster.svelte'
   import MCPMaske from './MCPMaske.svelte'
-  import { api } from '../lib/api.js'
+  import { api, ApiFehler } from '../lib/api.js'
   import { melde, frage } from '../lib/zustand.svelte.js'
   import { t } from '../lib/texte.svelte.js'
   import { LOGOS } from '../lib/logos.js'
-  import { NAMED_ONLY, SERVERKATALOG as KATALOG, serverTitel } from '../lib/serverkatalog.js'
+  import { SERVERKATALOG as KATALOG, gehoertZurKachel, serverTitel } from '../lib/serverkatalog.js'
 
   let { zuWerkzeugen } = $props()
 
@@ -39,7 +39,7 @@
      Anchored to the card's foot in fixed coordinates so no scroll container
      clips it. Only ever opens for a server on file — a card still to be
      connected goes straight to the sheet below. */
-  let menue = $state(null) // { name, top, left, nachOben } | null
+  let menue = $state(null) // { name, schluessel, top, left, nachOben } | null
 
   /* The MCP sheet (MCPMaske.svelte) — a proper window over the settings
      window, not the anchored menu above. Reached two ways: a not-yet-
@@ -53,6 +53,15 @@
   let mcpKachel = $state(null)
   let mcpName = $state('')
 
+  /* What the message above says when a call fails: the sentence the
+     service gave for its refusal — in the page's language, and for an
+     unreadable server file the reason the file is no good — and the general
+     one only where there is none. */
+  function errorSentence(error) {
+    const sentence = error instanceof ApiFehler ? error.message : ''
+    return sentence || t('fehler.allgemein')
+  }
+
   export async function laden() {
     try {
       const [server, oauth] = await Promise.all([
@@ -61,8 +70,8 @@
       ])
       eintraege = server
       status = Object.fromEntries(oauth.map((s) => [s.server, s]))
-    } catch {
-      melde(t('fehler.allgemein'), 'fehler')
+    } catch (error) {
+      melde(errorSentence(error), 'fehler')
     }
   }
 
@@ -70,16 +79,19 @@
     laden()
   })
 
-  const alle = $derived.by(() => {
-    const nachName = Object.fromEntries(eintraege.map((e) => [e.name, e]))
-    const katalogNamen = new Set(KATALOG.map((k) => k.name))
-    return [
-      ...KATALOG.map((k) => ({ katalog: k, eintrag: nachName[k.name] || null })),
-      ...eintraege
-        .filter((e) => !katalogNamen.has(e.name))
-        .map((e) => ({ katalog: null, eintrag: e })),
-    ]
-  })
+  /* A card belongs to the shipped server whose name and address an entry
+     carries (`gehoertZurKachel`). An entry under a shipped name that points
+     somewhere else is a server of one's own: a card of its own beside the
+     shipped one, which stands as not set up. */
+  const alle = $derived.by(() => [
+    ...KATALOG.map((k) => ({
+      katalog: k,
+      eintrag: eintraege.find((e) => gehoertZurKachel(k, e)) || null,
+    })),
+    ...eintraege
+      .filter((e) => !KATALOG.some((k) => gehoertZurKachel(k, e)))
+      .map((e) => ({ katalog: null, eintrag: e })),
+  ])
   /* One grid for all of them, the connected servers first; either half
      keeps the order of the list above. */
   const isConnected = (k) => ['verbunden', 'wartet'].includes(zustand(k))
@@ -110,21 +122,28 @@
     : 'still'
 
   const nameVon = (k) => k.katalog?.name || k.eintrag.name
+  /* What tells two cards apart: the name alone is not enough once a server
+     of one's own carries the name of a shipped one. */
+  const schluesselVon = (k) => `${k.katalog ? 'katalog' : 'eigen'}:${nameVon(k)}`
+  const katalogNamen = new Set(KATALOG.map((k) => k.name))
+  /* The shipped title and logo belong to the shipped server. A server of
+     one's own under its name has its own name as the title and the house's
+     plug as its sign, as every server of one's own has. */
+  const istKatalogName = (k) => k.katalog || !katalogNamen.has(nameVon(k))
 
   /* What a server is for, in one line. The text catalogue carries a line
-     for every shipped server and for the ones known by name only, which
-     show up for whoever registered them. A server nobody knows has none,
-     and its card leaves the line empty. */
-  const withPurpose = new Set([...KATALOG.map((k) => k.name), ...Object.keys(NAMED_ONLY)])
+     for every shipped server. A server nobody knows has none, and its card
+     leaves the line empty. */
+  const withPurpose = new Set(KATALOG.map((k) => k.name))
   const purposeOf = (serverName) =>
     withPurpose.has(serverName) ? t(`verbindungen.zweck.${serverName}`) : ''
-  const titelVon = (k) => serverTitel(nameVon(k))
+  const titelVon = (k) => (istKatalogName(k) ? serverTitel(nameVon(k)) : nameVon(k))
   /* The maker's logo, or nothing — then the house's plug stands in. Asked
      for the table's own entries only: a server may be called any word, also
      one every object answers to. */
-  const logoOf = (serverName) => (Object.hasOwn(LOGOS, serverName) ? LOGOS[serverName] : null)
-  const kachelVon = (name) => alle.find((k) => nameVon(k) === name) || null
-  const offeneKachel = $derived(menue ? kachelVon(menue.name) : null)
+  const logoVon = (k) => (istKatalogName(k) && Object.hasOwn(LOGOS, nameVon(k)) ? LOGOS[nameVon(k)] : null)
+  const kachelVon = (schluessel) => alle.find((k) => schluesselVon(k) === schluessel) || null
+  const offeneKachel = $derived(menue ? kachelVon(menue.schluessel) : null)
 
   /* A server that is not yet connected — never asked for a key, or an
      oauth one nobody has signed into — has nothing to show in the small
@@ -132,9 +151,10 @@
      that sheet, for every kind, not only the plain-key one.
 
      Not a server whose key is missing: it is on file, with an entry to
-     switch off or remove, and the sheet offers neither. Its card shows the
-     state, which opens the small menu, and the menu carries a way into the
-     sheet for the key. */
+     switch off, and the sheet does not switch it. Its card shows the state,
+     which opens the small menu, and the menu carries a way into the sheet
+     for the key. The sheet of a server on file does carry the removal, so
+     an entry whose sign-in was abandoned can still go. */
   function brauchtVerbindung(k) {
     return ['frei', 'getrennt'].includes(zustand(k))
   }
@@ -150,7 +170,8 @@
      of its card — or above when the bottom of the window is too close. */
   function oeffnen(k, ereignis) {
     const name = nameVon(k)
-    if (menue?.name === name) {
+    const schluessel = schluesselVon(k)
+    if (menue?.schluessel === schluessel) {
       menue = null
       return
     }
@@ -159,6 +180,7 @@
     const nachOben = platzUnten < 240
     menue = {
       name,
+      schluessel,
       top: nachOben ? r.top - 8 : r.bottom + 8,
       left: Math.min(r.left, window.innerWidth - 244),
       nachOben,
@@ -191,8 +213,8 @@
       await api.serverSchreiben(eintrag.name, { enabled: !eintrag.enabled })
       await laden()
       nachziehen()
-    } catch {
-      melde(t('fehler.allgemein'), 'fehler')
+    } catch (error) {
+      melde(errorSentence(error), 'fehler')
     }
   }
 
@@ -203,8 +225,8 @@
       schliessen()
       await laden()
       nachziehen()
-    } catch {
-      melde(t('fehler.allgemein'), 'fehler')
+    } catch (error) {
+      melde(errorSentence(error), 'fehler')
     }
   }
 
@@ -213,10 +235,11 @@
     try {
       await api.serverEntfernen(eintrag.name)
       schliessen()
+      mcpOffen = false
       await laden()
       nachziehen()
-    } catch {
-      melde(t('fehler.allgemein'), 'fehler')
+    } catch (error) {
+      melde(errorSentence(error), 'fehler')
     }
   }
 
@@ -238,8 +261,8 @@
 {#snippet card(k)}
   {@const name = nameVon(k)}
   {@const stand = zustand(k)}
-  {@const logo = logoOf(name)}
-  <div class="card" class:offen={menue?.name === name} role="group" aria-label={titelVon(k)}>
+  {@const logo = logoVon(k)}
+  <div class="card" class:offen={menue?.schluessel === schluesselVon(k)} role="group" aria-label={titelVon(k)}>
     <div class="cardhead">
       <span class="logo" aria-hidden="true">
         {#if logo}
@@ -275,7 +298,7 @@
         data-stand={stand}
         onclick={(e) => { e.stopPropagation(); oeffnen(k, e) }}
         aria-haspopup="menu"
-        aria-expanded={menue?.name === name}
+        aria-expanded={menue?.schluessel === schluesselVon(k)}
       >
         <Leuchtpunkt farbe={punktFarbe(stand)} groesse={11} />
         <span class="statetext">{t(`verbindungen.stand_${stand}`)}</span>
@@ -292,7 +315,7 @@
     <p class="introhint">{t('verbindungen.einleitung')}</p>
   </div>
   <div class="galerie">
-    {#each cards as k (nameVon(k))}{@render card(k)}{/each}
+    {#each cards as k (schluesselVon(k))}{@render card(k)}{/each}
     <!-- The way to a server nobody shipped: the same card, the house's own
          plug where a maker's logo would stand. -->
     <div class="card own" role="group" aria-label={t('verbindungen.custom_server')}>
@@ -312,7 +335,7 @@
   {@const k = offeneKachel}
   {@const stand = zustand(k)}
   {@const name = menue.name}
-  {@const logo = logoOf(name)}
+  {@const logo = logoVon(k)}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="schirm" onclick={schliessen}></div>
   <div class="menue" class:oben={menue.nachOben}
@@ -366,7 +389,9 @@
   {#snippet symbol()}
     <Hauszeichen zeichen={mcpModus === 'neu' ? 'plus' : 'plug'} groesse="mittel" />
   {/snippet}
-  <MCPMaske modus={mcpModus} kachel={mcpKachel} fertig={mcpFertig} bind:name={mcpName} />
+  <MCPMaske modus={mcpModus} kachel={mcpKachel} fertig={mcpFertig}
+            entfernen={mcpKachel?.eintrag ? () => entfernen(mcpKachel.eintrag) : null}
+            bind:name={mcpName} />
 </Fenster>
 
 <style>
@@ -468,16 +493,17 @@
     cursor: pointer;
   }
   /* The foot of a card with a button. The button alone fills it; beside
-     the words of a lost sign-in the two share it half and half, on the one
-     line every foot keeps, so no card of the grid grows taller. Columns of
-     one width whatever stands in them: shared out as flexible items, the
-     button would come out wider by its own edge and padding. The words take
-     their height from the button beside them. */
+     the words of a lost sign-in they take the width they need on one line
+     and the button takes the rest, so no card of the grid grows taller. The
+     words take their height from the button beside them. */
   .foot {
     display: grid;
     grid-auto-flow: column;
     grid-auto-columns: minmax(0, 1fr);
     gap: 8px;
+  }
+  .foot:has(.lost) {
+    grid-auto-columns: auto minmax(0, 1fr);
   }
   .lost {
     display: flex;
@@ -487,11 +513,10 @@
     font-weight: 600;
     color: var(--rot);
   }
-  /* In a narrow card half a foot is less than the words are long. They are
-     the whole message, so they break onto a second line inside the same
-     height instead of ending in an ellipsis. */
+  /* Never broken and never cut: the column of the words is as wide as they
+     are. */
   .lost .statetext {
-    white-space: normal;
+    white-space: nowrap;
     line-height: 1.2;
   }
   .connect {

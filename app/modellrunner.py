@@ -106,6 +106,11 @@ _FLASH_ATTN_MUSTER = re.compile(r"flash_attn\s*=\s*(\w+)")
 # needed for the embedded case — still worth the one live run to see the
 # real line before trusting it in practice.
 _MTP_MUSTER = re.compile(r"common_speculative_init_result")
+# The line that follows the one above when no speculative backend was chosen
+# at all: the server loaded the draft file and then drafts with nothing.
+# That is the proof the pairing did not take, and it comes before "model
+# loaded", so it is read the same way.
+_NO_BACKEND_PATTERN = re.compile(r"no implementations specified for speculative decoding")
 _BEREIT_MUSTER = re.compile(r"llama_server:\s*model loaded")
 # The line llama-server writes when a file's architecture is not one it
 # knows, measured with diffusiongemma-26B-A4B-it-Q5_K_M.gguf on build 10310:
@@ -510,7 +515,7 @@ class Modellrunner:
         zusatzflags: tuple[str, ...] = (),
         sampling_flags: bool = True,
         bereit_callback: Callable[[str, float], None] | None = None,
-        zustand_callback: Callable[[bool, bool | None, str | None], None]
+        zustand_callback: Callable[[bool, bool | None, str | None, str | None], None]
         | None = None,
     ) -> None:
         """One server of one kind.
@@ -527,13 +532,13 @@ class Modellrunner:
         never for the embedding or vision-encoder runners, which have
         nothing to preload ahead of.
 
-        ``zustand_callback`` (running, flash attention, drafter) fires
-        whenever any of those three answers changes, so a window can be
-        told instead of asking. Built the same way and for the same reason as
-        the one above: this module knows about no bus and no window, and
-        whoever hands the callback in decides which runner is worth
-        announcing — today only the chat one, which is the only server the
-        header has a readout for.
+        ``zustand_callback`` (running, flash attention, drafter, unknown
+        architecture) fires whenever any of those four answers changes, so a
+        window can be told instead of asking. Built the same way and for the
+        same reason as the one above: this module knows about no bus and no
+        window, and whoever hands the callback in decides which runner is
+        worth announcing — every server of the program hands one in, each
+        under its own name (app/runnerzustand.py).
         """
         self._ordner = Path(modelle_ordner).expanduser()
         self._programm_vorgabe = programm
@@ -570,6 +575,7 @@ class Modellrunner:
         # not "running".
         self._drafter_gewuenscht: bool = False
         self._mtp_gesehen: bool = False
+        self._mtp_no_backend: bool = False
         self._bereit_gesehen: bool = False
         self._unknown_arch: str | None = None
         self._schloss = threading.Lock()
@@ -577,7 +583,7 @@ class Modellrunner:
         # belong to `_zustand_melden` alone — see there for why the order of
         # two threads' announcements has to be held, not just their reading.
         self._meldeschloss = threading.Lock()
-        self._zuletzt_gemeldet: tuple[bool, bool | None, str | None] | None = None
+        self._zuletzt_gemeldet: tuple[bool, bool | None, str | None, str | None] | None = None
 
     # --- What can be seen without starting anything ------------------------
 
@@ -673,6 +679,10 @@ class Modellrunner:
         """
         if not self._drafter_gewuenscht:
             return None
+        # The draft file was loaded, but the server says that no way of
+        # drafting with it was chosen: it never took, whatever else it said.
+        if self._mtp_no_backend:
+            return "fehler"
         if self._mtp_gesehen:
             return "aktiv"
         if self._bereit_gesehen:
@@ -689,8 +699,9 @@ class Modellrunner:
                        not.
         ``"aktiv"``  → the speculative-init line passed, so the draft truly
                        engaged (blue).
-        ``"fehler"`` → the server reached "model loaded" without that line, so
-                       a drafter was configured but never took — a broken
+        ``"fehler"`` → the server reached "model loaded" without that line, or
+                       said that no way of drafting was chosen at all: a
+                       drafter was configured but never took — a broken
                        pairing (red).
         """
         if not self.laeuft():
@@ -699,8 +710,9 @@ class Modellrunner:
 
     def _zustand_melden(self) -> None:
         """Says out loud whether the server runs, whether flash attention
-        ended up on, and whether the drafter engaged — the three facts the
-        window shows without ever having asked for them.
+        ended up on, whether the drafter engaged, and which architecture the
+        last start failed on because the build does not know it — the four
+        facts the window shows without ever having asked for them.
 
         ONE LIVENESS READ, and the whole triple built from it. Asking three
         times gave three answers from three moments: a server that exits
@@ -737,6 +749,9 @@ class Modellrunner:
                     laeuft,
                     self._flash_attn if laeuft else None,
                     self._mtp_antwort() if laeuft else None,
+                    # Read from the same liveness answer: while a server runs
+                    # it has no failed start to name.
+                    None if laeuft else self._unknown_arch,
                 )
                 if zustand == self._zuletzt_gemeldet:
                     return
@@ -783,6 +798,8 @@ class Modellrunner:
                 self._flash_attn = wert == "enabled"
         if _MTP_MUSTER.search(zeile):
             self._mtp_gesehen = True
+        if _NO_BACKEND_PATTERN.search(zeile):
+            self._mtp_no_backend = True
         unknown = _UNKNOWN_ARCH_PATTERN.search(zeile)
         if unknown:
             self._unknown_arch = unknown.group(1)
@@ -849,11 +866,12 @@ class Modellrunner:
             if draft is None:
                 raise RunnerFehler("kein_modell")
             zeile += ["--model-draft", str(draft)]
-            # A prediction module needs its own mode; fed into the plain
-            # draft path it fails to build a context. A small sibling
-            # model is the plain path and needs no flag.
-            if ist_mtp(draft):
-                zeile += ["--spec-type", "draft-mtp"]
+            # The engine's default is no speculative backend at all, so a
+            # draft file alone loads and then drafts with nothing. A
+            # prediction module needs its own mode — fed into the plain
+            # draft path it fails to build a context — and a small sibling
+            # model is the plain path, named as such.
+            zeile += ["--spec-type", "draft-mtp" if ist_mtp(draft) else "draft-simple"]
         elif traegt_eingebettetes_mtp(self._ordner / modell):
             # No separate draft file chosen, and the model's own header
             # says it carries its prediction layers already — the engine
@@ -978,6 +996,7 @@ class Modellrunner:
             # engine's own log line says whether it actually did.
             self._drafter_gewuenscht = bool(drafter) or traegt_eingebettetes_mtp(ziel)
             self._mtp_gesehen = False
+            self._mtp_no_backend = False
             self._bereit_gesehen = False
             # A fresh server, nobody has stopped it yet — the answer belongs
             # to the run that is starting here, not to the one before it.

@@ -92,14 +92,16 @@
     return () => clearInterval(takt)
   })
 
-  const modelle = $derived(lokale())
+  /* The agent server's models have no group here: they are no model of the
+     chat's choice, so there is nothing for a switch to switch. */
+  const modelle = $derived(lokale().filter((m) => m.anbieter !== SLOT_ENDPUNKT))
   const modell = $derived(modelle.find((m) => m.id === gezeigt) ?? null)
   const anzahlAn = $derived(modelle.filter((m) => istAn(m.id)).length)
   const reise = $derived(modelle.length === 0)
 
   $effect(() => {
     if (!offen) return
-    if (!modellwahl.geladen) auswahlLaden()
+    auswahlLaden()
   })
 
 
@@ -190,6 +192,11 @@
   function spracheAnteilLaeuft() {
     return spracheStand?.laeuft ? gemessenerAnteil(spracheStand.belegt_gb) : null
   }
+  /* The tidy-up server is a process of its own: its share is counted while
+     it runs, and the answer carries no number when it does not. */
+  function tidyUpShareRunning() {
+    return gemessenerAnteil(spracheStand?.tidy_up_used_gb)
+  }
   function einbettungAnteilLaeuft() {
     return einbettungStand?.laeuft ? gemessenerAnteil(einbettungStand.belegt_gb) : null
   }
@@ -200,6 +207,7 @@
       zustand.serverPlan.modell ?? modellAnteilRuhe(),
       zustand.serverPlan.agent ?? agentAnteilRuhe(),
       spracheAnteilLaeuft(),
+      tidyUpShareRunning(),
       einbettungAnteilLaeuft(),
     ].filter(Boolean),
   )
@@ -251,12 +259,11 @@
   ])
 
   /* The quick picker, one group per server under its own heading: the model
-     server and the agent server can hold the same model, and two equal rows
-     with nothing between them could not be told apart. The two chat servers
-     first, in the order of the list above; any other local endpoint after
-     them under its own name. */
-  const GRUPPENTITEL = { [HAUPTMODELL]: 'modell.server', [SLOT_ENDPUNKT]: 'agentserver.titel' }
-  const RANG = { [HAUPTMODELL]: 0, [SLOT_ENDPUNKT]: 1 }
+     server first, any other local endpoint after it under its own name. The
+     agent server has no group — its models are not offered to the chat, so
+     there is nothing for a switch to switch. */
+  const GRUPPENTITEL = { [HAUPTMODELL]: 'modell.server' }
+  const RANG = { [HAUPTMODELL]: 0 }
   const gruppen = $derived.by(() => {
     const liste = []
     for (const m of modelle) {

@@ -323,10 +323,10 @@ def test_die_notizen_stehen_unter_dem_benutzerprompt():
 def test_das_geruest_ist_englisch_und_ohne_beispielinhalt():
     zeilen = [z for z in ordnerwissen.GERUEST.splitlines() if z.startswith("## ")]
     assert zeilen == [
-        "## Rules you cannot guess",
-        "## How things are done here",
+        "## Rules that cannot be inferred",
+        "## How work is done here",
         "## Where things belong",
-        "## Why it is built this way",
+        "## Reasons behind the design",
     ]
     assert "- " not in ordnerwissen.GERUEST
 

@@ -38,7 +38,7 @@ class SkriptEintrag(BaseModel):
     startbar: bool = True
 
 
-@router.get("", response_model=list[SkriptEintrag], summary="What is in the script folder")
+@router.get("", response_model=list[SkriptEintrag], summary="Script folder contents")
 def liste(config: Config = Depends(hole_config)) -> list[SkriptEintrag]:
     # Imported here rather than at the top, the way the picture helper next
     # door does it (app/api/v1/generierung.py). `skriptlauf` pulls in the

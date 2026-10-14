@@ -1,6 +1,6 @@
 """The Windows side of the Electron shell: the service's path inside its
 folder, the menu without the macOS role, the hidden menu bar in every window,
-and the end of the whole process tree on quit — each run with the platform
+and the quit that leaves the service running — each run with the platform
 set to win32, and each with its silence probe under darwin, where nothing may
 change. Alongside: the packer's Windows target and the build description's
 folder build.
@@ -78,20 +78,21 @@ def _menu_piece() -> str:
 def _window_pieces() -> str:
     return "\n".join([
         _piece(r"\nfunction menuBarOptions\(\) \{\n.*?\n\}\n", "menuBarOptions"),
-        _piece(r"\nfunction fensterweiche\(\{ url \}\) \{\n.*?\n\}\n", "fensterweiche"),
+        _piece(r"\nfunction istHauptfenster\(inhalt\) \{\n.*?\n\}\n", "istHauptfenster"),
+        _piece(r"\nfunction fensterweiche\(\{ url \}, inhalt\) \{\n.*?\n\}\n", "fensterweiche"),
         _piece(r"\nfunction fensterBauen\(\) \{\n.*?\n\}\n", "fensterBauen"),
     ])
 
 
-def _quit_pieces() -> str:
-    return "\n".join([
-        _piece(r"\nfunction stopService\(service\) \{\n.*?\n\}\n", "stopService"),
-        _piece(r"\nfunction killService\(service\) \{\n.*?\n\}\n", "killService"),
-        _piece(r"\napp\.on\('before-quit', async \(ereignis\) => \{\n.*?\n\}\)\n", "before-quit"),
-    ])
+def _quit_piece() -> str:
+    return _piece(r"\napp\.on\('before-quit', \(\) => \{\n.*?\n\}\)\n", "before-quit")
 
 
-# --- the service's path: on Windows the exe inside its folder ---------------
+def _start_piece() -> str:
+    return _piece(r"\nasync function dienstStarten\(\) \{\n.*?\n\}\n", "dienstStarten")
+
+
+# --- the service's path: the program inside its folder, on every system -----
 
 
 def _service_path(platform: str, *, packaged: bool, override: str | None = None) -> str:
@@ -126,12 +127,17 @@ def test_from_source_on_windows_the_service_is_the_exe_inside_dist():
     assert _service_path("win32", packaged=False).endswith("\\dist\\Exe AI\\Exe AI.exe")
 
 
-def test_on_macos_the_service_path_is_the_one_file_as_before():
-    """The silence probe: nothing is appended on macOS, packaged or not."""
+def test_on_macos_the_service_is_the_program_inside_its_folder():
+    """Falls over with the one-file path: the service is a folder there too,
+    and the shell starts the program inside it, packaged or from source."""
     assert _service_path("darwin", packaged=True) == (
-        "/Programme/Exe AI.app/Contents/Resources/exe-ai-terminal"
+        "/Programme/Exe AI.app/Contents/Resources/exe-ai-terminal/Exe AI"
     )
-    assert _service_path("darwin", packaged=False).endswith("/dist/Exe AI")
+    assert _service_path("darwin", packaged=False).endswith("/dist/Exe AI/Exe AI")
+
+
+def test_the_override_wins_on_macos_too():
+    assert _service_path("darwin", packaged=True, override="/own/service") == "/own/service"
 
 
 def test_the_override_wins_on_windows_too():
@@ -223,90 +229,102 @@ def test_on_macos_no_window_gets_the_menu_bar_option():
     assert windows["doc"] == {"width": 900, "height": 720}
 
 
-# --- quitting: the whole process tree on Windows, SIGTERM on macOS ----------
+# --- quitting: the service stays, on Windows as on macOS --------------------
 
 
-def _quit(platform: str, *, service_ends: bool, taskkill_fails: bool = False) -> dict:
-    """Runs the quit handler with a service stand-in that ends after 5 ms or
-    never, against a deadline of 300 ms — wide enough that a loaded machine
-    cannot push the one case over the line of the other."""
+def _quit(platform: str, *, found: bool = False, passes: int = 1) -> dict:
+    """Runs the quit handler, once or more, with a service stand-in that
+    records every way the shell could end it or wait for it — none of which
+    may be taken, on either platform."""
     script = f"""
 {_platform(platform)}
-const STOP_DEADLINE_MS = 300
-const calls = {{ kill: [], taskkill: [], childKill: [] }}
+const PORT = 8123
+const calls = {{ kill: [], childKill: [], waited: [], exit: [], terminals: 0, prevented: 0 }}
 process.kill = (pid, signal) => {{ calls.kill.push([pid, signal]) }}
-function execFile(command, args, done) {{
-  calls.taskkill.push([command, args])
-  done({str(taskkill_fails).lower()} ? new Error('taskkill: not found') : null)
-}}
+const logged = []
+console.log = (line) => logged.push(line)
 let fenster = null
 function geometrieSchreiben() {{}}
 let beendet = false
-let stopping = false
-let onExit = null
+let dienstVorgefunden = {"{ pid: 31337, port: 8123 }" if found else "null"}
+let bleibenGesagt = false
+const terminals = {{ stopAll() {{ calls.terminals += 1 }} }}
 let kind = {{
   pid: 4242,
-  once(event, f) {{ if (event === 'exit') onExit = f }},
+  once(event) {{ calls.waited.push(event) }},
+  on(event) {{ calls.waited.push(event) }},
   kill() {{ calls.childKill.push(4242) }},
 }}
-let exitCode = null
 const app = {{
   hooks: {{}},
   on(name, f) {{ this.hooks[name] = f }},
-  exit(code) {{ exitCode = code }},
+  exit(code) {{ calls.exit.push(code) }},
 }}
-{_quit_pieces()}
-const start = Date.now()
-const quitting = app.hooks['before-quit']({{ preventDefault() {{}} }})
-if ({str(service_ends).lower()}) setTimeout(() => onExit(), 5)
-quitting.then(() => {{
-  console.log(JSON.stringify({{ ...calls, exitCode, waitedMs: Date.now() - start }}))
-}})
+{_quit_piece()}
+for (let pass = 0; pass < {passes}; pass++) {{
+  app.hooks['before-quit']({{ preventDefault() {{ calls.prevented += 1 }} }})
+}}
+process.stdout.write(JSON.stringify({{ ...calls, logged, beendet }}) + "\\n")
 """
     return _run(script)
 
 
-TASKKILL = [["taskkill", ["/PID", "4242", "/T", "/F"]]]
+def _leaves_the_service_running(result: dict) -> None:
+    assert result["kill"] == [], "no signal to the service"
+    assert result["childKill"] == [], "no kill on the child handle"
+    assert result["waited"] == [], "no waiting for the service's end"
+    assert result["exit"] == [], "no app.exit: the quit goes through as it came"
+    assert result["prevented"] == 0
+    assert result["beendet"] is True
+    assert result["terminals"] == 1, "the terminals in the window end with it"
 
 
-def test_on_windows_quitting_ends_the_whole_process_tree_and_waits_for_it():
-    result = _quit("win32", service_ends=True)
-    assert result["taskkill"] == TASKKILL
-    assert result["kill"] == [], "no process.kill on Windows — it would end the service alone, hard"
-    assert result["childKill"] == [], "taskkill ran; nothing falls back"
-    assert result["exitCode"] == 0
-    assert result["waitedMs"] < 200, "the shell ends as soon as the service has ended"
+def test_on_windows_quitting_leaves_the_service_this_window_started_running():
+    result = _quit("win32")
+    _leaves_the_service_running(result)
+    assert result["logged"] == [
+        "Service: the service on port 8123 started by this window stays, for the terminal client and the next window"
+    ]
 
 
-def test_on_windows_a_service_that_does_not_end_does_not_hold_the_shell_past_the_deadline():
-    result = _quit("win32", service_ends=False)
-    assert result["taskkill"] == TASKKILL
-    assert result["kill"] == [], "taskkill /F has already killed; there is no harder step"
-    assert result["childKill"] == []
-    assert result["exitCode"] == 0
-    assert result["waitedMs"] >= 290
+def test_on_macos_quitting_leaves_the_service_this_window_started_running():
+    """The silence probe across platforms: nothing is platform-specific any more."""
+    result = _quit("darwin")
+    _leaves_the_service_running(result)
+    assert result["logged"] == [
+        "Service: the service on port 8123 started by this window stays, for the terminal client and the next window"
+    ]
 
 
-def test_on_windows_the_service_is_ended_alone_when_taskkill_cannot_run():
-    """taskkill not on the path, or denied: the one way left is the hard end
-    of the service itself — never silence."""
-    result = _quit("win32", service_ends=True, taskkill_fails=True)
-    assert result["taskkill"] == TASKKILL
-    assert result["childKill"] == [4242]
-    assert result["kill"] == []
-    assert result["exitCode"] == 0
+def test_quitting_leaves_a_found_service_running_and_says_so_as_before():
+    """The silence probe: a service this window only found was never ended,
+    and its line stays what it was."""
+    result = _quit("darwin", found=True)
+    _leaves_the_service_running(result)
+    assert result["logged"] == [
+        "Service: the running service on port 8123 stays; this window did not start it"
+    ]
 
 
-def test_on_macos_quitting_sends_sigterm_and_never_taskkill():
-    """The silence probe: SIGTERM, and after the deadline SIGKILL, as before."""
-    ended = _quit("darwin", service_ends=True)
-    assert ended["kill"] == [[4242, "SIGTERM"]]
-    assert ended["taskkill"] == []
-    assert ended["exitCode"] == 0
-    stuck = _quit("darwin", service_ends=False)
-    assert stuck["kill"] == [[4242, "SIGTERM"], [4242, "SIGKILL"]]
-    assert stuck["taskkill"] == []
-    assert stuck["exitCode"] == 0
+def test_quitting_says_once_that_the_service_stays():
+    """Closing the window runs before-quit twice; the line is said once."""
+    assert len(_quit("win32", passes=2)["logged"]) == 1
+    assert len(_quit("darwin", found=True, passes=2)["logged"]) == 1
+
+
+def test_the_service_is_started_cut_loose_from_the_shell():
+    """Read off the source: the service is spawned detached and unreferenced,
+    so it outlives the shell on every platform — and the quit handler has no
+    way left to end it or to wait for it."""
+    start = _start_piece()
+    assert "detached: true" in start
+    assert "kind.unref()" in start
+    quit_ = _quit_piece()
+    for forbidden in ("kill", "taskkill", "'exit'", "exit(", "await", "preventDefault"):
+        assert forbidden not in quit_, f"{forbidden} in before-quit"
+    source = _source()
+    for gone in ("stopService", "killService", "STOP_DEADLINE_MS", "execFile"):
+        assert gone not in source, f"{gone} is still in the shell"
 
 
 # --- the packer: a Windows installer beside the macOS image -----------------
@@ -333,8 +351,7 @@ def test_the_shell_packs_an_installer_for_windows():
 def test_the_macos_build_is_untouched():
     """The silence probe: the Windows installer changes nothing about the mac
     and dmg blocks or the two mac scripts, and the service ships under the
-    same resources name on both systems — the one file on macOS, the folder
-    on Windows."""
+    same resources name on both systems — a folder on each."""
     package = _package()
     build = package["build"]
     assert build["mac"]["target"] == ["dmg", "zip"]
@@ -344,7 +361,88 @@ def test_the_macos_build_is_untouched():
     assert {"from": "../dist/Exe AI", "to": "exe-ai-terminal"} in build["extraResources"]
 
 
-# --- the build description: one file on macOS, a folder on Windows ----------
+# --- the packer: the command on the path, per system ------------------------
+
+BUILD = ROOT / "fenster-electron" / "build"
+
+
+def test_the_mac_app_carries_the_command_beside_the_service():
+    """Contents/Resources/bin/exe — the file the links point at — next to
+    the folder Contents/Resources/exe-ai-terminal, to whose program it hands
+    over."""
+    build = _package()["build"]
+    assert {"from": "../deploy/exe", "to": "bin/exe"} in build["mac"]["extraResources"]
+    assert (ROOT / "deploy" / "exe").read_text(encoding="utf-8").rstrip().endswith(
+        'exec "$here/../exe-ai-terminal/Exe AI" --cli "$@"'
+    )
+
+
+def test_the_windows_installer_puts_the_command_on_the_users_path():
+    """Read off the script the packer takes by its name: exe.cmd in a bin
+    folder of its own, pointing at the client exe in the service folder, and
+    that folder — not the service's — on the user's PATH."""
+    script = (BUILD / "installer.nsh").read_text(encoding="utf-8")
+    assert "!macro customInstall" in script and "!macro customUnInstall" in script
+    assert 'FileOpen $R0 "$INSTDIR\\bin\\exe.cmd" w' in script
+    assert "@\"%~dp0..\\resources\\exe-ai-terminal\\exe.exe\" %*" in script
+    assert script.count('WriteRegExpandStr HKCU "Environment" "Path"') == 2
+    assert 'HKLM' not in script, "the machine's PATH is not this installer's"
+
+
+def test_the_windows_installer_never_writes_a_path_it_could_not_read_whole():
+    """Every write of the PATH sits behind the two guards: the value was
+    read whole, and the result still fits into one of the installer's
+    strings. An update keeps the PATH; only an uninstall takes the folder
+    out. Each pass of the build declares only the string function it calls."""
+    script = (BUILD / "installer.nsh").read_text(encoding="utf-8")
+    install = script.split("!macro customInstall", 1)[1].split("!macroend", 1)[0]
+    uninstall = script.split("!macro customUnInstall", 1)[1].split("!macroend", 1)[0]
+    for body in (install, uninstall):
+        guard = body.index('${If} $R2 == "1"')
+        assert "${AndIf} $R3 < ${NSIS_MAX_STRLEN}" in body
+        assert guard < body.index("WriteRegExpandStr"), "the write comes after the guard"
+        assert "!insertmacro exeUserPathRead" in body[:guard]
+    assert "${IfNot} ${isUpdated}" in uninstall
+    assert uninstall.index("${IfNot} ${isUpdated}") < uninstall.index("DeleteRegValue")
+    declared = script.split("!ifndef BUILD_UNINSTALLER", 1)[1].split("!endif", 1)[0]
+    in_installer, in_uninstaller = declared.split("!else")
+    assert in_installer.split() == ["${StrStr}"] and in_uninstaller.split() == ["${UnStrRep}"]
+    assert "${StrStr} $R4" in install and "${UnStrRep} $R4" in uninstall
+    assert "StrStr" not in uninstall and "StrRep" not in install
+
+
+def test_the_store_package_announces_the_command_as_an_alias():
+    build = _package()["build"]
+    assert build["appx"]["customExtensionsPath"] == "build/appx-extensions.xml"
+    import xml.etree.ElementTree as tree
+
+    text = (BUILD / "appx-extensions.xml").read_text(encoding="utf-8")
+    # The fragment borrows one prefix from the manifest it is spliced into.
+    wrapped = (
+        '<Extensions xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10">'
+        + text + "</Extensions>"
+    )
+    (extension,) = tree.fromstring(wrapped)
+    uap3 = "{http://schemas.microsoft.com/appx/manifest/uap/windows10/3}"
+    desktop = "{http://schemas.microsoft.com/appx/manifest/desktop/windows10}"
+    assert extension.tag == uap3 + "Extension"
+    assert extension.attrib == {
+        "Category": "windows.appExecutionAlias",
+        "Executable": "app\\resources\\exe-ai-terminal\\exe.exe",
+        "EntryPoint": "Windows.FullTrustApplication",
+    }
+    (alias,) = extension.iter(desktop + "ExecutionAlias")
+    assert alias.attrib == {"Alias": "exe.exe"}
+
+
+def test_the_windows_installer_is_otherwise_untouched():
+    """The silence probe: the packer finds the script by its name; nothing
+    about the installer's own options changed for it."""
+    assert _package()["build"]["nsis"] == {"artifactName": "Exe-AI-${version}-${arch}.exe"}
+    assert "buildResources" not in _package()["build"]["directories"]
+
+
+# --- the build description: a folder on every system ------------------------
 
 
 def _spec_calls(monkeypatch: pytest.MonkeyPatch, platform: str) -> dict[str, list]:
@@ -383,7 +481,7 @@ def _spec_calls(monkeypatch: pytest.MonkeyPatch, platform: str) -> dict[str, lis
 
 def test_on_windows_the_service_is_built_as_a_folder(monkeypatch):
     calls = _spec_calls(monkeypatch, "win32")
-    ((exe_args, exe_kwargs),) = calls["EXE"]
+    (exe_args, exe_kwargs), _client = calls["EXE"]
     assert exe_args[:2] == ("pyz", ["scripts"])
     assert exe_args[2] == [] and exe_args[3] == [], "binaries and datas go to COLLECT, not into the exe"
     assert exe_kwargs["exclude_binaries"] is True
@@ -391,20 +489,51 @@ def test_on_windows_the_service_is_built_as_a_folder(monkeypatch):
     assert exe_kwargs["console"] is False
     assert exe_kwargs["icon"].endswith("icon.ico")
     ((coll_args, coll_kwargs),) = calls["COLLECT"]
-    assert coll_args == ("EXE", ["binaries"], ["datas"])
+    assert coll_args == ("EXE", "EXE", ["binaries"], ["datas"])
     assert coll_kwargs["name"] == "Exe AI", "the folder's name is the path the shell starts"
     assert calls["BUNDLE"] == []
 
 
-def test_on_macos_the_service_is_one_file_in_its_bundle_as_before(monkeypatch):
-    """The silence probe."""
+def test_on_windows_the_command_is_a_console_exe_in_the_same_folder(monkeypatch):
+    """The command on the path: the same program under the name exe, with a
+    console — the service's exe has none —, laid out in the one folder
+    beside it rather than in a folder of its own."""
+    calls = _spec_calls(monkeypatch, "win32")
+    (service_args, _service), (client_args, client_kwargs) = calls["EXE"]
+    assert client_args[:2] == service_args[:2], "one analysis, one program"
+    assert client_args[2] == [] and client_args[3] == []
+    assert client_kwargs["exclude_binaries"] is True
+    assert client_kwargs["name"] == "exe"
+    assert client_kwargs["console"] is True
+    assert client_kwargs["icon"].endswith("icon.ico")
+    assert len(calls["COLLECT"]) == 1
+
+
+def test_on_macos_the_service_is_built_as_a_folder_and_its_bundle_takes_the_folder(monkeypatch):
+    """Falls over with the one-file build: nothing rides inside the program,
+    so nothing is unpacked into the system's temporary folder on a start.
+    One program only — the command on macOS is the script deploy/exe."""
     calls = _spec_calls(monkeypatch, "darwin")
     ((exe_args, exe_kwargs),) = calls["EXE"]
-    assert exe_args[2:4] == (["binaries"], ["datas"])
-    assert exe_kwargs["exclude_binaries"] is False
+    assert exe_args[2] == [] and exe_args[3] == [], "binaries and datas go to COLLECT, not into the program"
+    assert exe_kwargs["exclude_binaries"] is True
+    assert exe_kwargs["name"] == "Exe AI"
     assert exe_kwargs["console"] is True
     assert exe_kwargs["icon"] is None
-    assert calls["COLLECT"] == []
+    ((coll_args, coll_kwargs),) = calls["COLLECT"]
+    assert coll_args == ("EXE", ["binaries"], ["datas"])
+    assert coll_kwargs["name"] == "Exe AI", "the folder's name is the path the shell starts"
     ((bundle_args, bundle_kwargs),) = calls["BUNDLE"]
-    assert bundle_args == ("EXE",)
+    assert bundle_args == ("COLLECT",)
     assert bundle_kwargs["name"] == "Exe AI Terminal.app"
+
+
+def test_no_system_gets_a_one_file_build(monkeypatch):
+    """Anywhere else the build is the same folder: one program, no bundle."""
+    calls = _spec_calls(monkeypatch, "linux")
+    ((exe_args, exe_kwargs),) = calls["EXE"]
+    assert exe_args[2] == [] and exe_args[3] == []
+    assert exe_kwargs["exclude_binaries"] is True
+    ((coll_args, _coll_kwargs),) = calls["COLLECT"]
+    assert coll_args == ("EXE", ["binaries"], ["datas"])
+    assert calls["BUNDLE"] == []

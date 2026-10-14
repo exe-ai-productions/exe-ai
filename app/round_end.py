@@ -23,6 +23,7 @@ stand below the threshold's own share when a fold fires.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 from typing import Any, AsyncIterator
 
@@ -79,6 +80,7 @@ async def between_rounds(
     key: str,
     settings: Any,
     endpoint_id: str,
+    stop: asyncio.Event | None = None,
 ) -> AsyncIterator[Kontextstand | Cleared | Folded]:
     """The step between two rounds, its outcomes handed back as they happen.
 
@@ -88,20 +90,23 @@ async def between_rounds(
     results alone are not a context reading. ``appended_from`` is where the
     round's own tool results begin in ``anfrage.nachrichten``.
 
-    In this order — the first always, each after it only where the request
-    still stands at or above ``threshold``:
+    In this order — the first two always, each after them only where the
+    request still stands at or above ``threshold``:
 
     1. The total the trigger weighs, as a share of the whole window (a
        :class:`Kontextstand`).
-    2. Old tool results cleared, in the request alone (:class:`Cleared`) —
+    2. Pictures a tool read, beyond the newest few, retired in the request
+       alone (:class:`Cleared`) — and the reading again, less what that
+       saved. Every round, not only at the threshold.
+    3. Old tool results cleared, in the request alone (:class:`Cleared`) —
        and the reading again, less what that saved.
-    3. Where still too full, ``fold_allowed`` and a middle to fold: a model
+    4. Where still too full, ``fold_allowed`` and a middle to fold: a model
        folds the request in memory (:class:`Folded`). Where it did, the
        request is weighed again and that reading follows — the reading
        before the fold described the longer request, and the next answer
        would otherwise fold again at once over a number that is gone.
 
-    ``anfrage.nachrichten`` is changed in place by steps 2 and 3. Every
+    ``anfrage.nachrichten`` is changed in place by steps 2 to 4. Every
     reading is an estimate: the caller reports it at the live pace and
     estimates on from it.
     """
@@ -111,6 +116,27 @@ async def between_rounds(
         reading = kontextdruck.stand(last_reading, added, window)
         if reading is not None:
             yield reading
+    # The pictures tools read: the newest few stay in every request, the
+    # older ones are said as a note — on every round, not only where the
+    # window is full (app/werkzeugkuerzung.py ``thin_pictures``).
+    thinned, picture_count = werkzeugkuerzung.thin_pictures(anfrage.nachrichten)
+    if picture_count:
+        before_pictures = list(anfrage.nachrichten)
+        picture_saved = werkzeugkuerzung.gewicht(before_pictures) - werkzeugkuerzung.gewicht(
+            thinned
+        )
+        anfrage.nachrichten[:] = thinned
+        added -= picture_saved
+        yield Cleared(
+            count=picture_count,
+            saved=picture_saved,
+            before=before_pictures,
+            after=list(thinned),
+        )
+        if last_reading is not None:
+            reading = kontextdruck.stand(last_reading, added, window)
+            if reading is not None:
+                yield reading
     if not kontextdruck.ueber_der_schwelle(last_reading, added, window, threshold, set_limit):
         return
     # The tail sized for this model, not the fixed ceiling: on a small
@@ -152,6 +178,7 @@ async def between_rounds(
         schluessel=key,
         einstellungen=settings,
         endpoint_id=endpoint_id,
+        stopp=stop,
     )
     yield Folded(result=result)
     if result.angewendet:

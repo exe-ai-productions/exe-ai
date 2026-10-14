@@ -547,6 +547,33 @@ def test_schweigeprobe_ein_fehler_ohne_feldnamen_merkt_nichts():
     assert not denkablehnung.ist_ablehnung(None, None)
 
 
+def test_a_field_name_inside_a_model_id_is_no_refusal_of_the_stage():
+    """"kimi-k2-thinking" and "qwen/qwen3-thinking" are model ids: a 400 about
+    something else that names the model must not lock a stage."""
+    for text in (
+        "Model kimi-k2-thinking does not support image input",
+        "The model kimi-k2-thinking is not supported when using this account",
+        "qwen/qwen3-thinking does not support tools",
+        "This does not support image input: kimi-k2-thinking.",
+    ):
+        assert not denkablehnung.ist_ablehnung(400, text), text
+
+
+def test_a_field_name_standing_alone_is_still_a_refusal_next_to_a_model_id():
+    """Silence probe: the field named on its own keeps counting, dotted or
+    not, even when the same text also carries a model id."""
+    assert denkablehnung.ist_ablehnung(
+        400, "kimi-k2-thinking: adaptive thinking is not supported on this model"
+    )
+    assert denkablehnung.ist_ablehnung(
+        400, "chat_template_kwargs.enable_thinking: Extra inputs are not permitted"
+    )
+    assert denkablehnung.ist_ablehnung(400, "Unsupported parameter: reasoning_effort")
+    assert denkablehnung.ist_ablehnung(400, json.dumps({"error": {
+        "message": "kimi-k2-thinking rejected the request", "param": "reasoning_effort",
+    }}))
+
+
 def test_only_an_error_that_blames_the_thinking_field_is_a_refusal():
     """A field name in the text is not enough: the error has to point at it
     as the thing refused, or one foreign 400 locks "off" for the server."""
@@ -557,7 +584,7 @@ def test_only_an_error_that_blames_the_thinking_field_is_a_refusal():
         "assistant message cannot be modified.",
     )
     # A context error that happens to mention the effort somewhere.
-    assert not denkablehnung.ist_ablehnung(400, "prompt too long; effort was medium")
+    assert not denkablehnung.ist_ablehnung(400, "Prompt too long; effort was medium")
     # An OpenAI error object that points at another field.
     assert not denkablehnung.ist_ablehnung(400, json.dumps({"error": {
         "message": "Invalid 'max_tokens': thinking budget too large",
@@ -1204,3 +1231,58 @@ def test_a_provider_prefix_finds_the_same_row():
     assert prefixed.quelle == plain.quelle == "katalog"
     assert prefixed.stufen == plain.stufen
     assert denkstufen.model_key(" minimax/MiniMax-M3 ") == "minimax-m3"
+
+
+# --- a template that sits in tokenizer_config.json -------------------------
+
+
+def _config_only_catalogue(tmp_path, chat_template, *, bom: bool = False):
+    """A shelf of one model whose folder has no `chat_template.jinja`, only a
+    `tokenizer_config.json` with the given `chat_template` field."""
+    from app.discovery import templates_read
+
+    folder = tmp_path / "cfg"
+    folder.mkdir()
+    text = json.dumps({"chat_template": chat_template, "model_max_length": 1024})
+    (folder / "tokenizer_config.json").write_text(
+        ("﻿" if bom else "") + text, encoding="utf-8"
+    )
+    templates = templates_read({"Qwen3.8-27B": str(folder)})
+    return {"familien": {"Qwen3.8-27B": "qwen3_5"}, "templates": templates}
+
+
+def test_a_template_only_in_the_tokenizer_config_names_its_depths(tmp_path):
+    detected = _config_only_catalogue(tmp_path, QWEN38_TEMPLATE)
+
+    profile = denkstufen.stufen_fuer(_endpunkt(dialekt="mlx"), "Qwen3.8-27B", detected)
+
+    assert set(profile.stufen) == {"off", "low", "medium", "xhigh"}
+    assert profile.quelle == "vorlage"
+
+
+def test_a_list_of_named_templates_gives_the_default_one(tmp_path):
+    named = [
+        {"name": "tool_use", "template": QWEN35_TEMPLATE},
+        {"name": "default", "template": QWEN38_TEMPLATE},
+    ]
+    detected = _config_only_catalogue(tmp_path, named)
+
+    profile = denkstufen.stufen_fuer(_endpunkt(dialekt="mlx"), "Qwen3.8-27B", detected)
+
+    assert set(profile.stufen) == {"off", "low", "medium", "xhigh"}
+
+
+def test_a_tokenizer_config_with_a_byte_order_mark_reads_the_same(tmp_path):
+    detected = _config_only_catalogue(tmp_path, QWEN38_TEMPLATE, bom=True)
+
+    profile = denkstufen.stufen_fuer(_endpunkt(dialekt="mlx"), "Qwen3.8-27B", detected)
+
+    assert set(profile.stufen) == {"off", "low", "medium", "xhigh"}
+
+
+def test_silence_a_template_without_depths_in_the_config_keeps_the_switch(tmp_path):
+    detected = _config_only_catalogue(tmp_path, QWEN35_TEMPLATE)
+
+    profile = denkstufen.stufen_fuer(_endpunkt(dialekt="mlx"), "Qwen3.8-27B", detected)
+
+    assert profile.stufen == ["off", "on"]

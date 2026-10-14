@@ -43,6 +43,16 @@ export function fuerChat(chatId) {
   return warteschlange.liste.filter((e) => e.chatId === chatId)
 }
 
+/* Put an entry that was taken out for sending back where it stood: at the
+   front of its own chat's line, so the order its messages were written in
+   holds. A send the service turned away (the chat was taken by another
+   window) goes back this way and leaves again once the chat is free. */
+export function zurueckEinreihen(eintrag) {
+  const stelle = warteschlange.liste.findIndex((e) => e.chatId === eintrag.chatId)
+  if (stelle === -1) warteschlange.liste.push(eintrag)
+  else warteschlange.liste.splice(stelle, 0, eintrag)
+}
+
 /* Take the first one of this chat out of the line. Taking it out and
    sending it are one step on purpose: an entry that is on its way must
    not still be standing in the list, or a second end would send it

@@ -22,10 +22,10 @@
   import Modulabschnitte from './Modulabschnitte.svelte'
   import Agentenverlauf from './Agentenverlauf.svelte'
   import { untrack } from 'svelte'
+  import { slideIfDrawn } from '../lib/slideIfDrawn.js'
   import Kontextstrich from './Kontextstrich.svelte'
-  import Benutzerfrage from './Benutzerfrage.svelte'
   import { api } from '../lib/api.js'
-  import { answerAgentQuestion } from '../lib/agentchat.svelte.js'
+  import { showAgentQuestion } from '../lib/questionbox.svelte.js'
   import { dateiart, dateiFakten, dateiHerunterladen } from '../lib/dateiarten.js'
   import { dateienAus } from '../lib/markdown.js'
   import Hauszeichen from './Hauszeichen.svelte'
@@ -48,6 +48,10 @@
   import {
     auftragLoeschen, frage, melde, zustand, auftraegeStillLaden,
   } from '../lib/zustand.svelte.js'
+
+  /* The fixed marker the service gives as the agent of a run that started a
+     script: no agent file ran, and what it wrote is plain output. */
+  const SCRIPT_RUN = '(skript)'
 
   /* What is running comes first: a run in flight is the one thing on this
      view somebody may still have to act on — a question to answer, a run
@@ -145,8 +149,8 @@
   function berichtOeffnen(auftrag) {
     auftragGesehen(auftrag.id)
     showReport({
-      name: `${auftrag.agent || 'agent'}-${auftrag.id}`,
-      agent: auftrag.agent,
+      name: `${agentName(auftrag.agent || 'agent')}-${auftrag.id}`,
+      agent: agentName(auftrag.agent),
       colour: lesbar(farbeVon(auftrag.agent)),
       task: auftrag.task,
       time: zeitpunkt(auftrag.updated_at),
@@ -155,6 +159,8 @@
       reason: grundtext(auftrag),
       timedOut: auftrag.end_reason === 'zeitgrenze',
       text: auftrag.result ?? '',
+      // A script's output keeps its lines; an agent's report is markdown.
+      plain: auftrag.agent === SCRIPT_RUN,
       facts: dateiFakten,
     })
   }
@@ -285,16 +291,14 @@
     })
   })
 
-  /* The answer to a run's own question. One route for both cases: a run
-     that is still holding the call open takes it into that call, and a run
-     a restart took away is carried on from its own status with the question
-     and this answer in its assignment. The window does not decide which —
-     the service knows, and whoever answers should not have to.
-
-     The same way in as the chat's box, so a question answered here leaves
-     the box at once rather than standing there for a second answer. */
-  function frageBeantworten(auftrag, antwort) {
-    return answerAgentQuestion(auftrag.id, auftrag.question?.aufruf_id, antwort)
+  /* A click on a run's card unfolds its transcript. A run that waits on
+     the user also puts its question in the card over the chat — the one
+     card, wherever the run came from: this chat, another, the archive, a
+     schedule or no chat at all. The question is answered there; this view
+     only shows the run and its yellow dot. */
+  function laufKlick(auftrag) {
+    klappen(auftrag.id)
+    showAgentQuestion(zustand.aktiverChat, auftrag)
   }
 
   /* The cancel on a running row: asked for, not gone wrong — the run ends
@@ -427,7 +431,7 @@
              id={'modul-auftrag-' + auftrag.id}>
           <div class="karte laufkarte">
             <div class="laufkopf">
-              <button class="lauftitel" onclick={() => klappen(auftrag.id)}
+              <button class="lauftitel" onclick={() => laufKlick(auftrag)}
                       aria-expanded={offene.has(auftrag.id)} title={auftrag.task}>
                 <span class="laufpunkt" class:wartet={auftrag.state === 'wartet'} aria-hidden="true"></span>
                 <span class="laufaufgabe">{auftrag.task}</span>
@@ -440,52 +444,29 @@
               <Kontextstrich prozent={auftrag.kontext?.prozent} />
             </div>
             {#if offene.has(auftrag.id)}
-              {#if auftrag.parent_id}
-                <p class="bkette">↳ {kettenwort(auftrag)}</p>
-              {/if}
-              <div class="transcript-head">
-                <button class="stopp" onclick={() => abbrechen(auftrag)}
-                        title={t('jobs.abbrechen')} aria-label={t('jobs.abbrechen')}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                    <rect x="6.5" y="6.5" width="11" height="11" rx="2" />
-                  </svg>
-                </button>
+              <!-- The unfolded part glides down when it opens and up when it
+                   closes. At its top stands the whole task, the way the
+                   model wrote it, wrapped and set a little in from the
+                   card's edge; the transcript follows as it always did. -->
+              <div transition:slideIfDrawn={{ duration: 200 }}>
+                <p class="laufauftrag">{auftrag.task}</p>
+                {#if auftrag.parent_id}
+                  <p class="bkette">↳ {kettenwort(auftrag)}</p>
+                {/if}
+                <div class="transcript-head">
+                  <button class="stopp" onclick={() => abbrechen(auftrag)}
+                          title={t('jobs.abbrechen')} aria-label={t('jobs.abbrechen')}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <rect x="6.5" y="6.5" width="11" height="11" rx="2" />
+                    </svg>
+                  </button>
+                </div>
+                {#if protokolle[auftrag.id]?.length}
+                  <Agentenverlauf schritte={protokolle[auftrag.id]} laeuft={auftrag.state === 'laeuft'} />
+                {/if}
               </div>
-              {#if protokolle[auftrag.id]?.length}
-                <Agentenverlauf schritte={protokolle[auftrag.id]} laeuft={auftrag.state === 'laeuft'} />
-              {/if}
             {/if}
           </div>
-          <!-- The question stays OUTSIDE the card, and that is the point: it
-               is the one thing on this run somebody has to act on, and a
-               question that only appears once the card is unfolded is a
-               question nobody sees. The banner names the agent, and the
-               buttons are the chat's own — one component, so a question
-               looks the same wherever it is answered. -->
-          <!-- A run a chat started asks in that chat's box as well
-               (lib/agentchat.svelte.js); it stands here beside its
-               transcript too, so a question from a chat in the archive, or
-               from a schedule, always has a place to be answered. -->
-          {#if auftrag.state === 'wartet' && auftrag.question?.frage}
-            <div class="wartebanner">
-              {t('jobs.banner', { agent: agentName(auftrag.agent) })}
-            </div>
-            <div class="wartefrage">
-              <Benutzerfrage
-                eng={flaeche.eng}
-                frage={auftrag.question}
-                antworten={(wert) => frageBeantworten(auftrag, wert)}
-              />
-            </div>
-            {#if !auftrag.generation_id}
-              <!-- The run behind the question did not survive the restart.
-                   The buttons still work: the answer is carried into the
-                   continuation instead of into a call that no longer
-                   exists. Said out loud, because the run comes back a minute
-                   later rather than picking up mid-sentence. -->
-              <p class="warteweg">{t('jobs.frage_nach_neustart')}</p>
-            {/if}
-          {/if}
         </div>
       {/each}
     {/if}
@@ -552,11 +533,27 @@
   .laufpunkt.wartet {
     background: var(--gelb);
   }
+  /* One line, cut with "…" a little before the card's edge: the padding
+     stands outside the line, so the dots end where the text could still
+     have gone on, not on the edge itself. */
   .laufaufgabe {
     min-width: 0;
+    padding-right: 12px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* The whole task, as the model wrote it: its line breaks kept, long words
+     broken rather than pushed past the card, set in under the title's text
+     like the lines of the card. */
+  .laufauftrag {
+    margin: 0;
+    padding: 8px 0 0 16px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
   .laufagent {
     margin: 3px 0 0 16px;
@@ -729,29 +726,6 @@
   }
   .bweg:hover {
     color: var(--rot);
-  }
-
-  /* Waiting for a person is a STATE, so it may carry the colour — the quiet
-     form of it, never the full colour behind text, mixed over the card's
-     glass so the banner stays see-through like the card it lies on. */
-  .wartebanner {
-    margin: 6px 0 0;
-    padding: 6px 9px;
-    border: none;
-    background: color-mix(in srgb, var(--gelb) 12%, var(--glass-card));
-    border-radius: 9px;
-    font-size: 12px;
-    line-height: 1.45;
-    color: var(--text);
-  }
-  .wartefrage {
-    margin: 6px 0 4px;
-  }
-  .warteweg {
-    margin: 6px 0 4px;
-    font-size: 11.5px;
-    line-height: 1.5;
-    color: var(--text-still);
   }
 
   .alauf + .alauf {

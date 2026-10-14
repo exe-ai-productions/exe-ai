@@ -24,6 +24,7 @@ const GROUPS = [
       ['shortcuts.settings', [['Mod'], ',']],
       ['shortcuts.sidebar', [['Mod'], 'B']],
       ['shortcuts.tools', [['Mod'], 'J']],
+      ['shortcuts.cli', [['Control'], '`']],
       ['shortcuts.search', [['Mod'], 'K']],
       ['shortcuts.close', [[], 'Esc']],
     ],

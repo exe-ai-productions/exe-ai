@@ -4,9 +4,8 @@ Such a chat works in its private folder under the program's data
 (app/dokumentablage.py), so a bare name the model gives lands there. A
 refusal that only named the path left the model nothing to go on: it tried
 the same call again and then searched the whole disk. Every file tool that
-refuses such a path now says the same thing — that no folder is shared, and
-that the model should ask the user for one or ask them to share one via the
-folder icon in the input bar (``grenzen.NO_FOLDER_SHARED``).
+refuses such a path now says the same thing — that no folder is shared, so
+a relative path points into the chat's own folder (``grenzen.NO_FOLDER_SHARED``).
 
 Silence probe throughout: with a folder of the user's shared, every refusal
 reads as it did before.
@@ -61,11 +60,28 @@ def test_create_folder_with_a_bare_name_and_no_folder_shared_names_the_way_out(r
         _create_folder(repos, data_dir, "work", folders, chat.id)
 
     text = str(refusal.value)
-    assert grenzen.NO_FOLDER_SHARED in text
     assert "own data folder" in text
+    # The one sentence the refusal has: where the way out is, not the
+    # general sentence of the file tools.
+    assert text.endswith("Provide an absolute path to a user-owned folder instead.")
+    assert grenzen.NO_FOLDER_SHARED not in text
     assert "Give a full path to a folder of the user's instead" not in text
     assert not (dokumentablage.chatordner(data_dir, chat.id) / "work").exists()
     assert repos.chats.holen(chat.id).working_dirs == []
+
+
+def test_silence_probe_create_folder_with_a_folder_shared_makes_a_bare_name_there(
+    repos, data_dir, tmp_path
+):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    chat = repos.chats.erstellen(user_id="u", title="t")
+    repos.chats.aktualisieren(chat.id, working_dirs=[str(shared)])
+    folders = dokumentablage.ordner_dieses_chats(data_dir, [str(shared)], chat.id)
+
+    _create_folder(repos, data_dir, "work", folders, chat.id)
+
+    assert (shared / "work").is_dir()
 
 
 def test_silence_probe_create_folder_with_a_folder_shared_refuses_as_before(
@@ -82,7 +98,7 @@ def test_silence_probe_create_folder_with_a_folder_shared_refuses_as_before(
         _create_folder(repos, data_dir, inside_data, folders, chat.id)
 
     text = str(refusal.value)
-    assert text.endswith("Give a full path to a folder of the user's instead.")
+    assert text.endswith("Provide an absolute path to a user-owned folder instead.")
     assert grenzen.NO_FOLDER_SHARED not in text
     # And a bare name still goes into the shared folder.
     assert "Created" in _create_folder(repos, data_dir, "work", folders, chat.id)
@@ -109,6 +125,11 @@ def test_a_missing_bare_name_with_no_folder_shared_names_the_way_out(name, argum
     text = str(refusal.value)
     assert "does not exist." in text
     assert text.endswith(grenzen.NO_FOLDER_SHARED)
+    # It says where a relative path points — the chat's own folder — and
+    # sends the model nowhere: no asking for a folder, no sharing one.
+    assert "relative path resolves to the chat's private folder" in text
+    assert "Ask the user which folder to use or to share one" not in text
+    assert "folder icon" not in text
 
 
 @pytest.mark.parametrize(("name", "arguments"), MISSING)
@@ -135,10 +156,13 @@ def test_read_file_through_the_registry_carries_the_way_out(repos, data_dir):
         [], shell_an=True, folder_share=create_folder.ChatFolderShare(repos, data_dir)
     )
 
-    with pytest.raises(WerkzeugVerboten, match="folder icon in the input bar"):
+    with pytest.raises(WerkzeugVerboten) as refusal:
         run(registry.ausfuehren(
             "read_file", {"path": "exe.md"}, ordner=folders, chat_id=chat.id, herkunft="chat",
         ))
+
+    assert str(refusal.value).endswith(grenzen.NO_FOLDER_SHARED)
+    assert "folder icon" not in str(refusal.value)
 
 
 def test_write_file_with_no_folder_shared_still_writes_into_the_private_folder(data_dir):

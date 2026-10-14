@@ -14,11 +14,10 @@ second way in, not a replacement.
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
-from app import i18n
+from app import frontmatter, i18n
 
 # The fields the form may set, in the order a fresh file lists them. The
 # order only matters when a field is INSERTED — an existing field is replaced
@@ -46,8 +45,8 @@ _TEXT_FIELDS = frozenset({"description"})
 # belongs to it; the next unindented key line ends its block.
 _SCHLUESSEL_ZEILE = re.compile(r"^([A-Za-z_][\w-]*)\s*:")
 
-# Scalars that read fine without quotes. Anything else is written as a JSON
-# string, which is valid YAML and survives every character.
+# Scalars that read fine without quotes. Anything else is written as a quoted
+# string that survives every character (``frontmatter.yaml_quoted``).
 _SCHLICHT = re.compile(r"^[A-Za-z0-9._/-]+$")
 
 
@@ -80,7 +79,7 @@ def _skalar(wert: Any) -> str:
     text = str(wert)
     if _SCHLICHT.match(text):
         return text
-    return json.dumps(text, ensure_ascii=False)
+    return frontmatter.yaml_quoted(text)
 
 
 def _feld_zeilen(name: str, wert: Any) -> list[str]:
@@ -88,7 +87,7 @@ def _feld_zeilen(name: str, wert: Any) -> list[str]:
     if wert is None:
         return []
     if name in _TEXT_FIELDS:
-        return [f"{name}: {json.dumps(str(wert), ensure_ascii=False)}"]
+        return [f"{name}: {frontmatter.yaml_quoted(str(wert))}"]
     if isinstance(wert, (list, tuple)):
         if not wert:
             return [f"{name}: []"]
@@ -98,12 +97,12 @@ def _feld_zeilen(name: str, wert: Any) -> list[str]:
 
 def _zerlegen(text: str) -> tuple[list[str], str]:
     """The front-matter lines and the body, or a plain refusal."""
-    if not text.startswith("---"):
-        raise KopfteilKaputt("front_missing")
-    teile = text.split("---", 2)
-    if len(teile) < 3:
-        raise KopfteilKaputt("closing_missing")
-    _, kopf_roh, rumpf = teile
+    try:
+        kopf_roh, rumpf = frontmatter.split(text)
+    except frontmatter.NoFrontMatter as error:
+        raise KopfteilKaputt("front_missing") from error
+    except frontmatter.NoClosingLine as error:
+        raise KopfteilKaputt("closing_missing") from error
     kopf_zeilen = kopf_roh.split("\n")
     # The split leaves an empty first entry (the newline after the opening
     # marker) and the line break before the closing marker — both are the
@@ -150,7 +149,7 @@ def felder_anwenden(
     """
     unbekannt = set(felder) - set(FORMULAR_FELDER)
     if unbekannt:
-        raise ValueError(f"Nicht formularfähige Felder: {', '.join(sorted(unbekannt))}")
+        raise ValueError(f"Fields that cannot be used in forms: {', '.join(sorted(unbekannt))}")
 
     kopf_zeilen, rumpf = _zerlegen(text)
     bloecke = _bloecke(kopf_zeilen)

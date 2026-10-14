@@ -70,10 +70,9 @@ def werkzeug_beschreibung(
     return MCPWerkzeug(
         name=WERKZEUG_NAME,
         beschreibung=(
-            "Starts a job: it works on the task on its own, in the "
-            "background, and leaves a report when it is done. Use it when "
-            "the user wants work handed off — research, long file work, "
-            "anything that should keep running without the chat.\n"
+            "Starts an independent background job that reports back when finished. Use it "
+            "when the user wants to delegate research, lengthy file operations, or other work "
+            "that should continue independently of the chat.\n"
             + who
             + "The job starts at once with the task as you write it.\n"
             "Write the task so it stands ALONE. The agent never saw this "
@@ -95,7 +94,7 @@ def werkzeug_beschreibung(
                     **({"enum": sorted(agenten, key=str.casefold)} if agenten else {}),
                     "description": (
                         "The agent's name, exactly as it is listed."
-                        + (" Leave it out for a helper." if helpers else "")
+                        + (" Omit it to start a helper." if helpers else "")
                         + (
                             f" Available: {agentenname.auswahl_satz(agenten)}."
                             if agenten
@@ -106,16 +105,15 @@ def werkzeug_beschreibung(
                 "task": {
                     "type": "string",
                     "description": (
-                        "The complete, self-standing task — subject, goal, "
-                        "and where the result belongs."
+                        "The complete, self-contained task: subject, goal, and destination "
+                        "for the result."
                     ),
                 },
                 "context": {
                     "type": "string",
                     "description": (
-                        "Optional. What the work needs to know that the task "
-                        "does not say: facts from this conversation, file "
-                        "paths, what was already tried, limits to keep to."
+                        "Optional. Additional context needed for the task: facts from this "
+                        "conversation, file paths, previous attempts, and constraints."
                     ),
                 },
                 # Offered to a chat only: the pictures a run needs come
@@ -126,12 +124,10 @@ def werkzeug_beschreibung(
                     "items": {"type": "string"},
                     "maxItems": MAX_IMAGES,
                     "description": (
-                        "Optional. Up to "
-                        f"{MAX_IMAGES} pictures the work needs to see: file "
-                        "paths inside this chat's shared folders, http(s) "
-                        "URLs, or data:image URLs. They travel with the task; "
-                        "an agent whose model cannot see gets a line naming "
-                        "each one instead."
+                        f"Optional. Up to {MAX_IMAGES} images needed for the task: file paths "
+                        "within this chat's shared folders, http(s) URLs, or data:image URLs. "
+                        "Images accompany the task; models without image support receive a "
+                        "text reference to each image instead."
                     ),
                 }} if helpers else {}),
             },
@@ -202,7 +198,7 @@ def geprueft(argumente: dict[str, Any]) -> tuple[str, str]:
         _bereinigt(str(argumente.get("context") or ""))
     ).strip()
     if not task:
-        raise AuftragVerboten("No task given.")
+        raise AuftragVerboten("No task provided.")
     # One text, as the run is given it, the context included.
     if context:
         task = f"{task}\n\nContext:\n{context}"
@@ -216,6 +212,6 @@ def geprueft(argumente: dict[str, Any]) -> tuple[str, str]:
 # sentence means neither stood in between: a call with no chat and no
 # assignment behind it at all.
 NUR_IM_CHAT = (
-    "start_job starts a job from a chat, or from a job as part of the "
-    "assignment the run itself was given. Neither is the case here."
+    "start_job starts a job from a chat or as part of an existing job's assignment. Neither "
+    "context is available here."
 )

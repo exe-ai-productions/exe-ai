@@ -13,12 +13,14 @@
      here is what the next start runs with, and the log at the foot is the
      same log window every other server panel has. */
   import { api } from '../lib/api.js'
-  import { t } from '../lib/texte.svelte.js'
+  import { t, texte } from '../lib/texte.svelte.js'
+  import { fractionDigits, formatNumber } from '../lib/numberDisplay.js'
   import { katalogOeffnen, melde } from '../lib/zustand.svelte.js'
   import { diktat, standLaden, werteSetzen } from '../lib/diktat.svelte.js'
   import Servertafel from './Servertafel.svelte'
   import Serverregler from './Serverregler.svelte'
   import Startknopf from './Startknopf.svelte'
+  import Startfehler from './Startfehler.svelte'
   import Serverabschnitt from './Serverabschnitt.svelte'
   import Serverlogkopf from './Serverlogkopf.svelte'
   import Schieberegler from './Schieberegler.svelte'
@@ -302,8 +304,8 @@
     })),
   ])
 
-  function anzeige(zahl, ganzzahlig) {
-    return ganzzahlig ? String(zahl) : Number(zahl).toFixed(2)
+  function anzeige(zahl, ganzzahlig, schritt) {
+    return ganzzahlig ? String(zahl) : formatNumber(zahl, fractionDigits(schritt), texte.sprache)
   }
 </script>
 
@@ -324,6 +326,7 @@
   {#snippet mitte()}
     <!-- One column: network with the window's one
          deed, storage and the sampling values across the full width. -->
+    <Startfehler arch={auskunft?.unknown_architecture} />
     <Serverregler kennung="bs" teil="netzwerk" gesperrt={laeuft} bind:port>
       {#snippet kopfrechts()}
         <Startknopf text={tat.text} punkt={tat.punkt} gesperrt={tat.gesperrt} onTat={tat.onTat} />
@@ -365,7 +368,7 @@
             stufen={p.stufen}
             gesperrt={laeuft}
             beschriftung={parameterlabels[p.knopf]}
-            anzeige={(w) => anzeige(w, p.ganzzahlig)}
+            anzeige={(w) => anzeige(w, p.ganzzahlig, p.schritt)}
             mit_zahl={false}
             fuellung
           />

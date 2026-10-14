@@ -24,6 +24,7 @@ import json
 from pathlib import Path
 
 from app import atomic_file
+from app.ggufmtp import BEIFAHRER, dateiart
 
 # The sidecar in the model folder. It sits next to the models, so it travels
 # with them and is found without a path from outside.
@@ -108,11 +109,34 @@ def eintragen(ordner: Path, modell: str, rolle: str, datei: str) -> None:
     _schreiben(ordner, daten)
 
 
+def _whole_model_as_draft(ordner: Path, modell: str, name: str) -> bool:
+    """Whether ``name`` is a small sibling model standing in the model folder
+    itself that may draft for ``modell``.
+
+    The draft slot takes a whole model as well as a prediction module, and the
+    next start puts a whole model that lay in ``mtp/`` back into the model
+    folder: the note must find it there. The same three things the runner
+    rules out for a draft in the model folder are ruled out here — the main
+    model itself, a projector, and a prediction module (which belongs in
+    ``mtp/``).
+    """
+    datei = ordner / name
+    # The file itself resolved, as the runner's `draft_path` asks it: a link
+    # that leads out of the folder is no file of this folder.
+    if not datei.is_file() or datei.resolve().parent != ordner.resolve():
+        return False
+    if "mmproj" in name.lower() or datei.resolve() == (ordner / modell).resolve():
+        return False
+    return dateiart(datei) != BEIFAHRER
+
+
 def fuer(ordner: Path, modell: str) -> dict:
     """The companions declared for one model, only those still in the folder.
 
     A deleted projector or draft disappears from the answer, so the runner
-    never attaches a file that is no longer there.
+    never attaches a file that is no longer there. A projector counts only in
+    its own folder; a draft counts in ``mtp/`` first and otherwise as a whole
+    model in the model folder.
     """
     ordner = Path(ordner)
     eintrag = lade(ordner).get(modell)
@@ -121,7 +145,11 @@ def fuer(ordner: Path, modell: str) -> dict:
         return ergebnis
     for rolle in ROLLEN:
         name = _sicher(eintrag.get(rolle))
-        if name and (ordner / UNTERORDNER[rolle] / name).is_file():
+        if not name:
+            continue
+        if (ordner / UNTERORDNER[rolle] / name).is_file() or (
+            rolle == "mtp" and _whole_model_as_draft(ordner, modell, name)
+        ):
             ergebnis[rolle] = name
     return ergebnis
 

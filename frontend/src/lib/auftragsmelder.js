@@ -56,6 +56,7 @@
 
 import { weitergereicht } from './laufstand.js'
 import { melden } from './meldewesen.svelte.js'
+import { agentName } from './agentmarke.js'
 import { t } from './texte.svelte.js'
 
 /* The states a run is over in. Mirrors ENDZUSTAENDE in
@@ -133,7 +134,7 @@ export function meldetext(auftrag) {
     ersterSatz(auftrag.result) ||
     grundtext(auftrag) ||
     t('jobs.zustand.' + auftrag.state)
-  return `${auftrag.agent} · ${satz}`
+  return `${agentName(auftrag.agent)} · ${satz}`
 }
 
 /**
@@ -153,7 +154,7 @@ export function auftraegeBeobachten(jobs) {
           melden({
             was: 'wartet',
             von: 'agent',
-            text: `${auftrag.agent} · ${auftrag.question.frage}`,
+            text: `${agentName(auftrag.agent)} · ${auftrag.question.frage}`,
             auftragId: auftrag.id,
             agent: auftrag.agent,
           })

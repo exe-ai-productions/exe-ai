@@ -136,6 +136,13 @@ class EndpointConfig(BaseModel):
     @field_validator("base_url")
     @classmethod
     def _kein_schrägstrich_am_ende(cls, wert: str) -> str:
+        """Gives an address written without a scheme (``localhost:8080/v1``) an
+        ``http://`` in front, so the fetch of its models can reach the server:
+        httpx refuses a URL without a scheme. An address that has one is kept
+        as written, and an empty one stays empty."""
+        wert = wert.strip()
+        if wert and "://" not in wert:
+            wert = f"http://{wert}"
         return wert.rstrip("/")
 
     @field_validator("group")
@@ -172,6 +179,12 @@ class AppConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8090
     language: str = "de"
+    # The file holding the password a service beyond the loopback address
+    # demands (app/anmeldung.py). A path relative to the data folder, or an
+    # absolute one; empty means no password — and then no bind beyond this
+    # machine. A file and not the word itself: a word in here would stand
+    # in every copy of the configuration that is ever shown or sent.
+    password_file: str = ""
     # The geometry watch in the window (frontend/src/lib/geometriewache.js):
     # a diagnosis harness that records scroll anomalies, paints a report
     # panel over the app and writes marker lines into the access log. A
@@ -298,7 +311,7 @@ class AppConfig(BaseModel):
     @classmethod
     def _port_im_gueltigen_bereich(cls, wert: int) -> int:
         if not 1 <= wert <= 65535:
-            raise ValueError(f"Port {wert} liegt außerhalb von 1-65535")
+            raise ValueError(f"Port {wert} is outside the range 1-65535.")
         return wert
 
 
@@ -368,7 +381,7 @@ class Config(BaseModel):
         gesehen: set[str] = set()
         for endpunkt in wert:
             if endpunkt.id in gesehen:
-                raise ValueError(f"Endpunkt-Kennung '{endpunkt.id}' ist doppelt vergeben")
+                raise ValueError(f"Duplicate endpoint identifier: '{endpunkt.id}'")
             gesehen.add(endpunkt.id)
         return wert
 
@@ -553,6 +566,8 @@ def _umgebung_anwenden(rohdaten: dict) -> dict:
         app["port"] = int(port)
     if host := os.getenv("EXE_AI_HOST"):
         app["host"] = host
+    if passwortdatei := os.getenv("EXE_AI_PASSWORD_FILE"):
+        app["password_file"] = passwortdatei
     if sprache := os.getenv("EXE_AI_LANGUAGE"):
         app["language"] = sprache
     if datenbank := os.getenv("EXE_AI_DB_PATH"):
@@ -625,8 +640,8 @@ def config_laden(pfad: str | Path | None = None) -> Config:
 
     if not quelle.exists():
         raise FileNotFoundError(
-            f"Konfigurationsdatei nicht gefunden: {quelle}. "
-            "Vorlage liegt als config.example.yaml im Projektverzeichnis."
+            f"Configuration file not found: {quelle}. A template is available as "
+            "config.example.yaml in the project directory."
         )
 
     # Then the other direction: an existing file gets whatever the program

@@ -13,6 +13,7 @@ teaches the model to narrow the pattern, not to read a wall of text.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -67,14 +68,13 @@ def werkzeug_beschreibung() -> MCPWerkzeug:
             "properties": {
                 "pattern": {
                     "type": "string",
-                    "description": "What to look for, e.g. \"TODO\" or \"def \\w+_handler\".",
+                    "description": 'Pattern to search for, e.g. "TODO" or "def \\w+_handler".',
                 },
                 "path": {
                     "type": "string",
                     "description": (
-                        "File or folder to search. Default: the first shared "
-                        "folder, or the private working folder when none is "
-                        "shared."
+                        "File or folder to search. Defaults to the first shared folder, or "
+                        "the private working folder if none is shared."
                     ),
                 },
                 "case_sensitive": {
@@ -107,8 +107,11 @@ def _muster(argumente: dict[str, Any]) -> re.Pattern[str]:
         return re.compile(re.escape(roh), flags)
 
 
-def _dateien(wurzel: Path) -> tuple[list[Path], bool]:
-    """Every searchable file under the root, and whether the walk was cut off."""
+def _dateien(
+    wurzel: Path, private: Callable[[Path], bool] | None = None
+) -> tuple[list[Path], bool]:
+    """Every searchable file under the root, and whether the walk was cut off.
+    A private place of the program is walked past, never into."""
     if wurzel.is_file():
         return [wurzel], False
     dateien: list[Path] = []
@@ -122,6 +125,14 @@ def _dateien(wurzel: Path) -> tuple[list[Path], bool]:
             if len(dateien) >= MAX_DATEIEN:
                 return False
             if eintrag.is_symlink():
+                continue
+            # Folders are asked, and the named files beside the settings; any
+            # other file is private only through the folder it lies in.
+            if (
+                private is not None
+                and (eintrag.is_dir() or eintrag.name in grenzen.PRIVATE_FILES)
+                and private(eintrag)
+            ):
                 continue
             if eintrag.is_dir():
                 if eintrag.name in UEBERSPRUNGEN:
@@ -152,10 +163,13 @@ def _durchsuchbar(datei: Path) -> bool:
     return b"\0" not in probe
 
 
-async def ausfuehren(argumente: dict[str, Any], ordner: list[str], data_dir=None) -> str:
+async def ausfuehren(
+    argumente: dict[str, Any], ordner: list[str], data_dir=None,
+    private: Callable[[Path], bool] | None = None,
+) -> str:
     roh = str(argumente.get("pattern") or "").strip()
     if not roh:
-        raise grenzen.GrenzeVerletzt("No pattern given.")
+        raise grenzen.GrenzeVerletzt("No pattern provided.")
 
     pfad = str(argumente.get("path") or "").strip()
     if pfad:
@@ -168,7 +182,9 @@ async def ausfuehren(argumente: dict[str, Any], ordner: list[str], data_dir=None
         raise grenzen.GrenzeVerletzt(grenzen.missing(wurzel, ordner, data_dir))
 
     muster = _muster(argumente)
-    dateien, dateien_abgeschnitten = _dateien(wurzel)
+    if private is None:
+        private = grenzen.private_check(ordner, data_dir)
+    dateien, dateien_abgeschnitten = _dateien(wurzel, private)
 
     treffer: list[str] = []
     abgeschnitten = False
@@ -200,12 +216,12 @@ async def ausfuehren(argumente: dict[str, Any], ordner: list[str], data_dir=None
     if not treffer:
         rand = ""
         if dateien_abgeschnitten:
-            rand = f"\n(search stopped after {MAX_DATEIEN} files — narrow the path)"
+            rand = f"\n(search stopped after {MAX_DATEIEN} files; narrow the path)"
         return f"No matches for the pattern in {wurzel}.{rand}"
 
     kopf = f"{len(treffer)} match{'es' if len(treffer) != 1 else ''} in {wurzel}"
     if abgeschnitten:
-        kopf += f" (stopped at {MAX_TREFFER} — narrow the pattern or the path)"
+        kopf += f" (stopped at {MAX_TREFFER}; narrow the pattern or path)"
     elif dateien_abgeschnitten:
-        kopf += f" (search stopped after {MAX_DATEIEN} files — narrow the path)"
+        kopf += f" (search stopped after {MAX_DATEIEN} files; narrow the path)"
     return "\n".join([kopf, *treffer])

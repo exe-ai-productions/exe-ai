@@ -10,13 +10,12 @@
      and tells the parent, so a picture wall or a model list built on the old
      folder can refresh.
 
-     A folder whose files can also be put in by hand (the doc folder) passes
-     `onadd`: a third sign, the plus, sits beside the two and asks the parent
-     to pick files. Every other row keeps its pair.
-
-     `showPath` false leaves the buttons alone in the row, for a place where
-     the folder's path is not what the person came for (the doc folder). The
-     buttons' size comes from `--ordnerknopf` where a place sets it. */
+     The row is the same wherever it stands: the name, the path, the two
+     buttons — the gallery's and the doc folder's alike. A place whose path
+     is not the named location's (the doc folder inside a chat, whose files
+     lie in that chat's own folder) hands the path to show as `pathText`,
+     together with `onopen`. The buttons' size comes from `--ordnerknopf`
+     where a place sets it. */
   import { api } from '../lib/api.js'
   import Hauszeichen from './Hauszeichen.svelte'
   import { t } from '../lib/texte.svelte.js'
@@ -27,10 +26,11 @@
      that chat's own folder: the folder button then asks the parent to show
      that one. */
   let {
-    name, etikett = '', onaendern = null, onadd = null, onopen = null, showPath = true,
+    name, etikett = '', onaendern = null, onopen = null, pathText = null,
   } = $props()
 
   let pfad = $state('')
+  const shownPath = $derived(pathText ?? pfad)
   let neustartNoetig = $state(false)
 
   async function laden() {
@@ -71,10 +71,9 @@
 
 <div class="zeile">
   {#if etikett}<span class="etikett">{etikett}</span>{/if}
-  {#if showPath}<span class="pfad" title={pfad}>{pfad}</span>{/if}
+  <span class="pfad" title={shownPath}>{shownPath}</span>
   <!-- Open and change as a tight cluster of square icon buttons, held closer
-       to each other than to the path, so they read as one group of tools —
-       two of them, or three where the row also takes files in (`onadd`). -->
+       to each other than to the path, so they read as one group of tools. -->
   <div class="knopfpaar">
     <button class="ordnerknopf" onclick={oeffnen} title={t('speicherorte.oeffnen')}
             aria-label={t('speicherorte.oeffnen')}>
@@ -91,12 +90,6 @@
         <path d="M17 3l4 4L8 20l-5 1 1-5L17 3z" />
       </svg>
     </button>
-    {#if onadd}
-      <button class="ordnerknopf" onclick={onadd} title={t('speicherorte.dateien_hinzufuegen')}
-              aria-label={t('speicherorte.dateien_hinzufuegen')}>
-        <Hauszeichen zeichen="plus" groesse="klein" />
-      </button>
-    {/if}
   </div>
 </div>
 {#if neustartNoetig}

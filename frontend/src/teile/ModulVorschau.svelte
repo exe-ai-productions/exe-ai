@@ -113,10 +113,10 @@
     ><Hauszeichen zeichen="neu_laden" groesse={16} /></button>
     <div class="adresse">
       <!-- Where the file lies, as a browser's bar shows an address: cut at
-           its end where it does not fit, whole under the pointer. The name
-           stands in the tab above; a file without a place on disk shows it
-           here as well. -->
-      <span class="adresse-name" title={offen?.pfad || null}>{offen?.pfad || offen?.name}</span>
+           its front where it does not fit, so the file's name stays in
+           view, whole under the pointer. The name stands in the tab above;
+           a file without a place on disk shows it here as well. -->
+      <span class="adresse-name" title={offen?.pfad || null}><span>{offen?.pfad || offen?.name}</span></span>
       <span class="fakten">{fakten}</span>
     </div>
     {#if hasTwoViews}
@@ -289,6 +289,17 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    /* Cut at the front, the way the command's folder line does
+       (ModulTerminal): the box reads right to left, so the ellipsis stands
+       at the left end and the file's name at the right one stays. The path
+       itself, in the inner span, keeps reading left to right — the digits
+       and marks of a path stay in their order. */
+    direction: rtl;
+    text-align: left;
+  }
+  .adresse-name span {
+    direction: ltr;
+    unicode-bidi: bidi-override;
   }
   .fakten {
     flex: none;

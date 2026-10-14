@@ -85,6 +85,9 @@ class Auskunft(BaseModel):
     fein: dict | None = None
     flash_aktiv: bool | None = None
     mtp_aktiv: str | None = None
+    # The architecture the last start failed on because the server's build
+    # does not know it — the same word the model server's answer carries.
+    unknown_architecture: str | None = None
     zuordnung: dict[str, dict[str, str | None]] = {}
     # What is chosen when nobody has chosen: the one file this slot has
     # actually been measured on.
@@ -135,6 +138,7 @@ def _auskunft(request: Request) -> Auskunft:
         fein=lauf.fein.als_daten() if lauf and lauf.fein else None,
         flash_aktiv=runner.flash_attn_zustand(),
         mtp_aktiv=runner.mtp_zustand(),
+        unknown_architecture=runner.unknown_architecture(),
         zuordnung=_zuordnung(runner),
         vorgaben={
             name: wert
@@ -150,7 +154,7 @@ def auskunft(request: Request) -> Auskunft:
     return _auskunft(request)
 
 
-@router.get("/log", response_model=list[str], summary="What the server says")
+@router.get("/log", response_model=list[str], summary="Server messages")
 def protokoll(request: Request) -> list[str]:
     return _runner(request).protokoll()
 

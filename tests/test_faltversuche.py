@@ -145,7 +145,7 @@ async def test_the_total_clock_is_not_reported_as_silence(monkeypatch):
 
     with pytest.raises(faltversuche.Stille) as fehler:
         await faltversuche.anfordern(_Zustand(_Tropfen()), object())
-    assert "ran out of time" in str(fehler.value)
+    assert "timed out" in str(fehler.value)
 
 
 async def test_the_silence_clock_keeps_its_own_words(monkeypatch):
@@ -164,7 +164,7 @@ async def test_the_silence_clock_keeps_its_own_words(monkeypatch):
 
     with pytest.raises(faltversuche.Stille) as fehler:
         await faltversuche.anfordern(_Zustand(_Stumm()), object())
-    assert "no sign of life from the server for" in str(fehler.value)
+    assert "No response from the server for" in str(fehler.value)
 
 
 def test_the_clocks_keep_their_values():

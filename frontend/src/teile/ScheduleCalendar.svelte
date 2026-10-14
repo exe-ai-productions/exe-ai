@@ -6,8 +6,9 @@
      answer.
 
      `gross` is the settings' size. `onpick` hears a day clicked in the
-     month, with the cell's place on screen, for whoever opens something
-     there — the surface passes nothing and only chooses the day. */
+     month, with the cell itself, for whoever opens something there and
+     wants to stay beside it — the surface passes nothing and only chooses
+     the day. */
   import { t } from '../lib/texte.svelte.js'
 
   let { kalender, gross = false, onpick = null } = $props()
@@ -17,7 +18,7 @@
 
   function pick(day, ev) {
     kalender.choose(day)
-    onpick?.(day, ev.currentTarget.getBoundingClientRect())
+    onpick?.(day, ev.currentTarget)
   }
 </script>
 

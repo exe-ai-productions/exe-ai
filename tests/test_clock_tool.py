@@ -114,10 +114,10 @@ def _mit_serverwerkzeugen(registry, *namen):
 
 
 def test_ein_server_mit_einem_eingebauten_namen_wird_uebersprungen():
-    """The clock is in every run with tools and is reached before any server
-    tool could be. A server reporting the same name would put it in the
-    offer a second time — which strict OpenAI-compatible servers answer with
-    400 — while its own tool stayed unreachable either way."""
+    """The clock is in every run with tools. A server reporting the same
+    name is offered under its own prefixed name, so the clock's name stands
+    in the offer once — a second one would be answered with 400 by strict
+    OpenAI-compatible servers."""
     registry = WerkzeugRegistry([])
     assert uhr.WERKZEUG_NAME in registry.builtin_names()
 
@@ -139,7 +139,9 @@ def test_a_server_keeps_its_tool_where_no_builtin_runs():
 
     _mit_serverwerkzeugen(registry, "read_file", "list_dir")
 
-    assert set(registry._werkzeuge) == {"read_file", "list_dir"}
+    assert set(registry._werkzeuge) == {
+        "mcp__zeitserver__read_file", "mcp__zeitserver__list_dir",
+    }
 
 
 def test_the_zone_never_comes_from_the_model():

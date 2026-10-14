@@ -77,14 +77,14 @@ MAX_LAENGE = 2000
 _STEUERZEICHEN_ERLAUBT = {"\n", "\t"}
 _UNSICHTBARE_KATEGORIEN = {"Cf", "Cc", "Co", "Cs"}
 
-GESPEICHERT = "Note saved. The next run of this entry will be given it."
-GELOESCHT = "Note cleared. The next run of this entry starts without one."
+GESPEICHERT = "Note saved. It will be provided to the next run of this entry."
+GELOESCHT = "Note cleared. The next run of this entry will start without a note."
 
 # Said here because the registry says it for a call that reached it from a
 # chat, where there is no entry for a note to belong to.
 NUR_IM_LAUF = (
-    "cron_note only works in a run started by a schedule — there is no "
-    "entry here for a note to belong to."
+    "cron_note is only available in scheduled runs. There is no schedule entry here to attach "
+    "a note to."
 )
 
 
@@ -115,8 +115,8 @@ def werkzeug_beschreibung() -> MCPWerkzeug:
                 "note": {
                     "type": "string",
                     "description": (
-                        "The complete new note, replacing whatever was "
-                        "there. Empty clears it."
+                        "The complete replacement note. An empty value clears the existing "
+                        "note."
                     ),
                 },
             },
@@ -148,9 +148,9 @@ def notiz(argumente: dict[str, Any]) -> str | None:
     text = _bereinigt(str(argumente.get("note") or ""))
     if len(text) > MAX_LAENGE:
         raise NotizVerboten(
-            f"Too long ({len(text)} characters, at most {MAX_LAENGE}). "
-            "A note is the state the next run needs, not a transcript of "
-            "this one. Nothing was stored — the previous note still stands."
+            f"The note is too long ({len(text)} characters; maximum: {MAX_LAENGE}). Record the "
+            "state needed by the next run, not a transcript of this one. Nothing was saved; "
+            "the previous note remains unchanged."
         )
     return text or None
 
@@ -175,7 +175,7 @@ async def ausfuehren(
         # to write to, and saying "saved" would be a lie about a row that no
         # longer exists.
         raise NotizVerboten(
-            "This schedule no longer exists — the note was not stored."
+            "This schedule no longer exists. The note was not saved."
         )
     repo.notiz_setzen(cronjob_id, text)
     # A run whose context filled up hands the rest of its work to a fresh

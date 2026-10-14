@@ -91,3 +91,63 @@ def test_ohne_wirt_gilt_als_innen():
 def test_nur_http_und_https_werden_gelesen(adresse: str):
     antwort = asyncio.run(webseite_lesen.lesen(adresse))
     assert antwort.startswith("Error:")
+
+
+# --- No address of its own ------------------------------------------------
+
+
+def test_the_self_run_search_asks_nothing_without_an_address(monkeypatch):
+    """An instance on this machine used to be assumed (127.0.0.1:8888) — a
+    search that answered from whatever happened to listen there. Without an
+    address the server says so and sends no request at all."""
+    sent = []
+
+    class Client:
+        def __init__(self, *a, **k):
+            sent.append("opened")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, *a, **k):
+            sent.append("asked")
+            raise AssertionError("nothing may be asked without an address")
+
+    monkeypatch.setattr(searxng_server, "SEARXNG_URL", "")
+    monkeypatch.setattr(searxng_server.httpx, "AsyncClient", Client)
+    with pytest.raises(ValueError, match="SEARXNG_URL"):
+        asyncio.run(searxng_server.websuche("anything"))
+    assert sent == []
+
+
+def test_silence_with_an_address_the_search_goes_there(monkeypatch):
+    seen = []
+
+    class Answer:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"results": [{"title": "A", "url": "https://a.example", "content": "x"}]}
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, **k):
+            seen.append(url)
+            return Answer()
+
+    monkeypatch.setattr(searxng_server, "SEARXNG_URL", "https://suche.example.org")
+    monkeypatch.setattr(searxng_server.httpx, "AsyncClient", Client)
+    text = asyncio.run(searxng_server.websuche("anything"))
+    assert seen == ["https://suche.example.org/search"] and "https://a.example" in text

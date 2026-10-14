@@ -12,6 +12,7 @@ See fenster-electron/kontextmenue.js.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -36,7 +37,7 @@ console.log(JSON.stringify({
   link: k.baue({ ...leer, linkURL: 'http://x/seite' }, {}),
   link_ohne_schluessel: k.baue(
     { ...leer, linkURL: 'http://x/b.png?schluessel=geheim' }, {},
-    { linkLabel: 'Copy Link Address — not available', linkAdresse: 'http://x/b.png' },
+    { linkLabel: k.WORDS.copyLinkUnavailable, linkAdresse: 'http://x/b.png' },
   ),
   vorlesen_auswahl: k.baue(
     { ...leer, selectionText: '  ein Satz  ' }, { canCopy: true }, { vorlesenLabel: 'Vorlesen' },
@@ -46,9 +47,17 @@ console.log(JSON.stringify({
   ),
   vorlesen_ohne_auswahl: k.baue(leer, {}, { vorlesenLabel: 'Vorlesen' }),
   vorlesen_ohne_wort: k.baue({ ...leer, selectionText: 'ein Satz' }, { canCopy: true }),
+  bild_ohne_quelle: k.baue({ ...leer, mediaType: 'image' }, {}),
+  bild_ohne_quelle_im_link: k.baue({ ...leer, mediaType: 'image', linkURL: 'http://x/seite' }, {}),
   bild_und_link: k.baue(
     { ...leer, mediaType: 'image', srcURL: 'http://x/b.png', linkURL: 'http://x/seite' }, {},
   ),
+  words: k.WORDS,
+  words_unsaid: [k.wordsFrom(null), k.wordsFrom(undefined), k.wordsFrom('text'), k.wordsFrom({})],
+  words_said: k.wordsFrom({
+    copyLink: '  Link-Adresse kopieren ', copyImage: 'Bild kopieren', saveImage: '   ',
+    copyLinkUnavailable: 7, somethingElse: 'not a word of the menu',
+  }),
 }))
 """ % {"modul": json.dumps(str(MODUL))}
 
@@ -108,7 +117,7 @@ def test_die_schweigeproben_bleiben_bei_ihren_eintraegen():
         {"art": "link", "label": "Copy Link Address"}
     ], bericht["link"]
     assert bericht["link_ohne_schluessel"][0]["label"] == (
-        "Copy Link Address — not available"
+        "Copy Link Address — unavailable"
     )
     assert bericht["link_ohne_schluessel"][0]["adresse"] == "http://x/b.png"
 
@@ -131,3 +140,66 @@ def test_vorlesen_steht_nur_bei_markiertem_text():
     assert daten["vorlesen_feld"][-1] == {"art": "vorlesen", "label": "Read aloud", "text": "im Feld"}
     for fall in ("vorlesen_ohne_auswahl", "vorlesen_ohne_wort"):
         assert all(e["art"] != "vorlesen" for e in daten[fall]), fall
+
+
+@node_da
+def test_the_words_of_the_menu_are_english_until_the_page_says_them():
+    """The entries the program names by itself read English as long as no
+    page has sent its words — and whatever a page sends that is not one of
+    those words, not text or empty leaves the English word standing (the
+    silence check)."""
+    bericht = _lauf()
+    english = {
+        "copyLink": "Copy Link Address",
+        "copyLinkUnavailable": "Copy Link Address — unavailable",
+        "saveImage": "Save Image As…",
+        "copyImage": "Copy Image",
+    }
+    assert bericht["words"] == english
+    assert bericht["words_unsaid"] == [english] * 4
+    assert bericht["words_said"] == {
+        **english, "copyLink": "Link-Adresse kopieren", "copyImage": "Bild kopieren",
+    }
+
+
+@node_da
+def test_the_page_sends_exactly_the_words_the_shell_knows():
+    """The page and the shell name the words alike: a word sent under
+    another name would stay English without anybody noticing."""
+    page = (WURZEL / "frontend" / "src" / "lib" / "shellWords.js").read_text(encoding="utf-8")
+    sent = re.findall(r"^\s+(\w+): 'menue\.\w+',$", page, flags=re.MULTILINE)
+    assert sorted(sent) == sorted(_lauf()["words"])
+
+
+@node_da
+def test_a_picture_without_an_address_can_be_copied_but_not_saved():
+    """A right click on a picture that has no address (drawn on a canvas,
+    an inline element) opened no menu: the picture entries stood only with an
+    address. Copying needs none (it takes the spot), saving does."""
+    bericht = _lauf()
+    assert [e["art"] for e in bericht["bild_ohne_quelle"]] == ["bild_kopieren"], (
+        bericht["bild_ohne_quelle"]
+    )
+    # In a link too: the picture's entry, a separator, the link's entry.
+    assert [e["art"] for e in bericht["bild_ohne_quelle_im_link"]] == [
+        "bild_kopieren", "trenner", "link",
+    ], bericht["bild_ohne_quelle_im_link"]
+    # Silence probe: with an address the picture has both, in this order.
+    assert [e["art"] for e in bericht["bild"]] == ["bild_speichern", "bild_kopieren"]
+    # And no selectAll beside a picture without an address either.
+    assert all(e.get("role") != "selectAll" for e in bericht["bild_ohne_quelle"])
+
+
+def test_the_manual_is_noted_whichever_window_opened_it():
+    """`did-create-window` comes to the page that called `window.open`. A
+    listener on the main window alone never heard of a manual a second window
+    opened, and the next call opened another one beside it: the noting hangs
+    on every page the program creates."""
+    main = (WURZEL / "fenster-electron" / "main.js").read_text(encoding="utf-8")
+    hook = main.split("app.on('web-contents-created'", 1)[1].split("\n})\n", 1)[0]
+    assert "rememberManual(inhalt)" in hook
+    merken = main.split("function rememberManual(inhalt) {", 1)[1].split("\n}\n", 1)[0]
+    assert "inhalt.on('did-create-window'" in merken
+    assert "istHandbuch(angaben && angaben.url)" in merken
+    # Not any more on the main window alone.
+    assert "fenster.webContents.on('did-create-window'" not in main

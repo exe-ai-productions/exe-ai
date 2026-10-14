@@ -372,10 +372,9 @@ async def test_befehl_laeuft_im_freigegebenen_ordner(tmp_path):
 async def test_datei_anlegen_kommt_wirklich_an(tmp_path):
     """The core case: "create an HTML file" has to land on the disk."""
     await shell.ausfuehren(
-        # The angle brackets as escapes: written out, the outer cmd.exe of
-        # the Windows path reads them as redirections (the tool's own line
-        # toggles the quoting around them, measured in a Windows VM) — and
-        # the point of this test is the file on the disk, not that line.
+        # The angle brackets as escapes: the point of this test is the file
+        # on the disk, not the quoting of the Windows line, which has its own
+        # tests (test_shell_windows_line.py).
         {"command": python_command("open('seite.html', 'w').write('\\x3ch1\\x3ehallo\\x3c/h1\\x3e')")},
         [str(tmp_path)],
     )
@@ -386,7 +385,7 @@ async def test_datei_anlegen_kommt_wirklich_an(tmp_path):
 async def test_stille_befehle_melden_sich_trotzdem(tmp_path):
     """A silent success must not read like a failure to the model."""
     ausgabe = await shell.ausfuehren({"command": "mkdir neu"}, [str(tmp_path)])
-    assert ausgabe == "(done, no output)"
+    assert ausgabe == "(completed without output)"
     assert (tmp_path / "neu").is_dir()
 
 
@@ -409,7 +408,7 @@ async def test_lange_ausgabe_wird_gekuerzt(tmp_path):
     befehl = python_command(f"print('x' * {shell.MAX_AUSGABE_ZEICHEN + 5000})")
     ausgabe = await shell.ausfuehren({"command": befehl}, [str(tmp_path)])
     # The note travels to the model with the output, so it is English.
-    assert "more characters were cut" in ausgabe
+    assert "additional characters omitted" in ausgabe
     assert len(ausgabe) < shell.MAX_AUSGABE_ZEICHEN + 500
 
 
@@ -467,6 +466,25 @@ def test_beschreibung_ohne_wert_nennt_die_vorgabe():
     assert f"stopped after {shell.ZEITGRENZE_SEKUNDEN} seconds" in text
 
 
+def test_beschreibung_lenkt_suchen_und_webseiten_auf_die_werkzeuge_dafuer():
+    """A model that has a tool for web searches or for reading web pages is
+    told to use it, not to fetch the page with curl through this tool. The
+    sentence names no tool: it holds only where the tool is there. It stands
+    right behind the sentence about the file tools, and the others stay."""
+    text = shell.werkzeug_beschreibung().beschreibung
+
+    assert (
+        "and listing files and for making folders. Where you have a tool for web searches "
+        "or for reading web pages, use it for those instead of curl or wget.\n"
+        "It runs in the user's own shell,"
+    ) in text
+    # Silence probe: the rest of the description is as it was.
+    assert text.startswith("Runs a shell command on the user's computer and returns its output.")
+    assert "A `cd` persists to the next call" in text
+    assert f"stopped after {shell.ZEITGRENZE_SEKUNDEN} seconds" in text
+    assert "piping something off the net straight into a shell" in text
+
+
 # --- Background is a chat lane ----------------------------------------------
 
 
@@ -484,7 +502,7 @@ async def test_hintergrund_wird_ohne_erlaubnis_verweigert(tmp_path):
         zeitgrenze=300,
         hintergrund_erlaubt=False,
     )
-    assert "not available in a job" in ausgabe
+    assert "unavailable in a job" in ausgabe
     assert "300 seconds" in ausgabe
     # Nothing was started: no run was created for this id.
     assert len(hintergrund.laeufe._laeufe.get("job-1", [])) == vorher
@@ -582,7 +600,7 @@ async def test_registry_verweigert_hintergrund_im_auftrag(tmp_path):
         herkunft="agent",
         shell_zeitgrenze=240,
     )
-    assert "not available in a job" in antwort
+    assert "unavailable in a job" in antwort
     assert "240 seconds" in antwort
     assert hintergrund.laeufe.laeufe("job-99") == []
 

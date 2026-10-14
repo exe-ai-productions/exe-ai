@@ -28,6 +28,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from app import bildwahlen
 
@@ -290,7 +291,7 @@ def check(values: dict) -> dict:
     for key, value in values.items():
         switch = BY_KEY.get(key)
         if switch is None:
-            raise ValueError(f"unknown switch {key}")
+            raise ValueError(f"Unknown option: {key}")
         if value is None or value == "" or value is False:
             continue
         checked[key] = _value(switch, value)
@@ -301,39 +302,41 @@ def _value(switch: Switch, value):
     kind = switch.kind
     if kind == "bool":
         if value is not True:
-            raise ValueError(f"{switch.key} takes true or false")
+            raise ValueError(f"{switch.key} requires true or false.")
         return True
     if kind in ("int", "float"):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(f"{switch.key} takes a number")
+            raise ValueError(f"{switch.key} requires a number.")
         if not math.isfinite(value):
-            raise ValueError(f"{switch.key} takes a finite number")
+            raise ValueError(f"{switch.key} requires a finite number.")
         if kind == "int":
             if float(value) != int(value):
-                raise ValueError(f"{switch.key} takes a whole number")
+                raise ValueError(f"{switch.key} requires an integer.")
             value = int(value)
         else:
             value = float(value)
         if switch.low is not None and value < switch.low:
-            raise ValueError(f"{switch.key} is below {switch.low}")
+            raise ValueError(f"{switch.key} is below the minimum of {switch.low}.")
         if switch.high is not None and value > switch.high:
-            raise ValueError(f"{switch.key} is above {switch.high}")
+            raise ValueError(f"{switch.key} exceeds the maximum of {switch.high}.")
         return value
     if not isinstance(value, str):
-        raise ValueError(f"{switch.key} takes a text")
+        raise ValueError(f"{switch.key} requires text.")
     value = value.strip()
     if kind == "choice":
         if value not in switch.choices:
-            raise ValueError(f"{switch.key} takes one of {', '.join(switch.choices)}")
+            raise ValueError(f"{switch.key} requires one of these values: "
+                             f"{', '.join(switch.choices)}")
         return value
     if len(value) > _TEXT_LIMIT or "\n" in value or "\r" in value:
-        raise ValueError(f"{switch.key} takes one line of at most {_TEXT_LIMIT} characters")
+        raise ValueError(f"{switch.key} requires a single line of no more than {_TEXT_LIMIT} "
+                         "characters.")
     # sd-cli splits its key=value list at every comma, so a comma inside
     # one value would become a key of its own.
     if switch.list_flag and "," in value:
-        raise ValueError(f"{switch.key} takes no comma")
+        raise ValueError(f"{switch.key} must not contain a comma.")
     if kind in ("file", "picture") and (value != Path(value).name or value.startswith(".")):
-        raise ValueError(f"{switch.key} takes a bare file name")
+        raise ValueError(f"{switch.key} requires a filename without a path.")
     return value
 
 
@@ -436,23 +439,33 @@ def _layers(text: str) -> list[int] | None:
         return None
 
 
-def cli_only_reason(values: dict) -> str | None:
-    """A value the server's body cannot carry as sd-cli would read it: a
-    tile size or a sigma list that is no number. sd-cli then draws it, so
-    its own words explain it."""
+class CliOnly(NamedTuple):
+    """A switch that sends the picture to sd-cli: its key, and the sentence
+    that says why."""
+
+    key: str
+    text: str
+
+
+def cli_only(values: dict) -> CliOnly | None:
+    """The switch whose value the server's body cannot carry as sd-cli
+    would read it: a tile size or a sigma list that is no number. sd-cli
+    then draws it, so its own words explain it."""
     for key in ("vae_tile_size", "vae_relative_tile_size"):
         if key in values and _size(values[key]) is None:
-            return f"{key} that is no size"
+            return CliOnly(key, f"{key} is not a valid size")
     if "hires_sigmas" in values and _numbers(values["hires_sigmas"]) is None:
-        return "hires sigmas that are no list of numbers"
+        return CliOnly("hires_sigmas", "hires sigmas not provided as a list of numbers")
     if "high_noise_skip_layers" in values and _layers(values["high_noise_skip_layers"]) is None:
-        return "high-noise skip layers that are no list of numbers"
+        return CliOnly(
+            "high_noise_skip_layers", "high-noise skip layers not provided as a list of numbers"
+        )
     # The server reads no sound file: sd-cli alone loads one (sd.cpp
     # examples/cli/main.cpp), and as a start flag of the server either is
     # refused outside video mode (examples/common/common.cpp validate).
     for key in ("audio", "ref_audio", "ref_video_audio"):
         if key in values:
-            return f"a sound file ({key})"
+            return CliOnly(key, f"an audio file ({key})")
     return None
 
 
@@ -538,5 +551,5 @@ def file_path(image_folder: Path, folder: str, name: str) -> Path:
     """A switch file's name turned into its path — only a name really in
     its folder."""
     if name not in files(image_folder, folder):
-        raise ValueError(f"unknown file {name}")
+        raise ValueError(f"Unknown file: {name}")
     return Path(image_folder).expanduser() / folder / name

@@ -2,8 +2,8 @@
 when that window is the fallback of 128,000 tokens a server without any
 source of its own gets (`app/fenstergroesse.py`, ``ERSATZ``).
 
-The backend half is pinned in tests/test_discovery.py
-(`test_ohne_jede_quelle_gilt_der_ersatzwert`); nothing pinned the display
+The backend half is pinned in tests/test_discovery.py (the test of the
+fallback value without any source); nothing pinned the display
 half. `kontextStand` from `frontend/src/lib/zustand.svelte.js` is lifted out,
 with the three functions it reads, and run in node, the same way
 tests/test_seitenleiste_schmales_fenster.py runs `seitenleisteSchalten`. The

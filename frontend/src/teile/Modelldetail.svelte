@@ -80,7 +80,7 @@
       <div class="logo">{buchstabe}</div>
     {/if}
     <div class="wer">
-      <div class="name">{name}</div>
+      <div class="name" title={name}>{name}</div>
       {#if unter}<div class="unter">{unter}</div>{/if}
     </div>
     <div class="zeichenreihe">
@@ -115,6 +115,9 @@
             <div class="fname">{z.name}</div>
             {#if z.satz}<div class="fpasst">{z.satz}</div>{/if}
           </div>
+          {#if z.plakette}
+            <span class="plakette fplakette" style={`color:${z.plakette.farbe};border:1px solid ${farbton(z.plakette.farbe, 33)};background:${farbton(z.plakette.farbe, 9)}`}>{z.plakette.text}</span>
+          {/if}
           {#if z.gb != null}<span class="fgb">{t('modell.gb', { zahl: z.gb })}{#if z.teile > 1}{' · ' + t('modell.teile', { zahl: z.teile })}{/if}</span>{/if}
           {#if z.zustand === 'laedt'}
             <button class="knopf still" onclick={onAbbrechen}>{t('katalog.abbrechen')}</button>
@@ -211,8 +214,13 @@
   .wer {
     min-width: 0;
   }
+  /* A long name stays in its line and its block, cut with an ellipsis like
+     the line under it; the full name stands in the title. */
   .name {
     font: 600 17px var(--schrift);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .unter {
     font-size: var(--schrift-hinweis);
@@ -237,6 +245,11 @@
     padding: 2px 10px;
     font-size: 11.5px;
     font-weight: 600;
+  }
+  /* The kind of a file on its row: the same plaque, kept on one line. */
+  .fplakette {
+    flex: none;
+    white-space: nowrap;
   }
   .vram {
     font: 500 12px var(--schrift);

@@ -42,13 +42,13 @@ MODULE = (
     "agenten",
 )
 
-# Six 40 px signs of the row at the column's foot, five 10 px gaps and 12 px
+# Seven 40 px signs of the row at the column's foot, six 10 px gaps and 12 px
 # either side: no sign of the row ever has to shrink.
-LEISTE_MIN = 314
+LEISTE_MIN = 364
 LEISTE_MAX = 900
 
 # Six 40 px buttons of the sidebar's window row, five 10 px gaps and 12 px
-# either side — the same measure as the column on the right.
+# either side.
 SEITE_MIN = 314
 SEITE_MAX = 400
 

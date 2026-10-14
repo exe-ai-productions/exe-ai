@@ -33,18 +33,22 @@ function answerKey(jobId, callId) {
   return `${jobId}:${callId ?? ''}`
 }
 
+/** Does this job wait on the user with a question that no answer of this
+ *  window is on its way to? */
+export function questionOpen(job) {
+  return Boolean(
+    job?.state === 'wartet' &&
+      job.question?.frage &&
+      !answered[answerKey(job.id, job.question.aufruf_id)],
+  )
+}
+
 /** The questions the agents of this chat stand on, oldest first — one per
  *  agent, the way the box shows them one after the other. */
 export function agentQuestions(chatId) {
   if (!chatId) return []
   return zustand.auftraege
-    .filter(
-      (job) =>
-        job.chat_id === chatId &&
-        job.state === 'wartet' &&
-        job.question?.frage &&
-        !answered[answerKey(job.id, job.question.aufruf_id)],
-    )
+    .filter((job) => job.chat_id === chatId && questionOpen(job))
     .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
 }
 

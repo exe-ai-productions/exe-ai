@@ -231,7 +231,7 @@ def test_the_report_names_the_agent_the_ending_and_the_task():
     # shows in the window's language (app/agent_report._reason_text).
     assert "Reason: time limit reached" in text
     assert "Task: Collect." in text
-    assert text.endswith("The agent left no report.")
+    assert text.endswith("The agent did not provide a report.")
 
 
 def test_the_first_stop_keeps_its_reason():
@@ -263,7 +263,7 @@ def test_a_long_report_is_cut_where_a_tool_result_is():
     text = agent_report.report_text(job)
 
     assert text.count("x") == WERKZEUGERGEBNIS_GRENZE
-    assert text.endswith("the whole of it stands in the agents view.]")
+    assert text.endswith("the full report is available in the agents view.]")
 
 
 def test_the_continuation_of_a_run_under_another_reports_nowhere(client, chat_id):

@@ -211,7 +211,9 @@ def test_only_measured_readings_reach_the_answer_foot():
     foot = ANSWER.read_text(encoding="utf-8")
     app = APP.read_text(encoding="utf-8")
 
-    assert "laeuft && nachricht.liveSpeed?.wert" in foot
+    # A running answer reads the live reading and nothing else; the row's
+    # own `stats` are the finished answer's.
+    assert "      ? nachricht.liveSpeed?.wert\n        ? nachricht.liveSpeed" in foot
     assert "tempoGemessen(speedReading.quelle)" in foot
     # The live reading is the server's own, straight from the stream.
     assert "platzhalter.liveSpeed = {" in app

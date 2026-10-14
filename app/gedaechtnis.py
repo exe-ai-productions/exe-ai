@@ -56,9 +56,8 @@ UEBERSCHRIFT_FAKTEN = "## Facts"
 # What the model is told before the memory. Without a sentence like this the
 # entries read as part of the conversation instead of as standing knowledge.
 EINLEITUNG = (
-    "What you know about this user from earlier sessions. The rules always "
-    "apply; the facts apply where they fit. Do not repeat this back unless "
-    "asked."
+    "Information about this user from previous sessions. The rules always apply; use the "
+    "facts when relevant. Do not repeat this information to the user unless asked."
 )
 
 

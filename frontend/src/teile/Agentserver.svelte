@@ -47,6 +47,7 @@
   import Serverregler from './Serverregler.svelte'
   import Startknopf from './Startknopf.svelte'
   import Serverreihe from './Serverreihe.svelte'
+  import Startfehler from './Startfehler.svelte'
   import Serverlogkopf from './Serverlogkopf.svelte'
   import {
     protokollOffen,
@@ -638,6 +639,7 @@
     </Serverreihe>
     <Serverreihe>
       {#snippet links()}
+        <Startfehler arch={auskunft?.unknown_architecture} />
         <Serverregler
           kennung="as"
           teil="speicher"

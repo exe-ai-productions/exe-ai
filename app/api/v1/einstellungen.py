@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.abhaengigkeiten import hole_config, hole_repositories, hole_sprache
+from app.events import Ereignisse, bus
 from app.i18n import t
 from app.config import Config
 from app.db import Repositories
@@ -104,6 +105,11 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 # Which settings may be written through this route, and how each is checked.
 # A setting nobody vouches for does not get in — the JSON column cannot check
 # anything by itself.
+# The two switches of the model choice: a write that is stored goes out over
+# the line, so a second window or device reads them again instead of keeping
+# the state it had when it opened.
+MODEL_SWITCH_KEYS = frozenset({"modelle_aus", "katalog_wahl"})
+
 PRUEFER: dict[str, Callable[[Any], Any]] = {
     "parameter": pruefen,
     "modelle_aus": aus_pruefen,
@@ -142,6 +148,12 @@ PRUEFER: dict[str, Callable[[Any], Any]] = {
     BERECHTIGUNGSMODUS["chat"]: berechtigungsmodus_pruefen,
     BERECHTIGUNGSMODUS["agent"]: berechtigungsmodus_pruefen,
 }
+
+# Settings that exist once for everybody and in no narrower scope. The
+# permission mode: picking one rewrites the one rule file every chat and
+# every model is judged by, so a value kept at a chat or a model would stand
+# there and apply nowhere.
+GLOBAL_ONLY: frozenset[str] = frozenset(BERECHTIGUNGSMODUS.values())
 
 # Checks on a whole row, old and new side by side, that refuse a write by
 # raising ``WriteRefused`` instead of trimming it.
@@ -184,6 +196,10 @@ class AufgeloesterWert(BaseModel):
     # Per value: which scope it came from. The UI shows it, so nobody has to
     # guess why a number is what it is.
     herkunft: dict[str, str] = Field(default_factory=dict)
+    # The scope a value that is not a set came from, as a whole. Nothing for
+    # a set of values — its fields name theirs above — and for a value no
+    # scope has set.
+    scope: str | None = None
 
 
 class AufgeloesteAntwort(BaseModel):
@@ -195,6 +211,10 @@ class AufgeloesteAntwort(BaseModel):
     # Per value: which scope it came from. The UI shows it, so nobody has to
     # guess why a number is what it is.
     herkunft: dict[str, str] = Field(default_factory=dict)
+    # The scope a value that is not a set came from, as a whole. Nothing for
+    # a set of values — its fields name theirs above — and for a value no
+    # scope has set.
+    scope: str | None = None
 
 
 def _bereich_pruefen(bereich: str, sprache: str) -> str:
@@ -203,10 +223,21 @@ def _bereich_pruefen(bereich: str, sprache: str) -> str:
     raise HTTPException(400, t("fehler.einstellung_bereich", sprache))
 
 
+def _scope_check(bereich: str, schluessel: str, sprache: str) -> None:
+    """Refuses a write to a scope the setting does not have."""
+    if schluessel in GLOBAL_ONLY and bereich != GLOBAL:
+        raise HTTPException(400, t("fehler.setting_only_global", sprache, name=schluessel))
+
+
 def _value_and_origin(
     repositories: Repositories, schluessel: str, modell: str | None, chat: str | None
-) -> tuple[Any, dict[str, str]]:
-    """The merged value and, per field of it, the scope it came from.
+) -> tuple[Any, dict[str, str], str | None]:
+    """The merged value, per field of it the scope it came from, and for a
+    value that is not a set the scope it came from as a whole.
+
+    A setting that exists once for everybody (``GLOBAL_ONLY``) is read from
+    there alone, whatever chat or model is asked for: a row an earlier
+    version stored in a narrower scope never applied and is not shown.
 
     The scroll position is read scope by scope through the same check a
     write goes through, before the scopes are merged: what the check throws
@@ -217,6 +248,8 @@ def _value_and_origin(
     scope. Fields no scope sets come from the scroll position's defaults and
     name no scope. Every other key is merged as stored.
     """
+    if schluessel in GLOBAL_ONLY:
+        modell = chat = None
     if schluessel == SCROLLSTELLE:
         return repositories.einstellungen.value_and_origin(
             schluessel, modell=modell, chat=chat,
@@ -228,10 +261,10 @@ def _value_and_origin(
 @router.get(
     "/resolved",
     response_model=dict[str, AufgeloesterWert],
-    summary="What really applies here — several keys at once",
+    summary="Effective settings for multiple keys",
 )
 def aufgeloest_viele(
-    keys: str,
+    keys: str | None = None,
     modell: str | None = None,
     chat: str | None = None,
     repositories: Repositories = Depends(hole_repositories),
@@ -246,26 +279,33 @@ def aufgeloest_viele(
 
     Duplicates collapse and the order of `keys` is kept, so the caller can
     pair the answer with its own list without sorting it.
+
+    Without `keys` the answer holds every setting this route vouches for,
+    in the order of its table — so a caller that shows them all does not
+    have to carry the list itself. `keys` sent empty stays a mistake.
     """
-    schluessel: list[str] = []
-    for roh in keys.split(","):
-        name = roh.strip()
-        if name and name not in schluessel:
-            schluessel.append(name)
-    if not schluessel:
-        raise HTTPException(400, t("fehler.einstellung_keys_leer", sprache))
+    if keys is None:
+        schluessel = list(PRUEFER)
+    else:
+        schluessel = []
+        for roh in keys.split(","):
+            name = roh.strip()
+            if name and name not in schluessel:
+                schluessel.append(name)
+        if not schluessel:
+            raise HTTPException(400, t("fehler.einstellung_keys_leer", sprache))
 
     response: dict[str, AufgeloesterWert] = {}
     for name in schluessel:
-        wert, herkunft = _value_and_origin(repositories, name, modell, chat)
-        response[name] = AufgeloesterWert(wert=wert, herkunft=herkunft)
+        wert, herkunft, scope = _value_and_origin(repositories, name, modell, chat)
+        response[name] = AufgeloesterWert(wert=wert, herkunft=herkunft, scope=scope)
     return response
 
 
 @router.get(
     "/resolved/{schluessel}",
     response_model=AufgeloesteAntwort,
-    summary="What really applies here",
+    summary="Effective settings",
 )
 def aufgeloest(
     schluessel: str,
@@ -273,14 +313,14 @@ def aufgeloest(
     chat: str | None = None,
     repositories: Repositories = Depends(hole_repositories),
 ) -> AufgeloesteAntwort:
-    wert, herkunft = _value_and_origin(repositories, schluessel, modell, chat)
-    return AufgeloesteAntwort(schluessel=schluessel, wert=wert, herkunft=herkunft)
+    wert, herkunft, scope = _value_and_origin(repositories, schluessel, modell, chat)
+    return AufgeloesteAntwort(schluessel=schluessel, wert=wert, herkunft=herkunft, scope=scope)
 
 
 @router.get(
     "/{bereich}/{schluessel}",
     response_model=WertAntwort,
-    summary="What exactly this scope holds",
+    summary="Settings stored in this scope",
 )
 def holen(
     bereich: str,
@@ -294,6 +334,12 @@ def holen(
         schluessel=schluessel,
         wert=repositories.einstellungen.holen(bereich, schluessel),
     )
+
+
+def _model_switch_changed(schluessel: str) -> None:
+    """Announces a stored write of one of the model switches."""
+    if schluessel in MODEL_SWITCH_KEYS:
+        bus.veroeffentlichen_ohne_warten(Ereignisse.MODEL_SWITCHES_CHANGED, schluessel=schluessel)
 
 
 @router.put(
@@ -315,6 +361,7 @@ def setzen(
         raise HTTPException(
             400, t("fehler.einstellung_unbekannt", sprache, name=schluessel)
         )
+    _scope_check(bereich, schluessel, sprache)
 
     wert = daten.wert
     if wert is not None:
@@ -331,24 +378,23 @@ def setzen(
             wert = None
 
     repositories.einstellungen.setzen(bereich, schluessel, wert)
+    _model_switch_changed(schluessel)
 
     # The permission mode is a shortcut for lines in berechtigungen.json
     # (app/berechtigungswahl.py) — picking one has to write them, not only
-    # remember the choice in the cascade. Global only: there is one shared
-    # rule file, not one per chat or model, so a scoped write here would
-    # look like it applies narrowly while it actually rewrites the file for
-    # everyone.
-    if bereich == GLOBAL:
-        for herkunft, modus_schluessel in BERECHTIGUNGSMODUS.items():
-            if schluessel != modus_schluessel:
-                continue
-            # Clearing the cascade value falls back to "manuell" in the file
-            # too — otherwise the resolved value in the UI and what Tor 3
-            # actually enforces would quietly drift apart.
-            berechtigungsmodus_anwenden(
-                config.pfad(config.app.berechtigungen_datei),
-                herkunft, wert or "manuell",
-            )
+    # remember the choice in the cascade. There is one shared rule file, not
+    # one per chat or model, which is why the write above was refused for
+    # any scope but the global one (``GLOBAL_ONLY``).
+    for herkunft, modus_schluessel in BERECHTIGUNGSMODUS.items():
+        if schluessel != modus_schluessel:
+            continue
+        # Clearing the cascade value falls back to "manuell" in the file
+        # too — otherwise the resolved value in the UI and what Tor 3
+        # actually enforces would quietly drift apart.
+        berechtigungsmodus_anwenden(
+            config.pfad(config.app.berechtigungen_datei),
+            herkunft, wert or "manuell",
+        )
 
     return WertAntwort(
         bereich=bereich,
@@ -396,6 +442,7 @@ def teilweise_setzen(
     _bereich_pruefen(bereich, sprache)
     if schluessel not in PRUEFER:
         raise HTTPException(400, t("fehler.einstellung_unbekannt", sprache, name=schluessel))
+    _scope_check(bereich, schluessel, sprache)
     if not isinstance(daten.wert, dict):
         raise HTTPException(400, t("fehler.einstellung_kein_wertesatz", sprache))
 
@@ -412,5 +459,6 @@ def teilweise_setzen(
         raise HTTPException(400, t("fehler.einstellung_speichern", sprache)) from None
     if wert is None:
         raise HTTPException(400, t("fehler.einstellung_kein_wertesatz", sprache))
+    _model_switch_changed(schluessel)
 
     return WertAntwort(bereich=bereich, schluessel=schluessel, wert=wert)

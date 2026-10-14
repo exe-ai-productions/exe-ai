@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from app import dokumentablage
+from app import docfolder, dokumentablage, folder_names
 from app.agenten import Agent
 from app.agentendock import DATEI, dock_fuer
 from app.tools import agentendock as delivery
@@ -250,6 +250,20 @@ async def test_a_file_dropped_in_a_chat_lies_in_its_folder(client):
     assert row["origin"] == "user"
 
 
+async def test_a_picture_dropped_without_a_type_stands_in_the_folder_as_a_picture(client):
+    """The page sends octet-stream where the browser knows no type; the wall
+    shows a picture only for an `image/…` type, so the name has to decide."""
+    chat = _chat(client, "Pictures")
+    answer = client.post(
+        f"/api/v1/agentendock?name=foto.jpg&chat={chat}",
+        content=b"\xff\xd8\xff",
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert answer.status_code == 201, answer.text
+    rows = client.get("/api/v1/doc-folder", params={"chat": chat}).json()
+    assert [(row["name"], row["type"]) for row in rows] == [("foto.jpg", "image/jpeg")]
+
+
 async def test_a_drop_into_a_chat_that_does_not_exist_is_refused(client):
     answer = client.post(
         "/api/v1/agentendock?name=x.txt&chat=missing", content=b"x"
@@ -412,6 +426,176 @@ async def test_a_file_in_a_folder_below_stands_with_its_path(client):
     assert len({row["id"] for row in rows.values()}) == 3
 
 
+async def test_a_hidden_folder_and_a_package_managers_are_not_listed(client):
+    """A hidden folder and the folder a package manager fills are left out
+    with everything in them, on any depth below the chat's folder."""
+    chat = _chat(client, "Open")
+    for name in (
+        "report.md",
+        "src/a.py",
+        ".git/config",
+        ".venv/lib/x.py",
+        "src/.cache/y.bin",
+        "node_modules/pkg/index.js",
+        "src/node_modules/z.js",
+    ):
+        _written(client, chat, name, "x")
+
+    assert set(_names(client, chat=chat)) == {"report.md", "src/a.py"}
+    assert set(_names(client)) == {"report.md", "src/a.py"}
+
+
+async def test_only_a_folder_by_its_whole_name_is_kept_out(client):
+    """Silence probe: a folder whose name merely begins like the package
+    manager's, one with a dot inside its name, and a file named like that
+    folder all stand as before."""
+    chat = _chat(client, "Open")
+    names = {
+        "node_modules_old/pkg.js",
+        "my.folder/notes.txt",
+        "site/node_modules.txt",
+    }
+    for name in names:
+        _written(client, chat, name, "x")
+
+    assert set(_names(client, chat=chat)) == names
+
+
+async def test_the_folder_of_compiled_python_files_is_not_listed(client):
+    """A script run in the chat's folder leaves its compiled form in a
+    folder beside it. That folder is left out with everything in it, on any
+    depth below the chat's folder, like a hidden one."""
+    chat = _chat(client, "Open")
+    for name in (
+        "script.py",
+        "__pycache__/script.cpython-312.pyc",
+        "src/pkg/mod.py",
+        "src/pkg/__pycache__/mod.cpython-312.pyc",
+        "src/pkg/__pycache__/deeper/more.pyc",
+    ):
+        _written(client, chat, name, "x")
+
+    assert set(_names(client, chat=chat)) == {"script.py", "src/pkg/mod.py"}
+    assert set(_names(client)) == {"script.py", "src/pkg/mod.py"}
+
+
+async def test_only_the_folder_of_compiled_files_by_its_whole_name_is_kept_out(client):
+    """Silence probe: a folder merely named like a cache, one whose name
+    only holds the interpreter's, and a file that carries that name — with
+    an ending, or bare — all stand."""
+    chat = _chat(client, "Open")
+    names = {
+        "cache/data.bin",
+        "pycache/data.bin",
+        "__pycache__old/mod.pyc",
+        "my__pycache__/mod.pyc",
+        "__pycache__.txt",
+        "site/__pycache__",
+    }
+    for name in names:
+        _written(client, chat, name, "x")
+
+    assert set(_names(client, chat=chat)) == names
+
+
+def test_what_a_file_manager_leaves_is_named_in_one_list():
+    """The doc folder asks the list the program already keeps for these
+    names, and keeps none of its own."""
+    assert docfolder.is_viewer_file is folder_names.is_viewer_file
+    assert folder_names.VIEWER_FILES == {".DS_Store", "Thumbs.db", "desktop.ini"}
+
+
+async def test_hidden_files_and_what_a_file_manager_leaves_are_not_listed(client):
+    """A file whose name begins with a dot, and the ones a file manager
+    leaves in a folder it only showed, are left out — in the chat's folder
+    and in a folder below it. Left out of the list is all they are: each
+    lies where it lay, with what it held."""
+    chat = _chat(client, "Open")
+    hidden = [".env", ".gitignore", *sorted(folder_names.VIEWER_FILES)]
+    kept = [
+        _written(client, chat, place + name, f"kept as {place}{name}")
+        for place in ("", "site/")
+        for name in hidden
+    ]
+    _written(client, chat, "notes.txt", "x")
+    _written(client, chat, "site/index.html", "x")
+
+    assert set(_names(client, chat=chat)) == {"notes.txt", "site/index.html"}
+    assert set(_names(client)) == {"notes.txt", "site/index.html"}
+
+    folder = kept[0].parent
+    assert len(kept) == 10
+    for file in kept:
+        assert file.read_text(encoding="utf-8") == f"kept as {file.relative_to(folder).as_posix()}"
+
+
+async def test_what_a_file_manager_leaves_is_left_out_in_any_capitals(client):
+    """The names are the same names in any spelling: one system writes
+    ``Thumbs.db``, another finds ``thumbs.db`` or ``THUMBS.DB`` on its disk.
+    Each lies where it lay, in a folder of its own so that a disk that does
+    not tell capitals apart keeps all of them."""
+    chat = _chat(client, "Open")
+    left = [
+        _written(client, chat, f"{place}/{name}", f"kept as {name}")
+        for place, name in (
+            ("a", "thumbs.db"),
+            ("b", "THUMBS.DB"),
+            ("c", "Desktop.ini"),
+            ("d", "DESKTOP.INI"),
+        )
+    ]
+    _written(client, chat, "notes.txt", "x")
+
+    assert set(_names(client, chat=chat)) == {"notes.txt"}
+    for file in left:
+        assert file.read_text(encoding="utf-8") == f"kept as {file.name}"
+
+
+async def test_only_a_file_hidden_by_its_whole_name_is_kept_out(client):
+    """Silence probe: a name without the dot in front, one that only holds
+    a file manager's name, and one that differs from it by a letter all
+    stand, in the chat's folder and below it."""
+    chat = _chat(client, "Open")
+    names = {
+        "notes.txt",
+        "env",
+        "my.env",
+        "gitignore",
+        "report.DS_Store.txt",
+        "Thumbs.db.bak",
+        "site/desktop.ini.txt",
+        "site/Thumbs.dbx",
+        "site/env",
+        "Thumbs.db.txt",
+        "site/desktop.ini.bak",
+        "my-thumbs.db",
+        "site/my-Desktop.ini",
+    }
+    for name in names:
+        _written(client, chat, name, "x")
+
+    assert set(_names(client, chat=chat)) == names
+
+
+async def test_a_document_named_like_a_hidden_file_still_stands(client):
+    """Silence probe: only a file nobody entered is asked for its name. An
+    upload, a drop and a delivery have their rows and stand, dot or not —
+    and none of them comes a second time, or goes, as a loose file."""
+    chat = _chat(client, "Open")
+    _upload(client, chat, ".plan.txt", "plan")
+    _drop(client, ".kept.txt", "kept", chat)
+    await _deliver(client, chat, ".report.md", "# Report")
+    _written(client, chat, ".loose.txt", "loose")
+
+    rows = client.get("/api/v1/doc-folder", params={"chat": chat}).json()
+
+    assert {row["name"]: row["source"] for row in rows} == {
+        ".kept.txt": "document",
+        ".plan.txt": "document",
+        ".report.md": "document",
+    }
+
+
 async def test_a_page_a_tool_wrote_is_never_served_as_a_page(client):
     """What a model wrote must not run under this service's address: like a
     document's file, everything but a PDF is handed out to be saved."""
@@ -484,6 +668,91 @@ async def test_a_link_leading_out_of_the_chat_folder_is_refused(client):
 
     assert set(_names(client, chat=chat)) == {"notes.txt", "again.txt"}
     assert client.get(f"/api/v1/chat-files/{chat}/again.txt").content == b"in"
+
+
+@pytest.mark.platforms("posix", reason="a symlink needs a privilege on Windows")
+async def test_a_link_into_a_folder_that_is_left_out_is_not_listed(client):
+    """A link is listed by where it leads: one lying in a folder that is
+    shown and leading to a file in a hidden folder is left out like that
+    file. Silence probe: a link to a file in a folder that is shown stands."""
+    chat = _chat(client, "Open")
+    folder = _written(client, chat, "site/index.html", "<p>page</p>").parent.parent
+    kept = _written(client, chat, ".git/config", "[core]")
+    deep = _written(client, chat, "site/node_modules/pkg/index.js", "x")
+    (folder / "config.txt").symlink_to(kept)
+    (folder / "site" / "pkg.js").symlink_to(deep)
+    (folder / "page.html").symlink_to(folder / "site" / "index.html")
+
+    assert set(_names(client, chat=chat)) == {"site/index.html", "page.html"}
+
+
+@pytest.mark.platforms("posix", reason="a symlink needs a privilege on Windows")
+async def test_a_link_is_listed_by_its_own_name_too(client):
+    """A link stands in the list under its own name, so a name that is left
+    out is left out for a link as for a file: one beginning with a dot and
+    one a file manager leaves, in any capitals. Whatever it leads to stays
+    where it is listed. Silence probe: a link to the same file under a name
+    that is shown stands, and so does a link whose name only holds one."""
+    chat = _chat(client, "Open")
+    folder = _written(client, chat, "site/index.html", "<p>page</p>").parent.parent
+    target = folder / "site" / "index.html"
+    for name in (".page.html", "site/.hidden.html", "Thumbs.db", "site/DESKTOP.INI"):
+        (folder / name).symlink_to(target)
+    for name in ("page.html", "site/Thumbs.db.txt", "my.page.html"):
+        (folder / name).symlink_to(target)
+
+    assert set(_names(client, chat=chat)) == {
+        "site/index.html",
+        "page.html",
+        "site/Thumbs.db.txt",
+        "my.page.html",
+    }
+
+
+@pytest.mark.platforms("posix", reason="a symlink needs a privilege on Windows")
+async def test_a_link_to_what_is_not_listed_is_not_listed(client):
+    """A link is listed by where it leads: one leading into the folder of
+    compiled files, to a hidden file or to one a file manager left behind
+    is left out like the file it leads to. Silence probe: a link to a file
+    that is listed stands."""
+    chat = _chat(client, "Open")
+    folder = _written(client, chat, "notes.txt", "in").parent
+    compiled = _written(client, chat, "src/__pycache__/mod.cpython-312.pyc", "x")
+    settings = _written(client, chat, ".env", "KEY=1")
+    thumbs = _written(client, chat, "site/Thumbs.db", "x")
+    (folder / "compiled.pyc").symlink_to(compiled)
+    (folder / "settings.txt").symlink_to(settings)
+    (folder / "site" / "thumbs.txt").symlink_to(thumbs)
+    (folder / "again.txt").symlink_to(folder / "notes.txt")
+
+    assert set(_names(client, chat=chat)) == {"notes.txt", "again.txt"}
+
+
+def _below(folder):
+    return {name for _, name in docfolder._files_below(folder)}
+
+
+def test_where_the_chat_folder_itself_lies_hides_nothing(tmp_path):
+    """Silence probe: only the names below the chat's folder are asked. A
+    data folder inside a hidden folder is where some systems keep it."""
+    folder = tmp_path / ".local" / "node_modules" / "chat"
+    (folder / "site").mkdir(parents=True)
+    (folder / "notes.txt").write_text("x", encoding="utf-8")
+    (folder / "site" / "index.html").write_text("x", encoding="utf-8")
+
+    assert _below(folder) == {"notes.txt", "site/index.html"}
+
+
+@pytest.mark.platforms("posix", reason="a symlink needs a privilege on Windows")
+def test_a_link_is_judged_below_the_chat_folder_only(tmp_path):
+    """Silence probe: a link is judged by where it leads below the chat's
+    folder, not by the hidden folder the chat's folder lies in."""
+    folder = tmp_path / ".local" / "node_modules" / "chat"
+    folder.mkdir(parents=True)
+    (folder / "notes.txt").write_text("x", encoding="utf-8")
+    (folder / "again.txt").symlink_to(folder / "notes.txt")
+
+    assert _below(folder) == {"notes.txt", "again.txt"}
 
 
 async def test_a_file_with_a_document_row_stands_once(client):
@@ -583,3 +852,69 @@ async def test_a_loose_file_is_fetched_with_the_key_in_the_address(client):
         assert client.get(f"/api/v1{path}?schluessel=wrong").status_code == 401
     finally:
         client.headers["X-Sitzungsschluessel"] = key
+
+
+# --- The place a chat's folder row names ---------------------------------------
+
+
+def test_a_chats_folder_row_names_the_chats_own_folder(client):
+    """The row of an open chat shows where its files lie and opens that
+    place; the route answers the path without making the folder."""
+    chat_id = _chat(client, "Place")
+    answer = client.get("/api/v1/doc-folder/place", params={"chat": chat_id})
+    assert answer.status_code == 200, answer.text
+    config = client.app.state.config
+    expected = dokumentablage.chatordner(docfolder.Path(config.datenverzeichnis), chat_id)
+    assert answer.json() == {"path": str(expected)}
+    assert not expected.exists()
+
+
+def test_silence_a_name_that_is_no_chat_id_has_no_place(client):
+    """The id travels in from a URL: what could climb out of the data
+    folder is refused, as the files route refuses it."""
+    for name in ("..", "a/b", "x y"):
+        answer = client.get("/api/v1/doc-folder/place", params={"chat": name})
+        assert answer.status_code == 404, name
+
+
+# --- One file on the disk, one tile ---------------------------------------------
+
+
+def _tiles(client, name, **query):
+    rows = client.get("/api/v1/doc-folder", params=query).json()
+    return [row for row in rows if row["name"] == name]
+
+
+def test_the_same_file_put_into_a_chat_twice_stands_as_one_tile(client):
+    """The defect: a file put into the same chat a second time has a second
+    row and no second file, and the folder showed it twice. One file on the
+    disk is one tile; it is the newest row that stands."""
+    chat_id = _chat(client, "Twice")
+    first = _upload(client, chat_id, "llm-wiki.md", "# wiki\n")
+    second = _upload(client, chat_id, "llm-wiki.md", "# wiki\n")
+    assert first != second
+
+    tiles = _tiles(client, "llm-wiki.md")
+    assert len(tiles) == 1
+    assert tiles[0]["source"] == "document"
+    assert len(_tiles(client, "llm-wiki.md", chat=chat_id)) == 1
+
+
+def test_silence_files_of_one_name_in_two_chats_stay_two_tiles(client):
+    one = _chat(client, "One")
+    two = _chat(client, "Two")
+    _upload(client, one, "plan.md", "the plan")
+    _upload(client, two, "plan.md", "the plan")
+
+    assert len(_tiles(client, "plan.md")) == 2
+    assert len(_tiles(client, "plan.md", chat=one)) == 1
+
+
+def test_silence_the_dock_copy_and_the_chat_copy_of_a_file_stay_two_tiles(client):
+    """Two copies on the disk are two files, whatever their name says."""
+    chat_id = _chat(client, "Dock")
+    _upload(client, chat_id, "notes.md", "same words")
+    _drop(client, "notes.md", "same words")
+
+    tiles = _tiles(client, "notes.md")
+    assert sorted(row["source"] for row in tiles) == ["agent", "document"]

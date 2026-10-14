@@ -94,9 +94,8 @@ BEREINIGUNGEN: tuple[str, ...] = ("aus", "putzmodell", "modell", "agent")
 # speech is in travels separately, in a field of its own, so this text stays
 # free of it.
 ANWEISUNG_VORGABE = (
-    "Transcribe the speech exactly as spoken, word for word. Keep the "
-    "speaker's language. Do not translate, do not summarise, do not answer. "
-    "Output only the transcription."
+    "Transcribe the speech verbatim, preserving the speaker's language. Do not translate, "
+    "summarize, or respond to the content. Output only the transcription."
 )
 
 BEREINIGUNG_ANWEISUNG_VORGABE = (
@@ -495,7 +494,7 @@ def gespraechsanweisung(repositories) -> str:
 # the half answer in the history reads like a finished one. The brackets
 # mark it as a note about the talk, not as words the person said.
 UNTERBRECHUNGSHINWEIS = (
-    "[Note: the user interrupted your previous spoken reply before it finished.]"
+    "[Note: the user interrupted your previous spoken response before it finished.]"
 )
 
 

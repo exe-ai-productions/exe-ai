@@ -39,6 +39,9 @@ class Auskunft(BaseModel):
     # Live resident memory of the running server, for the machine head's sum
     # — the same measurement the runner already keeps for itself.
     belegt_gb: float | None = None
+    # The architecture the last start failed on because the server's build
+    # does not know it.
+    unknown_architecture: str | None = None
 
 
 class Start(BaseModel):
@@ -77,6 +80,7 @@ def _auskunft(request: Request, config: Config) -> Auskunft:
         modell=lauf.modell if lauf else None,
         port=lauf.port if lauf else runner.port_vorgabe,
         belegt_gb=runner.belegt_gb(),
+        unknown_architecture=runner.unknown_architecture(),
     )
 
 
@@ -85,7 +89,7 @@ def auskunft(request: Request, config: Config = Depends(hole_config)) -> Auskunf
     return _auskunft(request, config)
 
 
-@router.get("/log", response_model=list[str], summary="What the server says")
+@router.get("/log", response_model=list[str], summary="Server messages")
 def protokoll(request: Request) -> list[str]:
     return _runner(request).protokoll()
 

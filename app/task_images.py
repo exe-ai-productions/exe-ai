@@ -88,16 +88,14 @@ def _too_large_sentence(image: TaskImage, number: int) -> str:
     if image.kind == "data":
         # A data URL travels as it was given; nothing made it smaller.
         return (
-            f"[Image number {number} of the images, given inline, was not attached, "
-            f"because it is larger than {ceiling} MB, more than a model accepts. "
-            "Work without it, or ask for a smaller copy if the task cannot be done "
-            "without it.]"
+            f"[Inline image number {number} was not attached because it exceeds the model's "
+            f"limit of {ceiling} MB. Work without it, or ask for a smaller copy if the task "
+            "requires it.]"
         )
     return (
-        f"[The image at {image.source} was not attached, because even after it was "
-        f"made smaller it is larger than {ceiling} MB, more than a model accepts. "
-        "Work without it, or ask for a smaller copy if the task cannot be done "
-        "without it.]"
+        f"[The image at {image.source} was not attached because it still exceeds the model's "
+        f"limit of {ceiling} MB after resizing. Work without it, or ask for a smaller copy if "
+        "the task requires it.]"
     )
 
 
@@ -113,7 +111,7 @@ def checked(raw: Any) -> list[str]:
     names = [item.strip() for item in raw if item.strip()]
     if len(names) > MAX_IMAGES:
         raise TaskImagesInvalid(
-            f"At most {MAX_IMAGES} images can be handed to a job; {len(names)} were given."
+            f"A job accepts at most {MAX_IMAGES} images; {len(names)} were provided."
         )
     return names
 

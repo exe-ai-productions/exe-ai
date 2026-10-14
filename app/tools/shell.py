@@ -46,6 +46,7 @@ import signal
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path, PurePath
 from typing import Any
@@ -93,7 +94,7 @@ MAX_AUSGABE_ZEICHEN = 20_000
 # Said out loud rather than cured with a bigger buffer, which would only move
 # the same wall further out and hide it on the way: a line that does not fit
 # is a fact, and the user reading the terminal is the one it concerns.
-HINWEIS_ZEILE_ZU_LANG = "[a line too long for the reader was cut here]"
+HINWEIS_ZEILE_ZU_LANG = "[A line exceeded the reader's length limit and was truncated here.]"
 
 # The tripwire. Deliberately short: every pattern here has to be worth its
 # false positives, otherwise it only trains people to work around it.
@@ -113,7 +114,7 @@ GEFAEHRLICH: tuple[tuple[str, str], ...] = (
     # how a machine gets taken over, and it is never what file work needs.
     (r"\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(ba|z|k)?sh\b", "a fetch from the net piped into a shell"),
     (r"\b(launchctl|systemctl)\b", "system services"),
-    (r">\s*/dev/(sd|nvme|disk)", "writing onto a device"),
+    (r">\s*/dev/(sd|nvme|disk)", "writing to a device"),
 )
 
 # The one file a command may not take away: the ``exe.md`` at the top of a
@@ -438,7 +439,9 @@ def werkzeug_beschreibung(zeitgrenze: int | None = None) -> MCPWerkzeug:
             "opening a folder or file in the desktop UI. Where you have "
             "read_file, write_file, edit_file, search_files, list_dir or "
             "create_folder, use those for reading, writing, editing, searching "
-            "and listing files and for making folders.\n"
+            "and listing files and for making folders. Where you have a tool "
+            "for web searches or for reading web pages, use it for those "
+            "instead of curl or wget.\n"
             "It runs in the user's own shell, so pipes, redirection and globs "
             "work, inside the shared folders — relative paths resolve against "
             "the first one, or against a private working folder when none is "
@@ -468,17 +471,17 @@ def werkzeug_beschreibung(zeitgrenze: int | None = None) -> MCPWerkzeug:
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The shell command to run, e.g. \"git status\" or \"npm run build\".",
+                    "description": 'Shell command to execute, e.g. "git status" or "npm run '
+                                   'build".',
                 },
                 "background": {
                     "type": "boolean",
                     "description": (
-                        "Start it and return immediately. The result appears in "
-                        "the chat when the command is done and wakes you to "
-                        "carry on from it. Use it for builds, "
-                        "downloads and anything else that takes minutes. In a "
-                        "chat only: a job refuses it, because there is no "
-                        "conversation for the result to appear in."
+                        "Start the command and return immediately. When it finishes, the "
+                        "result appears in the chat and prompts you to continue. Use for "
+                        "builds, downloads, and other tasks that take minutes. Available only "
+                        "in a chat; jobs reject it because no conversation can receive the "
+                        "result."
                     ),
                 },
             },
@@ -1096,7 +1099,9 @@ def _split_command(command: str) -> list[str]:
     return list(reader)
 
 
-def greift_nach_draussen(befehl: str, ordner: list[str]) -> str | None:
+def greift_nach_draussen(
+    befehl: str, ordner: list[str], private: Callable[[Path], bool] | None = None
+) -> str | None:
     """The path in the command that leaves the shared folders, or None.
 
     A heuristic on purpose. It reads every path-shaped word out of the
@@ -1105,6 +1110,12 @@ def greift_nach_draussen(befehl: str, ordner: list[str]) -> str | None:
     cannot see is a path built at runtime (`$(cat file)`); that is the honest
     limit of a tripwire and the reason the share, not this function, is the
     actual boundary.
+
+    With ``private`` the same reading answers another question: which word
+    of the command names a private place of the program. Every word then
+    counts, a bare name resolved in the first shared folder too, and the
+    answer is the first one ``private`` says yes to — inside the shared
+    folders or not.
     """
     if not ordner:
         return None
@@ -1135,7 +1146,7 @@ def greift_nach_draussen(befehl: str, ordner: list[str]) -> str | None:
         # Judged without its quotes: the plain split of a line no shell could
         # split (an unbalanced quote) leaves them on the word, and the raw
         # scan below would still find `/etc` in it but never `C:\Users`.
-        if _points_outside(teil.strip("\"'")):
+        if private is not None or _points_outside(teil.strip("\"'")):
             kandidaten.append(teil)
     for treffer in _PFAD_MUSTER.findall(befehl):
         if treffer in kandidaten:
@@ -1173,7 +1184,7 @@ def greift_nach_draussen(befehl: str, ordner: list[str]) -> str | None:
             kandidat = kandidat[:platz]
             # The stump has to still look like a way out on its own, by the
             # same marks as above — `rm ../*` stays caught by its `..`.
-            if not _points_outside(kandidat):
+            if private is None and not _points_outside(kandidat):
                 continue
         # Strip what the shell would treat as syntax, not as part of the path.
         sauber = kandidat.strip("\"'`;|&()<>")
@@ -1204,10 +1215,15 @@ def greift_nach_draussen(befehl: str, ordner: list[str]) -> str | None:
         ):
             continue
         try:
-            ziel = _aufgeloest(sauber, wurzel)
+            # `$HOME/...` is a path the shell makes of it; read the same way
+            # when the question is which private place the line names.
+            ziel = _aufgeloest(os.path.expandvars(sauber) if private else sauber, wurzel)
         except (OSError, RuntimeError):
             continue
-        if not liegt_innerhalb(ziel, wurzeln):
+        if private is not None:
+            if private(ziel):
+                return str(ziel)
+        elif not liegt_innerhalb(ziel, wurzeln):
             return str(ziel)
     return None
 
@@ -1240,6 +1256,16 @@ def aussenpfad(argumente: dict[str, Any], ordner: list[str]) -> str | None:
     return greift_nach_draussen(befehl, ordner) or netzziel(befehl)
 
 
+def private_target(
+    argumente: dict[str, Any], ordner: list[str], private: Callable[[Path], bool]
+) -> str | None:
+    """The private place of the program this command names, or None."""
+    befehl = str(argumente.get("command") or "").strip()
+    if not befehl or not ordner:
+        return None
+    return greift_nach_draussen(befehl, ordner, private)
+
+
 def grundschluessel(argumente: dict[str, Any], ordner: list[str]) -> str:
     """Which of the two sentences explains THIS call's confirmation.
 
@@ -1262,6 +1288,12 @@ def braucht_bestaetigung(argumente: dict[str, Any], ordner: list[str]) -> bool:
     the tool does not run at all, so there is nothing to confirm either.
     """
     return aussenpfad(argumente, ordner) is not None
+
+
+# The note that stands where a long output was cut; its room is reserved from
+# this one wording, so a changed sentence can never push the result past the
+# ceiling.
+KUERZUNGSNOTIZ = "\n… [{n} additional characters omitted]"
 
 
 def _kuerzen(text: str, anhang: str = "") -> str:
@@ -1287,11 +1319,9 @@ def _kuerzen(text: str, anhang: str = "") -> str:
     grenze = MAX_AUSGABE_ZEICHEN - len(anhang)
     if len(text) <= grenze:
         return text + anhang
-    platz = len("\n… [ more characters were cut]") + len(str(len(text)))
+    platz = len(KUERZUNGSNOTIZ.format(n="")) + len(str(len(text)))
     behalten = grenze - platz
-    return (
-        text[:behalten] + f"\n… [{len(text) - behalten} more characters were cut]" + anhang
-    )
+    return text[:behalten] + KUERZUNGSNOTIZ.format(n=len(text) - behalten) + anhang
 
 
 # The shell reports its working folder on this marker after every command, so
@@ -1401,7 +1431,7 @@ def _antwort_bauen(ausgabe: list[str], fehler: list[str], code: int | None) -> s
     if not rumpf:
         # A successful `mkdir` says nothing at all. Silence would read like a
         # failure to the model, so say plainly that it worked.
-        return anhang.lstrip("\n") or "(done, no output)"
+        return anhang.lstrip("\n") or "(completed without output)"
     # Cut ONCE, on the whole answer. Cut per part, two parts that each just
     # fit are a full answer over the ceiling when they are joined — and the
     # caller cuts again at exactly that figure, so the note itself would go
@@ -1524,19 +1554,18 @@ async def ausfuehren(
     grenze = zeitgrenze if zeitgrenze and zeitgrenze >= 1 else ZEITGRENZE_SEKUNDEN
     befehl = str(argumente.get("command") or "").strip()
     if not befehl:
-        raise ShellVerboten("No command given.")
+        raise ShellVerboten("No command provided.")
     if not ordner:
         raise ShellVerboten(
-            "No working folder is shared with this chat. Ask the user to share "
-            "one via the folder icon in the input bar — until then no command "
-            "can run."
+            "No working folder is shared with this chat. Ask the user to share one using the "
+            "folder icon in the input bar. Commands cannot run until then."
         )
 
     if (grund := blockiert(befehl)) is not None:
         log.warning("Shell command refused (%s): %s", grund, befehl)
         raise ShellVerboten(
-            f"This command was refused because it matches a blocked pattern ({grund}). "
-            "It is not about permissions — commands like this are refused outright."
+            f"The command was rejected because it matches a blocked pattern ({grund}). This "
+            "restriction applies regardless of permissions."
         )
 
     if (grund := prepare_folders(ordner, data_dir)) is not None:
@@ -1550,18 +1579,17 @@ async def ausfuehren(
     if (notiz := notiz_in_gefahr(befehl, wurzel, ordner)) is not None:
         log.warning("Shell command refused (folder note): %s", befehl)
         raise ShellVerboten(
-            f"'{notiz}' is the folder's own notes and is not removed or "
-            "overwritten from here — what is in it would be gone. Use "
-            "edit_file to change a passage, or write somewhere else."
+            f"'{notiz}' contains the folder's own notes. It cannot be removed or overwritten "
+            "here, because that would discard its contents. Use edit_file to change a passage "
+            "or write to a different file."
         )
 
     im_hintergrund = bool(argumente.get("background"))
     if im_hintergrund and not hintergrund_erlaubt:
         # Before anything starts: a run that cannot deliver must not exist.
         return (
-            "Background runs are not available in a job. Run the command "
-            f"normally — the time limit for a single command is {int(grenze)} "
-            "seconds."
+            "Background execution is unavailable in a job. Run the command in the foreground. "
+            f"The limit for a single command is {int(grenze)} seconds."
         )
     lauf = (
         hintergrund.laeufe.anlegen(chat_id, befehl, im_hintergrund, folder=str(wurzel))
@@ -1596,8 +1624,8 @@ async def ausfuehren(
             bei_ende=partial(_begleiter_loslassen, lauf),
         )
         return (
-            f"Started in the background as run #{nummer}. The result appears "
-            "in the terminal when it is done."
+            f"Started in the background as run #{nummer}. The result will appear in the "
+            "terminal when complete."
         )
 
     ergebnis, abgelaufen = await _begleiten(
@@ -1607,16 +1635,16 @@ async def ausfuehren(
     # answer says so rather than advising a longer run.
     if abgelaufen and not (lauf is not None and lauf.stop_requested):
         rat = (
-            "If it is supposed to run that long, start it with background set "
-            "to true."
+            "If the command is expected to take this long, start it with background set to "
+            "true."
             if hintergrund_erlaubt
             # A job has no background to offer — the honest advice is the
             # setting that governs this limit, not a door that is shut here.
-            else "If it needs longer, the time limit for commands can be "
-            "raised in the settings or in the agent's max_command_seconds."
+            else "For longer commands, increase the time limit in the settings or the agent's "
+                 "max_command_seconds."
         )
         return (
-            f"Stopped after {int(grenze)} seconds — the command was still running.\n"
+            f"Stopped after {int(grenze)} seconds because the command was still running.\n"
             + rat
         )
     return ergebnis
@@ -1865,6 +1893,34 @@ class Prozessgruppe:
         self.kill()
 
 
+# What asyncio's own stream readers keep as the limit of one line; written out
+# because the constant is private there.
+_STREAM_LIMIT = 2**16
+
+
+async def _process_from_line(line: str, **popen_arguments):
+    """A process started from one command-line string, with no shell around it.
+
+    asyncio knows two ways to start a process: a list (joined by the C
+    runtime's quoting) and a shell (which wraps the string in a command
+    processor of its own). Neither hands a string to the system as it is, and
+    on Windows that is what the command line needs. The pipe transport is the
+    same one ``create_subprocess_exec`` uses; only the program is given as the
+    whole line, so Popen takes it unchanged as the command line.
+
+    The transport's start is a private method of the event loop. The program
+    ships its own interpreter, so it changes only with a deliberate upgrade,
+    and a test pins the signature it is called with.
+    """
+    loop = asyncio.get_running_loop()
+    protocol = asyncio.subprocess.SubprocessStreamProtocol(limit=_STREAM_LIMIT, loop=loop)
+    transport = await loop._make_subprocess_transport(  # noqa: SLF001
+        protocol, line, False, None, asyncio.subprocess.PIPE, asyncio.subprocess.PIPE, 0,
+        **popen_arguments,
+    )
+    return asyncio.subprocess.Process(transport, protocol, loop)
+
+
 async def _starten(befehl: str, wurzel: Path):
     """The process for one command.
 
@@ -1887,24 +1943,27 @@ async def _starten(befehl: str, wurzel: Path):
     """
     environment = {**os.environ, "PYTHONUNBUFFERED": "1"}
     if WINDOWS:
-        # As ONE STRING, never as a list of arguments. A list is joined into
-        # a command line by the rules of the MS C runtime, which writes every
-        # double quote as \" — and cmd.exe does not read \": the folder marker
-        # arrived as \"__exe_ai_ordner__\"C:\…, the exit code was lost and a
-        # cd forgotten (measured in a Windows VM). Handed a string, subprocess
-        # only wraps it as `cmd.exe /c "…"`, and cmd strips that outer pair
-        # itself — its own rule for /c: more than two quotes, or a special
-        # character between them, and the first and the last quote go.
-        # Delayed expansion is a switch of cmd itself, so the string starts a
-        # cmd of its own with /v:on; that second pair of quotes goes the same
-        # way, and the command inside arrives as it was written, quotes and
-        # all.
+        # As ONE STRING, never as a list of arguments, and with no shell
+        # around it. A list is joined into a command line by the rules of the
+        # MS C runtime, which writes every double quote as \" — and cmd.exe
+        # does not read \": the folder marker arrived as
+        # \"__exe_ai_ordner__\"C:\…, the exit code was lost and a cd
+        # forgotten (measured in a Windows VM). Handed to asyncio's shell
+        # start the string would be wrapped a second time, as
+        # `cmd.exe /c "cmd.exe /v:on /c "…""`, and the OUTER cmd reads the
+        # user's quotes the other way round: a `<` or `>` inside "…" stands
+        # outside them for it and becomes a redirection, so the file was
+        # never written. Here the string goes to the system unchanged, and
+        # the one cmd strips its own outer pair by its own rule for /c: more
+        # than two quotes, or a special character between them, and the
+        # first and the last quote go.
+        # Delayed expansion is a switch of cmd itself, so the string starts
+        # that cmd with /v:on, and the command inside arrives as it was
+        # written, quotes and all.
         programm = os.environ.get("COMSPEC") or "cmd.exe"
-        return await asyncio.create_subprocess_shell(
+        return await _process_from_line(
             f'{programm} /v:on /c "{_mit_ordnermarke(befehl)}"',
             cwd=str(wurzel),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
             env=environment,
             **no_window(),
         )
@@ -2023,7 +2082,7 @@ async def _begleiten(
 
     if abgelaufen:
         antwort = (
-            f"Stopped after {int(grenze)} seconds — the command was still running."
+            f"Stopped after {int(grenze)} seconds because the command was still running."
         )
     else:
         antwort = _antwort_bauen(ausgabe, fehler, prozess.returncode)

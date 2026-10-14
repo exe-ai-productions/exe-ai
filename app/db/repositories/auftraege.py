@@ -23,6 +23,10 @@ ENDZUSTAENDE = {"fertig", "abgebrochen", "gescheitert", "unterbrochen"}
 # result — it is left out, along with the still-active ``laeuft``/``wartet``.
 CRONJOB_AUSGAENGE = {"fertig": "gut", "gescheitert": "gescheitert", "abgebrochen": "gescheitert"}
 
+# The most runs the list of all schedules' runs answers with, newest first —
+# the same bound the lists of chats and jobs keep.
+RUNS_LIMIT = 100
+
 
 def _eigentuemer_filter(
     port: int | None, *, nur_eigene: bool
@@ -63,8 +67,8 @@ def _eigentuemer_filter(
     """
     if nur_eigene and port is None:
         raise ValueError(
-            "A cleanup narrowed to its own rows needs the port of the "
-            "service running it (Database.dienst_port), and none was given."
+            "Cleanup restricted to the service's own rows requires its port "
+            "(Database.dienst_port), but no port was provided."
         )
     return ("AND dienst_port = ?", (port,)) if nur_eigene else ("", ())
 
@@ -304,17 +308,32 @@ class AuftragRepository(Repository):
         return int(row[0])
 
     def laeuft_fuer_cronjob(self, cronjob_id: str) -> bool:
-        """Whether a run this ONE cron entry started is still going.
+        """Whether the work of this ONE cron entry is still going — a run it
+        started, or the continuation of one.
 
         The agent-name question above cannot answer this for a script entry:
         every script entry carries the same marker in ``agent``
         (app/skriptlauf.py), so asking by name would let one long backup hold
         up every other script in the table. The entry's own id is the only
         thing that is per entry, and it is already on the run.
+
+        A run that hands its work on continues under an entry of its own
+        (``ursprung_id`` names the entry a person made), so the entry's own
+        id alone is blind to the continuation: a due time would start a
+        second copy of the work beside it. The continuation counts from the
+        moment its entry exists and is switched on, not only once its run
+        has begun.
         """
         zeile = self.verbindung.execute(
-            "SELECT 1 FROM auftraege WHERE cronjob_id = ? "
-            "AND zustand IN ('laeuft', 'wartet') LIMIT 1",
+            "SELECT 1 FROM auftraege WHERE zustand IN ('laeuft', 'wartet') "
+            "AND (cronjob_id = ?1 OR cronjob_id IN "
+            "(SELECT id FROM cronjobs WHERE ursprung_id = ?1)) LIMIT 1",
+            (cronjob_id,),
+        ).fetchone()
+        if zeile is not None:
+            return True
+        zeile = self.verbindung.execute(
+            "SELECT 1 FROM cronjobs WHERE ursprung_id = ? AND aktiv = 1 LIMIT 1",
             (cronjob_id,),
         ).fetchone()
         return zeile is not None
@@ -346,14 +365,22 @@ class AuftragRepository(Repository):
         ).fetchall()
         return [Auftrag.aus_zeile(zeile) for zeile in zeilen]
 
-    def alle_cronlaeufe(self, *, je_termin: int = 5) -> list[Auftrag]:
+    def alle_cronlaeufe(
+        self, *, per_date: int = 5, limit: int = RUNS_LIMIT
+    ) -> list[tuple[Auftrag, int]]:
         """The newest ended runs of every schedule, newest first — whether or
-        not the entry that fired it still exists.
+        not the entry that fired it still exists — each with the number of
+        ended runs its schedule has altogether.
 
-        Capped per schedule, not overall: one cap for all of them let a busy
-        schedule push every older one out, and a schedule whose last run
-        failed weeks ago showed no runs at all beside its red dot. Five per
-        schedule are what its page shows.
+        Capped twice. Per schedule, so a busy schedule cannot push every
+        older one out and one whose last run failed weeks ago still shows
+        a run beside its red dot: five per schedule are what its page shows.
+        And overall, at ``limit``, newest first, so the answer does not grow
+        with the number of schedules that ever existed.
+
+        The number beside each run is what the page's "shown/total" counter
+        reads: the page shows five, and without it the counter could only
+        name what the answer carries.
 
         The history used to be gathered per ENTRY: one request each, and a
         run whose entry had been deleted was gone from the window although it
@@ -369,12 +396,13 @@ class AuftragRepository(Repository):
             f"SELECT * FROM ("
             f"SELECT *, ROW_NUMBER() OVER ("
             f"PARTITION BY cronjob_id ORDER BY created_at DESC, rowid DESC"
-            f") AS platz FROM auftraege WHERE cronjob_id IS NOT NULL "
+            f") AS platz, COUNT(*) OVER (PARTITION BY cronjob_id) AS gesamt "
+            f"FROM auftraege WHERE cronjob_id IS NOT NULL "
             f"AND zustand IN ({platzhalter})"
-            f") WHERE platz <= ? ORDER BY created_at DESC",
-            (*CRONJOB_AUSGAENGE.keys(), je_termin),
+            f") WHERE platz <= ? ORDER BY created_at DESC LIMIT ?",
+            (*CRONJOB_AUSGAENGE.keys(), per_date, limit),
         ).fetchall()
-        return [Auftrag.aus_zeile(zeile) for zeile in zeilen]
+        return [(Auftrag.aus_zeile(zeile), zeile["gesamt"]) for zeile in zeilen]
 
     def cron_runs_between(
         self, start: datetime, end: datetime
@@ -611,6 +639,5 @@ class AuftragRepository(Repository):
     def _zustand_pruefen(zustand: str) -> None:
         if zustand not in ZUSTAENDE:
             raise ValueError(
-                f"Unbekannter Zustand '{zustand}'. "
-                f"Erlaubt: {', '.join(sorted(ZUSTAENDE))}"
+                f"Unknown state '{zustand}'. Allowed states: {', '.join(sorted(ZUSTAENDE))}"
             )

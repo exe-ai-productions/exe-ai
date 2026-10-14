@@ -19,6 +19,8 @@ is to make the rare 12-of-400 run stand out.
 
 from __future__ import annotations
 
+from app import i18n
+
 # 10%: comfortably below what a run genuinely working through its budget
 # would show, without catching the everyday case of a short task finishing
 # early against a budget sized for something longer.
@@ -45,10 +47,17 @@ def kurz(
 
 
 def hinweis(
-    runden_benutzt: int, runden_erlaubt: int, minuten_benutzt: float, minuten_erlaubt: float,
+    runden_benutzt: int,
+    runden_erlaubt: int,
+    minuten_benutzt: float,
+    minuten_erlaubt: float,
+    sprache: str | None = None,
 ) -> str:
-    return (
-        f"This run considered itself finished after {runden_benutzt} of "
-        f"{runden_erlaubt} allowed rounds and {minuten_benutzt:.1f} of "
-        f"{minuten_erlaubt} allowed minutes — far under budget for a normal ending."
+    return i18n.t(
+        "jobs.kurzlauf",
+        sprache,
+        runden=runden_benutzt,
+        runden_erlaubt=runden_erlaubt,
+        minuten=minuten_benutzt,
+        minuten_erlaubt=minuten_erlaubt,
     )

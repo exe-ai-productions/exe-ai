@@ -49,12 +49,8 @@ def _lock_pieces() -> str:
     ])
 
 
-def _quit_pieces() -> str:
-    return "\n".join([
-        _piece(r"\nfunction stopService\(service\) \{\n.*?\n\}\n", "stopService"),
-        _piece(r"\nfunction killService\(service\) \{\n.*?\n\}\n", "killService"),
-        _piece(r"\napp\.on\('before-quit', async \(ereignis\) => \{\n.*?\n\}\)\n", "before-quit"),
-    ])
+def _quit_piece() -> str:
+    return _piece(r"\napp\.on\('before-quit', \(\) => \{\n.*?\n\}\)\n", "before-quit")
 
 
 def _start(*, lock: bool, minimised: bool = False, window: bool = True) -> dict:
@@ -120,22 +116,25 @@ def test_the_lock_is_taken_before_ready_and_before_any_window():
 
 def test_a_second_instance_leaves_before_quit_without_a_wait():
     """A second instance holds no window and no service: before-quit neither
-    holds the quit nor ends anything — the quit simply goes through."""
+    holds the quit nor ends anything, and has no service to speak of — the
+    quit simply goes through."""
     script = f"""
 const calls = []
 process.kill = (pid, signal) => calls.push(['kill', pid, signal])
-function execFile(command, args) {{ calls.push(['taskkill', command, args]) }}
-const STOP_DEADLINE_MS = 50
+console.log = (line) => calls.push(['log', line])
+const PORT = 8123
 let fenster = null
 function geometrieSchreiben() {{ calls.push('geometry') }}
 let beendet = false
-let stopping = false
 let kind = null
+let dienstVorgefunden = null
+let bleibenGesagt = false
+const terminals = {{ stopAll() {{ calls.push('terminals') }} }}
 let prevented = false
 const app = {{ hooks: {{}}, on(name, f) {{ this.hooks[name] = f }}, exit: (code) => calls.push(['exit', code]) }}
-{_quit_pieces()}
-app.hooks['before-quit']({{ preventDefault() {{ prevented = true }} }}).then(() => {{
-  process.stdout.write(JSON.stringify({{ calls, prevented, beendet }}) + "\\n")
-}})
+{_quit_piece()}
+app.hooks['before-quit']({{ preventDefault() {{ prevented = true }} }})
+process.stdout.write(JSON.stringify({{ calls, prevented, beendet }}) + "\\n")
 """
-    assert _run(script) == {"calls": [], "prevented": False, "beendet": True}
+    # The terminals in the window end on every pass; nothing else happens.
+    assert _run(script) == {"calls": ["terminals"], "prevented": False, "beendet": True}

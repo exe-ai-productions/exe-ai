@@ -1,0 +1,16 @@
+<!-- The command on the path, Store edition. No installer runs for a Store
+     app, so Windows itself places an alias named exe that starts the client
+     exe inside the package. The alias starts the program by name and adds
+     no switch, which is why the client is a program of its own name
+     (deploy/exe-ai-terminal.spec, start.py). electron-builder splices this
+     file into the Extensions block of the package manifest; the desktop
+     prefix is declared on the manifest's root, the other one here. -->
+<uap3:Extension
+    xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+    Category="windows.appExecutionAlias"
+    Executable="app\resources\exe-ai-terminal\exe.exe"
+    EntryPoint="Windows.FullTrustApplication">
+  <uap3:AppExecutionAlias>
+    <desktop:ExecutionAlias Alias="exe.exe" />
+  </uap3:AppExecutionAlias>
+</uap3:Extension>

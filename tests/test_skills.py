@@ -10,6 +10,8 @@ there is a limit on it at all.
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from app import skills
@@ -158,6 +160,29 @@ def test_nur_automatische_kosten_platz_im_prompt(tmp_path):
 
     geladen = skills.skills_laden(tmp_path / "haus", mein)
     assert [s.name for s in skills.automatische(geladen, ())] == ["selbst"]
+
+
+def test_der_mitgelieferte_cronjob_skill_widerspricht_der_werkzeugbeschreibung_nicht():
+    """The skill said a job without an agent goes to a shipped reminder agent
+    with no tools and no folders; the description of the tool says it runs as
+    an unattended model run with the approved tools. Two statements that
+    disagree: the skill now leaves what happens without an agent to the
+    description, which always comes with the tool."""
+    ordner = pathlib.Path(__file__).resolve().parent.parent / "skills" / "cronjob"
+    skill = skills.skill_lesen(ordner)
+
+    assert skill.name == "cronjob"
+    assert "reminder agent" not in skill.anleitung
+    assert "shipped" not in skill.anleitung
+    assert (
+        "Offer to name a specific agent to run it; if the user has no preference, leave "
+        "`agent` out." in " ".join(skill.anleitung.split())
+    )
+    # Silence probe: the head and the table of `time` stay as they were.
+    assert skill.auto is True
+    assert skill.beschreibung.startswith("Schedules future actions:")
+    assert "| every day at 08:00 | `08:00` — a daily time, 24-hour `HH:MM` |" in skill.anleitung
+    assert "| every fifteen minutes | `*/15 * * * *` — a five-field cron expression |" in skill.anleitung
 
 
 # --- writing one from the UI -------------------------------------------------
@@ -355,13 +380,70 @@ Sort the inbox, then file every letter by its sender.
 
 
 def test_ein_kopf_mit_umbrochener_beschreibung_wird_angenommen(tmp_path):
-    """The shape that could not be stored at all: a description over two
-    lines is not valid YAML, and the whole skill was refused for it. Read
-    line by line, the second line continues the field above it."""
+    """A description over two lines is not valid YAML. The skill is still
+    stored, and it is read the way the line-wise reader reads it: the first
+    line is the description, the second one carries no colon and falls away
+    instead of being glued to it."""
     skill = skills.skill_aus_text("sortieren", ZWEIZEILIG, ordner=tmp_path)
-    assert skill.beschreibung == "Sorts the inbox and files every letter by sender"
+    assert skill.beschreibung == "Sorts the inbox and"
     assert skill.auto is True
     assert skill.anleitung.startswith("Sort the inbox")
+
+
+def test_der_kaputte_kopf_schreibt_eine_zeile_mit_dem_yaml_fehler(tmp_path, caplog):
+    """An unterminated quote makes the header invalid. The value stays text,
+    as the line-wise reader hands it over, but the log names the skill and
+    the parser's own sentence — a typo no longer passes in silence."""
+    text = '---\ndescription: "Zitat\nauto: true\n---\n\nText.\n'
+    with caplog.at_level("WARNING", logger="app.skills"):
+        skill = skills.skill_aus_text("zitat", text, ordner=tmp_path)
+    assert skill.beschreibung == '"Zitat'
+    assert skill.auto is True
+    zeilen = [r.getMessage() for r in caplog.records if "not valid YAML" in r.getMessage()]
+    assert len(zeilen) == 1
+    assert "'zitat'" in zeilen[0]
+    assert "line" in zeilen[0]  # the parser's sentence carries line and column
+
+
+def test_ein_gueltiger_kopf_schreibt_keine_yaml_zeile(tmp_path, caplog):
+    """Silence probe: a header YAML can read says nothing about YAML."""
+    with caplog.at_level("WARNING", logger="app.skills"):
+        skills.skill_aus_text("x", GUT, ordner=tmp_path)
+    assert "not valid YAML" not in caplog.text
+
+
+def test_eine_zeile_ohne_doppelpunkt_legt_kein_feld_an_und_klebt_nirgends(tmp_path):
+    """A note inside a broken header is dropped. It used to be glued to the
+    description and then rode in the system prompt of every request."""
+    text = (
+        "---\ndescription: Sorts the inbox and\nfiles by sender\n# Notiz\n"
+        "auto: true\n---\n\nText.\n"
+    )
+    skill = skills.skill_aus_text("x", text, ordner=tmp_path)
+    assert skill.beschreibung == "Sorts the inbox and"
+    assert skill.auto is True
+
+
+def test_eine_fortsetzung_mit_doppelpunkt_ist_ein_eigenes_unbekanntes_feld(tmp_path, caplog):
+    """`12:30 Uhr` or a URL with a port opens a field of its own; the
+    description is its first line, and the field is passed over with a log
+    line, like any unknown one."""
+    text = (
+        "---\ndescription: Sorts the inbox and\n12:30 Uhr\nauto: true\n---\n\nText.\n"
+    )
+    with caplog.at_level("WARNING", logger="app.skills"):
+        skill = skills.skill_aus_text("x", text, ordner=tmp_path)
+    assert skill.beschreibung == "Sorts the inbox and"
+    assert "unknown header fields are ignored: 12" in caplog.text
+
+
+def test_eine_fortsetzung_nach_auto_trifft_nicht_das_feld_auto(tmp_path):
+    """The line after `auto: true` used to be glued to `auto` and the skill
+    refused for a line that says plainly `true`."""
+    text = "---\ndescription: Eins und\nauto: true\nnoch was\n---\n\nText.\n"
+    skill = skills.skill_aus_text("x", text, ordner=tmp_path)
+    assert skill.auto is True
+    assert skill.beschreibung == "Eins und"
 
 
 def test_ein_doppelpunkt_in_der_beschreibung_ist_kein_fehler_mehr(tmp_path):
@@ -395,7 +477,7 @@ def test_zwei_zeilen_die_zusammen_zu_lang_sind_werden_abgelehnt(tmp_path):
     """Joined first, measured after: a description that only grows past the
     budget by being joined is refused, never cut off at the seam."""
     halb = "w" * 600
-    text = f"---\ndescription: {halb}\n{halb}\n---\n\nText.\n"
+    text = f"---\ndescription: {halb}\n  {halb}\n---\n\nText.\n"
     with pytest.raises(skills.SkillKaputt) as gefangen:
         skills.skill_aus_text("x", text, ordner=tmp_path)
     assert gefangen.value.kind == "beschreibung_lang"
@@ -496,7 +578,7 @@ def test_die_route_nimmt_die_umbrochene_beschreibung_an(client):
     namen = [s["name"] for s in eintraege]
     assert "sortieren" in namen
     einer = [s for s in eintraege if s["name"] == "sortieren"][0]
-    assert "files every letter" in str(einer)
+    assert einer["beschreibung"] == "Sorts the inbox and"
 
 
 # --- the automatic switch keeps what it does not change -----------------------
@@ -593,3 +675,145 @@ def test_a_file_that_is_not_utf8_takes_only_itself_out(tmp_path, caplog):
     assert sorted(loaded) == ["heil"]
     assert any("kaputt" in record.getMessage() for record in caplog.records)
 
+
+
+# --- the switch changes only `auto`, lands whole and survives an existing folder
+
+
+KOPF_MIT_FREMDEM = """---
+description: "Sums it up"
+# a note somebody left in the header
+version: 2
+auto: false   # the switch
+---
+
+Sum the conversation up.
+"""
+
+
+def test_the_switch_changes_only_the_auto_line(client):
+    """A field a newer version wrote, a comment in the header, the description
+    as written and the instruction stay; only the value of `auto` changes,
+    and the comment behind it stays too."""
+    assert client.post(
+        "/api/v1/skills", json={"name": "kopf", "inhalt": KOPF_MIT_FREMDEM}
+    ).status_code == 201
+
+    assert client.patch("/api/v1/skills/kopf", json={"auto": True}).status_code == 200
+
+    gelesen = client.get("/api/v1/skills/kopf").json()["inhalt"]
+    assert gelesen == KOPF_MIT_FREMDEM.replace("auto: false   # the switch", "auto: true   # the switch")
+    assert _verwaltung(client, "kopf")["auto"] is True
+
+
+def test_the_switch_writes_through_the_atomic_writer(client, monkeypatch):
+    from app import atomic_file
+
+    geschrieben = []
+    echt = atomic_file.write
+    monkeypatch.setattr(
+        atomic_file, "write", lambda pfad, daten, **kw: (geschrieben.append(pfad), echt(pfad, daten, **kw))[1]
+    )
+    client.post("/api/v1/skills", json={"name": "atomar", "inhalt": NEU})
+
+    assert client.patch("/api/v1/skills/atomar", json={"auto": False}).status_code == 200
+
+    assert [p.name for p in geschrieben] == ["SKILL.md"]
+    assert _verwaltung(client, "atomar")["auto"] is False
+
+
+def test_the_switch_goes_into_an_existing_folder_without_a_skill_file(client):
+    """A folder of the user's own by the skill's name, with a file of theirs
+    and no SKILL.md: the shipped skill is copied into it, the file stays."""
+    mitgeliefert, eigen = client.app.state.config.skillverzeichnisse
+    werk = mitgeliefert / "werk2"
+    werk.mkdir(parents=True)
+    (werk / "SKILL.md").write_text(NEU, encoding="utf-8")
+    (werk / "hilfe.md").write_text("shipped help", encoding="utf-8")
+    ordner = eigen / "werk2"
+    ordner.mkdir(parents=True)
+    (ordner / "notes.md").write_text("mine", encoding="utf-8")
+    (ordner / "hilfe.md").write_text("my own help", encoding="utf-8")
+
+    antwort = client.patch("/api/v1/skills/werk2", json={"auto": False})
+
+    assert antwort.status_code == 200
+    assert (ordner / "notes.md").read_text(encoding="utf-8") == "mine"
+    assert (ordner / "hilfe.md").read_text(encoding="utf-8") == "my own help"
+    assert "auto: false" in (ordner / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_editing_a_shipped_skill_goes_into_an_existing_folder_as_well(client):
+    mitgeliefert, eigen = client.app.state.config.skillverzeichnisse
+    werk = mitgeliefert / "werk3"
+    werk.mkdir(parents=True)
+    (werk / "SKILL.md").write_text(NEU, encoding="utf-8")
+    ordner = eigen / "werk3"
+    ordner.mkdir(parents=True)
+    (ordner / "notes.md").write_text("mine", encoding="utf-8")
+
+    geaendert = NEU.replace("short plan", "careful plan")
+    antwort = client.put("/api/v1/skills/werk3", json={"inhalt": geaendert})
+
+    assert antwort.status_code == 200
+    assert (ordner / "notes.md").read_text(encoding="utf-8") == "mine"
+    assert client.get("/api/v1/skills/werk3").json()["inhalt"] == geaendert
+
+
+def test_a_skill_without_an_auto_line_gets_one_and_reads_as_automatic(client):
+    """Silence probe: nothing else in the header moves."""
+    inhalt = '---\ndescription: "No auto here"\n---\n\nDo it.\n'
+    client.post("/api/v1/skills", json={"name": "ohne-auto", "inhalt": inhalt})
+    assert _verwaltung(client, "ohne-auto")["auto"] is False
+
+    assert client.patch("/api/v1/skills/ohne-auto", json={"auto": True}).status_code == 200
+
+    assert client.get("/api/v1/skills/ohne-auto").json()["inhalt"] == (
+        '---\ndescription: "No auto here"\nauto: true\n---\n\nDo it.\n'
+    )
+    assert _verwaltung(client, "ohne-auto")["auto"] is True
+
+
+def test_a_shipped_skill_is_copied_whole_when_the_switch_is_used(client):
+    """Silence probe: the shipped folder with its companion files, as before."""
+    mitgeliefert, eigen = client.app.state.config.skillverzeichnisse
+    werk = mitgeliefert / "werk4"
+    werk.mkdir(parents=True)
+    (werk / "SKILL.md").write_text(NEU, encoding="utf-8")
+    (werk / "beilage.md").write_text("companion", encoding="utf-8")
+
+    assert client.patch("/api/v1/skills/werk4", json={"auto": False}).status_code == 200
+
+    assert (eigen / "werk4" / "beilage.md").read_text(encoding="utf-8") == "companion"
+    assert (werk / "SKILL.md").read_text(encoding="utf-8") == NEU
+    assert _verwaltung(client, "werk4")["eigen"] is True
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("---\nauto: false\ndescription: x\n---\nbody\n", "---\nauto: true\ndescription: x\n---\nbody\n"),
+        ("---\r\ndescription: x\r\nauto: false\r\n---\r\nbody\r\n", "---\r\ndescription: x\r\nauto: true\r\n---\r\nbody\r\n"),
+        ("---\ndescription: x\nauto:\n---\nbody\n", "---\ndescription: x\nauto: true\n---\nbody\n"),
+        ("---\ndescription: |\n  auto: false\n  more\n---\nbody\n", "---\ndescription: |\n  auto: false\n  more\nauto: true\n---\nbody\n"),
+        ("﻿---\ndescription: x\n---\nbody\n", "﻿---\ndescription: x\nauto: true\n---\nbody\n"),
+    ],
+    ids=["first", "crlf", "empty-value", "indented-line-is-not-the-field", "bom"],
+)
+def test_with_auto_keeps_every_other_byte(text, expected):
+    assert skills.with_auto(text, True) == expected
+
+
+def test_a_flow_style_header_still_loads_after_the_switch(client):
+    """A header written as one flow mapping has no `auto` line to change; the
+    switch then writes the file the house way instead of leaving a skill that
+    no longer reads."""
+    inhalt = '---\n{description: "Flow header", auto: false}\n---\n\nDo it.\n'
+    assert client.post("/api/v1/skills", json={"name": "fluss", "inhalt": inhalt}).status_code == 201
+    assert _verwaltung(client, "fluss")["auto"] is False
+
+    assert client.patch("/api/v1/skills/fluss", json={"auto": True}).status_code == 200
+
+    zeile = _verwaltung(client, "fluss")
+    assert zeile is not None and zeile["auto"] is True
+    assert zeile["beschreibung"] == "Flow header"

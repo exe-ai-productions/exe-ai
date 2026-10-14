@@ -13,11 +13,23 @@
      `fuellen` makes the content a column at least as tall as the page, for
      a page whose editor takes the room that is left (the settings).
      `festeHoehe` makes it exactly as tall, for a part that scrolls inside
-     itself instead of with the page (the tools list beside its detail). */
+     itself instead of with the page (the tools list beside its detail).
+     `fillsFoot` is for a page that fills its own foot (the settings'
+     schedules, with the scripts at the bottom): the room at the foot is
+     the page's to use, down to the margin the status strip leaves. */
   import { rollfade } from '../lib/rollfade.js'
   import { zustand } from '../lib/zustand.svelte.js'
 
-  let { offen = true, liste, kopf, inhalt, beschriftung = '', fuellen = false, festeHoehe = false } = $props()
+  let {
+    offen = true,
+    liste,
+    kopf,
+    inhalt,
+    beschriftung = '',
+    fuellen = false,
+    festeHoehe = false,
+    fillsFoot = false,
+  } = $props()
 
   /* `offen` is what keeps this honest for a page whose frame stays mounted
      while its menu is closed (the catalogue, whose version choice and
@@ -47,7 +59,7 @@
     {@render kopf?.()}
   </header>
   <div class="inhalt" use:rollfade>
-    <div class="breite" class:fuellen class:festeHoehe>
+    <div class="breite" class:fuellen class:festeHoehe class:fillsFoot>
       {@render inhalt?.()}
     </div>
   </div>
@@ -103,6 +115,11 @@
   }
   .breite.festeHoehe {
     height: 100%;
+  }
+  /* The page's own last part stands this far above the edge, where the
+     default foot room (56px) would leave it higher. */
+  .breite.fillsFoot {
+    padding-bottom: 24px;
   }
 
   /* Narrow: the content keeps its card, only its side room shrinks. */

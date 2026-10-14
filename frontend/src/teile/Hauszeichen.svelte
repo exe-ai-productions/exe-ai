@@ -39,6 +39,7 @@
        download   a download (arrow onto a line)
        neu_laden  loading again (an open arc with a tip)
        ecken      the layout mode (two opposite corners)
+       clapperboard  a video (the clapper above its board)
 
      The three server kinds used to share the rack sign, which said "a
      server" three times and which of the three never. Now the rack stays
@@ -308,6 +309,15 @@
          so the join is named here instead of taking the round one every
          other sign on this grid wears. -->
     <path d="M20 11a8 8 0 10-2.3 5.7M20 5v6h-6" stroke-linejoin="miter" />
+  {:else if zeichen === 'clapperboard'}
+    <!-- The house icon clapperboard, verbatim with its own stroke widths:
+         the board and the raised clapper with its stripes. -->
+    <rect x="5.89" y="13.04" width="14" height="9.6" rx="1.6" />
+    <path d="M5.89 13.04 L15.79 3.14 L14.02 1.37 L4.12 11.27 Z" stroke-width="1.33" />
+    <path d="M7.87 11.06 L6.10 9.29" stroke-width="1.33" />
+    <path d="M9.85 9.08 L8.08 7.31" stroke-width="1.33" />
+    <path d="M11.83 7.10 L10.06 5.33" stroke-width="1.33" />
+    <path d="M13.81 5.12 L12.04 3.35" stroke-width="1.33" />
   {:else if zeichen === 'ecken'}
     <!-- The house icon corners, verbatim with its own stroke width. -->
     <path d="M10 4 H4 V10" stroke-width="2.5" />

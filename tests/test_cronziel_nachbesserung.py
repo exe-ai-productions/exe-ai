@@ -53,7 +53,7 @@ def gemeldet(monkeypatch):
     aufrufe: list[tuple[str, bool]] = []
     monkeypatch.setattr(
         cronablauf.cronmeldung, "melden",
-        lambda text, *, erfolgreich: aufrufe.append((text, erfolgreich)),
+        lambda text, *, erfolgreich, sprache=None: aufrufe.append((text, erfolgreich)),
     )
     return aufrufe
 
@@ -326,7 +326,7 @@ async def test_einmaliger_eintrag_ohne_meldung_sagt_es(repos, gemeldet):
         repos, eintrag.id, "Ins Postfach sehen", bericht=None, erfolgreich=True
     )
     assert gemeldet == [
-        (f"Ins Postfach sehen — {cronablauf.ZIEL_NICHT_ERREICHT}", False)
+        ("Ins Postfach sehen — Ran once; goal not reached.", False)
     ]
 
 
@@ -338,7 +338,7 @@ async def test_einmaliger_eintrag_sagt_es_auch_nach_einem_fehlschlag(repos, geme
         repos, eintrag.id, "Ins Postfach sehen", bericht=None, erfolgreich=False
     )
     assert len(gemeldet) == 1
-    assert cronablauf.ZIEL_NICHT_ERREICHT in gemeldet[0][0]
+    assert "Ran once; goal not reached." in gemeldet[0][0]
 
 
 async def test_einmaliger_eintrag_mit_meldung_sagt_nichts_zusaetzlich(repos, gemeldet):

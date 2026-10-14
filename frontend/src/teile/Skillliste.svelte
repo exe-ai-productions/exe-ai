@@ -1,8 +1,10 @@
 <script>
   import { rollfade } from '../lib/rollfade.js'
   /* The slash list above the input field. Opens when a slash is the FIRST
-     character — mid-sentence a slash stays a slash. Two lines per entry:
-     the name to type and the one line that says when it applies. */
+     character — mid-sentence a slash stays a slash. Per entry: the name to
+     type on one line and the description that says when it applies, at most
+     two lines and then an ellipsis (the whole one stands in the skill's own
+     sheet). */
   let { eintraege = [], dran = 0, waehlen } = $props()
 
   let kasten = $state(null)
@@ -77,6 +79,12 @@
     color: var(--text-still);
     line-height: 1.35;
     margin-top: 1px;
+    /* A description may be 1024 characters: two lines, then an ellipsis. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
   }
   .zeile.dran .zwas {
     color: var(--text-leise);

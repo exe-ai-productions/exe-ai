@@ -89,7 +89,7 @@ def test_ein_mehrdeutiger_teiltext_schreibt_nichts():
     alt = "## Facts\n- Mag Kaffee.\n- Mag Tee."
     with pytest.raises(memory.ErsetztNichtEindeutig) as fehler:
         memory.eintragen(alt, "Mag Kakao.", memory.FAKTUM, ersetzt="Mag")
-    assert "2 different entries contain 'Mag'" in str(fehler.value)
+    assert "2 entries contain 'Mag'." in str(fehler.value)
     assert "- Mag Kaffee." in fehler.value.eintraege and "- Mag Tee." in fehler.value.eintraege
 
 
@@ -312,5 +312,5 @@ def test_a_note_without_a_gap_stays_as_written(tmp_path):
     answer = asyncio.run(
         memory.ausfuehren({"text": "Be brief.", "kind": "rule"}, path, zeigen=True)
     )
-    assert answer == "Already known — nothing changed."
+    assert answer == "Already known; nothing changed."
     assert path.read_text(encoding="utf-8") == "My note\n## Rules\n- Be brief.\n"

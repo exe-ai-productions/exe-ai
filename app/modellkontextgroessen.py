@@ -28,6 +28,16 @@ from __future__ import annotations
 # Substring in the (lowercased) model id -> context window in tokens.
 BEKANNTE_MODELLE: tuple[tuple[str, int], ...] = (
     ("claude", 200_000),
+    # The DeepSeek V4 models: a million tokens, from the provider's own
+    # documentation, whose model list names no size. `deepseek-v4-flash`
+    # also covers its vision variants by substring. The older `deepseek-chat`
+    # and `deepseek-reasoner` are left out on purpose: the provider has
+    # retired both names, and other services serve older models with a
+    # smaller window under them. No bare `deepseek` entry either — nothing
+    # documents one number for every model of that name.
+    ("deepseek-v4-pro", 1_000_000),
+    ("deepseek-v4-flash", 1_000_000),
+    ("deepseek-flash", 1_000_000),
 )
 
 

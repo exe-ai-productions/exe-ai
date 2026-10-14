@@ -333,10 +333,10 @@ def test_an_unreadable_file_is_never_written_over(client, config, eigener_ordner
     for detail in (answer.json()["detail"], removed.json()["detail"]):
         assert not detail.startswith("mcp_datei.")
     assert removed.json()["detail"] != answer.json()["detail"]
-    english = {"{ kaputt": "not valid JSON", '{"servers": {}}': "'mcpServers' is missing",
-               "[]": "the top level must be an object"}[broken]
-    german = {"{ kaputt": "kein gültiges JSON", '{"servers": {}}': "'mcpServers' fehlt",
-              "[]": "die oberste Ebene muss ein Objekt sein"}[broken]
+    english = {"{ kaputt": "Invalid JSON", '{"servers": {}}': "'mcpServers' is missing",
+               "[]": "The top level must be an object."}[broken]
+    german = {"{ kaputt": "Ungültiges JSON", '{"servers": {}}': "'mcpServers' fehlt",
+              "[]": "Die oberste Ebene muss ein Objekt sein."}[broken]
     assert english in answer.json()["detail"]
     assert german in removed.json()["detail"]
     assert path.read_text(encoding="utf-8") == broken
@@ -363,8 +363,8 @@ def test_the_messages_come_in_the_language_of_the_page(client, config, eigener_o
         "type": "http", "url": "https://beispiel.invalid/mcp",
     }}}), encoding="utf-8")
     for language, taken, wrong in (
-        ("en", "'github' is already added", "'api_key_env' must be a name"),
-        ("de", "'github' ist schon eingetragen", "'api_key_env' muss ein Name sein"),
+        ("en", "'github' is already registered.", "'api_key_env' must be a name"),
+        ("de", "'github' ist bereits eingetragen.", "'api_key_env' muss ein Name sein"),
     ):
         headers = {"X-Ui-Language": language}
         answer = client.put("/api/v1/tools/servers/github?neu=true", json={}, headers=headers)
@@ -375,3 +375,159 @@ def test_the_messages_come_in_the_language_of_the_page(client, config, eigener_o
         )
         assert answer.status_code == 400
         assert wrong in answer.json()["detail"]
+
+
+# --- One reading rule for the server file --------------------------------
+
+UNUSABLE_FILES = {
+    "empty": b"",
+    "broken": b"{ kaputt",
+    "not_utf8": '{"mcpServers": {"grüße": {"type": "stdio"}}}'.encode("latin-1"),
+    "entry_not_object": b'{"mcpServers": {"github": "x"}}',
+}
+
+
+@pytest.mark.parametrize("kind", list(UNUSABLE_FILES))
+def test_the_service_builds_its_registry_from_an_unusable_server_file(client, config, kind):
+    """A file that is empty, no JSON, no UTF-8 or holds an entry that is no
+    object loads no server and stops nothing: the registry stands with the
+    program's own tools."""
+    from app.tools.aufbau import registry_bauen
+
+    path = config.pfad(config.mcp.servers_file)
+    path.write_bytes(UNUSABLE_FILES[kind])
+
+    registry = registry_bauen(client.app, config)
+
+    assert registry.eintraege == []
+    assert any(e["builtin"] for e in registry.uebersicht())
+    assert path.read_bytes() == UNUSABLE_FILES[kind]
+
+
+@pytest.mark.parametrize("kind", ["broken", "not_utf8", "entry_not_object"])
+def test_the_gallery_list_and_the_sign_in_say_why_the_file_is_unusable(client, config, kind):
+    """409 with the check's sentence in the page's language, never 500."""
+    path = config.pfad(config.mcp.servers_file)
+    path.write_bytes(UNUSABLE_FILES[kind])
+
+    for language in ("en", "de"):
+        headers = {"X-Ui-Language": language}
+        listing = client.get("/api/v1/tools/servers", headers=headers)
+        sign_in = client.post(
+            "/api/v1/tools/oauth/start", json={"server": "github"}, headers=headers
+        )
+        assert listing.status_code == 409
+        assert sign_in.status_code == 409
+        assert listing.json()["detail"] == sign_in.json()["detail"]
+        assert not listing.json()["detail"].startswith("mcp_datei.")
+    assert client.get("/api/v1/tools/servers", headers={"X-Ui-Language": "de"}).json()[
+        "detail"
+    ] != client.get("/api/v1/tools/servers", headers={"X-Ui-Language": "en"}).json()["detail"]
+    # Never written by a reading.
+    assert path.read_bytes() == UNUSABLE_FILES[kind]
+
+
+def test_a_file_that_is_no_utf8_names_the_decoder_as_the_json_sentence_does(client, config):
+    path = config.pfad(config.mcp.servers_file)
+    path.write_bytes(UNUSABLE_FILES["not_utf8"])
+
+    detail = client.get("/api/v1/tools/servers", headers={"X-Ui-Language": "en"}).json()["detail"]
+
+    assert detail.startswith("Invalid JSON")
+    assert "utf-8" in detail
+
+
+def test_an_empty_file_lists_nothing_and_a_gallery_put_on_an_entry_that_is_no_object_says_409(
+    client, config
+):
+    path = config.pfad(config.mcp.servers_file)
+    path.write_bytes(UNUSABLE_FILES["empty"])
+    listing = client.get("/api/v1/tools/servers")
+    assert listing.status_code == 200 and listing.json() == []
+
+    path.write_bytes(UNUSABLE_FILES["entry_not_object"])
+    answer = client.put("/api/v1/tools/servers/github", json={"enabled": False})
+    assert answer.status_code == 409
+    assert path.read_bytes() == UNUSABLE_FILES["entry_not_object"]
+
+
+def test_a_byte_order_mark_does_not_count(client, config):
+    path = config.pfad(config.mcp.servers_file)
+    body = json.dumps({"mcpServers": {"github": {"type": "http", "url": "https://beispiel.invalid/mcp"}}})
+    path.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+
+    listing = client.get("/api/v1/tools/servers")
+
+    assert listing.status_code == 200
+    assert [e["name"] for e in listing.json()] == ["github"]
+
+
+def test_silence_a_valid_file_reads_entry_for_entry_and_is_never_changed(client, config):
+    from app.tools import server_lesen
+
+    path = config.pfad(config.mcp.servers_file)
+    body = json.dumps(
+        {"mcpServers": {
+            "b": {"type": "http", "url": "https://beispiel.invalid/b"},
+            "a": {"type": "stdio", "command": "npx", "args": ["-y", "x"], "enabled": False},
+        }}
+    ).encode("utf-8")
+    path.write_bytes(body)
+
+    entries = server_lesen(path)
+
+    assert [(e.name, e.type, e.enabled) for e in entries] == [
+        ("b", "http", True), ("a", "stdio", False),
+    ]
+    assert path.read_bytes() == body
+    assert server_lesen(path.with_name("missing.json")) == []
+
+
+def test_the_text_field_shows_an_unreadable_file_with_its_reason(client, config):
+    path = config.pfad(config.mcp.servers_file)
+    path.write_bytes(UNUSABLE_FILES["not_utf8"])
+
+    answer = client.get("/api/v1/tools/config", headers={"X-Ui-Language": "en"})
+
+    assert answer.status_code == 200
+    assert answer.json()["kaputt"].startswith("Invalid JSON")
+    assert path.read_bytes() == UNUSABLE_FILES["not_utf8"]
+
+
+# --- The placeholder takes the name an environment variable may have ------
+
+
+def test_a_placeholder_with_a_hyphen_gets_its_light(client, config, monkeypatch):
+    monkeypatch.setenv("github-token", "x")
+    body = json.dumps({"mcpServers": {"github": {
+        "type": "http", "url": "https://beispiel.invalid/mcp",
+        "env": {"TOKEN": "${github-token}"},
+    }}})
+    config.pfad(config.mcp.servers_file).write_text(body, encoding="utf-8")
+
+    names = {p["name"]: p["gesetzt"] for p in client.get("/api/v1/tools/config").json()["platzhalter"]}
+
+    assert names == {"github-token": True}
+
+
+@pytest.mark.parametrize("written", ["${-x}", "${1x}", "$NAME"])
+def test_silence_a_name_that_is_no_environment_name_gets_no_light(client, config, written):
+    body = json.dumps({"mcpServers": {"github": {
+        "type": "http", "url": "https://beispiel.invalid/mcp", "env": {"TOKEN": written},
+    }}})
+    config.pfad(config.mcp.servers_file).write_text(body, encoding="utf-8")
+
+    assert client.get("/api/v1/tools/config").json()["platzhalter"] == []
+
+
+def test_silence_the_old_name_keeps_its_light(client, config, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "x")
+    body = json.dumps({"mcpServers": {"github": {
+        "type": "http", "url": "https://beispiel.invalid/mcp",
+        "env": {"TOKEN": "${GITHUB_TOKEN}"},
+    }}})
+    config.pfad(config.mcp.servers_file).write_text(body, encoding="utf-8")
+
+    names = {p["name"]: p["gesetzt"] for p in client.get("/api/v1/tools/config").json()["platzhalter"]}
+
+    assert names == {"GITHUB_TOKEN": True}

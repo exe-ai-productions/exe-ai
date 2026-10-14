@@ -39,23 +39,21 @@ WERKZEUG_NAME = "draw_video"
 DRAWING_TOOLS = frozenset({bild_werkzeug.WERKZEUG_NAME, WERKZEUG_NAME})
 
 IN_CHAT = (
-    "The finished video appears in your answer by itself, and the result "
-    "names its file and path; do not describe its contents afterwards — "
-    "you have not seen it."
+    "The finished video appears automatically in your response, and the result includes its "
+    "filename and path. Do not describe its contents afterward; you have not seen it."
 )
 IN_JOB = (
-    "The finished video is saved in the pictures folder, which the user "
-    "sees under Images, and the answer names its file; do not describe its "
-    "contents afterwards — you have not seen it."
+    "The finished video is saved in the pictures folder, visible to the user under Images. "
+    "The response includes its filename. Do not describe its contents afterward; you have not "
+    "seen it."
 )
 
 UNUSABLE_ANSWER = (
-    "The video could not be made: the picture service sent an answer that "
-    "could not be used."
+    "The video could not be generated: the image service returned an unusable response."
 )
 # What this tool makes, for the calls it shares with the drawing tool.
 VIDEO = bild_werkzeug.Made(
-    "The video could not be made", "The video was not made", UNUSABLE_ANSWER,
+    "The video could not be generated", "The video was not generated", UNUSABLE_ANSWER,
 )
 NO_VIDEO_MODEL = (
     "No video model is installed. The user can add one under Images or from "
@@ -63,9 +61,8 @@ NO_VIDEO_MODEL = (
 )
 # Nothing chooses among several video models by itself.
 MODEL_NOT_CHOSEN = (
-    "The video was not made: several video models are installed, and this "
-    "chat has none of them chosen. Ask the user to choose one under Images › "
-    "Video."
+    "The video was not generated: several video models are installed, but none is selected "
+    "for this chat. Ask the user to select one under Images › Video."
 )
 
 # The start values of a video model the request carries, by their name in
@@ -122,18 +119,17 @@ def werkzeug_beschreibung(in_chat: bool = True) -> MCPWerkzeug:
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "What the video shows and how it moves. Write it in English.",
+                    "description": "Describe the video's content and motion in English.",
                 },
                 "negative_prompt": {
                     "type": "string",
-                    "description": "What must stay out of the video. Optional.",
+                    "description": "Optional. Elements to exclude from the video.",
                 },
                 "image": {
                     "type": "string",
                     "description": (
-                        "Optional: the path of a picture the video starts "
-                        "from — a file you may read, in a shared folder or "
-                        "in the pictures folder."
+                        "Optional: path to a readable image in a shared folder or the "
+                        "pictures folder to use as the video's starting point."
                     ),
                 },
             },
@@ -175,7 +171,7 @@ async def ausfuehren(
                 antwort_id if in_chat else None, abbruch, input_picture,
             )
     except (httpx.HTTPError, httpx.InvalidURL) as error:
-        return f"The video could not be made: {str(error) or type(error).__name__}"
+        return f"The video could not be generated: {str(error) or type(error).__name__}"
     if isinstance(made, str):
         return made
     model, body, name = made
@@ -186,22 +182,21 @@ async def ausfuehren(
     if body.get("video_frames"):
         used.append(f"{body['video_frames']} frames")
     if input_picture is not None:
-        used.append(f"started from {input_picture.name}")
+        used.append(f"based on {input_picture.name}")
     if not in_chat:
         sentence = (
-            f"The video was made ({', '.join(used)}) and saved as {path}, in "
-            "the pictures folder the user sees under Images; it is not "
-            "attached to your report."
+            f"The video was generated ({', '.join(used)}) and saved as {path} in the pictures "
+            "folder, visible to the user under Images. It is not attached to your report."
         )
         if deliver_with:
             sentence += (
-                " When it is meant for the user as a result of this job, "
-                f"deliver it with {deliver_with}, passing this path."
+                " If this video is a deliverable for the user, deliver it using "
+                f"{deliver_with} with this path."
             )
         return sentence
     return (
-        f"The video was made ({', '.join(used)}), is attached to this answer "
-        f"and saved as {path}."
+        f"The video was generated ({', '.join(used)}), attached to this response, and saved as "
+        f"{path}."
     )
 
 
@@ -250,8 +245,8 @@ async def _make(
         return UNUSABLE_ANSWER
     if not state.get("programm_da"):
         return (
-            "No image generator is installed. The user can fetch it under "
-            "Images (plus menu)."
+            "No image generator is installed. The user can download it from the plus menu "
+            "under Images."
         )
     families = state.get("families") or {}
     video_models = [
@@ -282,13 +277,13 @@ async def _make(
     # What the family can start from: words, or a first frame.
     if input_picture is None and "t2v" not in family.tasks:
         return (
-            f"The video was not made: the video model in use — {family.label} "
-            "— needs a picture to start from. Pass its path as image."
+            f"The video was not generated: the selected model, {family.label}, requires an "
+            "input image. Pass its path as image."
         )
     if input_picture is not None and "i2v" not in family.tasks:
         return (
-            f"The video was not made: the video model in use — {family.label} "
-            "— makes videos from words only. Call again without an image."
+            f"The video was not generated: the selected model, {family.label}, accepts text "
+            "input only. Call again without an image."
         )
     answer = await client.get(f"{basis}/bild/vorgaben", params={"modell": model})
     start = bild_werkzeug._json_object(answer)
@@ -323,7 +318,7 @@ async def _make(
         body["chat_id"] = chat_id
         body["lauf_kennung"] = antwort_id
     if abbruch is not None and abbruch.is_set():
-        return "The video was not made: the run was stopped."
+        return "The video was not generated because the run was stopped."
     log.info("draw_video: making a video with %s", model)
     made = await bild_werkzeug._bild_anfordern(client, basis, body, abbruch)
     data = bild_werkzeug._json_object(made)

@@ -617,7 +617,10 @@ def test_das_fenster_sagt_komprimiere_solange_gefaltet_wird():
     fenster = (WURZEL / "frontend/src/App.svelte").read_text()
     # The chat's ONE waiting mark (App.svelte, `wartemarke`) draws the word now.
     assert "zeile.taetigkeit === 'verdichtung'" in fenster
-    assert fenster.count("t('status.komprimiert')") == 1, "the mark slot ignores the compaction word"
+    # Twice: the mark of the chat's one waiting answer, and the mark a
+    # hand-made compaction wears at the end of the list while no answer
+    # exists to carry one.
+    assert fenster.count("t('status.komprimiert')") == 2, "the mark slot ignores the compaction word"
     assert "art={laufMarke.art}" in fenster, "the mark slot does not wear the mark's art"
     # ONE word per waiting stretch: the effect must watch the bare yes/no,
     # not the laufMarke object — that one is rebuilt on every streamed
@@ -712,6 +715,40 @@ def test_der_nachtrag_markiert_nur_was_die_faltung_wirklich_hatte(client):
     }
     assert klein[3].id in gefaltet, "the old row belongs behind the seam"
     assert schwer.id not in gefaltet, "the protected row was folded along"
+
+
+def test_the_write_back_keeps_the_rows_the_fold_kept_where_pictures_carry_the_weight(client):
+    """Sixteen pictures with a few words each: by their text the rows do not
+    fill the tail budget, by what the request carries they do. The fold of
+    the answer's own rounds counted every picture at its price, so it kept
+    the newest rows verbatim; the recording must not mark them as folded."""
+    from app import chatverdichtung, verdichtung
+
+    repositories = client.app.state.repositories
+    chat_id = _chat(client)
+    klein = _gespraech(repositories, chat_id, paare=4)
+    bilder = [
+        repositories.messages.speichern(
+            chat_id=chat_id, role="user", content=f"Look {nr}.", anhaenge=["foto.png"]
+        )
+        for nr in range(16)
+    ]
+
+    kennung = chatverdichtung.faltung_nachtragen(
+        chat=repositories.chats.holen(chat_id),
+        repositories=repositories,
+        zusammenfassung=f"{verdichtung.VORSPANN}\n\nsummary",
+        budget=80_000,
+    )
+
+    assert kennung, "the fold was not added"
+    gefaltet = {
+        z.id
+        for z in repositories.messages.auflisten(chat_id=chat_id)
+        if z.verdichtet_in
+    }
+    assert klein[3].id in gefaltet, "the old row belongs behind the seam"
+    assert bilder[-1].id not in gefaltet, "a row of the verbatim tail was folded along"
 
 
 def test_ein_lauf_ohne_faltung_schreibt_keine_zeile(mcp_client):

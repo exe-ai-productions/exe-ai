@@ -12,6 +12,7 @@ from datetime import datetime
 
 from app import agentenmodellwahl, grundprompt, verdichtung, verdichtungswahl, werkzeugbild
 from app.tools import uhr
+from app.own_folder_line import own_folder_line, with_own_folder_last
 from app.providers import MockProvider, mock_endpunkt
 from app.verlaufsbau import _verlauf_bauen
 from tests.conftest import lokaler_endpunkt, provider_setzen
@@ -59,15 +60,15 @@ def test_die_geschlossene_tuer_haengt_an_den_werkzeugen():
     exactly the state in which nobody could read it. It hangs on the tools
     now: a run offered commands with no folder is the one that needs it."""
     mit_befehlen = grundprompt.bauen(werkzeuge=True, befehle=True)
-    assert "No working folder is shared" in mit_befehlen
+    assert "No working folder has been shared" in mit_befehlen
     mit_dateien = grundprompt.bauen(werkzeuge=True, dateiwerkzeuge=["read_file"])
-    assert "No working folder is shared" in mit_dateien
+    assert "No working folder has been shared" in mit_dateien
     # With a folder the door is open, and without any file-shaped tool there
     # is no door to speak of.
-    assert "No working folder is shared" not in grundprompt.bauen(
+    assert "No working folder has been shared" not in grundprompt.bauen(
         werkzeuge=True, befehle=True, ordner=["/a"]
     )
-    assert "No working folder is shared" not in grundprompt.bauen(werkzeuge=True)
+    assert "No working folder has been shared" not in grundprompt.bauen(werkzeuge=True)
 
 
 def test_die_rundengrenze_wird_nur_mit_zahl_genannt():
@@ -77,6 +78,28 @@ def test_die_rundengrenze_wird_nur_mit_zahl_genannt():
     assert "tool rounds" not in grundprompt.bauen(werkzeuge=True)
     mit = grundprompt.bauen(werkzeuge=True, werkzeugrunden=50)
     assert "up to 50 tool rounds" in mit
+
+
+def test_kommt_das_modell_nicht_weiter_sagt_es_das_und_haelt_an():
+    """Next to the paragraph on the round limit stands the one sentence that
+    tells the model to stop and say so when it is stuck or lacks something
+    only the user knows — otherwise it writes on until the user breaks off.
+    Where no round number is named the paragraph is not there, nor is the
+    sentence; a chat with no tools carries neither."""
+    satz = (
+        "If you cannot get any further, or you need something only the user knows, say so "
+        "clearly and stop."
+    )
+    mit = grundprompt.bauen(werkzeuge=True, werkzeugrunden=50)
+
+    assert " ".join(mit.split()).count(satz) == 1
+    # Behind the sentence on the limit, in the same paragraph.
+    assert " ".join(mit.split()).index("in the next message. " + satz) > 0
+    # Silence probes.
+    assert satz not in " ".join(grundprompt.bauen(werkzeuge=True).split())
+    assert satz not in " ".join(grundprompt.bauen(werkzeuge=False, werkzeugrunden=50).split())
+    # The taken-over text stays as it was.
+    assert grundprompt.TASK_COMPLETION_GUIDANCE in mit
 
 
 def test_jeder_geteilte_ordner_steht_mit_pfad_drin():
@@ -655,14 +678,14 @@ def test_die_faehigkeiten_nennen_nur_was_angeboten_wird():
     of them can be switched off individually, and a fixed sentence would then
     promise what is not there — the one thing this prompt must never do."""
     nur_bilder = grundprompt.bauen(kann=grundprompt.faehigkeiten({"draw_image"}))
-    assert "draw pictures" in nur_bilder
+    assert "generate images" in nur_bilder
     assert "schedule" not in nur_bilder
     assert "remember things" not in nur_bilder
 
     mit_mehr = grundprompt.bauen(
         kann=grundprompt.faehigkeiten({"cronjob", "memory_save"})
     )
-    assert "draw pictures" not in mit_mehr
+    assert "generate images" not in mit_mehr
     assert "schedule" in mit_mehr
     assert "remember things" in mit_mehr
 
@@ -717,8 +740,8 @@ def test_auf_dieser_maschine_faellt_beim_anbieter_weg():
 def test_die_suche_haengt_an_einem_suchwerkzeug():
     ohne = grundprompt.bauen(werkzeuge=True)
     mit = grundprompt.bauen(werkzeuge=True, suche=True)
-    assert "not one call" not in ohne
-    assert "not one call" in mit
+    assert "more than one search" not in ohne
+    assert "more than one search" in mit
     # And no tool name in it: the file search is ours, a web search comes out
     # of mcp_servers.json, and that file belongs to the user.
     assert "search_files" not in mit
@@ -806,10 +829,10 @@ def test_der_agentenlauf_hebt_das_nachfragen_auf():
     )
     # UMFANG wraps its line, hence the short match.
     assert "ask one short" in text                   # still there, from UMFANG
-    assert "there is no way to ask one" in text      # and taken back here
-    assert "confirmation prompt in a job" in text
+    assert "There is no way to ask the user for clarification" in text      # and taken back here
+    assert "confirmation prompt during a job" in text
     # The correction has to stand AFTER what it corrects.
-    assert text.index("there is no way to ask one") > text.index("ask one short")
+    assert text.index("There is no way to ask the user for clarification") > text.index("ask one short")
 
 
 def test_der_agentenlauf_nennt_die_zahlen_statt_limited():
@@ -844,7 +867,7 @@ def test_die_agentenbausteine_haengen_je_an_ihrem_werkzeug():
         ),
     )
     assert "deliver_file" in mit
-    assert "cannot put anything in the background" in mit
+    assert "cannot start background work here" in mit
     assert "belongs in the memory" in mit
 
 
@@ -879,7 +902,7 @@ def test_der_ordnersatz_nennt_die_zugriffslage():
         ).split()
     )
     assert "commands and file tools run without asking" in text
-    assert "outside them they ask the user first" in text
+    assert "outside them, they ask the user first" in text
     assert "cannot see" not in text
 
 
@@ -889,7 +912,7 @@ def test_ein_agent_hoert_dass_die_tuer_nach_aussen_zu_ist():
             werkzeuge=True, befehle=True, ordner=["/a"], zugriff=("ja", "nein")
         ).split()
     )
-    assert "outside them they are refused" in text
+    assert "outside them, they are refused" in text
 
 
 def test_ohne_zugriffslage_bleibt_der_neutrale_satz():
@@ -916,9 +939,18 @@ def test_the_chats_own_folder_alone_is_no_share():
         werkzeuge=True, ordner=["/data/chat_files/c1"], own_folder="/data/chat_files/c1",
         dateiwerkzeuge=["read_file"],
     )
+    line = own_folder_line(
+        ["/data/chat_files/c1"], "/data/chat_files/c1", None, None
+    )
     assert "The user has shared" not in text
-    assert "has a folder of its own" in text
-    assert "- /data/chat_files/c1" in text
+    assert "has a folder of its own" in line
+    assert line.endswith(
+        "- /data/chat_files/c1\n\nRelative paths resolve against this folder."
+    )
+    # The paragraph is built elsewhere and goes last: the base prompt itself
+    # does not carry the chat's path, which differs in every chat.
+    assert "has a folder of its own" not in text
+    assert "/data/chat_files/c1" not in text
 
 
 def test_shares_and_the_own_folder_stand_apart():
@@ -931,7 +963,13 @@ def test_shares_and_the_own_folder_stand_apart():
     shared = text.split("The user has shared these working folders with you:\n\n")[1]
     shared = shared.split("\n\n")[0]
     assert shared == "- /u/a\n- /u/b"
-    assert "also has a folder of its own, where its uploads are kept:\n\n- /data/chat_files/c1" in text
+    assert "/data/chat_files/c1" not in text
+    assert own_folder_line(
+        ["/u/a", "/u/b", "/data/chat_files/c1"], "/data/chat_files/c1", None, None
+    ) == (
+        "This conversation also has a folder of its own, where its uploads are "
+        "kept:\n\n- /data/chat_files/c1"
+    )
 
 
 def test_a_chat_sharing_nothing_hears_of_no_share(client, chat_id):
@@ -976,9 +1014,178 @@ def test_the_dock_and_the_image_folder_stand_apart_last():
     )
     shared = text.split("The user has shared these working folders with you:\n\n")[1]
     assert shared.split("\n\n")[0] == "- /u/a"
-    assert text.index("The dock folder is where") < text.index("The image folder is where")
+    assert text.index("The dock folder holds") < text.index("The image folder contains")
     assert "- /data/agent_dock" in text
     assert "- /data/images" in text
+
+
+def test_the_own_folder_paragraph_is_empty_without_an_own_folder():
+    assert own_folder_line(["/u/a"], None, None, None) == ""
+    # Not among the folders the run may reach: the prompt names no other.
+    assert own_folder_line(["/u/a"], "/data/chat_files/c1", None, None) == ""
+    assert own_folder_line([], "/data/chat_files/c1", None, None) == ""
+
+
+def test_the_own_folder_paragraph_says_where_you_work_while_nothing_is_shared():
+    """Silence probe: the words are the ones the paragraph always had."""
+    assert own_folder_line(
+        ["/data/chat_files/c1"], "/data/chat_files/c1", None, None
+    ) == (
+        "This conversation has a folder of its own, where its uploads are kept "
+        "and where you work while nothing is shared:\n\n- /data/chat_files/c1"
+        "\n\nRelative paths resolve against this folder."
+    )
+    # The program's dock and image folders are no share: still "nothing shared".
+    assert own_folder_line(
+        ["/data/chat_files/c1", "/data/agent_dock", "/data/images"],
+        "/data/chat_files/c1",
+        "/data/agent_dock",
+        "/data/images",
+    ).startswith("This conversation has a folder of its own, where its uploads")
+
+
+def test_the_paragraph_goes_behind_the_text_and_only_when_there_is_one():
+    own = "/data/chat_files/c1"
+    assert with_own_folder_last("BASE", [own], own, None, None) == (
+        f"BASE\n\n{own_folder_line([own], own, None, None)}"
+    )
+    assert with_own_folder_last("BASE", ["/u/a"], None, None, None) == "BASE"
+
+
+def test_new_chats_share_the_whole_system_message_up_to_the_own_folder(client):
+    """Each new chat has a folder named by its id. Everything in front of
+    that paragraph is the same for both chats, so a model server can keep it
+    in its cache; the paragraph is the last thing in the message."""
+    provider = provider_setzen(
+        client, MockProvider(mock_endpunkt("test"), haeppchen=["ok"])
+    )
+    client.app.state.config.features.mcp = True
+    texts = []
+    for title in ("one", "two"):
+        new_id = client.post("/api/v1/chats", json={"title": title}).json()["id"]
+        client.post(
+            "/api/v1/chat/completions",
+            json={"chat_id": new_id, "endpoint_id": "test", "content": "hallo"},
+        )
+        texts.append((new_id, _system(provider)))
+    (id_a, text_a), (id_b, text_b) = texts
+    marker = "This conversation has a folder of its own"
+    assert marker in text_a and marker in text_b
+    head_a, tail_a = text_a.rsplit(marker, 1)
+    head_b, tail_b = text_b.rsplit(marker, 1)
+    assert head_a == head_b
+    assert id_a in tail_a and id_b in tail_b
+    # Nothing but the paragraph follows: the path, then the sentence that
+    # names this folder as the one relative paths start from.
+    lines_a = [line for line in tail_a.splitlines() if line.strip()]
+    assert lines_a[-2].startswith("- ") and lines_a[-2].endswith(id_a)
+    assert lines_a[-1] == "Relative paths resolve against this folder."
+    assert id_a not in head_a and id_b not in head_b
+
+
+# --- Which folder a relative path starts from ---------------------------------
+
+FIRST_ONE = "Relative paths resolve against the first one."
+THIS_FOLDER = "Relative paths resolve against this folder."
+
+
+def test_without_a_share_the_sentence_names_the_chats_own_folder():
+    """The list has the dock first and the chat's folder is named last, so
+    "the first one" would name the dock: the sentence stands with the path."""
+    own = "/data/chat_files/c1"
+    folders = [own, "/data/agent_dock", "/data/images"]
+    base = grundprompt.bauen(
+        werkzeuge=True, ordner=folders, own_folder=own, dock="/data/agent_dock",
+        images="/data/images", dateiwerkzeuge=["read_file"],
+    )
+    line = own_folder_line(folders, own, "/data/agent_dock", "/data/images")
+
+    assert FIRST_ONE not in base
+    assert THIS_FOLDER not in base
+    assert line.endswith(THIS_FOLDER)
+    # The rest of that sentence is as it was, word for word.
+    assert (
+        "A folder the user names in\npassing is one of these, not a subfolder of "
+        "the first one — match what they\nsay against the list before assuming "
+        "anything is missing."
+    ) in base
+
+
+def test_silence_with_a_share_the_sentence_stays_with_the_list():
+    own = "/data/chat_files/c1"
+    folders = ["/u/a", own, "/data/agent_dock", "/data/images"]
+    base = grundprompt.bauen(
+        werkzeuge=True, ordner=folders, own_folder=own, dock="/data/agent_dock",
+        images="/data/images", dateiwerkzeuge=["read_file"],
+    )
+    line = own_folder_line(folders, own, "/data/agent_dock", "/data/images")
+
+    assert f"{FIRST_ONE} A folder the user names in\npassing" in base
+    assert THIS_FOLDER not in base
+    assert THIS_FOLDER not in line
+    assert line.startswith("This conversation also has a folder of its own")
+
+
+def test_silence_a_run_without_a_chat_folder_keeps_the_sentence_with_the_list():
+    folders = ["/agents/work", "/data/agent_dock", "/data/images"]
+    base = grundprompt.bauen(
+        werkzeuge=True, ordner=folders, own_folder=None, dock="/data/agent_dock",
+        images="/data/images", dateiwerkzeuge=["read_file"],
+    )
+
+    assert f"{FIRST_ONE} A folder the user names in\npassing" in base
+    assert THIS_FOLDER not in base
+    assert own_folder_line(folders, None, "/data/agent_dock", "/data/images") == ""
+
+
+def test_a_chat_without_a_share_ends_on_its_folder_and_the_sentence(client, chat_id):
+    provider = provider_setzen(client, MockProvider(mock_endpunkt("test"), haeppchen=["ok"]))
+    client.app.state.config.features.mcp = True
+    client.post(
+        "/api/v1/chat/completions",
+        json={"chat_id": chat_id, "endpoint_id": "test", "content": "hallo"},
+    )
+    text = _system(provider)
+
+    assert text.endswith(f"{chat_id}\n\n{THIS_FOLDER}")
+    assert FIRST_ONE not in text
+    assert text.count(THIS_FOLDER) == 1
+
+
+def test_a_chat_with_a_share_names_the_first_folder_and_never_this_one(client, chat_id, tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    client.patch(f"/api/v1/chats/{chat_id}", json={"working_dirs": [str(shared)]})
+    provider = provider_setzen(client, MockProvider(mock_endpunkt("test"), haeppchen=["ok"]))
+    client.app.state.config.features.mcp = True
+    client.post(
+        "/api/v1/chat/completions",
+        json={"chat_id": chat_id, "endpoint_id": "test", "content": "hallo"},
+    )
+    text = _system(provider)
+
+    assert FIRST_ONE in text
+    assert THIS_FOLDER not in text
+
+
+def test_the_own_folder_paragraph_ends_a_message_that_has_a_user_prompt(
+    client, chat_id
+):
+    """The user's own prompt used to stand behind the path."""
+    provider = provider_setzen(
+        client, MockProvider(mock_endpunkt("test"), haeppchen=["ok"])
+    )
+    config = client.app.state.config
+    config.system_prompt_schreiben("Answer in rhymes, always.")
+    client.post(
+        "/api/v1/chat/completions",
+        json={"chat_id": chat_id, "endpoint_id": "test", "content": "hallo"},
+    )
+    text = _system(provider)
+    assert text.index("Answer in rhymes, always.") < text.index(
+        "This conversation has a folder of its own"
+    )
+    assert text.endswith(f"{chat_id}\n\nRelative paths resolve against this folder.")
 
 
 def test_a_chat_prompt_names_the_dock_and_the_image_folder(client, chat_id):
@@ -994,6 +1201,6 @@ def test_a_chat_prompt_names_the_dock_and_the_image_folder(client, chat_id):
     config = client.app.state.config
     assert f"- {speicherorte.ort(config, agentendock.ORT_NAME)}" in system_text
     assert f"- {speicherorte.ort(config, 'images')}" in system_text
-    assert "The image folder is where" in system_text
+    assert "The image folder contains" in system_text
     # Silence probe: the data folder above them is never named on its own.
     assert f"- {config.datenverzeichnis}\n" not in system_text

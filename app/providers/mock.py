@@ -32,7 +32,7 @@ def mock_endpunkt(
     return EndpointConfig.model_validate(
         {
             "id": kennung,
-            "name": f"Attrappe ({kennung})",
+            "name": f"Mock ({kennung})",
             "provider": "mock",
             "base_url": "http://mock.invalid/v1",
             "reasoning_format": reasoning_format,
@@ -61,7 +61,7 @@ class MockProvider(Provider):
         tor: "asyncio.Event | None" = None,
     ) -> None:
         super().__init__(endpunkt or mock_endpunkt())
-        self.haeppchen = haeppchen if haeppchen is not None else ["Hallo ", "Welt"]
+        self.haeppchen = haeppchen if haeppchen is not None else ["Hello ", "World"]
         self.ist_erreichbar = ist_erreichbar
         self.verzoegerung = verzoegerung
         self.fehler = fehler

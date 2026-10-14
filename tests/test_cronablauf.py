@@ -11,11 +11,20 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from app import cronablauf
-from app.ohne_agent import NAME as OHNE_AGENT
+from app.no_agent import NAME as NO_AGENT
 from app import fenstergroesse
 from app.providers import MockProvider, mock_endpunkt
 from tests.conftest import agentenmodell_setzen, provider_setzen
+
+
+@pytest.fixture(autouse=True)
+def _no_hand_start_wish(monkeypatch):
+    """The wish is the flow's own memory, one per process: each test starts
+    without one."""
+    monkeypatch.setattr(cronablauf, "_hand_start_wanted", set())
 
 
 def schreiben(ordner: Path, name: str, inhalt: str = "---\n---\n\nPrompt.\n") -> None:
@@ -172,14 +181,14 @@ def test_fehlender_agent_bleibt_offen_und_stuerzt_nicht(config, client):
 
 def test_cronjob_ohne_agent_feuert_ohne_agentendatei(config, client):
     """An entry with no agent needs no file: it fires with the run built in
-    memory (app/ohne_agent.py)."""
+    memory (app/no_agent.py)."""
     provider_setzen(client, MockProvider(mock_endpunkt("test")))
     client.app.state.repositories.cronjobs.erstellen(
-        agent=OHNE_AGENT, task="Kaffee", zeitplan="12:00", herkunft="chat"
+        agent=NO_AGENT, task="Kaffee", zeitplan="12:00", herkunft="chat"
     )
 
     pruefen(client, MORGEN_13)
-    assert len(auftraege_von(client, OHNE_AGENT)) == 1
+    assert len(auftraege_von(client, NO_AGENT)) == 1
 
 
 def test_zwei_cronjobs_ohne_agent_warten_nicht_aufeinander(config, client):
@@ -188,11 +197,63 @@ def test_zwei_cronjobs_ohne_agent_warten_nicht_aufeinander(config, client):
     provider_setzen(client, MockProvider(mock_endpunkt("test")))
     for task in ("Kaffee", "Tee"):
         client.app.state.repositories.cronjobs.erstellen(
-            agent=OHNE_AGENT, task=task, zeitplan="12:00", herkunft="chat"
+            agent=NO_AGENT, task=task, zeitplan="12:00", herkunft="chat"
         )
 
     pruefen(client, MORGEN_13)
-    assert len(auftraege_von(client, OHNE_AGENT)) == 2
+    assert len(auftraege_von(client, NO_AGENT)) == 2
+
+
+def test_a_second_run_without_agent_is_refused_while_its_continuation_runs(config, client):
+    """A run that handed its work on continues under an entry of its own
+    (``ursprung_id``). The due time of the entry a person made must not start
+    a second copy of the work beside it: one run at a time per schedule,
+    continuations included."""
+    provider_setzen(client, MockProvider(mock_endpunkt("test")))
+    repositories = client.app.state.repositories
+    origin = repositories.cronjobs.erstellen(
+        agent=NO_AGENT, task="Kaffee", zeitplan="12:00", herkunft="chat"
+    )
+    chain = repositories.cronjobs.erstellen(
+        agent=NO_AGENT, task="Kaffee weiter", zeitplan="13:30", herkunft="agent",
+        ursprung_id=origin.id,
+    )
+    running = repositories.auftraege.erstellen(
+        user_id="standard", agent=NO_AGENT, auftrag="weiter", zustand="laeuft",
+        cronjob_id=chain.id,
+    )
+
+    pruefen(client, MORGEN_13)
+    # Only the continuation's own run stands; the origin's due time was skipped.
+    assert [a["id"] for a in auftraege_von(client, NO_AGENT)] == [running.id]
+
+    # Silence probe: with the continuation ended, the next due time of the
+    # origin runs.
+    repositories.auftraege.zustand_setzen(running.id, "fertig")
+    repositories.cronjobs.aktiv_setzen(chain.id, False)
+    pruefen(client, MORGEN_13 + timedelta(days=1))
+    assert sorted(a["cronjob_id"] for a in auftraege_von(client, NO_AGENT)) == sorted(
+        [chain.id, origin.id]
+    )
+
+
+def test_the_continuation_waiting_to_start_holds_back_the_origin_too(config, client):
+    """The moment between the hand-over and the start of the continuation's
+    run: its entry is switched on, no run of it exists yet."""
+    provider_setzen(client, MockProvider(mock_endpunkt("test")))
+    repositories = client.app.state.repositories
+    origin = repositories.cronjobs.erstellen(
+        agent=NO_AGENT, task="Kaffee", zeitplan="12:00", herkunft="chat"
+    )
+    chain = repositories.cronjobs.erstellen(
+        agent=NO_AGENT, task="Kaffee weiter", zeitplan="23:59", herkunft="agent",
+        ursprung_id=origin.id,
+    )
+
+    pruefen(client, MORGEN_13)
+    # The origin comes first in the table and is held back by the entry that
+    # carries its work; the only run is the continuation's own.
+    assert [a["cronjob_id"] for a in auftraege_von(client, NO_AGENT)] == [chain.id]
 
 
 def test_fehlender_agent_steht_am_eintrag(config, client):
@@ -203,21 +264,21 @@ def test_fehlender_agent_steht_am_eintrag(config, client):
         agent="verschwunden", task="Los", zeitplan="12:00", herkunft="chat"
     )
     zeilen = {z["id"]: z for z in client.get("/api/v1/cronjobs").json()}
-    assert zeilen[eintrag.id]["agent_fehlt"] is True
+    assert zeilen[eintrag.id]["agent_missing"] is True
 
     pruefen(client, MORGEN_13)
     assert auftraege_von(client, "verschwunden") == []
     zeilen = {z["id"]: z for z in client.get("/api/v1/cronjobs").json()}
-    assert zeilen[eintrag.id]["agent_fehlt"] is True
+    assert zeilen[eintrag.id]["agent_missing"] is True
 
 
 def test_ohne_agent_fehlt_kein_agent(config, client):
     """Silence test: an entry with no agent names no file, so none is missing."""
     eintrag = client.app.state.repositories.cronjobs.erstellen(
-        agent=OHNE_AGENT, task="Los", zeitplan="12:00", herkunft="chat"
+        agent=NO_AGENT, task="Los", zeitplan="12:00", herkunft="chat"
     )
     zeilen = {z["id"]: z for z in client.get("/api/v1/cronjobs").json()}
-    assert zeilen[eintrag.id]["agent_fehlt"] is False
+    assert zeilen[eintrag.id]["agent_missing"] is False
 
 
 def test_vorhandener_agent_fehlt_nicht(config, client):
@@ -230,7 +291,7 @@ def test_vorhandener_agent_fehlt_nicht(config, client):
 
     pruefen(client, MORGEN_13)
     zeilen = {z["id"]: z for z in client.get("/api/v1/cronjobs").json()}
-    assert zeilen[eintrag.id]["agent_fehlt"] is False
+    assert zeilen[eintrag.id]["agent_missing"] is False
 
 
 def test_nur_die_crontabelle_feuert(config, client):
@@ -537,7 +598,7 @@ async def test_meldet_nur_bei_deliver_announce(repos, monkeypatch):
     aufrufe = []
     monkeypatch.setattr(
         cronablauf.cronmeldung, "melden",
-        lambda text, *, erfolgreich: aufrufe.append((text, erfolgreich)),
+        lambda text, *, erfolgreich, sprache=None: aufrufe.append((text, erfolgreich)),
     )
 
     still = repos.cronjobs.erstellen(agent="a", task="x", zeitplan="08:00", herkunft="chat")
@@ -555,7 +616,7 @@ async def test_gescheiterter_lauf_meldet_sich_auch(repos, monkeypatch):
     aufrufe = []
     monkeypatch.setattr(
         cronablauf.cronmeldung, "melden",
-        lambda text, *, erfolgreich: aufrufe.append((text, erfolgreich)),
+        lambda text, *, erfolgreich, sprache=None: aufrufe.append((text, erfolgreich)),
     )
     ansage = repos.cronjobs.erstellen(
         agent="a", task="x", zeitplan="08:00", herkunft="chat", deliver="announce"
@@ -570,7 +631,7 @@ async def test_ohne_cronjob_id_passiert_nichts(repos, monkeypatch):
     aufrufe = []
     monkeypatch.setattr(
         cronablauf.cronmeldung, "melden",
-        lambda text, *, erfolgreich: aufrufe.append((text, erfolgreich)),
+        lambda text, *, erfolgreich, sprache=None: aufrufe.append((text, erfolgreich)),
     )
     await cronablauf.melde_wenn_faellig(repos, None, "Plant reminder")
     assert aufrufe == []
@@ -583,7 +644,7 @@ async def test_geloeschter_cronjob_passiert_nichts(repos, monkeypatch):
     aufrufe = []
     monkeypatch.setattr(
         cronablauf.cronmeldung, "melden",
-        lambda text, *, erfolgreich: aufrufe.append((text, erfolgreich)),
+        lambda text, *, erfolgreich, sprache=None: aufrufe.append((text, erfolgreich)),
     )
     await cronablauf.melde_wenn_faellig(repos, "phantom", "Plant reminder")
     assert aufrufe == []
@@ -626,6 +687,54 @@ def test_ohne_erreichbares_modell_entsteht_kein_lauf(config, client):
     assert frisch.zuletzt_ausgeloest is None
 
 
+def test_a_run_without_an_agent_fails_at_once_when_no_model_is_reachable(config, client):
+    """No model answers and the program has no server to start: the due time
+    of an entry without an agent ends as a failed run with the sentence the
+    program already has, instead of waiting for good. The entry is not
+    "waiting for a model" any more, the failure is counted, and the next due
+    time starts as usual."""
+    repositories = client.app.state.repositories
+    provider_setzen(client, MockProvider(mock_endpunkt("test")))
+    agentenmodell_setzen(client, "wolke:gibtsnicht")
+    eintrag = repositories.cronjobs.erstellen(
+        agent=NO_AGENT, task="Los", zeitplan="08:00", herkunft="chat"
+    )
+    _created_before_the_ticks(repositories, eintrag.id)
+
+    pruefen(client, MORGEN_13.replace(hour=8, minute=1))
+
+    (lauf,) = auftraege_von(client, NO_AGENT)
+    assert lauf["state"] == "gescheitert"
+    assert lauf["end_reason"] == "kein_modell_verfuegbar"
+    assert cronablauf.wartet_auf_modell(eintrag.id) is False
+    frisch = repositories.cronjobs.holen(eintrag.id)
+    assert frisch.fehlversuche == 1
+    assert frisch.aktiv is True
+    assert frisch.zuletzt_ausgeloest is not None
+    runs = client.get("/api/v1/cronjobs/runs/all").json()
+    assert [(r["status"], r["grund"]) for r in runs] == [("gescheitert", "kein_modell_verfuegbar")]
+
+    # The tick does not book the same due time again ...
+    pruefen(client, MORGEN_13.replace(hour=8, minute=2))
+    assert len(auftraege_von(client, NO_AGENT)) == 1
+    # ... and the next day's one runs as soon as a model answers.
+    agentenmodell_setzen(client, "test")
+    pruefen(client, (MORGEN_13 + timedelta(days=1)).replace(hour=8, minute=1))
+    assert len(auftraege_von(client, NO_AGENT)) == 2
+
+
+def test_the_sentence_of_a_run_without_a_model_is_in_both_languages(client):
+    """The reason is read from the catalogue like every other ending."""
+    from app import i18n
+
+    assert i18n.t("jobs.grund.kein_modell_verfuegbar", "de") == i18n.t(
+        "fehler.kein_modell_verfuegbar", "de"
+    ) == "Kein Modell erreichbar"
+    assert i18n.t("jobs.grund.kein_modell_verfuegbar", "en") == i18n.t(
+        "fehler.kein_modell_verfuegbar", "en"
+    ) == "No model reachable"
+
+
 def test_das_modell_kommt_und_der_versaeumte_termin_feuert_nach(config, client):
     """The catch-up rule does the rest: once something answers, the most
     recent missed due time fires and the waiting mark is cleared."""
@@ -650,6 +759,82 @@ def test_das_modell_kommt_und_der_versaeumte_termin_feuert_nach(config, client):
     assert cronablauf.wartet_auf_modell(eintrag.id) is False
 
 
+def _created_before_the_ticks(repositories, eintrag_id):
+    """The entry was made at 06:00 of the day the ticks of these tests run
+    on, so its next due time (08:00) lies behind every tick — whatever the
+    clock says when the test runs. Left to the real clock, an entry made
+    after midnight would count the 08:00 of that same day as missed."""
+    repositories.cronjobs.verbindung.execute(
+        "UPDATE cronjobs SET created_at = ? WHERE id = ?",
+        (MORGEN_13.replace(hour=6).isoformat(), eintrag_id),
+    )
+
+
+def _hand_start_waiting(config, client):
+    """An entry that is not due, started by hand while the model was coming
+    up: the field names a model that is not there, and the wish is noted."""
+    schreiben(Path(config.app.agenten_verzeichnis), "recherche")
+    provider_setzen(client, MockProvider(mock_endpunkt("test")))
+    agentenmodell_setzen(client, "wolke:gibtsnicht")
+    repositories = client.app.state.repositories
+    eintrag = repositories.cronjobs.erstellen(
+        agent="recherche", task="Los", zeitplan="08:00", herkunft="chat"
+    )
+    _created_before_the_ticks(repositories, eintrag.id)
+    cronablauf.want_hand_start(eintrag.id)
+    return repositories, eintrag
+
+
+def test_a_hand_start_waits_for_the_model_and_runs_once_when_it_answers(config, client):
+    """The tick treats the wish like a due time that waits for its model:
+    nothing is created and nothing is counted while no model answers; when
+    one does, exactly one run starts with the entry's id, and a second tick
+    starts no second."""
+    repositories, eintrag = _hand_start_waiting(config, client)
+
+    pruefen(client, MORGEN_13.replace(hour=7, minute=0))
+    assert auftraege_von(client, "recherche") == []
+    assert cronablauf.wartet_auf_modell(eintrag.id) is True
+    assert repositories.cronjobs.holen(eintrag.id).fehlversuche == 0
+
+    agentenmodell_setzen(client, "test")
+    pruefen(client, MORGEN_13.replace(hour=7, minute=1))
+    (lauf,) = auftraege_von(client, "recherche")
+    assert lauf["cronjob_id"] == eintrag.id
+    assert cronablauf.wartet_auf_modell(eintrag.id) is False
+    assert repositories.cronjobs.holen(eintrag.id).zuletzt_ausgeloest is not None
+
+    pruefen(client, MORGEN_13.replace(hour=7, minute=2))
+    assert len(auftraege_von(client, "recherche")) == 1
+
+
+def test_a_hand_start_wish_does_not_outlive_a_pause(config, client):
+    """Silence probe: switched off while the wish was pending, the entry is
+    not started when it is switched on again later."""
+    repositories, eintrag = _hand_start_waiting(config, client)
+    repositories.cronjobs.aktiv_setzen(eintrag.id, False)
+    pruefen(client, MORGEN_13.replace(hour=7, minute=0))
+    repositories.cronjobs.aktiv_setzen(eintrag.id, True)
+
+    agentenmodell_setzen(client, "test")
+    pruefen(client, MORGEN_13.replace(hour=7, minute=1))
+    assert auftraege_von(client, "recherche") == []
+
+
+def test_an_entry_nobody_started_by_hand_is_not_started_before_its_time(config, client):
+    """Silence probe: without the wish the same entry stays quiet — the wish
+    is what starts it, not the answering model."""
+    schreiben(Path(config.app.agenten_verzeichnis), "recherche")
+    provider_setzen(client, MockProvider(mock_endpunkt("test")))
+    repositories = client.app.state.repositories
+    eintrag = repositories.cronjobs.erstellen(
+        agent="recherche", task="Los", zeitplan="08:00", herkunft="chat"
+    )
+    _created_before_the_ticks(repositories, eintrag.id)
+    pruefen(client, MORGEN_13.replace(hour=7, minute=0))
+    assert auftraege_von(client, "recherche") == []
+
+
 def test_die_wartemeldung_kommt_genau_einmal(config, client, monkeypatch):
     """Ten minutes of waiting are worth one notification, not one per tick.
 
@@ -671,7 +856,7 @@ def test_die_wartemeldung_kommt_genau_einmal(config, client, monkeypatch):
     gemeldet: list[str] = []
     monkeypatch.setattr(
         cronablauf.cronmeldung, "melden",
-        lambda text, *, erfolgreich: gemeldet.append(text),
+        lambda text, *, erfolgreich, sprache=None: gemeldet.append(text),
     )
 
     start = MORGEN_13.replace(hour=8, minute=1)

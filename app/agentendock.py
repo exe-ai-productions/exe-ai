@@ -309,8 +309,8 @@ class AgentenDock:
             log.warning("Dock record cannot be read (%s): %s", pfad, fehler)
             if streng:
                 raise ValueError(
-                    f"The agent dock's record ({pfad}) cannot be read, so nothing "
-                    f"was written — writing would have overwritten it ({fehler})."
+                    f"The agent dock's record ({pfad}) could not be read. Nothing was written "
+                    f"to avoid overwriting it ({fehler})."
                 ) from fehler
             return []
         if isinstance(daten, list):
@@ -318,8 +318,8 @@ class AgentenDock:
         log.warning("Dock record is not a list (%s)", pfad)
         if streng:
             raise ValueError(
-                f"The agent dock's record ({pfad}) is not a list, so nothing was "
-                "written — writing would have overwritten it."
+                f"The agent dock's record ({pfad}) is not a list. Nothing was written to avoid "
+                "overwriting it."
             )
         return []
 
@@ -379,7 +379,7 @@ class AgentenDock:
 
             eintrag = {
                 "id": kennung,
-                "name": eintragsname(name) or "Datei",
+                "name": eintragsname(name) or "File",
                 "datei": f"{kennung}{endung}",
                 # A given type wins; otherwise the name decides. Both ways in
                 # (text ``content`` and a copied ``path``) meet here, so this
@@ -571,7 +571,7 @@ def _carry_old_dock(config: "Config", dock: AgentenDock) -> None:
                 neu.append(
                     {
                         "id": kennung,
-                        "name": str(eintrag.get("name") or "") or "Datei",
+                        "name": str(eintrag.get("name") or "") or "File",
                         "datei": quelle.name,
                         "typ": str(eintrag.get("typ") or "") or type_from_name(quelle.name),
                         "groesse": int(eintrag.get("groesse") or 0),

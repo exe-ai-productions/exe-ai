@@ -2,9 +2,10 @@
   The work rail on the right: which module is showing, how wide it is, and
   whether it may open by itself.
 
-  The rail started as one window for the terminal. It is a rail with six
-  modules now — preview, agents, schedules, terminal, pictures, doc folder — and the
-  rule that made the terminal work is the rule they all follow: it opens
+  The rail started as one window for the terminal. It is a rail with seven
+  modules now — preview, agents, schedules, terminal, CLI, pictures, doc
+  folder — and the rule that made the terminal work is the rule they all
+  follow: it opens
   itself when its module has something to show, and whoever closes it
   during that is not asked again for it.
 
@@ -12,7 +13,8 @@
   visible: at its foot while it is open, as a bar of signs while it is
   folded (Arbeitsleiste.svelte, ToolSigns.svelte) — the same anatomy
   as the sidebar on the left. One tool shows at a time; a click on another
-  sign swaps it.
+  sign swaps it, and a click on the sign of the tool showing folds the
+  column.
 
   Everything here is per chat: switching chats on the left switches runs,
   preview tabs and terminal history with it. (The note was the one thing
@@ -22,19 +24,19 @@
 
 import { VORGABE_LAYOUT, layoutSpeichern } from './anzeige.js'
 
-/* Six 40px signs of the row at the column's foot, five 10px gaps and 12px
+/* Seven 40px signs of the row at the column's foot, six 10px gaps and 12px
    either side: no sign of the row ever has to shrink. */
-export const BREITE_MIN = 314
+export const BREITE_MIN = 364
 const BREITE_MAX = 900
 
-/* The CLI is not among them any more: it left the window, and a full CLI
-   comes back later as a piece of its own. The agents and the schedules are
-   two tools, each with its own button. The notes are gone as a tool: the
-   doc folder took their place and stands as one of its own now, right
-   beside the pictures. A layout remembered on any of them opens the tool
-   that holds it today (`leisteAnwenden`). */
-export const MODULE = ['terminal', 'vorschau', 'bilder', 'docfolder', 'agenten', 'cronjobs']
-const FRUEHER = { cli: 'terminal', notiz: 'docfolder' }
+/* The CLI is back as a tool of its own: the terminal client `exe` running
+   in the window, beside the terminal that logs the chat's tool calls. The
+   agents and the schedules are two tools, each with its own button. The
+   notes are gone as a tool: the doc folder took their place and stands as
+   one of its own now, right beside the pictures. A layout remembered on a
+   tool that is gone opens the tool that holds it today (`leisteAnwenden`). */
+export const MODULE = ['terminal', 'cli', 'vorschau', 'bilder', 'docfolder', 'agenten', 'cronjobs']
+const FRUEHER = { notiz: 'docfolder' }
 
 export const leiste = $state({
   /* Open, closed and which module: remembered like the sidebar's state on
@@ -73,13 +75,19 @@ export function leisteAnwenden(wert) {
 
 /**
  * A click on a sign in the column's row: that tool shows, and a folded
- * column opens on it. The sign of the tool already showing does nothing —
- * folding is the head's button, not a second meaning of this one.
+ * column opens on it. The sign of the tool already showing folds the
+ * column, the same way the head's button does — one way in, one way out.
+ * `covered` says that something else lies over the tool in the column (the
+ * picture studio's details): the tool is then not showing, and the click
+ * brings it forward instead.
  */
-export async function modulWaehlen(name) {
+export async function modulWaehlen(name, covered = false) {
   if (!MODULE.includes(name)) return
   leiste.gewaehlt += 1
-  if (leiste.offen && leiste.modul === name) return
+  if (leiste.offen && leiste.modul === name && !covered) {
+    await schliessen()
+    return
+  }
   zeigenRoh(name)
   leiste.nichtAufdraengen = ''
 }

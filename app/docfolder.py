@@ -12,7 +12,9 @@ Three places hold files, and each keeps doing its own job:
   tool or a command put there, in the chat or in a job started from it.
   Nobody entered it anywhere, so the folder is asked, the way the dock asks
   its own folder for what its record does not know. Such a file is named by
-  its path below the chat's folder.
+  its path below the chat's folder. A folder a tool keeps for itself — a
+  hidden one, a package manager's, the interpreter's — is not looked into,
+  and a hidden file and what a file manager leaves behind are not listed.
 
 Nothing is copied or moved to make the folder. It is a READ over those
 places: one row per file with where it came from, and the address the file
@@ -41,6 +43,7 @@ from urllib.parse import quote
 
 from app import dokumentablage
 from app.agentendock import dock_fuer, type_from_name
+from app.folder_names import is_viewer_file
 
 if TYPE_CHECKING:
     from app.config import Config
@@ -106,28 +109,51 @@ def entries(
         )
 
     documents = repositories.documents.for_folder()
+    # One file on the disk is one tile, however many rows name it — the same
+    # file put into a chat twice has two rows and one file. The row kept is
+    # the newest one; a row whose file is gone has nothing to be compared by
+    # and stays as it is.
+    by_file: dict[tuple[int, int], dict[str, Any]] = {}
+    keys: dict[str, tuple[int, int]] = {}
     for document in documents:
-        rows.append(
-            {
-                "id": document["id"],
-                "source": SOURCE_DOCUMENT,
-                "origin": origin_of(document["agent"], document["job"], cron_jobs),
-                "name": document["filename"],
-                "type": document["mime_type"] or "",
-                "size": int(document["size_bytes"] or 0),
-                "created": document["created_at"],
-                "agent": document["agent"] or "",
-                "chat_id": document["chat_id"],
-                "project_id": document["project_id"],
-                "path": f"/documents/{document['id']}/file" if document["pfad"] else "",
-            }
-        )
+        row = {
+            "id": document["id"],
+            "source": SOURCE_DOCUMENT,
+            "origin": origin_of(document["agent"], document["job"], cron_jobs),
+            "name": document["filename"],
+            "type": document["mime_type"] or "",
+            "size": int(document["size_bytes"] or 0),
+            "created": document["created_at"],
+            "agent": document["agent"] or "",
+            "chat_id": document["chat_id"],
+            "project_id": document["project_id"],
+            "path": f"/documents/{document['id']}/file" if document["pfad"] else "",
+        }
+        key = _file_key(document["pfad"])
+        if key is not None:
+            keys[document["id"]] = key
+        earlier = by_file.get(key) if key is not None else None
+        if earlier is None:
+            if key is not None:
+                by_file[key] = row
+            rows.append(row)
+        elif row["created"] > earlier["created"]:
+            rows[rows.index(earlier)] = row
+            by_file[key] = row
 
-    # What lies below a chat's folder without a row of its own — exactly
-    # the files the address under ``path`` hands out, by the same test.
-    named = _document_files(
-        [document for document in documents if not chat or document["chat_id"] == chat]
-    )
+    # What lies below a chat's folder without a row of its own — files the
+    # address under ``path`` hands out, by the same test, and of those all
+    # but the ones the walk leaves out: by their folder, or by their name.
+    # Each as the file itself, not as a spelling of its path: a row's path
+    # and the folder's own listing can write one name in two ways — another
+    # letter case, an accent stored composed here and decomposed there — and
+    # two spellings of one file must not make two tiles.
+    named = {
+        key
+        for document in documents
+        if (not chat or document["chat_id"] == chat)
+        and (key := keys.get(document["id"])) is not None
+    }
     for chat_id, project_id, folder in _chat_folders(config, repositories, chat):
         for file, name in _files_below(folder):
             try:
@@ -176,27 +202,16 @@ def _real(path: Path | str) -> Path | None:
         return None
 
 
-def _document_files(documents: list[dict[str, Any]]) -> set[tuple[int, int]]:
-    """The files the document rows name. A file among them already has its
-    row and its address; listing it from the folder as well would show it
-    twice.
-
-    Each as the file itself, not as a spelling of its path: a row's path and
-    the folder's own listing can write one name in two ways — another letter
-    case, an accent stored composed here and decomposed there — and two
-    spellings of one file must not make two tiles.
-    """
-    named: set[tuple[int, int]] = set()
-    for document in documents:
-        if not document["pfad"]:
-            continue
-        try:
-            state = os.stat(document["pfad"])
-        except (OSError, ValueError):
-            # The row outlived its file. Nothing in the folder can be it.
-            continue
-        named.add((state.st_dev, state.st_ino))
-    return named
+def _file_key(path: str | None) -> tuple[int, int] | None:
+    """A file as the file itself — its device and inode — or nothing where
+    the path names no file that can be looked at."""
+    if not path:
+        return None
+    try:
+        state = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    return (state.st_dev, state.st_ino)
 
 
 def _chat_folders(
@@ -236,11 +251,19 @@ def _files_below(folder: Path) -> list[tuple[Path, str]]:
 
     A missing folder is the state before the first file, and an empty list.
 
-    A link is listed by where it leads, not by where it lies. One leading
-    out of the folder is left out, and a linked folder is not walked into:
-    the address resolves what it is asked for and refuses whatever ends up
-    outside (``chat_file``), and a tile the address refuses is a tile
-    nothing can open.
+    A folder a tool keeps for itself is not walked into (``_is_left_out``),
+    on any depth: nothing in it is listed. A hidden file and one a file
+    manager left behind are not listed either (``_is_hidden_file``), in any
+    folder. Both stay where they lie; only the list passes them by.
+
+    A link is listed by where it leads and by the name it stands under.
+    One leading out of the folder is left out, and a linked folder is not
+    walked into: the address resolves what it is asked for and refuses
+    whatever ends up outside (``chat_file``), and a tile the address
+    refuses is a tile nothing can open. One leading into a folder that is
+    not walked into, or to a file that is not listed, is left out like the
+    file it leads to; one whose own name is not listed is left out like a
+    file of that name, and the file it leads to stays where it is listed.
     """
     root = _real(folder)
     if root is None or not root.is_dir():
@@ -262,13 +285,21 @@ def _files_below(folder: Path) -> list[tuple[Path, str]]:
                     # everything else below a resolved folder lies where its
                     # path says, and a job's folder can hold tens of
                     # thousands of files.
+                    if _is_hidden_file(entry.name):
+                        continue
                     file = _real(entry.path)
                     if file is None or not file.is_file() or not file.is_relative_to(root):
                         continue
+                    *folders, file_name = file.relative_to(root).parts
+                    if any(_is_left_out(name) for name in folders) or _is_hidden_file(file_name):
+                        continue
                 elif entry.is_dir(follow_symlinks=False):
-                    waiting.append(Path(entry.path))
+                    if not _is_left_out(entry.name):
+                        waiting.append(Path(entry.path))
                     continue
                 elif entry.is_file(follow_symlinks=False):
+                    if _is_hidden_file(entry.name):
+                        continue
                     file = Path(entry.path)
                 else:
                     continue
@@ -276,6 +307,42 @@ def _files_below(folder: Path) -> list[tuple[Path, str]]:
                 continue
             found.append((file, Path(entry.path).relative_to(root).as_posix()))
     return found
+
+
+def _is_left_out(folder_name: str) -> bool:
+    """Whether a folder of this name is left out of the list with everything
+    in it: a hidden one, the one a package manager fills, and the one the
+    Python interpreter keeps its compiled files in. No other.
+
+    Such a folder holds what a tool needs to do its work, not what was
+    brought into the chat's folder for the person, and it can hold tens of
+    thousands of files. Only the name is asked, which a listing already
+    carries — the name below the chat's folder: where that folder itself
+    lies is nobody's choice and hides nothing.
+    """
+    return folder_name.startswith(".") or folder_name in ("node_modules", "__pycache__")
+
+
+def _is_hidden_file(file_name: str) -> bool:
+    """Whether a file of this name is left out of the list: a hidden one,
+    and one a file manager leaves in a folder it only showed.
+
+    Neither was brought into the chat's folder for the person: one holds
+    what a tool is set up with, the other what a folder looked like in a
+    window. The file itself is not touched — whatever reads and writes it
+    still finds it. A document of the chat is not asked here at all: it has
+    its row, whatever it is called.
+    """
+    return file_name.startswith(".") or is_viewer_file(file_name)
+
+
+def chat_folder_path(config: "Config", chat_id: str) -> str | None:
+    """Where a chat's own files lie — the place its folder row shows and
+    opens. Nothing is created: the folder may not exist yet, and a row that
+    names the place is not a reason to make it. ``None`` for an id that is
+    not a chat id (``dokumentablage.chatordner`` refuses those)."""
+    folder = dokumentablage.chatordner(Path(config.datenverzeichnis), chat_id)
+    return None if folder is None else str(folder)
 
 
 def chat_file(config: "Config", chat_id: str, name: str) -> Path | None:

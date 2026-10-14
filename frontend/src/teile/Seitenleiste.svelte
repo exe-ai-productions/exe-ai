@@ -1,6 +1,7 @@
 <script>
   import { rollfade } from '../lib/rollfade.js'
-  import { slide, fade, fly } from 'svelte/transition'
+  import { fade, fly } from 'svelte/transition'
+  import { slideIfDrawn } from '../lib/slideIfDrawn.js'
   import { flip } from 'svelte/animate'
   import { t, texte } from '../lib/texte.svelte.js'
   import { chatgruppen, gruppenDatum } from '../lib/chatgruppen.js'
@@ -37,12 +38,27 @@
     seitenSchliessen()
     return chatOeffnen(id)
   }
+  /* Whether the sidebar is standing open: the drawer on a narrow window,
+     the column beside the chat otherwise. */
+  function sidebarOpen() {
+    return istSeitenleisteSchmal() ? zustand.seitenleisteOffen : !zustand.seitenleisteEingeklappt
+  }
+  /* Whether the chat list is what the sidebar shows right now. */
+  const chatsAn = () =>
+    !eineSeiteOffen() && !studio.offen && zustand.seitenblatt === 'chats' && sidebarOpen()
   /* The chat list again: a menu page and the studio give way and the sheet
-     is the chats. */
+     is the chats; a folded sidebar unfolds with it. While the list already
+     stands there, the same sign folds the sidebar — the sidebar's own
+     button and ⌘B do just that. */
   function chatsZeigen() {
+    if (chatsAn()) {
+      seitenleisteSchalten()
+      return
+    }
     seitenSchliessen()
     studioSchliessen()
     blattWechseln('chats')
+    if (!sidebarOpen()) seitenleisteSchalten()
   }
   function neuerChatAusDerListe() {
     seitenSchliessen()
@@ -254,7 +270,7 @@
          first of the six. -->
     <button
       class="zk"
-      class:aktiv={!eineSeiteOffen() && !studio.offen && zustand.seitenblatt === 'chats'}
+      class:aktiv={chatsAn()}
       onclick={chatsZeigen}
       title={t('jobs.bereich_chats')}
       aria-label={t('jobs.bereich_chats')}
@@ -334,7 +350,7 @@
     </svg>
   </button>
   <span class="frei"></span>
-  {@render fensterknoepfe()}
+  {@render fensterknoepfe(true)}
 </nav>
 
 <aside
@@ -440,20 +456,20 @@
           class="gruppe tafelkopf day"
           aria-expanded={!folded}
           onclick={() => (foldedDays[dayKey(gruppe)] = !foldedDays[dayKey(gruppe)])}
-          transition:slide={{ duration: 160 }}
+          transition:slideIfDrawn={{ duration: 160 }}
         >
           <span class="chevron" class:open={!folded}><Hauszeichen zeichen="pfeil_unten" groesse={12} strich={2.6} /></span>
           {gruppe.schluessel ? t(gruppe.schluessel) : gruppenDatum(gruppe.datum, texte.sprache)}
         </button>
       {:else}
-        <div class="gruppe tafelkopf" transition:slide={{ duration: 160 }}>
+        <div class="gruppe tafelkopf" transition:slideIfDrawn={{ duration: 160 }}>
           {t(gruppe.schluessel)}
         </div>
       {/if}
       {#if !folded}
-        <div transition:slide={{ duration: 160 }}>
+        <div transition:slideIfDrawn={{ duration: 160 }}>
           {#each gruppe.chats as chat (chat.id)}
-            <div animate:flip={{ duration: 220 }} transition:slide={{ duration: 180 }}>
+            <div animate:flip={{ duration: 220 }} transition:slideIfDrawn={{ duration: 180 }}>
               <Chatzeile {chat} oeffnen={chatAusDerListe} menue={menueOeffnen} />
             </div>
           {/each}
@@ -469,7 +485,7 @@
     {#if !searching && zustand.projects.length}
       <div class="projects">
         {#each zustand.projects as project (project.id)}
-          <div transition:slide={{ duration: 160 }}>
+          <div transition:slideIfDrawn={{ duration: 160 }}>
             <ProjectRow
               {project}
               open={Boolean(openProjects[project.id])}
@@ -478,9 +494,9 @@
               onDropChat={(chatId) => dropIntoProject(chatId, project)}
             />
             {#if openProjects[project.id]}
-              <div transition:slide={{ duration: 160 }}>
+              <div transition:slideIfDrawn={{ duration: 160 }}>
                 {#each chatsByProject[project.id] ?? [] as chat (chat.id)}
-                  <div animate:flip={{ duration: 220 }} transition:slide={{ duration: 180 }}>
+                  <div animate:flip={{ duration: 220 }} transition:slideIfDrawn={{ duration: 180 }}>
                     <Chatzeile {chat} nested oeffnen={chatAusDerListe} menue={menueOeffnen} />
                   </div>
                 {/each}

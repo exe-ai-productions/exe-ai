@@ -204,16 +204,16 @@ def test_the_execution_lines_name_only_this_runs_tools():
 
 
 def test_the_overview_names_only_this_runs_tools():
-    """A run that may read but not write is not told it can change files."""
+    """A run that may read but not write is not told it can edit files."""
     reading = " ".join(grundprompt.bauen(kann=grundprompt.faehigkeiten({"read_file"})).split())
     assert "Exe AI can read files in the shared folders." in reading
-    assert ", change files" not in reading and "and change files" not in reading
+    assert ", edit files" not in reading and "and edit files" not in reading
     everything = " ".join(grundprompt.bauen(
         kann=grundprompt.faehigkeiten({"read_file", "edit_file", "ask_user", "deliver_file"})
     ).split())
-    assert "and change files" in everything or ", change files" in everything
+    assert "and edit files" in everything or ", edit files" in everything
     assert "ask the user to choose between options" in everything
-    assert "hand files over into the Doc folder" in everything
+    assert "deliver files to the Doc folder" in everything
 
 
 def test_a_chat_hears_where_its_own_delivered_file_lands():
@@ -226,9 +226,9 @@ def test_a_chat_hears_where_its_own_delivered_file_lands():
 
     assert in_chat == [
         "read files in the shared folders",
-        "hand finished files to the user as cards in the answer",
+        "deliver completed files to the user as cards in the response",
     ]
-    assert in_job == ["read files in the shared folders", "hand files over into the Doc folder"]
+    assert in_job == ["read files in the shared folders", "deliver files to the Doc folder"]
 
 
 def test_a_job_hears_of_no_conversation_in_the_folder_sentences():
@@ -237,7 +237,7 @@ def test_a_job_hears_of_no_conversation_in_the_folder_sentences():
     shared = grundprompt.bauen(werkzeuge=True, ordner=["/u/a"], dateiwerkzeuge=["read_file"])
     assert "shared these working folders with you" in shared
     none_shared = grundprompt.bauen(werkzeuge=True, dateiwerkzeuge=["read_file"])
-    assert "No working folder is shared with you." in none_shared
+    assert "No working folder has been shared with you." in none_shared
     assert "[Earlier steps of this conversation, summarized to save space]" in none_shared
 
 

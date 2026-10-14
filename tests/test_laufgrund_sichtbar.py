@@ -148,7 +148,7 @@ async def test_der_ganze_weg_bis_zur_mitteilung(repos, monkeypatch):
     aufrufe: list[tuple[str, bool]] = []
     monkeypatch.setattr(
         cronablauf.cronmeldung, "melden",
-        lambda text, *, erfolgreich: aufrufe.append((text, erfolgreich)),
+        lambda text, *, erfolgreich, sprache=None: aufrufe.append((text, erfolgreich)),
     )
     eintrag = repos.cronjobs.erstellen(
         agent="a", task="Postfach lesen", zeitplan="08:00", herkunft="chat",
@@ -168,7 +168,7 @@ async def test_ein_stiller_eintrag_bleibt_still(repos, monkeypatch):
     aufrufe: list[str] = []
     monkeypatch.setattr(
         cronablauf.cronmeldung, "melden",
-        lambda text, *, erfolgreich: aufrufe.append(text),
+        lambda text, *, erfolgreich, sprache=None: aufrufe.append(text),
     )
     eintrag = repos.cronjobs.erstellen(
         agent="a", task="Postfach lesen", zeitplan="08:00", herkunft="chat",
@@ -301,15 +301,15 @@ def test_die_route_nimmt_den_satz_aus_dem_ablauf(client):
             "/api/v1/cronjobs", headers={"Accept-Language": "de"}
         ).json()
         assert deutsch["skript_nicht_startbar"] == (
-            "„sicherung.sh“ ist nicht ausführbar. Mach die Datei im "
-            "Skript-Ordner (/wo/anders) ausführbar und versuch es noch einmal."
+            "„sicherung.sh“ ist nicht ausführbar. Erteile der Datei im Skriptordner "
+            "(/wo/anders) eine Ausführungsberechtigung und versuche es erneut."
         )
 
         (englisch,) = client.get(
             "/api/v1/cronjobs", headers={"Accept-Language": "en"}
         ).json()
         assert englisch["skript_nicht_startbar"] == (
-            "'sicherung.sh' is not executable. Make it executable in the "
+            "'sicherung.sh' is not executable. Grant execute permission in the "
             "scripts folder (/wo/anders) and try again."
         )
     finally:

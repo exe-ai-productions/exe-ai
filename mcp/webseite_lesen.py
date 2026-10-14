@@ -27,15 +27,14 @@ MAX_ZEICHEN = int(os.getenv("ABRUF_MAX_ZEICHEN", "6000"))
 WERKZEUG = {
     "name": "read_webpage",
     "description": (
-        "Fetches a web page and returns its text content. Useful for "
-        "addresses from a previous web_search."
+        "Retrieves a web page and returns its text. Use it to read URLs found by web_search."
     ),
     "inputSchema": {
         "type": "object",
         "properties": {
             "url": {
                 "type": "string",
-                "description": "Full address, starting with http:// or https://",
+                "description": "Full URL starting with http:// or https://.",
             }
         },
         "required": ["url"],
@@ -103,7 +102,10 @@ async def lesen(adresse: str) -> str:
                     break
                 adresse = str(antwort.url.join(ziel))
                 if not adresse.startswith(("http://", "https://")):
-                    return "Error: the redirect does not lead to http or https."
+                    return (
+                               "Error: the redirect points to a URL that uses neither http nor "
+                               "https."
+                           )
                 continue
             break
         else:
@@ -113,7 +115,10 @@ async def lesen(adresse: str) -> str:
         rohtext = antwort.text
 
     if "html" not in inhaltstyp and "text" not in inhaltstyp:
-        return f"The address returns '{inhaltstyp}', which is not readable text."
+        return (
+                   f"The address returns content of type '{inhaltstyp}', which is not readable "
+                   "text."
+               )
 
     text = _SKRIPT.sub(" ", rohtext)
     text = _TAG.sub(" ", text)

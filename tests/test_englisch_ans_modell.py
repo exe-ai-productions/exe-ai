@@ -88,12 +88,12 @@ def test_run_command_truncation_note_is_english():
     # The note has to SURVIVE the ceiling a tool result is cut to on its way
     # out, and that ceiling is this same figure — added on top of it, the
     # note was cut off every single time and nobody ever read it.
-    assert "were cut" in text[:WERKZEUGERGEBNIS_GRENZE]
+    assert "additional characters omitted" in text[:WERKZEUGERGEBNIS_GRENZE]
     assert len(text) <= shell.MAX_AUSGABE_ZEICHEN
     # And its figure is what the reader LOST, not what the note cost: the
     # count once ran against the ceiling before the note took its room, so
     # it understated the loss by the length of the note itself.
-    notiz = re.search(r"\n… \[(\d+) more characters were cut\]$", text)
+    notiz = re.search(r"\n… \[(\d+) additional characters omitted\]$", text)
     assert notiz, text[-80:]
     behalten = len(text) - len(notiz.group(0))
     assert int(notiz.group(1)) == shell.MAX_AUSGABE_ZEICHEN + 500 - behalten
@@ -114,7 +114,7 @@ def test_the_note_survives_two_streams_that_each_just_fit():
     text = shell._antwort_bauen([rand], [rand], 1)
     assert len(text) <= shell.MAX_AUSGABE_ZEICHEN
     assert len(text) <= WERKZEUGERGEBNIS_GRENZE
-    assert "more characters were cut]" in text
+    assert "additional characters omitted]" in text
     # The exit code is not part of the cut: it is carried behind it.
     assert text.endswith("\n[exit code 1]")
 
@@ -127,7 +127,7 @@ def test_the_exit_code_survives_a_long_output_alone():
     assert text.endswith("[exit code 2]")
     assert len(text) <= shell.MAX_AUSGABE_ZEICHEN
     # And a command with no output at all stays as it was.
-    assert shell._antwort_bauen([], [], 0) == "(done, no output)"
+    assert shell._antwort_bauen([], [], 0) == "(completed without output)"
     assert shell._antwort_bauen([], [], 3) == "[exit code 3]"
 
 
@@ -235,7 +235,7 @@ def test_the_agent_report_speaks_english():
         _pruefen(f"Agentenbericht ({grund})", bericht)
         # And it says something: an unknown ending would fall back to a
         # sentence that names nothing.
-        assert "without a named reason" not in bericht, grund
+        assert "without a stated reason" not in bericht, grund
         assert f"jobs.grund.{grund}" not in bericht
 
 
@@ -247,7 +247,7 @@ def test_an_unknown_ending_is_not_a_key():
     bericht = agent_report.report_text(_Auftrag("ein_grund_den_es_nicht_gibt"))
     _pruefen("Agentenbericht (unbekannt)", bericht)
     assert "jobs.grund.ein_grund_den_es_nicht_gibt" not in bericht
-    assert "without a named reason" in bericht
+    assert "without a stated reason" in bericht
 
 
 def test_a_provider_error_keeps_its_own_words():

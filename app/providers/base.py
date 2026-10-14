@@ -67,8 +67,10 @@ class ChatNachricht:
     # blocks with their signature exactly as received, its text and tool
     # calls as markers of their place. The API wants a round's thinking
     # back unchanged and in order while its tool calls are answered
-    # (app/providers/anthropic.py). They live in the request only — never
-    # stored, never carried past the turn — and no other wire reads them.
+    # (app/providers/anthropic.py). The answer's tool log keeps them with
+    # the round's first call, so an answer that failed and is asked again
+    # hands them back; the history of earlier answers never carries them,
+    # and no other wire reads them.
     anthropic_blocks: list[dict[str, Any]] = field(default_factory=list)
     # Only with role='user': an image as a data URL (vision). The provider
     # builds the OpenAI image format from it; endpoints without vision never
@@ -140,15 +142,22 @@ class Stueck:
     werkzeugaufrufe: list[Werkzeugaufruf] = field(default_factory=list)
 
 
-def zeitlimit(timeout: float, timeout_enabled: bool) -> httpx.Timeout:
+def zeitlimit(
+    timeout: float, timeout_enabled: bool, read_timeout: float | None = None
+) -> httpx.Timeout:
     """The read timeout is what `EndpointConfig.timeout_enabled` switches —
     off drops it so a long-silent server is never cut off mid-answer. The
     connect timeout stays either way: a server that cannot even be reached
     has nothing to wait for. Shared by every provider that builds its own
     `httpx.AsyncClient` for the model call, not just the OpenAI-compatible
-    one."""
+    one.
+
+    `read_timeout` lifts the read timeout alone, for a server that may go
+    quiet for long while it works (a model on this machine reading a long
+    prompt): the connect timeout is still `timeout`. With the switch off
+    there is no read timeout at all, whatever this says."""
     if timeout_enabled:
-        return httpx.Timeout(timeout)
+        return httpx.Timeout(timeout, read=read_timeout or timeout)
     return httpx.Timeout(timeout, read=None)
 
 
@@ -415,6 +424,17 @@ class Provider(ABC):
         Read by the discovery to tell an endpoint entered under the wrong
         dialect from one that is right (app/dialektverdacht.py). Answered by
         whoever sees such answers; by default nobody does.
+        """
+        return False
+
+    def kontext_vorlaeufig(self) -> bool:
+        """Whether the number :meth:`kontextgroesse` answered last is only a
+        provisional one — a model that is not loaded yet names the most it
+        can take, and its own window comes with the loading.
+
+        Read by the discovery, which asks again on the next pass for as long
+        as this holds. Answered by whoever sees such answers; by default
+        nobody does, and every number is final.
         """
         return False
 

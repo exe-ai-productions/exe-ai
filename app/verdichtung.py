@@ -16,6 +16,7 @@ middle, everything already settled, gets folded into one.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import logging
@@ -105,6 +106,20 @@ file, a plan, numbers you will need again.
 Nothing else. No preamble, no sign-off.
 """
 
+# The last thing a chat's summary request says when the user compacted by
+# hand and named a focus (``/compact only the open tasks``): the one place
+# where a request of the user's own steers what the summary keeps. Absent
+# from every request that came from the threshold, so those stay word for
+# word what they were. ``{topic}`` is filled with the words behind the
+# command, in quotes, as typed.
+FOCUS_TEXT = (
+    'The user requested this summary and specified a focus: "{topic}". '
+    "Under the two headings above, record everything related to this focus "
+    "in full detail: exact values, file paths, commands, error messages, and "
+    "decisions. Summarize everything else briefly, and omit anything "
+    "irrelevant to this focus."
+)
+
 
 def _nicht_hinter_werkzeugantwort(nachrichten: list[ChatNachricht], ab: int, richtung: int) -> int:
     """Moves ``ab`` by ``richtung`` (+1 or -1) until it does not land on a
@@ -129,14 +144,15 @@ def nachrichtengewicht(nachricht: ChatNachricht) -> int:
     )
 
 
-def schwanz_anfang(inhalte: list[str], budget: int = LETZTE_ZEICHEN) -> int:
+def tail_start_from_weights(gewichte: list[int], budget: int = LETZTE_ZEICHEN) -> int:
     """Where the verbatim tail begins — walked backwards until the budget is
     used up. ``budget`` is what :func:`schwanz_budget` answers for the model
     in hand; the ceiling stands in where nobody asked.
 
-    Texts and not messages, so a chat's rows and a job's message list can ask
-    the same question of the same function. One boundary written twice is a
-    boundary that drifts.
+    What each message WEIGHS, in characters, and not the messages: a chat's
+    rows (``app/fold_row_weights.py``) and a job's message list
+    (:func:`nachrichtengewicht`) ask the same question of the same function.
+    One boundary written twice is a boundary that drifts.
 
     The message that busts the budget is NOT kept: a single huge tool result
     would otherwise pin itself and everything after it, and the tail would
@@ -149,12 +165,6 @@ def schwanz_anfang(inhalte: list[str], budget: int = LETZTE_ZEICHEN) -> int:
     ever answered. Attaching a large file has to stay possible, so the tail
     keeps the newest message however big it is.
     """
-    return _schwanz_ab_gewichten([len(t or "") for t in inhalte], budget)
-
-
-def _schwanz_ab_gewichten(gewichte: list[int], budget: int) -> int:
-    """The same walk, with what each message WEIGHS in hand rather than its
-    text — so a picture can weigh what it costs without a copy of anything."""
     if not gewichte:
         return 0
     zeichen = 0
@@ -168,13 +178,13 @@ def _schwanz_ab_gewichten(gewichte: list[int], budget: int) -> int:
 def _schwanz_anfang(nachrichten: list[ChatNachricht], budget: int = LETZTE_ZEICHEN) -> int:
     """The same boundary, asked with messages in hand — pictures included
     (:func:`nachrichtengewicht`)."""
-    return _schwanz_ab_gewichten([nachrichtengewicht(n) for n in nachrichten], budget)
+    return tail_start_from_weights([nachrichtengewicht(n) for n in nachrichten], budget)
 
 
 def geschuetztes_ende(nachrichten: list[ChatNachricht], budget: int = LETZTE_ZEICHEN) -> int:
     """The first index of the stretch that keeps its own text, in full.
 
-    :func:`schwanz_anfang` alone is not that index: where it lands inside a
+    :func:`tail_start_from_weights` alone is not that index: where it lands inside a
     round's tool results, everything from the assistant call that made them
     down to the boundary would be treated as settled, and a tool result whose
     call is no longer in the kept stretch is invalid history — Anthropic
@@ -222,12 +232,22 @@ class Ergebnis:
     it and on nothing else. After a failure, inside a pause, with no room to
     write a summary in, or after a summary that saved nothing, the next step
     would ask about the same history again and end the same way.
+
+    ``ersetzt`` is how many rows the summary replaced, set where a chat's
+    fold was applied and zero everywhere else.
+
+    ``gestoppt`` says the person pressed stop while the summary was being
+    asked for: the request was closed, nothing was folded, and nothing was
+    booked — not a failure (``notfall`` stays false), so no pause and no
+    notice. The caller ends the way it ends after any stop.
     """
 
     angewendet: bool
     ohne_ersparnis: bool = False
     notfall: bool = False
     keine_mitte: bool = False
+    ersetzt: int = 0
+    gestoppt: bool = False
 
 
 def _bitte_nachrichten(nachrichten: list[ChatNachricht]) -> list[ChatNachricht]:
@@ -316,6 +336,7 @@ async def verdichten(
     erzwungen: bool = False,
     einstellungen=None,
     endpoint_id: str | None = None,
+    stopp: asyncio.Event | None = None,
 ) -> Ergebnis:
     """Summarizes everything between the first ``ERSTE_FEST`` messages and
     the verbatim tail of ``anfrage.nachrichten`` into one, in place.
@@ -490,7 +511,10 @@ async def verdichten(
     try:
         # One request under two clocks; the pause below is booked once from
         # what it came back with.
-        text = await faltversuche.anfordern(zustand, zwischenanfrage)
+        text = await faltversuche.anfordern(zustand, zwischenanfrage, stopp)
+    except faltversuche.Gestoppt:
+        # Stop pressed: the request is closed, and nothing is booked.
+        return Ergebnis(angewendet=False, gestoppt=True)
     except Exception as fehler:  # noqa: BLE001 - a failed fold must not end the run
         route = denkschalter.route_for(zustand, modell=anfrage.modell)
         if not (
@@ -514,7 +538,9 @@ async def verdichten(
             zwischenanfrage, parameter=parameter, zusatz=ohne_denken
         )
         try:
-            text = await faltversuche.anfordern(zustand, zwischenanfrage)
+            text = await faltversuche.anfordern(zustand, zwischenanfrage, stopp)
+        except faltversuche.Gestoppt:
+            return Ergebnis(angewendet=False, gestoppt=True)
         except Exception:  # noqa: BLE001 - see above
             log.warning("Fold for %s failed again without the thinking switch", schluessel,
                         exc_info=True)

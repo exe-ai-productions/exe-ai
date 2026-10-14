@@ -205,6 +205,8 @@ def test_eine_kaputte_frage_wird_dem_modell_gesagt(client, chat_id):
     assert not any(e["typ"] == "user_ask" for e in ereignisse)
     ergebnis = next(e for e in ereignisse if e["typ"] == "tool_result")
     assert ergebnis["fehlgeschlagen"] is True
+    # Silence probe: a call that really failed is no stop by the person.
+    assert "stopped" not in ergebnis
 
 
 # --- The call's result and its time -----------------------------------------
@@ -265,6 +267,9 @@ def test_a_cancelled_question_gets_its_result(client, chat_id, monkeypatch):
     assert results[0]["fehlgeschlagen"] is True
     assert results[0]["bild"] is None
     assert results[0]["text"] == t("nachricht.abgebrochen_kurz", "de")
+    # The result says the person stopped it, for every window that watches:
+    # nothing failed, so none of them reports a failure.
+    assert results[0]["stopped"] is True
     assert isinstance(results[0]["dauer_sekunden"], float)
     # The result comes after the question and before the run's end.
     kinds = [e["typ"] for e in events]
@@ -291,6 +296,7 @@ def test_an_answered_question_has_one_successful_result(client, chat_id):
     )
     results = [e for e in _ereignisse(response) if e["typ"] == "tool_result"]
     assert [(e["fehlgeschlagen"], e["text"]) for e in results] == [(False, "Links")]
+    assert "stopped" not in results[0]
     # The model reads the answer itself, not the words of a cancelled call.
     rows = client.get(f"/api/v1/chats/{chat_id}/messages").json()["nachrichten"]
     entry = [z for z in rows if z["role"] == "assistant"][-1]["stats"]["werkzeuge"][0]

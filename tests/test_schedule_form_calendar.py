@@ -32,7 +32,7 @@ MORGEN_13 = datetime.now(timezone.utc).replace(
 def _shown(monkeypatch) -> list[str]:
     shown: list[str] = []
     monkeypatch.setattr(
-        cronablauf.cronmeldung, "melden", lambda text, *, erfolgreich: shown.append(text)
+        cronablauf.cronmeldung, "melden", lambda text, *, erfolgreich, sprache=None: shown.append(text)
     )
     return shown
 

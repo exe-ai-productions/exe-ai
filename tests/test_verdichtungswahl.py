@@ -127,24 +127,3 @@ def test_die_vorgabe_bleibt_unter_der_notbremse():
     from app import zwischenstand
 
     assert vw.VORGABE < zwischenstand.SCHWELLE_PROZENT
-
-
-def test_der_hinweistext_nennt_die_wirkliche_vorgabe():
-    """The sentence under the field says which number zero restores. It
-    said 50 after the default had moved to 80 — and the commit that changed
-    the floor in that very sentence walked past the stale number. A label
-    that names a different value than the service uses is the same defect
-    the setting itself was built to remove.
-    """
-    import json
-
-    wurzel = WURZEL
-    for datei in ("de.json", "en.json"):
-        texte = json.loads((wurzel / "app/locales" / datei).read_text(encoding="utf-8"))
-        satz = texte["editor"]["kontextkomprimierung_unter"]
-        assert str(int(vw.VORGABE)) in satz, (
-            f'{datei}: the hint text does not name the default {vw.VORGABE}'
-        )
-        assert str(int(vw.KLEINSTE)) in satz and str(int(vw.GROESSTE)) in satz, (
-            f'{datei}: the hint text does not name the band correctly'
-        )

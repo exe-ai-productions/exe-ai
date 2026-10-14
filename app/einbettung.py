@@ -172,7 +172,7 @@ def zerlegen(
     breaks would arrive as several unrelated inputs.
     """
     if ueberlappung >= woerter:
-        raise ValueError("Überlappung muss kleiner als die Abschnittslänge sein")
+        raise ValueError("The overlap must be smaller than the section length.")
     stuecke = (text or "").split()
     if not stuecke:
         return []
@@ -341,7 +341,7 @@ def als_kontext(dateiname: str, treffer: list[Treffer]) -> str:
     """
     if not treffer:
         return ""
-    teile = [f'[From "{dateiname}", the passages that fit the question]']
+    teile = [f'[Passages from "{dateiname}" relevant to the question]']
     for eintrag in treffer:
         teile.append(f"[{dateiname}, section {eintrag.nummer}]\n{eintrag.text}")
     teile.append("[End of passages]")

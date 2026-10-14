@@ -376,7 +376,7 @@ async def test_a_handoff_that_only_gets_keepalives_ends_on_the_silence_clock(
     assert handoff == ""
     assert server.closed
     lines = [r for r in caplog.records if r.name == "app.zwischenstand"]
-    assert [r.getMessage() for r in lines] == ["Handoff not received: no sign of life from the server for 0 s"]
+    assert [r.getMessage() for r in lines] == ["Handoff not received: No response from the server for 0 s."]
     assert lines[0].exc_info is None
 
 

@@ -71,7 +71,7 @@ def test_a_refused_model_list_names_its_reason(tmp_path, monkeypatch):
     text = asyncio.run(
         bild_werkzeug.ausfuehren({"prompt": "a dog"}, "http://x", tmp_path, "testschluessel")
     )
-    assert text == "The picture could not be drawn: Invalid session key."
+    assert text == "The image could not be generated: Invalid session key."
     assert "No image generator" not in text
     assert service.gezeichnet == []
 
@@ -81,7 +81,7 @@ def test_refused_defaults_do_not_draw_with_fixed_values(tmp_path, monkeypatch):
         tmp_path, monkeypatch, {"c1": {"modell": "a.safetensors", "familie": "sdxl"}}, "c1",
         vorgaben={"detail": "defaults unreadable"}, vorgaben_status=500,
     )
-    assert text == "The picture could not be drawn: defaults unreadable"
+    assert text == "The image could not be generated: defaults unreadable"
     assert service.gezeichnet == []
 
 
@@ -123,16 +123,16 @@ def test_a_failure_without_a_readable_detail_still_names_a_reason(
     tmp_path, monkeypatch, answer, reason
 ):
     assert _draw_with_model_list(tmp_path, monkeypatch, answer) == (
-        f"The picture could not be drawn: {reason}"
+        f"The image could not be generated: {reason}"
     )
 
 
 # The two sentences for a 200 the tool cannot use, word for word.
 _UNUSABLE = (
-    "The picture could not be drawn: the picture service sent an answer "
-    "that could not be used."
+    "The image could not be generated: the image service returned an unusable "
+    "response."
 )
-_NO_PICTURE = "The picture could not be drawn: the picture service sent no picture."
+_NO_PICTURE = "The image could not be generated: the image service returned no image."
 
 
 @pytest.mark.parametrize(
@@ -182,7 +182,7 @@ def test_a_failed_picture_window_does_not_draw_with_the_first_model(
         tmp_path, monkeypatch, _WINDOW_C1, "c1",
         answers={"/settings/resolved/bildfenster": Antwort({"detail": "settings broken"}, 500)},
     )
-    assert text == "The picture could not be drawn: settings broken"
+    assert text == "The image could not be generated: settings broken"
     assert service.gezeichnet == []
 
 
@@ -194,7 +194,7 @@ def test_a_failed_job_does_not_draw_with_the_first_model(
         answers={"/jobs/j1": Antwort({"detail": "Invalid session key."}, 401)},
     )
     text = _draw_from_job(tmp_path, monkeypatch, service)
-    assert text == "The picture could not be drawn: Invalid session key."
+    assert text == "The image could not be generated: Invalid session key."
     assert service.gezeichnet == []
 
 
@@ -203,7 +203,7 @@ def test_an_unknown_job_is_no_failure(tmp_path, monkeypatch):
     that is "no chat", not a failure; drawn with the first model as before."""
     service = Bilddienst(_WINDOW_C1)
     text = _draw_from_job(tmp_path, monkeypatch, service, job_id="unbekannt")
-    assert text.startswith("The picture was drawn")
+    assert text.startswith("The image was generated")
     assert service.gezeichnet[0]["modell"] == "a.safetensors"
 
 
@@ -211,7 +211,7 @@ def test_a_job_with_a_chat_draws_with_its_window(tmp_path, monkeypatch):
     """Silence probe: job and window both answer — the chat's own model."""
     service = Bilddienst(_WINDOW_C1, jobs={"j1": "c1"})
     text = _draw_from_job(tmp_path, monkeypatch, service)
-    assert text.startswith("The picture was drawn")
+    assert text.startswith("The image was generated")
     assert service.gezeichnet[0]["modell"] == "b.safetensors"
 
 
@@ -236,7 +236,7 @@ def test_a_call_without_an_answer_names_the_reason(tmp_path, monkeypatch, ending
     as a raw exception — at every one of the tool's calls."""
     service = Bilddienst(_WINDOW_C1, jobs={"j1": "c1"}, answers={ending: error})
     text = _draw_from_job(tmp_path, monkeypatch, service)
-    assert text == f"The picture could not be drawn: {reason}"
+    assert text == f"The image could not be generated: {reason}"
     # Only the draw call itself reaches the route — with the chat's model.
     assert [body["modell"] for body in service.gezeichnet] == (
         ["b.safetensors"] if ending == "/bild" else []
@@ -255,7 +255,7 @@ def test_an_undecodable_answer_does_not_draw_with_the_first_model(
         answers={ending: httpx.DecodingError("Error decoding the body")},
     )
     text = _draw_from_job(tmp_path, monkeypatch, service)
-    assert text == "The picture could not be drawn: Error decoding the body"
+    assert text == "The image could not be generated: Error decoding the body"
     assert [body["modell"] for body in service.gezeichnet] == (
         ["b.safetensors"] if ending == "/bild" else []
     )
@@ -271,8 +271,8 @@ def test_a_timed_out_drawing_is_not_drawn_again(
     )
     text = _draw_from_job(tmp_path, monkeypatch, service)
     assert text == (
-        "The picture took too long: no answer came within 15 minutes. "
-        "It may still be drawn, so do not draw it again."
+        "Image generation timed out: no response was received within 15 minutes. "
+        "Generation may still be running; do not start it again."
     )
 
 
@@ -296,7 +296,7 @@ def test_a_large_foreign_body_is_cut_like_the_picture_log(
     text = _draw_with_model_list(
         tmp_path, monkeypatch, Antwort(NOT_JSON, 502, text="\n".join(lines))
     )
-    reason = text.removeprefix("The picture could not be drawn: ")
+    reason = text.removeprefix("The image could not be generated: ")
     assert len(reason) <= bildrunner.LOG_LIMIT
     assert reason.endswith("<p>line 1999</p>")
     assert "<p>line 0</p>" not in reason
@@ -314,7 +314,7 @@ def test_a_long_detail_of_the_route_stays_whole(tmp_path, monkeypatch):
         answers={"/bild": Antwort({"detail": detail}, 500)},
     )
     text = _draw_from_job(tmp_path, monkeypatch, service)
-    assert text == f"The picture could not be drawn: {detail}"
+    assert text == f"The image could not be generated: {detail}"
 
 
 @pytest.mark.parametrize(
@@ -364,7 +364,7 @@ def test_any_other_detail_reaches_the_model_as_json(tmp_path, monkeypatch, detai
         _WINDOW_C1, jobs={"j1": "c1"}, answers={"/bild": Antwort({"detail": detail}, 409)}
     )
     text = _draw_from_job(tmp_path, monkeypatch, service)
-    assert text == f"The picture could not be drawn: {reason}"
+    assert text == f"The image could not be generated: {reason}"
 
 
 def test_an_invalid_address_names_the_reason(tmp_path, monkeypatch):
@@ -373,7 +373,7 @@ def test_an_invalid_address_names_the_reason(tmp_path, monkeypatch):
         answers={"/bild/modelle": httpx.InvalidURL("Invalid URL 'x'")},
     )
     text = _draw_from_job(tmp_path, monkeypatch, service)
-    assert text == "The picture could not be drawn: Invalid URL 'x'"
+    assert text == "The image could not be generated: Invalid URL 'x'"
     assert service.gezeichnet == []
 
 
@@ -383,7 +383,7 @@ def test_a_detail_object_reaches_the_model_as_json(tmp_path, monkeypatch):
         answers={"/bild": Antwort({"detail": {"code": "busy", "wait": 3}}, 409)},
     )
     text = _draw_from_job(tmp_path, monkeypatch, service)
-    assert text == 'The picture could not be drawn: {"code":"busy","wait":3}'
+    assert text == 'The image could not be generated: {"code":"busy","wait":3}'
 
 
 def test_missing_fields_still_draw_as_before(tmp_path, monkeypatch):
@@ -401,7 +401,7 @@ def test_missing_fields_still_draw_as_before(tmp_path, monkeypatch):
         },
     )
     text = _draw_from_job(tmp_path, monkeypatch, service)
-    assert text.startswith("The picture was drawn")
+    assert text.startswith("The image was generated")
     assert service.gezeichnet[0]["modell"] == "b.safetensors"
 
 
@@ -412,7 +412,7 @@ def test_text_entries_draw_as_before(tmp_path, monkeypatch):
         _WINDOW_C1, jobs={"j1": "c1"}, familien={"b.safetensors": "sdxl"},
     )
     text = _draw_from_job(tmp_path, monkeypatch, service)
-    assert text.startswith("The picture was drawn")
+    assert text.startswith("The image was generated")
     assert service.gezeichnet[0]["modell"] == "b.safetensors"
     assert service.gezeichnet[0]["familie"] == "sdxl"
 
@@ -423,8 +423,8 @@ def test_both_lookups_with_200_draw_as_before(tmp_path, monkeypatch):
         tmp_path, monkeypatch, {"c1": {"modell": "a.safetensors", "familie": "sdxl"}}, "c1",
         vorgaben={"family": "sdxl"},
     )
-    assert "could not be drawn" not in text
-    assert text.startswith("The picture was drawn")
+    assert "could not be generated" not in text
+    assert text.startswith("The image was generated")
     assert service.gezeichnet and service.gezeichnet[0]["prompt"] == "a dog"
 
 
@@ -555,7 +555,7 @@ def test_die_beschreibung_ist_fuer_flux_gebaut():
 
     werkzeug = bild_werkzeug.werkzeug_beschreibung(image_families.get("flux"))
     assert "Flux" in werkzeug.beschreibung
-    assert "whole, flowing sentences" in werkzeug.beschreibung
+    assert "complete, fluent sentences" in werkzeug.beschreibung
     assert "256 tokens" in werkzeug.beschreibung
     assert "no effect" in werkzeug.beschreibung
     felder = (werkzeug.schema or {}).get("properties", {})
@@ -701,7 +701,7 @@ def test_eine_video_familie_im_fenster_wird_beim_ausfuehren_abgewiesen(
         tmp_path, monkeypatch, {"c1": {"modell": "a.safetensors", "familie": "wan"}}, "c1"
     )
 
-    assert "cannot draw from text" in text
+    assert "cannot generate images from text" in text
     assert dienst.gezeichnet == [], dienst.gezeichnet
 
 
@@ -740,7 +740,7 @@ def test_die_wache_liest_die_familie_dort_wo_die_zeichenroute_sie_liest(tmp_path
         familien={"b.safetensors": "wan"},  # the file's header, and no defaults
     )
 
-    assert "cannot draw from text" in text
+    assert "cannot generate images from text" in text
     assert dienst.gezeichnet == [], dienst.gezeichnet
 
 
@@ -947,7 +947,7 @@ class _ZeichnetBisStopp(Bilddienst):
             self.gezeichnet.append(json)
             self.angefangen.set()
             await self._beendet.wait()
-            return Antwort({"detail": "Drawing stopped"}, 499)
+            return Antwort({"detail": "Image generation cancelled"}, 499)
         return await super().post(url, json=json, **_)
 
 
@@ -976,14 +976,14 @@ def test_a_stop_during_the_drawing_ends_the_picture(tmp_path, monkeypatch):
     the tool does not wait out the picture for a run that is over."""
     dienst = _ZeichnetBisStopp()
     text = _zeichnen_und_stoppen(tmp_path, monkeypatch, dienst)
-    assert text == "The picture could not be drawn: Drawing stopped"
+    assert text == "The image could not be generated: Image generation cancelled"
     assert dienst.stopps == 1
 
 
 def test_a_stop_that_came_before_the_painter_started_is_sent_again(tmp_path, monkeypatch):
     dienst = _ZeichnetBisStopp(stopps_noetig=3)
     text = _zeichnen_und_stoppen(tmp_path, monkeypatch, dienst)
-    assert text == "The picture could not be drawn: Drawing stopped"
+    assert text == "The image could not be generated: Image generation cancelled"
     assert dienst.stopps == 3
 
 
@@ -998,7 +998,7 @@ def test_a_stop_before_the_request_draws_nothing(tmp_path, monkeypatch):
             chat_id="c1", abbruch=abbruch,
         )
     )
-    assert text == "The picture could not be drawn: Drawing stopped"
+    assert text == "The image could not be generated: Image generation cancelled"
     assert dienst.gezeichnet == []
     assert dienst.stopps == 0
 
@@ -1012,7 +1012,7 @@ def test_a_signal_that_is_never_set_changes_nothing(tmp_path, monkeypatch):
             chat_id="c1", abbruch=asyncio.Event(),
         )
     )
-    assert "could not be drawn" not in text
+    assert "could not be generated" not in text
     assert not any(url.endswith("/bild/stop") for url, _ in dienst.aufrufe)
 
 
@@ -1046,7 +1046,7 @@ def test_a_stop_during_the_prompt_preparation_ends_the_run_at_once(tmp_path, mon
         abbruch.set()
         return await asyncio.wait_for(aufgabe, timeout=5)
 
-    assert asyncio.run(lauf()) == "The picture could not be drawn: Drawing stopped"
+    assert asyncio.run(lauf()) == "The image could not be generated: Image generation cancelled"
     assert dienst.gezeichnet == []
 
 
@@ -1189,3 +1189,30 @@ def test_draw_image_leaves_the_kit_of_such_a_model_to_the_service(tmp_path, monk
     assert "familie" not in body
     for field in ("diffusion_model", "t5xxl", "clip_l", "clip_g", "llm", "tokenizer", "vae"):
         assert field not in body, field
+
+
+def test_in_a_chat_the_result_says_the_picture_hangs_on_the_answer_already(tmp_path, monkeypatch):
+    """The model is told its path, and a model told a path writes a link onto
+    it. In a chat the picture is attached to the answer already: the result
+    says so and asks for no link and no image markdown — with the file name
+    and the path still in it. In a job the picture is not attached to
+    anything, and the sentence is not there."""
+    painter = Bilddienst({})
+    monkeypatch.setattr(bild_werkzeug.httpx, "AsyncClient", lambda timeout, headers: painter)
+    registry = WerkzeugRegistry([], bild_zugang=("http://x", tmp_path, "testschluessel"))
+    in_chat = asyncio.run(
+        registry.ausfuehren(
+            bild_werkzeug.WERKZEUG_NAME, {"prompt": "a dog"}, chat_id="c1", antwort_id="answer-1"
+        )
+    )
+    in_job = asyncio.run(
+        bild_werkzeug.ausfuehren(
+            {"prompt": "a dog"}, "http://x", tmp_path, "testschluessel", job_id="a-job"
+        )
+    )
+    sentence = "write no link and no image markdown for it"
+    assert sentence in in_chat
+    assert "attached to this response, and saved as " in in_chat
+    assert ".png" in in_chat.split("saved as ", 1)[1]
+    # Silence probe: the job's result is as it was.
+    assert sentence not in in_job

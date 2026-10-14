@@ -818,3 +818,61 @@ def test_der_schreiber_weist_kaputte_art_und_zustand_ab(tmp_path):
             chat_id=chat.id, role="assistant", content="x", zustand="halbgar"
         )
     repos.messages.speichern(chat_id=chat.id, role="assistant", content="x")
+
+
+# --- The permission mode kept at a chat or a model -------------------------
+#
+# The mode exists once, in the global scope. An earlier version stored it at
+# a chat or a model too, and the settings route refuses every write of the
+# two keys there since, the write that takes one back included: only a start
+# can remove such a row.
+
+MODE_KEYS = ("berechtigungsmodus_chat", "berechtigungsmodus_agent")
+
+
+def _settings(db: Database) -> dict[tuple[str, str], str]:
+    return {
+        (row["bereich"], row["schluessel"]): row["wert_json"]
+        for row in db.verbindung.execute(
+            "SELECT bereich, schluessel, wert_json FROM einstellungen"
+        ).fetchall()
+    }
+
+
+def _store(db: Database, scope: str, key: str, value: object) -> None:
+    db.verbindung.execute(
+        "INSERT INTO einstellungen (bereich, schluessel, wert_json, updated_at) "
+        "VALUES (?, ?, ?, ?)",
+        (scope, key, json.dumps(value), connection.jetzt_iso()),
+    )
+    db.verbindung.commit()
+
+
+def test_migration_41_removes_the_permission_mode_kept_at_a_chat_or_a_model(db: Database):
+    _auf_version_zuruecksetzen(db, 40)
+    _store(db, "chat:c1", MODE_KEYS[0], "auto")
+    _store(db, "chat:c1", MODE_KEYS[1], "restricted")
+    _store(db, "modell:m1", MODE_KEYS[0], "restricted")
+    _store(db, "modell:m1", MODE_KEYS[1], "auto")
+
+    db.schema_einrichten()
+
+    assert _settings(db) == {}
+    assert db.schema_version() == SCHEMA_VERSION
+
+
+def test_migration_41_leaves_the_global_mode_and_every_other_setting(db: Database):
+    """The quiet case: nothing but the two keys outside the global scope goes."""
+    _auf_version_zuruecksetzen(db, 40)
+    _store(db, "global", MODE_KEYS[0], "auto")
+    _store(db, "global", MODE_KEYS[1], "restricted")
+    _store(db, "chat:c1", "verdichtung_schwelle", 70)
+    _store(db, "chat:c1", "werkzeuge_aus", ["run_command"])
+    _store(db, "modell:m1", "parameter", {"temperature": 0.2})
+    before = _settings(db)
+
+    db.schema_einrichten()
+
+    assert _settings(db) == before
+    assert len(before) == 5
+

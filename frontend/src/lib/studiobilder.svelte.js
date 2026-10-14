@@ -32,23 +32,48 @@ export function zuVideo(name) {
   startbildWaehlen(name)
 }
 
-export function nachbessern(name) {
+/* The words the faces are redone with: the prompt bar's, otherwise what the
+   program kept for this picture. Where it kept none — a picture that was
+   uploaded — nothing is drawn: the detector asks for a prompt, and a word of
+   the surface is no prompt. A look-up that fails counts as nothing kept. */
+export async function nachbessern(name) {
   if (!werte.ad_modell) {
     melde(t('bild.modus_unvollstaendig'), 'fehler')
     return
   }
-  studioZeichnen({ mode: 'adetailer', startbild: name, maske: null,
-                   prompt: werte.prompt.trim() || t('bild.nur_adetailer') })
+  const fuer = chatanzeige.chatId
+  let prompt = werte.prompt.trim()
+  if (!prompt) {
+    const gefunden = await api.drawnWith(name).catch(() => null)
+    prompt = typeof gefunden?.prompt === 'string' ? gefunden.prompt.trim() : ''
+    // Another chat was opened while the question was on its way.
+    if (fuer !== chatanzeige.chatId) return
+  }
+  if (!prompt) {
+    melde(t('studio.no_prompt'), 'hinweis')
+    return
+  }
+  studioZeichnen({ mode: 'adetailer', startbild: name, maske: null, prompt })
 }
 
-export function hochskalieren(name) {
-  const upscaler = listen.upscalers.includes(werte.hires_upscaler) ? werte.hires_upscaler : listen.upscalers[0]
+/* Enlarging reads no prompt: the new picture keeps the one the program kept
+   for this picture, otherwise the bar's, otherwise none — and a picture
+   without one is enlarged all the same, without a word of the surface in
+   its place. The model is the one chosen in the row "Upscaler", otherwise
+   the first of the folder. A look-up that fails counts as nothing kept. */
+export async function hochskalieren(name) {
+  const upscaler = listen.upscalers.includes(werte.upscale_model) ? werte.upscale_model : listen.upscalers[0]
   if (!upscaler) {
     melde(t('bild.modus_unvollstaendig'), 'fehler')
     return
   }
+  const fuer = chatanzeige.chatId
+  const gefunden = await api.drawnWith(name).catch(() => null)
+  // Another chat was opened while the question was on its way.
+  if (fuer !== chatanzeige.chatId) return
+  const gemerkt = typeof gefunden?.prompt === 'string' ? gefunden.prompt.trim() : ''
   studioZeichnen({ mode: 'upscale', startbild: name, maske: null, upscale_model: upscaler,
-                   prompt: werte.prompt.trim() || t('bild.nur_hochskalieren') })
+                   prompt: gemerkt || werte.prompt.trim() })
 }
 
 /* "Remove" on the picture in the generation area: the area is emptied, and

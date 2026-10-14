@@ -228,6 +228,21 @@ class EinstellungenRepository(Repository):
             (bereich, schluessel),
         )
 
+    def all_with_key(self, key: str) -> list[tuple[str, Any]]:
+        """Every scope that has ``key`` set, with its value — the
+        global one, each model's and each chat's. For a value that has to be
+        moved in all of them at once; a row that cannot be read is left out."""
+        found: list[tuple[str, Any]] = []
+        for row in self.verbindung.execute(
+            "SELECT bereich, wert_json FROM einstellungen WHERE schluessel = ?",
+            (key,),
+        ).fetchall():
+            try:
+                found.append((row["bereich"], json.loads(row["wert_json"])))
+            except json.JSONDecodeError:
+                continue
+        return found
+
     def bereich_leeren(self, bereich: str) -> None:
         """Everything of one scope — used when a chat is deleted."""
         self.verbindung.execute("DELETE FROM einstellungen WHERE bereich = ?", (bereich,))
@@ -305,7 +320,7 @@ class EinstellungenRepository(Repository):
         chat: str | None = None,
         vorgabe: dict[str, Any] | None = None,
         pruefen: Callable[[Any], Any] | None = None,
-    ) -> tuple[Any, dict[str, str]]:
+    ) -> tuple[Any, dict[str, str], str | None]:
         """The merged value (see ``zusammengefuehrt``) and, per field of it,
         the scope it came from — read from each scope once, for both. The
         origin is what the UI shows, so nobody has to guess whether a number
@@ -313,7 +328,10 @@ class EinstellungenRepository(Repository):
 
         The origin only names fields the value actually has: a value that is
         not a set has no fields, so it has no field origin either, and a field
-        that only the default fills in names no scope.
+        that only the default fills in names no scope. Such a value travels
+        whole from the most specific scope that set it, and that scope is
+        the third part of the answer — ``None`` for a set of values and for
+        a value no scope has set.
 
         ``pruefen``, when given, checks each scope on its own BEFORE the
         merge, and a scope it throws out counts as unset. A row is only
@@ -322,6 +340,7 @@ class EinstellungenRepository(Repository):
         """
         merged: Any = dict(vorgabe or {})
         woher: dict[str, str] = {}
+        whole: str | None = None
         for bereich in self.kette(schluessel, modell=modell, chat=chat):
             gefunden = self.holen(bereich, schluessel)
             if gefunden is not None and pruefen is not None:
@@ -336,6 +355,9 @@ class EinstellungenRepository(Repository):
                 merged = gefunden
                 woher = {}
             if isinstance(gefunden, dict):
+                whole = None
                 for name in gefunden:
                     woher[name] = bereich
-        return merged, woher
+            else:
+                whole = bereich
+        return merged, woher, whole

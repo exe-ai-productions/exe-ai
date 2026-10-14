@@ -131,6 +131,12 @@ class Stille(TimeoutError):
     """The request went silent, or ran out of time."""
 
 
+class Gestoppt(Exception):
+    """The person pressed stop while the request was running: nothing is
+    folded, and nothing is booked — a stopped request says nothing about the
+    model."""
+
+
 async def read_stream(quelle, request: str) -> AsyncGenerator[Stueck, None]:
     """Every piece of a stream, read under the two clocks above.
 
@@ -163,7 +169,7 @@ async def read_stream(quelle, request: str) -> AsyncGenerator[Stueck, None]:
         while True:
             rest = ende - uhr()
             if rest <= 0:
-                raise Stille(f"the {request} ran out of time")
+                raise Stille(f"The {request} timed out.")
             # Which clock caps this wait: the whole request's, or the one for
             # silence. The wait itself cannot say it later — a rest of three
             # milliseconds times out before a piece that needs five, and that
@@ -177,9 +183,9 @@ async def read_stream(quelle, request: str) -> AsyncGenerator[Stueck, None]:
             except TimeoutError as fehler:
                 if still:
                     raise Stille(
-                        f"no sign of life from the server for {frist:.0f} s"
+                        f"No response from the server for {frist:.0f} s."
                     ) from fehler
-                raise Stille(f"the {request} ran out of time") from fehler
+                raise Stille(f"The {request} timed out.") from fehler
             yield stueck
     finally:
         # Every ``streamen`` owes this (app/providers/base.py): the stop
@@ -187,10 +193,56 @@ async def read_stream(quelle, request: str) -> AsyncGenerator[Stueck, None]:
         await quelle.aclose()
 
 
-async def anfordern(zustand, anfrage) -> str | None:
+async def _bis_zum_stopp(
+    stuecke: AsyncGenerator[Stueck, None], stopp: asyncio.Event | None
+) -> AsyncGenerator[Stueck, None]:
+    """The pieces of ``stuecke``, until ``stopp`` is set.
+
+    The wait for the next piece is raced against the signal, so a server that
+    sends nothing for minutes (a summary still being thought) is let go the
+    moment stop is pressed — a plain loop would only look at the signal once
+    a piece had arrived. The wait is cancelled and settled before anything
+    closes the stream behind it, and the reader is closed either way.
+    """
+    if stopp is None:
+        async for stueck in stuecke:
+            yield stueck
+        return
+    wache = asyncio.ensure_future(stopp.wait())
+    try:
+        while True:
+            naechstes = asyncio.ensure_future(anext(stuecke, None))
+            try:
+                await asyncio.wait({naechstes, wache}, return_when=asyncio.FIRST_COMPLETED)
+                if wache.done():
+                    raise Gestoppt()
+                stueck = naechstes.result()
+            finally:
+                if not naechstes.done():
+                    naechstes.cancel()
+                # Settled, not just asked to end: the reader behind it counts
+                # as running until its wait has unwound, and closing it
+                # earlier fails.
+                await asyncio.gather(naechstes, return_exceptions=True)
+            if stueck is None:
+                return
+            yield stueck
+    finally:
+        wache.cancel()
+        await asyncio.gather(wache, return_exceptions=True)
+        await stuecke.aclose()
+
+
+async def anfordern(zustand, anfrage, stopp: asyncio.Event | None = None) -> str | None:
     """The summary, asked for once, text only, on a request built just for
     this ask so the live conversation is never touched until there is an
     answer to splice in.
+
+    ``stopp`` is the stop signal of whatever asks (the answer's run, a job's
+    run, the claim a chat holds while it sets up): set while the request is
+    running, the request is closed on the spot and :class:`Gestoppt` is
+    raised — the model server is free at once instead of at the end of a
+    summary nobody wants any more.
 
     Answers the summary, ``""`` for an empty answer, or ``None`` for one cut
     off at the ceiling: a cut summary would be stored whole and fold away
@@ -209,7 +261,7 @@ async def anfordern(zustand, anfrage) -> str | None:
     ende_grund: str | None = None
     abgeschnitten = False
     quelle = zustand.provider.streamen(without_tools(anfrage))
-    async for stueck in read_stream(quelle, "fold request"):
+    async for stueck in _bis_zum_stopp(read_stream(quelle, "fold request"), stopp):
         if stueck.sorte == "content":
             text.append(stueck.text)
         elif stueck.sorte == "reasoning":

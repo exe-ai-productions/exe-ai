@@ -16,7 +16,7 @@ import shutil
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from app import skills
+from app import atomic_file, skills
 from app.api.abhaengigkeiten import hole_sprache
 from app.i18n import t
 
@@ -70,7 +70,7 @@ def _geprueft(name: str, sprache: str) -> str:
     return name
 
 
-@router.get("", response_model=list[SkillEintrag], summary="List the skills")
+@router.get("", response_model=list[SkillEintrag], summary="List skills")
 def liste(request: Request) -> list[SkillEintrag]:
     """Every usable skill, sorted by name, the user's copy winning."""
     vorhanden = skills.skills_laden(*_orte(request))
@@ -82,7 +82,7 @@ def liste(request: Request) -> list[SkillEintrag]:
 
 @router.get(
     "/verwaltung", response_model=list[SkillZeile],
-    summary="The skills with where each one comes from (for the settings)",
+    summary="Skills and their sources (for settings)",
 )
 def verwaltung(request: Request) -> list[SkillZeile]:
     """The same list for the settings mask, with where each one comes from."""
@@ -154,7 +154,7 @@ def anlegen(
 
 @router.patch(
     "/{name}", response_model=SkillZeile,
-    summary="Switch a skill between offered on its own and named",
+    summary="Switch a skill between automatic availability and explicit invocation",
 )
 def auto_setzen(
     name: str, daten: AutoSetzen, request: Request, sprache: str = Depends(hole_sprache)
@@ -172,13 +172,15 @@ def auto_setzen(
         raise HTTPException(404, t("fehler.skill_nicht_gefunden", sprache, name=name))
 
     ziel = eigen / name
-    if not skill.eigen:
-        shutil.copytree(skill.ordner, ziel)
-    datei = ziel / skills.SKILL_DATEI
-    datei.write_text(
-        skills.skill_file_text(skill.beschreibung, daten.auto, skill.anleitung),
-        encoding="utf-8",
+    # The text is made from the winning copy's own file before any copy is
+    # made: the switch changes the `auto` line and leaves the rest of the
+    # file as it lies, then lands whole or not at all.
+    neu = skills.switched_text(
+        skill, (skill.ordner / skills.SKILL_DATEI).read_text(encoding="utf-8"), daten.auto
     )
+    if not skill.eigen:
+        skills.copy_without_overwriting(skill.ordner, ziel)
+    atomic_file.write(ziel / skills.SKILL_DATEI, neu)
     ab_werk = set(skills.aus_verzeichnis(mitgeliefert, eigen=False))
     # The user's own change: a chat's next message builds its system
     # message anew (app/skills.py, `note_user_edit`).
@@ -207,7 +209,7 @@ class SkillInhalt(BaseModel):
     inhalt: str = Field(max_length=100_000)
 
 
-@router.get("/{name}", response_model=SkillDatei, summary="The raw skill file (for the editor)")
+@router.get("/{name}", response_model=SkillDatei, summary="Raw skill file (for the editor)")
 def datei_lesen(
     name: str, request: Request, sprache: str = Depends(hole_sprache)
 ) -> SkillDatei:
@@ -252,7 +254,7 @@ def bearbeiten(
         ) from fehler
 
     if not skill.eigen:
-        shutil.copytree(skill.ordner, ziel)
+        skills.copy_without_overwriting(skill.ordner, ziel)
     (ziel / skills.SKILL_DATEI).write_text(daten.inhalt, encoding="utf-8")
 
     geladen = skills.skills_laden(mitgeliefert, eigen)[name]

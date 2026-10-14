@@ -126,3 +126,71 @@ def test_scaled_copy_says_false_for_a_file_that_is_no_picture(tmp_path: Path):
 
     assert model_image.scaled_copy(source, target, 30, 10) is False
     assert not target.exists()
+
+
+def _large_see_through(path: Path, mode: str) -> Path:
+    """A picture over the edge whose left half is fully see-through and
+    whose right half is black: at half strength (alpha 128) in RGBA, fully
+    opaque in a palette picture whose colour 0 is the see-through one."""
+    width, height = model_image.KANTE_MAX + 400, 200
+    if mode == "P":
+        image = Image.new("P", (width, height), 0)
+        image.putpalette([0, 0, 0, 0, 0, 0] + [0, 0, 0] * 254)
+        image.paste(1, (width // 2, 0, width, height))
+        image.info["transparency"] = 0
+        image.save(path, "PNG", transparency=0)
+        return path
+    image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    image.paste((0, 0, 0, 128), (width // 2, 0, width, height))
+    image.save(path, "PNG")
+    return path
+
+
+def _pixel(copy: Path, x_part: float) -> tuple[int, ...]:
+    with Image.open(copy) as image:
+        return image.convert("RGB").getpixel((int(image.width * x_part), image.height // 2))
+
+
+def test_a_see_through_area_of_the_copy_lies_on_white(tmp_path: Path):
+    source = _large_see_through(tmp_path / "durchsicht.png", "RGBA")
+
+    copy = model_image.kopie(source, tmp_path / "work")
+
+    assert copy != source and copy.suffix == ".jpg"
+    # Fully see-through: white (JPEG tolerance); half see-through black: mid grey.
+    assert all(channel >= 250 for channel in _pixel(copy, 0.25))
+    assert all(115 <= channel <= 140 for channel in _pixel(copy, 0.75))
+
+
+def test_a_palette_picture_with_a_see_through_colour_lies_on_white(tmp_path: Path):
+    source = _large_see_through(tmp_path / "palette.png", "P")
+
+    copy = model_image.kopie(source, tmp_path / "work")
+
+    assert copy.suffix == ".jpg"
+    assert all(channel >= 250 for channel in _pixel(copy, 0.25))
+    assert all(channel <= 10 for channel in _pixel(copy, 0.75))
+
+
+def test_a_picture_without_see_through_areas_keeps_its_colours(tmp_path: Path):
+    """Silence: an RGB picture keeps its colours and a grey one stays grey."""
+    source = tmp_path / "gross.png"
+    Image.new("RGB", (model_image.KANTE_MAX + 400, 200), (90, 120, 200)).save(source, "PNG")
+    grey = tmp_path / "grau.png"
+    Image.new("L", (model_image.KANTE_MAX + 400, 200), 77).save(grey, "PNG")
+
+    coloured = model_image.kopie(source, tmp_path / "work")
+    greyed = model_image.kopie(grey, tmp_path / "work")
+
+    red, green, blue = _pixel(coloured, 0.5)
+    assert abs(red - 90) <= 4 and abs(green - 120) <= 4 and abs(blue - 200) <= 4
+    with Image.open(greyed) as image:
+        assert image.mode == "L"
+
+
+def test_a_small_see_through_picture_goes_out_unchanged(tmp_path: Path):
+    """Silence: under both thresholds the original is sent, not a copy."""
+    source = tmp_path / "klein.png"
+    Image.new("RGBA", (64, 64), (0, 0, 0, 0)).save(source, "PNG")
+
+    assert model_image.kopie(source, tmp_path / "work") == source

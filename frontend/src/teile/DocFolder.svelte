@@ -26,16 +26,16 @@
      preview the app shell draws (a PDF's first page) or, where there is
      none, the page sign with the folded corner.
 
-     A file dropped on the folder, or picked with the plus in its row, goes
-     onto the dock — in a chat into that chat's own folder — and the row's
-     folder button shows that same place; a tile dragged onto the chat
-     attaches its file. A tile
-     clicked opens its file in the reader (Bildschau.svelte). */
+     A file dropped on the folder goes onto the dock — in a chat into that
+     chat's own folder — and the row's folder button shows that same place;
+     a tile dragged onto the chat attaches its file. A tile clicked opens
+     its file in the reader (Bildschau.svelte). */
   import { untrack } from 'svelte'
   import { api } from '../lib/api.js'
   import { docFolderFilters as filters, ORIGINS } from '../lib/docFolderFilters.svelte.js'
   import { neuigkeit } from '../lib/ereignisstrom.svelte.js'
   import { shellPreview, shellPreviews } from '../lib/thumbnails.js'
+  import { agentName } from '../lib/agentmarke.js'
   import { t } from '../lib/texte.svelte.js'
   import { frage, laufVon, melde, zustand } from '../lib/zustand.svelte.js'
   import { bildZeigen, showPage } from '../lib/bildschau.svelte.js'
@@ -164,6 +164,12 @@
     return (file.type || '').startsWith('image/')
   }
 
+  /* The one type the reader shows in a frame: the browser's own viewer
+     draws its pages, as for the card in a chat. */
+  function isPdf(file) {
+    return (file.type || '').toLowerCase() === 'application/pdf'
+  }
+
   /* The shell's preview for everything the page cannot draw itself
      (lib/thumbnails.js keeps them for the session and asks a few at a
      time); an answer of nothing leaves the page sign. */
@@ -223,7 +229,7 @@
   function originOf(file) {
     return file.origin === 'user'
       ? t('docfolder.by_you')
-      : t('docfolder.by_agent', { agent: file.agent || '—' })
+      : t('docfolder.by_agent', { agent: agentName(file.agent) || '—' })
   }
   function originLine(file) {
     const who = originOf(file)
@@ -279,6 +285,10 @@
     const more = { name: file.name, origin: originLine(file), folder: folderOf(file) }
     if (isPicture(file) && adresse) {
       bildZeigen(adresse, more)
+      return
+    }
+    if (isPdf(file) && adresse) {
+      showPage({ ...more, adresse, framed: true })
       return
     }
     showPage({
@@ -339,24 +349,23 @@
     await load()
   }
 
-  /* The folder button of the row shows the place files are put into: in a
-     chat that chat's own folder, on the start page the dock (the row's
-     named location, which it opens itself). */
+  /* The folder row shows the place files are put into: in a chat that
+     chat's own folder, on the start page the dock (the row's named
+     location, which it names and opens itself). */
   function openChatFolder() {
     return api.ordnerOeffnen(chat, null)
   }
 
-  /* The plus in the folder row: the system's file picker, several files at
-     once, handed on exactly like a drop — one path in, whichever way the
-     files came. */
-  let filePicker
-
-  async function picked(event) {
-    const chosenFiles = [...(event.currentTarget.files || [])]
-    event.currentTarget.value = ''
-    if (!chosenFiles.length) return
-    await add(chosenFiles)
-  }
+  let chatPlace = $state(null)
+  $effect(() => {
+    const asked = chat
+    chatPlace = null
+    if (!asked) return
+    api.docFolderPlace(asked).then(
+      (answer) => { if (asked === chat) chatPlace = answer.path },
+      () => {},
+    )
+  })
 
   /* The folder lights up for a drag it will take, and for no other: one
      that carries files. Text, or one of the folder's own tiles, is let go
@@ -404,12 +413,24 @@
   ondragleave={dragLeft}
   ondrop={dropped}
 >
-  <!-- One row: on the start page the chooser, then open, move and add for
-       the place the files are put into — the dock, in a chat that chat's
-       own folder; in a chat the three buttons alone. Moving the dock
-       reloads the list. -->
+  <!-- One row, the gallery's: the folder's name and path, then open and
+       change. On the start page the folder is the dock, in a chat that
+       chat's own folder, where its files lie and where a file dropped here
+       goes. Files come in by dropping them; there is no button for it. -->
   <div class="ordnerzeile">
-    {#if !chat}
+    <Speicherortzeile
+      name="agent_dock"
+      etikett={t('docfolder.ordner')}
+      pathText={chat ? (chatPlace ?? '') : null}
+      onaendern={load}
+      onopen={chat ? openChatFolder : null}
+    />
+  </div>
+
+  <!-- On the start page the files of every chat are listed: the chooser
+       says whose, and which project. In a chat there is nothing to choose. -->
+  {#if !chat}
+    <div class="chooser-row">
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <span
         class="projekt"
@@ -449,20 +470,8 @@
           </div>
         {/if}
       </span>
-    {/if}
-    <div class="knoepfe">
-      <Speicherortzeile
-        name="agent_dock"
-        showPath={false}
-        onaendern={load}
-        onopen={chat ? openChatFolder : null}
-        onadd={() => filePicker?.click()}
-      />
     </div>
-    <input type="file" multiple hidden bind:this={filePicker} onchange={picked} />
-  </div>
-
-  <div class="abschnitt">{t('docfolder.dateien')}</div>
+  {/if}
 
   <div class="rollen">
     {#if files.length}
@@ -484,7 +493,7 @@
               {:else if showsText(file)}
                 <span class="blick" class:code={isCode(file)}>{starts[startKey(file)]}</span>
               {:else if previewOf(file, CARD_PREVIEW)}
-                <img src={previewOf(file, CARD_PREVIEW)} alt="" loading="lazy" draggable="false" />
+                <img class="shell" src={previewOf(file, CARD_PREVIEW)} alt="" loading="lazy" draggable="false" />
               {:else}
                 <!-- Nothing to preview: the page sign alone, as large as a
                      tile, with no tile behind it. -->
@@ -542,20 +551,18 @@
     background: var(--glass-button);
     box-shadow: inset 0 0 0 1px var(--glass-button-edge);
   }
-  /* One row: the chooser takes the width, the three buttons stand at its
-     end — in a chat, where there is no chooser, at the same place. All of
-     them 36 high, the buttons square. */
+  /* The folder's row: the gallery's, the same size and place. */
   .ordnerzeile {
+    flex: none;
+    padding: 12px 14px;
+  }
+  /* The chooser under it, as wide as the row; its list opens below. */
+  .chooser-row {
     flex: none;
     position: relative;
     display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 8px;
-    padding: 12px 14px;
-    --ordnerknopf: 36px;
+    padding: 0 14px 8px;
   }
-  .knoepfe { flex: none; }
   .projekt {
     flex: 1;
     min-width: 0;
@@ -641,26 +648,9 @@
     margin: 4px 9px;
     background: var(--linie);
   }
-  /* The heading over the files, a hairline running out after it. */
-  .abschnitt {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 28px;
-    margin: 0 14px 4px;
-    font-weight: 600;
-    font-size: 13.5px;
-    color: var(--text);
-  }
-  .abschnitt::after {
-    content: '';
-    flex: 1;
-    border-top: 1px solid var(--linie);
-  }
-  /* The wall scrolls under the heading and ends at its line. Nothing fades
-     at the top: a fade there would thin out the first row while it simply
-     stands in its place. */
+  /* The wall scrolls under the rows above it and ends at its line. Nothing
+     fades at the top: a fade there would thin out the first row while it
+     simply stands in its place. */
   .rollen {
     flex: 1;
     min-height: 0;
@@ -739,6 +729,13 @@
     line-height: 14px;
     height: 28px;
     color: var(--text);
+  }
+  /* The shell's picture of a file's first page is the tile's face, not a
+     picture of its own: it takes no pointer, so a right click on it lands on
+     the tile and the menu offers no "save image" for what is a page of a
+     document. The tile of a real picture keeps its image as it was. */
+  .shell {
+    pointer-events: none;
   }
   /* Who brought the file: the bare sign inside the document, at its lower
      left — opposite the delete cross, on its line and in its box of 20.

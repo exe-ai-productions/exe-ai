@@ -467,3 +467,115 @@ def test_ein_umschreiben_auf_fehler_haengt_am_selben_schalter():
     )
     assert "write_file fehlgeschlagen" in bericht["zweiMeldungen"]
     assert "run_command fertig" in bericht["dreiMeldungen"]
+
+
+# --- The notice-duration field: one conversion, one clamp ------------------
+
+
+def test_die_umrechnung_der_dauer_steht_einmal():
+    """The seconds of the field become the time a notice stands in one place;
+    the tool tick and `melden()` both ask it and keep their own answer for
+    "Auto"."""
+    quelle = MODUL.read_text(encoding="utf-8")
+    assert quelle.count("popupSekunden * 1000") == 1
+
+
+def _dauer(js: str, *, gespeichert=None) -> dict:
+    """Run `js` against the shipped module with the stored notice settings
+    set to `gespeichert` (None: nothing stored) and report what it returns.
+    `delays` lists the clocks the module sets, in order, in milliseconds."""
+    with _pruefordner() as ordner:
+        gebaut = ordner / "gebaut.mjs"
+        (ordner / "api.mjs").write_text(
+            "export const api = {\n"
+            "  einstellungAufgeloest: async () => (%s),\n"
+            "  einstellungSetzen: async () => {},\n"
+            "}\n" % json.dumps({"wert": gespeichert} if gespeichert is not None else None),
+            encoding="utf-8",
+        )
+        (ordner / "texte.mjs").write_text(
+            "export function t(pfad) { return pfad }\n"
+            "export function teile(pfad) { return [{ fest: pfad }] }\n",
+            encoding="utf-8",
+        )
+        (ordner / "klaenge.mjs").write_text("export function klingen() {}\n", encoding="utf-8")
+        treiber = ordner / "pruefung.mjs"
+        treiber.write_text(
+            textwrap.dedent(
+                """
+                import { compileModule } from 'svelte/compiler'
+                import { readFileSync, writeFileSync } from 'fs'
+                const gebaut = compileModule(readFileSync(%r, 'utf-8'), {
+                  filename: 'meldewesen.svelte.js', generate: 'client',
+                })
+                writeFileSync(%r, gebaut.js.code
+                  .replace('./api.js', './api.mjs')
+                  .replace('./klaenge.svelte.js', './klaenge.mjs')
+                  .replace('./texte.svelte.js', './texte.mjs'))
+                const delays = []
+                const realSetTimeout = globalThis.setTimeout
+                globalThis.setTimeout = (fn, ms, ...rest) => {
+                  delays.push(ms)
+                  return realSetTimeout(fn, ms, ...rest)
+                }
+                const m = await import('./gebaut.mjs')
+                const bericht = await (async () => {
+                %s
+                })()
+                console.log('---BERICHT---' + JSON.stringify(bericht))
+                process.exit(0)
+                """
+            )
+            % (str(MODUL), str(gebaut), textwrap.indent(js, "  ")),
+            encoding="utf-8",
+        )
+        ergebnis = subprocess.run(
+            ["node", treiber.name], cwd=ordner, capture_output=True, text=True, encoding="utf-8", timeout=120
+        )
+    assert ergebnis.returncode == 0, (ergebnis.stdout + ergebnis.stderr)[-2000:]
+    marke = "---BERICHT---"
+    assert marke in ergebnis.stdout, ergebnis.stdout[-2000:]
+    return json.loads(ergebnis.stdout.split(marke, 1)[1].strip())
+
+
+@node_da
+def test_die_dauer_gilt_fuer_haken_und_meldung_gleich():
+    """Five seconds in the field: the tick stands five seconds and a notice
+    asked for through `melden()` the same. "Auto" keeps each one's own answer
+    — the house 1.5 s for the tick, the kind's own time for the notice."""
+    bericht = _dauer(
+        """
+        m.popupSekundenSetzen(5)
+        delays.length = 0
+        m.melden({ was: 'fertig', text: 'ok' })
+        const fuenf = { haken: m.werkzeugFertigDauer(), meldung: delays.at(-1) }
+        m.popupSekundenSetzen(0)
+        delays.length = 0
+        m.melden({ was: 'fertig', text: 'ok' })
+        const auto = { haken: m.werkzeugFertigDauer(), meldung: delays.at(-1) }
+        return { fuenf, auto, haus: m.WERKZEUG_FERTIG_MS }
+        """
+    )
+    assert bericht["fuenf"] == {"haken": 5000, "meldung": 5000}
+    assert bericht["auto"]["haken"] == bericht["haus"] == 1500
+    # On "Auto" the kind's own time stands, not the field's.
+    assert bericht["auto"]["meldung"] not in (None, 0, 5000)
+
+
+@node_da
+def test_ein_geladener_wert_wird_wie_ein_gesetzter_geklemmt():
+    """A value stored outside 0..60 comes into the window clamped, the way a
+    value typed by hand does; one inside the range is taken as it is."""
+    gross = _dauer("await m.meldewesenLaden(); return m.meldewesen.popupSekunden", gespeichert={"popup_sekunden": 900})
+    klein = _dauer("await m.meldewesenLaden(); return m.meldewesen.popupSekunden", gespeichert={"popup_sekunden": -4})
+    mitte = _dauer("await m.meldewesenLaden(); return m.meldewesen.popupSekunden", gespeichert={"popup_sekunden": 5})
+    assert (gross, klein, mitte) == (60, 0, 5)
+
+
+@node_da
+def test_ein_geladener_zu_grosser_wert_laesst_den_haken_nicht_lange_stehen():
+    haken = _dauer(
+        "await m.meldewesenLaden(); return m.werkzeugFertigDauer()",
+        gespeichert={"popup_sekunden": 900},
+    )
+    assert haken == 60_000

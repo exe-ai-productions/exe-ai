@@ -108,7 +108,7 @@ def _pruefen(
         )
 
 
-@router.get("/sicherung", response_model=Stand, summary="Is there a backup?")
+@router.get("/sicherung", response_model=Stand, summary="Is a backup available?")
 def stand(
     chat_id: str,
     pfad: str,

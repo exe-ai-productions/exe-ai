@@ -171,7 +171,7 @@ def test_kein_zeiger_auf_ein_geloeschtes_ergebnis():
 
 def test_die_grenze_ist_die_des_faltens():
     """The boundary a caller must hand over is ``verdichtung.geschuetztes_ende``
-    and never ``schwanz_anfang`` alone: the raw boundary can land INSIDE the
+    and never ``tail_start_from_weights`` alone: the raw boundary can land INSIDE the
     tool results of the round that just ran, and a result cleared there tells
     the model its own fresh call produced nothing — it would simply make the
     call again."""
@@ -191,8 +191,8 @@ def test_die_grenze_ist_die_des_faltens():
         ChatNachricht(role="tool", content="A" * 500, werkzeugaufruf_id="wa"),
         ChatNachricht(role="tool", content="B" * 500, werkzeugaufruf_id="wb"),
     ]
-    roh = verdichtung.schwanz_anfang(
-        [n.content or "" for n in nachrichten], budget
+    roh = verdichtung.tail_start_from_weights(
+        [len(n.content or "") for n in nachrichten], budget
     )
     grenze = verdichtung.geschuetztes_ende(nachrichten, budget)
     assert grenze < roh, "this history is only interesting where the two differ"
@@ -278,6 +278,15 @@ def test_zeichen_zaehlt_die_ganze_liste():
     assert werkzeugkuerzung.zeichen(nachrichten) == 3
 
 
+@pytest.fixture
+def small_limits(monkeypatch):
+    """The mechanics of retiring a picture — which message, which result,
+    which promise — shown with small numbers: three stay and the older ones
+    go one at a time. The real numbers have their own tests below."""
+    monkeypatch.setattr(werkzeugkuerzung, "OUTBOUND_IMAGE_LIMIT", 3)
+    monkeypatch.setattr(werkzeugkuerzung, "IMAGE_EVICTION_BATCH", 1)
+
+
 def _bildzug(nummer: int, pfad: str | None = "/ordner/bild.png") -> ChatNachricht:
     """The message a tool's picture rides on (app/werkzeugbild.py)."""
     return werkzeugbild.nachricht(
@@ -310,6 +319,7 @@ def test_ein_bild_verschiebt_die_grenze_des_schwanzes():
     assert verdichtung.geschuetztes_ende(mit_bild, budget) > ohne
 
 
+@pytest.mark.usefixtures("small_limits")
 def test_die_drei_neuesten_werkzeugbilder_bleiben():
     """Five pictures a tool read: the newest three keep theirs, the older two
     say where the file is instead. The number comes from the constant."""
@@ -319,7 +329,7 @@ def test_die_drei_neuesten_werkzeugbilder_bleiben():
 
     neu, anzahl = werkzeugkuerzung.kuerzen(nachrichten, geschuetzt_ab=len(nachrichten))
 
-    behalten = werkzeugkuerzung.WERKZEUGBILDER_BEHALTEN
+    behalten = werkzeugkuerzung.OUTBOUND_IMAGE_LIMIT
     mit_bild = [n for n in neu if n.alle_bild_urls()]
     assert len(mit_bild) == behalten
     assert anzahl == 5 - behalten
@@ -328,6 +338,101 @@ def test_die_drei_neuesten_werkzeugbilder_bleiben():
         assert n.content.startswith(werkzeugkuerzung.BILD_ENTFERNT)
         assert "/ordner/bild" in n.content
         assert "read_file" in n.content
+
+
+def _bildzuege(anzahl: int) -> list[ChatNachricht]:
+    return [_bildzug(nr, f"/ordner/bild{nr}.png") for nr in range(anzahl)]
+
+
+def _ausgemustert(neu: list[ChatNachricht]) -> list[int]:
+    """The numbers of the picture messages that lost their picture."""
+    return [
+        int(n.content.split("/ordner/bild")[1].split(".png")[0])
+        for n in neu
+        if n.content and werkzeugkuerzung.BILD_ENTFERNT in n.content
+    ]
+
+
+def test_bis_zum_limit_bleiben_alle_gelesenen_bilder():
+    """Twenty pictures: none leaves. (Before: seventeen of them went.)"""
+    nachrichten = _bildzuege(werkzeugkuerzung.OUTBOUND_IMAGE_LIMIT)
+
+    neu, anzahl = werkzeugkuerzung.thin_pictures(nachrichten)
+
+    assert anzahl == 0
+    assert neu is nachrichten
+
+
+def test_ueber_dem_limit_fallen_die_aeltesten_acht_auf_einmal():
+    nachrichten = _bildzuege(werkzeugkuerzung.OUTBOUND_IMAGE_LIMIT + 1)
+
+    neu, anzahl = werkzeugkuerzung.thin_pictures(nachrichten)
+
+    assert anzahl == werkzeugkuerzung.IMAGE_EVICTION_BATCH
+    assert _ausgemustert(neu) == list(range(8))
+    assert sum(1 for n in neu if n.alle_bild_urls()) == 13
+
+
+def test_die_achterschritte_wachsen_mit_der_zahl_der_bilder():
+    """Twenty-eight pictures: the same eight go as at twenty-one (twenty are
+    left, the limit). Twenty-nine: sixteen go, so that thirteen are left."""
+    acht, _ = werkzeugkuerzung.thin_pictures(_bildzuege(28))
+    sechzehn, anzahl = werkzeugkuerzung.thin_pictures(_bildzuege(29))
+
+    assert _ausgemustert(acht) == list(range(8))
+    assert anzahl == 16
+    assert _ausgemustert(sechzehn) == list(range(16))
+
+
+def test_ueber_dem_budget_fallen_bilder_auch_unter_dem_limit():
+    """Five pictures of six million characters each are thirty million sent:
+    the batch is eight, but the newest three stay — two go."""
+    gross = "data:image/png;base64," + "A" * 6_000_000
+    nachrichten = [
+        werkzeugbild.nachricht([f"bild{nr}.png"], [gross], [f"/ordner/bild{nr}.png"])
+        for nr in range(5)
+    ]
+
+    neu, anzahl = werkzeugkuerzung.thin_pictures(nachrichten)
+
+    assert anzahl == 2
+    assert _ausgemustert(neu) == [0, 1]
+    assert sum(1 for n in neu if n.alle_bild_urls()) == 3
+
+
+def test_hochgeladene_bilder_zaehlen_mit_und_bleiben():
+    """Eighteen tool pictures and three attached ones are twenty-one: the
+    oldest eight tool pictures go, the attached ones stay as they were."""
+    hochgeladen = [
+        ChatNachricht(role="user", content=f"mein Bild {nr}", bild_urls=[f"data:image/png;base64,U{nr}"])
+        for nr in range(3)
+    ]
+    gelesen = _bildzuege(18)
+    nachrichten = [hochgeladen[0], *gelesen[:9], hochgeladen[1], *gelesen[9:], hochgeladen[2]]
+
+    neu, anzahl = werkzeugkuerzung.thin_pictures(nachrichten)
+
+    assert anzahl == werkzeugkuerzung.IMAGE_EVICTION_BATCH
+    assert _ausgemustert(neu) == list(range(8))
+    for nr, nachricht in enumerate(hochgeladen):
+        gleiche = [n for n in neu if n.content == f"mein Bild {nr}"]
+        assert gleiche[0].alle_bild_urls() == nachricht.alle_bild_urls()
+
+
+def test_die_groesse_wird_nur_fuer_bleibende_bilder_gefragt():
+    """A history of a hundred pictures is not read through to decide: the
+    size is asked for the ones that would stay, and for each one once."""
+    gefragt: list[int] = []
+
+    def groesse(position: int) -> int:
+        gefragt.append(position)
+        return 1_000
+
+    gehen = werkzeugkuerzung.retired_positions([True] * 100, groesse)
+
+    assert len(gehen) == 80
+    assert gehen == list(range(80))
+    assert sorted(gefragt) == list(range(80, 100))
 
 
 def test_ein_hochgeladenes_bild_bleibt_unberuehrt():
@@ -344,6 +449,7 @@ def test_ein_hochgeladenes_bild_bleibt_unberuehrt():
     assert neu[0].content == "mein Bild"
 
 
+@pytest.mark.usefixtures("small_limits")
 def test_ohne_pfad_steht_der_leitsatz_allein():
     """A picture with no file to read back: the sentence stands on its own,
     with no empty path in it."""
@@ -354,9 +460,10 @@ def test_ohne_pfad_steht_der_leitsatz_allein():
     assert neu[0].content == werkzeugkuerzung.BILD_ENTFERNT
 
 
+@pytest.mark.usefixtures("small_limits")
 def test_drei_bilder_werden_nicht_ausgemustert():
     """Silence test: up to the constant nothing is retired at all."""
-    nachrichten = [_bildzug(nr) for nr in range(werkzeugkuerzung.WERKZEUGBILDER_BEHALTEN)]
+    nachrichten = [_bildzug(nr) for nr in range(werkzeugkuerzung.OUTBOUND_IMAGE_LIMIT)]
 
     neu, anzahl = werkzeugkuerzung.kuerzen(nachrichten, geschuetzt_ab=len(nachrichten))
 
@@ -364,6 +471,7 @@ def test_drei_bilder_werden_nicht_ausgemustert():
     assert neu is nachrichten
 
 
+@pytest.mark.usefixtures("small_limits")
 def test_fuenf_werkzeugbilder_in_einer_nachricht_werden_je_bild_gezaehlt():
     """One round can read several pictures into a single message
     (``app/werkzeugbild.py``): the cut counts each of them on its own, not
@@ -389,7 +497,7 @@ def test_fuenf_werkzeugbilder_in_einer_nachricht_werden_je_bild_gezaehlt():
 
     neu, anzahl = werkzeugkuerzung.kuerzen(nachrichten, geschuetzt_ab=0)
 
-    behalten = werkzeugkuerzung.WERKZEUGBILDER_BEHALTEN
+    behalten = werkzeugkuerzung.OUTBOUND_IMAGE_LIMIT
     ausgemustert = 5 - behalten
     bildnachricht = neu[-1]
     assert anzahl == ausgemustert
@@ -428,6 +536,7 @@ def test_fuenf_werkzeugbilder_bleiben_bei_drei_haengen():
     assert neu is nachrichten
 
 
+@pytest.mark.usefixtures("small_limits")
 def test_dasselbe_bild_zweimal_in_einer_runde_behaelt_das_zweite_versprechen():
     """The same file read twice inside ONE round, into one picture message:
     retiring the older instance must not take the promise from the kept
@@ -465,6 +574,7 @@ def test_dasselbe_bild_zweimal_in_einer_runde_behaelt_das_zweite_versprechen():
         assert ergebnisse_neu[nr].content == werkzeugbild.bildsatz(pfade[nr], groessen[nr])
 
 
+@pytest.mark.usefixtures("small_limits")
 def test_ein_bereits_ausgemustertes_duplikat_verschiebt_das_bildversprechen_nicht():
     """The duplicate-RESULT pass above (``DOPPELT``) can blank an older copy
     of a byte-identical tool result before this pass runs. Counting the
@@ -837,7 +947,7 @@ def test_auftrag_kuerzt_vor_der_faltung(config, mcp_client):
     assert daten["state"] == "fertig"
     assert provider.faltungen == 0
     schritte = [s["inhalt"] for s in daten["schritte"] if s["typ"] == "status"]
-    assert any("old tool results" in s for s in schritte), schritte
+    assert any("ältere Werkzeugergebnisse" in s for s in schritte), schritte
     letzte = provider.aufzeichnung[-1]
     inhalte = [inhalt for _, inhalt in letzte]
     assert werkzeugkuerzung.PLATZHALTER in inhalte
@@ -867,8 +977,8 @@ def test_auftrag_reicht_die_erste_stufe_nicht_wird_gefaltet(config, mcp_client):
     assert daten["state"] == "fertig"
     assert provider.faltungen >= 1
     schritte = [s["inhalt"] for s in daten["schritte"] if s["typ"] == "status"]
-    assert any("old tool results" in s for s in schritte), schritte
-    assert any("Compacted the history" in s for s in schritte), schritte
+    assert any("ältere Werkzeugergebnisse" in s for s in schritte), schritte
+    assert any("Der Verlauf wurde komprimiert" in s for s in schritte), schritte
     assert _paare_stimmen(provider.aufzeichnung[-1])
 
 
@@ -961,6 +1071,7 @@ def test_auftrag_die_kontextleiste_zeigt_die_zahl_des_ausloesers(
     assert max(f for _, f in an_der_faltung) < max(a for _, a in am_ausloeser)
 
 
+@pytest.mark.usefixtures("small_limits")
 def test_ein_ausgemustertes_bild_nimmt_das_versprechen_mit():
     """Five pictures read, the two oldest retired: their results drop the
     promise of an attachment and say nothing else — the path already stands
@@ -1001,7 +1112,7 @@ def test_ein_ausgemustertes_bild_nimmt_das_versprechen_mit():
     # same, and it is exactly there that the two sentences met.
     neu, _ = werkzeugkuerzung.kuerzen(nachrichten, geschuetzt_ab=0)
 
-    behalten = werkzeugkuerzung.WERKZEUGBILDER_BEHALTEN
+    behalten = werkzeugkuerzung.OUTBOUND_IMAGE_LIMIT
     ergebnisse = [n for n in neu if n.role == "tool"]
     assert len(ergebnisse) == 5
     bildzeilen = [n for n in neu if n.content and n.content.startswith(werkzeugkuerzung.BILD_ENTFERNT)]
@@ -1054,6 +1165,7 @@ def test_ein_abgelehntes_bild_behaelt_seinen_text():
     assert werkzeugbild.NICHT_MEHR_DABEI not in abgelehnt[0].content
 
 
+@pytest.mark.usefixtures("small_limits")
 def test_dasselbe_bild_zweimal_gelesen_behaelt_das_neueste_versprechen():
     """The same file read twice: only the round whose picture was retired
     loses its promise.
@@ -1097,3 +1209,63 @@ def test_dasselbe_bild_zweimal_gelesen_behaelt_das_neueste_versprechen():
     assert "/ordner/schirm.png" in bildzeilen[0].content
     # Round 4's picture is in the request — its promise stands.
     assert werkzeugbild.ANHANG_SATZ in (ergebnisse[3].content or "")
+
+
+# --- The picture rule alone, for every request --------------------------
+
+
+@pytest.mark.usefixtures("small_limits")
+def test_thin_pictures_keeps_the_newest_three_and_the_texts():
+    """The picture rule applies without the text passes: a long old result
+    stays whole (the threshold keeps its say over the text), and five
+    pictures become three plus two notes."""
+    lang = "x" * 5_000
+    nachrichten = [
+        ChatNachricht(role="user", content="frage"),
+        ChatNachricht(role="assistant", content="", werkzeugaufrufe=[]),
+        ChatNachricht(role="tool", content=lang, werkzeugaufruf_id="t1"),
+    ]
+    for nr in range(5):
+        nachrichten.append(_bildzug(nr, f"/ordner/bild{nr}.png"))
+
+    neu, anzahl = werkzeugkuerzung.thin_pictures(nachrichten)
+
+    behalten = werkzeugkuerzung.OUTBOUND_IMAGE_LIMIT
+    assert anzahl == 5 - behalten
+    assert len([n for n in neu if n.alle_bild_urls()]) == behalten
+    assert neu[2].content == lang
+
+
+@pytest.mark.usefixtures("small_limits")
+def test_thin_pictures_returns_the_input_where_nothing_goes():
+    nachrichten = [ChatNachricht(role="user", content="frage")] + [
+        _bildzug(nr) for nr in range(werkzeugkuerzung.OUTBOUND_IMAGE_LIMIT)
+    ]
+
+    neu, anzahl = werkzeugkuerzung.thin_pictures(nachrichten)
+
+    assert anzahl == 0
+    assert neu is nachrichten
+
+
+@pytest.mark.usefixtures("small_limits")
+def test_thin_pictures_twice_is_like_once():
+    """Asked every round, it must not count a retired picture again."""
+    nachrichten = [_bildzug(nr, f"/ordner/bild{nr}.png") for nr in range(5)]
+
+    einmal, erste = werkzeugkuerzung.thin_pictures(nachrichten)
+    zweimal, zweite = werkzeugkuerzung.thin_pictures(einmal)
+
+    assert erste == 2 and zweite == 0
+    assert zweimal is einmal
+
+
+def test_thin_pictures_leaves_uploaded_pictures():
+    hochgeladen = ChatNachricht(
+        role="user", content="mein Bild", bild_urls=["data:image/png;base64,ZZZ"]
+    )
+    nachrichten = [hochgeladen] + [_bildzug(nr) for nr in range(5)]
+
+    neu, _ = werkzeugkuerzung.thin_pictures(nachrichten)
+
+    assert neu[0].alle_bild_urls() == hochgeladen.alle_bild_urls()

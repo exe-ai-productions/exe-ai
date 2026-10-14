@@ -174,12 +174,12 @@
                 onclick={() => werkzeugZeigen(quelle, werkzeug)}
                 onkeydown={(e) => { if (e.key === 'Enter') werkzeugZeigen(quelle, werkzeug) }}
               >
-                <span class="wname werkzeugname">{werkzeug.name}</span>
+                <span class="wname werkzeugname">{werkzeug.anzeige ?? werkzeug.name}</span>
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <span onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
                   <Schalter
                     an={istAn(werkzeug.name)}
-                    beschriftung={werkzeug.name}
+                    beschriftung={werkzeug.anzeige ?? werkzeug.name}
                     onschalten={(an) => schalten(werkzeug.name, an)}
                   />
                 </span>
@@ -187,8 +187,6 @@
             {/each}
           {/if}
         </div>
-      {:else}
-        <p class="leer">{t('werkzeuge.keine_quelle')}</p>
       {/each}
     </div>
 
@@ -196,7 +194,7 @@
       {#if gewaehltesWerkzeug}
         <div class="kopfkarte">
           <div class="min">
-            <div class="gross">{gewaehltesWerkzeug.name}</div>
+            <div class="gross">{gewaehltesWerkzeug.anzeige ?? gewaehltesWerkzeug.name}</div>
             <div class="unter">
               {quelleDesWerkzeugs ? quellenName(quelleDesWerkzeugs) : ''}
             </div>
@@ -219,11 +217,6 @@
         <div class="regel">
           <div class="regeltext">
             {t('werkzeuge.fragt_vorher')}
-            <span class="regelhinweis">
-              {gewaehltesWerkzeug.needs_confirmation
-                ? t('werkzeuge.fragt_vorher_hinweis')
-                : t('werkzeuge.fragt_nicht_hinweis')}
-            </span>
           </div>
           <span class="wert">
             {t(gewaehltesWerkzeug.needs_confirmation ? 'app.ja' : 'app.nein')}
@@ -276,8 +269,6 @@
                 </button>
               {/each}
             </div>
-          {:else}
-            <p class="fliess">{t('werkzeuge.eingebaut_hinweis')}</p>
           {/if}
         {/if}
 
@@ -286,8 +277,6 @@
             {t('werkzeuge.verbindung_einrichten')}
           </button>
         {/if}
-      {:else}
-        <p class="leer">{t('werkzeuge.keine_quelle')}</p>
       {/if}
     </div>
   </div>
@@ -477,7 +466,6 @@
     padding: 12px 16px;
   }
   .regeltext { flex: 1; min-width: 0; font-size: 13px; }
-  .regelhinweis { display: block; font-size: 12px; color: var(--text-still); margin-top: 1px; }
   .wert { flex: none; font-size: 13px; color: var(--text-leise); }
 
   .knopfleise {
@@ -493,8 +481,6 @@
     cursor: pointer;
   }
   .knopfleise:hover { background: var(--glass-hover); }
-
-  .leer { color: var(--text-still); font-size: 13px; padding: 6px 4px; }
 
   @media (max-width: 720px) {
     .zwei { flex-direction: column; flex: none; }

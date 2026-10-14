@@ -155,6 +155,9 @@ FELDER: dict[str, str] = {
     "hires_steps": WERT,
     "hires_denoise": WERT,
     "hires_upscaler": TEXT,
+    # The file "Upscale" enlarges a finished picture with; it travels with that
+    # wish only, not with a drawing.
+    "upscale_model": TEXT,
     "hires_breite": WERT,
     "hires_hoehe": WERT,
     "slg_scale": WERT,

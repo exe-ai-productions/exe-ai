@@ -74,8 +74,8 @@ class _Werkzeug:
         self.beschreibung = ""
         self.server = "test"
 
-    def als_openai_werkzeug(self) -> dict:
-        return {"type": "function", "function": {"name": self.name}}
+    def als_openai_werkzeug(self, name: str | None = None) -> dict:
+        return {"type": "function", "function": {"name": name or self.name}}
 
 
 class _Client:

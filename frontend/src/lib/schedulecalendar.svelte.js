@@ -2,15 +2,19 @@
   The calendar's state, shared by the tool surface (teile/ModulCronjobs.svelte)
   and Settings › Cronjobs (teile/SettingsCronjobs.svelte): day or month, the
   chosen day, the month on show, and the rows the service answers for the
-  range on show. One object, so both faces read the same clock and the same
-  answer; the faces only draw it — ScheduleCalendar.svelte the calendar,
-  ScheduleDayRuns.svelte the chosen day's runs.
+  range on show. One object — `kalender`, below — so both faces read the same
+  clock, the same chosen day and the same answer; the faces only draw it —
+  ScheduleCalendar.svelte the calendar, ScheduleDayRuns.svelte the chosen
+  day's runs. A face holds it while it stands (`hold`): the clock and the
+  loading run as long as one of them does.
 
   The calendar reads one answer from the service per range
   (/cronjobs/calendar): what ran from the history, what is still to come
   from each schedule's rule, one row per schedule and day, all on the clock
   the service fires schedules by. Asked again when the range changes and
-  when a schedule fires, changes or a run ends.
+  when a schedule fires, is made, changed, paused, resumed or removed — by
+  whoever did it, here or elsewhere — or a run ends: the service announces
+  each of them, and nothing else asks.
 */
 import { untrack } from 'svelte'
 import { api } from './api.js'
@@ -65,8 +69,7 @@ const minuteOf = (clock) => Number(clock.slice(0, 2)) * 60 + Number(clock.slice(
 
 export class ScheduleCalendar {
   jetzt = $state(new Date())
-  /* Day or month, the chosen day, and the month on show. The chosen day
-     starts as today on the service's clock. */
+  /* Day or month, the chosen day, and the month on show. */
   view = $state('day')
   chosen = $state('')
   shownMonth = $state('')
@@ -75,20 +78,51 @@ export class ScheduleCalendar {
   /* Drops an answer that a newer question has already overtaken. */
   #asked = 0
 
+  /* How many faces hold it, and the root of what runs while one does. */
+  #holders = 0
+  #stop = null
+
   constructor() {
+    this.#reset()
+  }
+
+  /* A face that stands calls this from an effect and returns what it gets:
+     the first one starts the clock and the loading from a fresh day, the
+     last one stops them. */
+  hold() {
+    if (this.#holders++ === 0) {
+      untrack(() => this.#reset())
+      this.#stop = $effect.root(() => {
+        $effect(() => {
+          const uhr = setInterval(() => (this.jetzt = new Date()), 60000)
+          return () => clearInterval(uhr)
+        })
+        $effect(() => {
+          void neuigkeit.termine
+          void neuigkeit.auftraege
+          const [first, last] = this.range
+          untrack(() => this.#load(first, last))
+        })
+      })
+    }
+    return () => {
+      if (--this.#holders > 0) return
+      this.#stop?.()
+      this.#stop = null
+    }
+  }
+
+  /* The chosen day starts as today on the service's clock. */
+  #reset() {
     const today = dayIn(new Date(), zustand.timezone)
+    this.jetzt = new Date()
+    this.view = 'day'
     this.chosen = today
     this.shownMonth = today.slice(0, 7)
-    $effect(() => {
-      const uhr = setInterval(() => (this.jetzt = new Date()), 60000)
-      return () => clearInterval(uhr)
-    })
-    $effect(() => {
-      void neuigkeit.termine
-      void neuigkeit.auftraege
-      const [first, last] = this.range
-      untrack(() => this.#load(first, last))
-    })
+    this.calendar = {}
+    /* An answer still on its way from before belongs to a range nobody
+       shows now. */
+    this.#asked += 1
   }
 
   today = $derived(dayIn(this.jetzt, zustand.timezone))
@@ -181,3 +215,6 @@ export class ScheduleCalendar {
     }
   }
 }
+
+/* The one calendar both faces draw. */
+export const kalender = new ScheduleCalendar()

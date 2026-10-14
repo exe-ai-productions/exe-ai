@@ -293,7 +293,7 @@ def test_zeitgrenze_unbekannter_endpunkt_gibt_404(client, eigener_ordner):
 
 def test_ein_anbieter_laesst_sich_entfernen(client, eigener_ordner):
     """The counterpart of adding one: gone from the file, gone from
-    discovery, gone from the running config — but the key stays in .env."""
+    discovery, gone from the running config — and its key line with it."""
     client.post(
         "/api/v1/providers",
         json={
@@ -312,9 +312,10 @@ def test_ein_anbieter_laesst_sich_entfernen(client, eigener_ordner):
     assert all(e["id"] != "eigene" for e in gespeichert["endpoints"])
     assert client.app.state.discovery.zustaende.get("eigene") is None
     assert not any(e.id == "eigene" for e in client.app.state.config.endpoints)
-    # The key was never the route's to remove — only the entry.
-    assert os.environ["EIGENE_API_KEY"] == "sk-test-1234"
-    assert "EIGENE_API_KEY=sk-test-1234" in (eigener_ordner / ".env").read_text()
+    # The key goes with the provider: out of the file and out of the
+    # running environment.
+    assert "EIGENE_API_KEY" not in os.environ
+    assert "EIGENE_API_KEY" not in (eigener_ordner / ".env").read_text()
 
 
 def test_entfernter_anbieter_laesst_sich_erneut_anlegen(client, eigener_ordner):
@@ -366,3 +367,101 @@ def test_andere_anbieter_bleiben_beim_entfernen_unberuehrt(client, eigener_ordne
 
 def test_anbieter_loeschen_unbekannt_gibt_404(client, eigener_ordner):
     assert client.delete("/api/v1/providers/phantom").status_code == 404
+
+
+# --- The key goes with the provider, unless another provider reads it ----------
+
+
+def _add_own(client, kennung: str, schluessel: str = "sk-test-1234"):
+    return client.post(
+        "/api/v1/providers",
+        json={
+            "art": "eigen",
+            "kennung": kennung,
+            "url": "http://127.0.0.1:9/v1",
+            "schluessel": schluessel,
+        },
+    )
+
+
+def test_removing_a_provider_leaves_the_other_env_lines_byte_equal(client, eigener_ordner):
+    before = "# my keys\nOTHER_KEY=abc\n\n# note\nLAST_KEY=xyz\n"
+    (eigener_ordner / ".env").write_text(before, encoding="utf-8")
+    _add_own(client, "eigene")
+    assert "EIGENE_API_KEY=sk-test-1234" in (eigener_ordner / ".env").read_text()
+
+    assert client.delete("/api/v1/providers/eigene").status_code == 204
+
+    assert (eigener_ordner / ".env").read_bytes() == before.encode("utf-8")
+
+
+def test_a_key_another_provider_reads_stays_until_the_last_one_goes(client, eigener_ordner, monkeypatch):
+    """`ab-c` and `ab_c` both name `AB_C_API_KEY`: two providers, one line."""
+    monkeypatch.setenv("AB_C_API_KEY", "vorher")
+    assert _add_own(client, "ab-c").status_code == 200
+    assert _add_own(client, "ab_c").status_code == 200
+    env_file = eigener_ordner / ".env"
+    assert "AB_C_API_KEY=sk-test-1234" in env_file.read_text()
+
+    assert client.delete("/api/v1/providers/ab-c").status_code == 204
+    # The other provider still reads it, in the file and in the process.
+    assert "AB_C_API_KEY=sk-test-1234" in env_file.read_text()
+    assert os.environ["AB_C_API_KEY"] == "sk-test-1234"
+
+    assert client.delete("/api/v1/providers/ab_c").status_code == 204
+    assert "AB_C_API_KEY" not in env_file.read_text()
+    assert "AB_C_API_KEY" not in os.environ
+
+
+def test_a_variable_without_a_line_in_the_file_is_not_taken_from_the_environment(
+    client, eigener_ordner
+):
+    """The silence probe: the value came from the shell, not from .env —
+    removing the provider neither fails nor takes it from the process."""
+    _add_own(client, "eigene")
+    (eigener_ordner / ".env").unlink()
+
+    assert client.delete("/api/v1/providers/eigene").status_code == 204
+    assert not (eigener_ordner / ".env").exists()
+    assert os.environ["EIGENE_API_KEY"] == "sk-test-1234"
+
+
+def _key_goes(client) -> dict[str, bool]:
+    antwort = client.get("/api/v1/models", params={"alle": "true"})
+    assert antwort.status_code == 200
+    return {m["anbieter"]: m["key_goes_with_provider"] for m in antwort.json()}
+
+
+def test_the_list_says_for_each_provider_whether_its_key_goes_with_it(
+    client, eigener_ordner, monkeypatch
+):
+    """The window asks before the removal; it reads the same rule the route
+    applies — also for a provider that is down."""
+    monkeypatch.setenv("AB_C_API_KEY", "vorher")
+    _add_own(client, "eigene")
+    _add_own(client, "ab-c")
+    _add_own(client, "ab_c")
+
+    seen = _key_goes(client)
+    assert seen["eigene"] is True
+    assert seen["ab-c"] is False
+    assert seen["ab_c"] is False
+
+    client.delete("/api/v1/providers/ab-c")
+    assert _key_goes(client)["ab_c"] is True
+
+
+def test_the_question_names_the_key_in_both_languages():
+    from app.i18n import t
+
+    assert (
+        t("modell.anbieter_loeschen_frage_mit_schluessel", "en", name="Acme")
+        == "Remove provider “Acme” and its key?"
+    )
+    assert (
+        t("modell.anbieter_loeschen_frage_mit_schluessel", "de", name="Acme")
+        == "Anbieter „Acme“ und seinen Schlüssel entfernen?"
+    )
+    # The sentence for a shared key is the one that already stood there.
+    assert "key remains in .env" in t("modell.anbieter_loeschen_frage", "en", name="Acme")
+    assert "bleibt in der .env erhalten" in t("modell.anbieter_loeschen_frage", "de", name="Acme")

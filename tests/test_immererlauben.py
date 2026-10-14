@@ -148,6 +148,7 @@ def _spaeter_ueber_die_route_bestaetigen(client, config, *, angefragter_name, da
                     ),
                     generierungen=verwaltung,
                     config=config,
+                    registry=client.app.state.werkzeuge,
                 )
                 return True
         return False
@@ -166,8 +167,12 @@ class _BestaetigungsWerkzeug:
     ``HeikleRegistry``/``_spaeter_klicken`` use in test_werkzeuge.py, the
     only point during a request where the prompt actually exists yet."""
 
-    def __init__(self, name: str, client, config, *, angefragter_name: str, dauerhaft: bool):
+    def __init__(
+        self, name: str, client, config, *, angefragter_name: str, dauerhaft: bool,
+        display_names: dict[str, str] | None = None,
+    ):
         self.name = name
+        self._display_names = display_names or {}
         self.aufgerufen = []
         self._client = client
         self._config = config
@@ -187,6 +192,9 @@ class _BestaetigungsWerkzeug:
     def server_von(self, name):
         return ""
 
+    def display_name(self, name):
+        return self._display_names.get(name, name)
+
     def bestaetigungsgrund(self, name, argumente=None, ordner=None):
         return ""
 
@@ -195,7 +203,9 @@ class _BestaetigungsWerkzeug:
         return "erledigt"
 
 
-def _rueckfrage_beantworten(client, config, chat_id, werkzeugname, *, angefragter_name, dauerhaft):
+def _rueckfrage_beantworten(
+    client, config, chat_id, werkzeugname, *, angefragter_name, dauerhaft, display_names=None,
+):
     """Runs one chat turn that asks for confirmation on ``werkzeugname``
     and answers it — through the real ``/chat/confirm`` route logic —
     claiming ``angefragter_name`` for the "always allow", with a real
@@ -203,7 +213,7 @@ def _rueckfrage_beantworten(client, config, chat_id, werkzeugname, *, angefragte
     client.app.state.config.features.mcp = True
     client.app.state.werkzeuge = _BestaetigungsWerkzeug(
         werkzeugname, client, config,
-        angefragter_name=angefragter_name, dauerhaft=dauerhaft,
+        angefragter_name=angefragter_name, dauerhaft=dauerhaft, display_names=display_names,
     )
     provider_setzen(
         client,
@@ -258,6 +268,29 @@ def test_eine_echte_rueckfrage_mit_immer_schreibt_die_regel_weiterhin(config, cl
 
     regeln = laden(config.pfad(config.app.berechtigungen_datei))
     assert regeln.regeln["web_search"] == "ja"
+
+
+def test_a_servers_tool_is_allowed_under_the_name_of_the_model(config, client, chat_id):
+    """The window names a server's tool as the server does ('read_file'),
+    the gate reads the name the model calls it by: the rule lands under that
+    one — never under the plain word, which a built-in tool carries as well."""
+    _rueckfrage_beantworten(
+        client, config, chat_id, "mcp__fs__read_file", angefragter_name="read_file",
+        dauerhaft=True, display_names={"mcp__fs__read_file": "read_file"},
+    )
+
+    regeln = laden(config.pfad(config.app.berechtigungen_datei))
+    assert regeln.regeln == {"mcp__fs__read_file": "ja"}
+
+
+def test_another_display_name_writes_no_rule_here_either(config, client, chat_id):
+    _rueckfrage_beantworten(
+        client, config, chat_id, "mcp__fs__read_file", angefragter_name="write_file",
+        dauerhaft=True, display_names={"mcp__fs__read_file": "read_file"},
+    )
+
+    regeln = laden(config.pfad(config.app.berechtigungen_datei))
+    assert regeln.regeln == {}
 
 
 def test_ohne_dauerhaft_bleibt_die_datei_unberuehrt(config, client):

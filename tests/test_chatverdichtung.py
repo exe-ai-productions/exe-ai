@@ -10,6 +10,8 @@ not a list in memory.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app import (
@@ -19,11 +21,13 @@ from app import (
     faltbitte,
     faltpause,
     fenstergroesse,
+    fold_row_weights,
     kontextvoll,
     verdichtung,
     verdichtungswahl,
 )
 from app import verlaufsbau
+from app.providers import MockProvider, mock_endpunkt
 # The request builder's own reading of a row. Compaction is handed it now
 # instead of reading `messages.content`, so every test here has to hand it
 # over too — which is the point: `content` is not what a row says to a
@@ -63,6 +67,10 @@ class _Zustand:
         # none, so its refusals are kept under the endpoint alone
         # (app/discovery.py `refusal_key`).
         self.auswaehlbare_modelle = []
+
+    def kann(self, name: str) -> bool:
+        """The capability the fold asks about: a model that sees."""
+        return name == "vision"
 
 
 class _Zusammenfasser:
@@ -169,7 +177,7 @@ def test_der_nachweis_ohne_datei_bleibt_ein_satz():
 
     satz = chatverdichtung._dokumentnachweis([_Dok("a.txt", "A" * 100)])
 
-    assert '"a.txt" (100 characters). Their text travelled' in satz
+    assert '"a.txt" (100 characters). Their contents accompanied' in satz
 
 
 async def test_eine_eingestellte_grenze_laesst_den_chat_frueher_falten(client):
@@ -210,10 +218,9 @@ async def test_eine_eingestellte_grenze_laesst_den_chat_frueher_falten(client):
 
 def _gewichte(repositories, zeilen, dokumentplan=None):
     """What each row weighs in the prompt — the reading compaction uses."""
-    return [
-        verlaufsbau.zeilentext(z, repositories, dokumentplan=dokumentplan)
-        for z in zeilen
-    ]
+    return fold_row_weights.fold_row_weights(
+        zeilen, repositories, document_plan=dokumentplan
+    )
 
 
 def _gebaut(chat, repositories, dokumentplan=None) -> list:
@@ -571,7 +578,7 @@ async def test_ein_kleines_modell_kann_verdichten(client):
         )
     zeilen = repositories.messages.fuer_das_modell(chat_id=chat.id)
     assert sum(len(z.content) for z in zeilen) < verdichtung.LETZTE_ZEICHEN
-    assert chatverdichtung._mitte_suchen(zeilen, [z.content for z in zeilen]) == []
+    assert chatverdichtung._mitte_suchen(zeilen, [len(z.content) for z in zeilen]) == []
 
     kennung = await chatverdichtung.vielleicht_verdichten(
         zustand=_Zustand(_Zusammenfasser(), context_tokens=16_000),
@@ -896,10 +903,10 @@ async def test_die_faltung_rechnet_nicht_mit_einer_fremden_ablehnung(client):
     """A number a refusal named belongs to the request it happened to.
     The fold is its own request and must not inherit a
     ceiling left over from whatever the chat turn asked before it — the
-    silent case (no prior refusal) is already measured by
-    ``test_die_faltung_auf_dem_anthropic_draht_rechnet_wie_eine_antwort``,
-    which this test's refused request beside it is the only difference
-    from. The fold does not take the number away from that request either."""
+    silent case (no prior refusal) is already measured by the test of the
+    fold on the Anthropic wire above, which this test's refused request
+    beside it is the only difference from. The fold does not take the
+    number away from that request either."""
     from app import antwortgrenze, kontextvoll
     from app.providers import mock_endpunkt
 
@@ -1066,7 +1073,7 @@ async def test_die_bremse_loest_sich_wenn_die_mitte_eine_andere_ist(client):
 async def test_die_budgetgrenze_wird_genau_einmal_gelaufen(client, monkeypatch):
     """The unread block was nine lines that could not do anything.
 
-    It found the last real answer and walked ``schwanz_anfang`` a SECOND
+    It found the last real answer and walked the boundary a SECOND
     time over the rows behind it, folding the result in with a ``min``. Both
     walks add the same texts from the same end against the same budget, so
     the same row busts it and the slice only renames it with a smaller
@@ -1092,25 +1099,25 @@ async def test_die_budgetgrenze_wird_genau_einmal_gelaufen(client, monkeypatch):
         _Zeile(f"BERICHT {i:03d} " + "y" * MAX_ZEICHEN, art="werkzeugmeldung")
         for i in range(60)
     ]
-    echt = verdichtung.schwanz_anfang
-    grenze = echt([z.content for z in zeilen])
+    echt = verdichtung.tail_start_from_weights
+    grenze = echt([len(z.content) for z in zeilen], verdichtung.LETZTE_ZEICHEN)
     # The guard the removed block sat behind: unread from row 1 on, boundary
     # far behind that. Without this the block would not even have run.
     assert 1 < grenze, "the history does not hit the case at all"
 
     laeufe = []
 
-    def zaehlend(inhalte, *rest):
-        laeufe.append(list(inhalte))
-        return echt(inhalte, *rest)
+    def zaehlend(gewichte, *rest):
+        laeufe.append(list(gewichte))
+        return echt(gewichte, *rest)
 
-    monkeypatch.setattr(verdichtung, "schwanz_anfang", zaehlend)
+    monkeypatch.setattr(verdichtung, "tail_start_from_weights", zaehlend)
     # These rows carry nothing but text, so their weight IS their content —
     # which is what the caller hands in.
-    mitte = chatverdichtung._mitte_suchen(zeilen, [z.content for z in zeilen])
+    mitte = chatverdichtung._mitte_suchen(zeilen, [len(z.content) for z in zeilen])
 
     assert len(laeufe) == 1, "the budget boundary is still walked twice"
-    assert laeufe[0] == [z.content for z in zeilen]
+    assert laeufe[0] == [len(z.content) for z in zeilen]
     # Behaviour unchanged — the global boundary was always the answer.
     erwartet = zeilen[verdichtung.ERSTE_FEST : grenze]
     assert [z.id for z in mitte] == [z.id for z in erwartet]
@@ -1142,8 +1149,8 @@ async def test_ein_chat_aus_dokumenten_wird_ueberhaupt_verdichtet(client):
     # by `content` alone there is nothing here to compact.
     roh = [z.content or "" for z in zeilen]
     assert sum(len(t) for t in roh) < verdichtung.LETZTE_ZEICHEN
-    assert verdichtung.schwanz_anfang(roh) == 0
-    assert chatverdichtung._mitte_suchen(zeilen, roh) == []
+    assert verdichtung.tail_start_from_weights([len(t) for t in roh]) == 0
+    assert chatverdichtung._mitte_suchen(zeilen, [len(t) for t in roh]) == []
     # And what actually goes to the model.
     vorher = sum(len(n.content or "") for n in _gebaut(chat, repositories, dokumentplan=plan))
     assert vorher > 900_000
@@ -1181,8 +1188,8 @@ async def test_das_gewicht_einer_zeile_ist_was_die_anfrage_traegt(client):
     gewichte = _gewichte(repositories, zeilen, dokumentplan=plan)
     gebaut = _gebaut(chat, repositories, dokumentplan=plan)
 
-    assert [len(t) for t in gewichte] == [len(n.content or "") for n in gebaut]
-    assert sum(len(t) for t in gewichte) > 6 * 24_000
+    assert gewichte == [len(n.content or "") for n in gebaut]
+    assert sum(gewichte) > 6 * 24_000
 
 
 async def test_die_anfrage_nennt_das_dokument_und_traegt_es_nicht(client):
@@ -1869,7 +1876,8 @@ async def test_ein_kleines_fenster_fragt_das_modell_mit_gesenktem_deckel(client,
     )
 
     assert kennung is not None
-    assert ergebnis == verdichtung.Ergebnis(angewendet=True)
+    assert ergebnis.angewendet is True
+    assert ergebnis.ersetzt > 0
     assert len(fasser.anfragen) == 1
     gefragt = fasser.anfragen[0]
     assert len(gefragt.nachrichten[0].content) < faltbitte.BITTE_MAX
@@ -2217,7 +2225,7 @@ async def test_eine_riesige_mitte_wird_gedeckelt_mit_vermerk(client):
     # the request carries the middle, the pinned opening stays out of it —
     # the end of it, and a visible seam between them.
     assert gefragt[0].content.startswith("[ASSISTANT]: antwort 1 ")
-    assert "summary input truncated" in gefragt[0].content
+    assert "Summary input truncated" in gefragt[0].content
     # The ask itself is never cut: it is what the request is for.
     assert gefragt[1].content == verdichtung.ANFRAGE_TEXT
 
@@ -2363,3 +2371,480 @@ async def test_another_400_of_the_chat_fold_gets_no_second_request(client, uhr):
 
     assert len(server.anfragen) == 1
     assert ergebnis.angewendet is False
+
+
+# --- compacting by hand: POST /chats/{id}/compact ---
+
+
+def _hand(client, provider, context_tokens=100_000):
+    """The test endpoint answering with ``provider``, a window it fits in."""
+    from tests.conftest import provider_setzen
+
+    provider_setzen(client, provider)
+    client.app.state.discovery.zustaende["test"].context_tokens = context_tokens
+    return provider
+
+
+def _compact(client, chat_id, **body):
+    return client.post(f"/api/v1/chats/{chat_id}/compact", json=body)
+
+
+def _unfolded(repositories, chat_id) -> int:
+    return len(repositories.messages.fuer_das_modell(chat_id=chat_id))
+
+
+def test_a_hand_made_fold_folds_a_chat_below_its_threshold_and_says_how_many(client):
+    """No reading, no threshold: the chat has never been measured and folds."""
+    from app.providers import MockProvider
+
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    _schwer(repositories, chat.id, 12)
+    before = _unfolded(repositories, chat.id)
+    fasser = _hand(client, MockProvider(haeppchen=["## Done\n- compacted"]))
+
+    antwort = _compact(client, chat.id)
+
+    assert antwort.status_code == 200
+    body = antwort.json()
+    assert body["result"] == "folded"
+    assert body["replaced"] > 0
+    # The count is what the seam under the middle will say.
+    summary = next(
+        m for m in repositories.messages.auflisten(chat_id=chat.id) if m.art == "verdichtung"
+    )
+    assert body["replaced"] == summary.verdichtete_anzahl
+    assert _unfolded(repositories, chat.id) == before - body["replaced"] + 1
+    assert len(fasser.alle_anfragen) == 1, "exactly one summary request"
+
+
+def test_a_second_hand_made_fold_finds_nothing_left_to_fold(client):
+    from app.providers import MockProvider
+
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    _schwer(repositories, chat.id, 12)
+    fasser = _hand(client, MockProvider(haeppchen=["## Done\n- compacted"]))
+    assert _compact(client, chat.id).json()["result"] == "folded"
+
+    antwort = _compact(client, chat.id)
+
+    assert antwort.json() == {"result": "too_short", "replaced": 0}
+    assert len(fasser.alle_anfragen) == 1, "the second one asked no model"
+
+
+def test_a_chat_without_a_middle_is_too_short_and_asks_no_model(client):
+    from app.providers import MockProvider
+
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    repositories.messages.speichern(chat_id=chat.id, role="user", content="Hi")
+    repositories.messages.speichern(
+        chat_id=chat.id, role="assistant", content="Hello", zustand="fertig"
+    )
+    fasser = _hand(client, MockProvider())
+
+    antwort = _compact(client, chat.id)
+
+    assert antwort.json() == {"result": "too_short", "replaced": 0}
+    assert fasser.alle_anfragen == []
+    assert not [
+        m for m in repositories.messages.auflisten(chat_id=chat.id) if m.art == "verdichtung"
+    ]
+
+
+def test_a_summary_that_is_not_shorter_folds_nothing_and_says_so(client):
+    from app.providers import MockProvider
+
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    _schwer(repositories, chat.id, 12)
+    before = _unfolded(repositories, chat.id)
+    _hand(client, MockProvider(haeppchen=["z" * 600_000]))
+
+    antwort = _compact(client, chat.id)
+
+    assert antwort.json() == {"result": "no_saving", "replaced": 0}
+    assert _unfolded(repositories, chat.id) == before
+
+
+def test_a_failed_summary_folds_nothing_and_frees_the_chat(client):
+    from app.providers import MockProvider
+
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    _schwer(repositories, chat.id, 12)
+    before = _unfolded(repositories, chat.id)
+    _hand(client, MockProvider(fehler="the server is down"))
+
+    antwort = _compact(client, chat.id)
+
+    assert antwort.json() == {"result": "failed", "replaced": 0}
+    assert _unfolded(repositories, chat.id) == before
+    generierungen = client.app.state.generierungen
+    assert generierungen.beansprucht(chat.id) is False
+    faltpause.freigeben(chat.id)
+
+
+def test_the_hand_lifts_the_pause_and_the_block_and_the_automatic_fold_works_again(client):
+    from app.providers import MockProvider
+
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    _schwer(repositories, chat.id, 12)
+    faltpause.notfall(chat.id, faltpause.LANG)
+    assert faltpause.notfall(chat.id, faltpause.LANG) is True
+    assert faltpause.automatik_gesperrt(chat.id) is True
+    fasser = _hand(client, MockProvider(haeppchen=["## Done\n- compacted"]))
+
+    antwort = _compact(client, chat.id)
+
+    assert antwort.json()["result"] == "folded"
+    assert len(fasser.alle_anfragen) == 1
+    assert faltpause.pausiert(chat.id) is False
+    assert faltpause.automatik_gesperrt(chat.id) is False
+
+
+def test_a_hand_made_fold_goes_past_the_brake_of_an_earlier_empty_try(client):
+    """An automatic fold that saved nothing for this middle brakes the next
+    automatic one; the user asking is not that next one."""
+    from app.providers import MockProvider
+
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    _schwer(repositories, chat.id, 12)
+    chatverdichtung._ohne_ersparnis[chat.id] = ("test", 1, 1)
+    try:
+        fasser = _hand(client, MockProvider(haeppchen=["## Done\n- compacted"]))
+        assert _compact(client, chat.id).json()["result"] == "folded"
+        assert len(fasser.alle_anfragen) == 1
+    finally:
+        chatverdichtung._ohne_ersparnis.pop(chat.id, None)
+
+
+def test_a_topic_is_the_last_sentence_of_the_request_and_no_topic_changes_nothing(client):
+    from app.providers import MockProvider
+
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    _schwer(repositories, chat.id, 12)
+    fasser = _hand(client, MockProvider(haeppchen=["## Done\n- compacted"]))
+
+    assert _compact(client, chat.id).json()["result"] == "folded"
+    plain = fasser.alle_anfragen[-1].nachrichten[-1].content
+    assert plain == verdichtung.ANFRAGE_TEXT
+
+    _schwer(repositories, chat.id, 12)
+    assert _compact(client, chat.id, topic="  only the open tasks  ").json()["result"] == "folded"
+    focused = fasser.alle_anfragen[-1].nachrichten[-1].content
+    sentence = verdichtung.FOCUS_TEXT.format(topic="only the open tasks")
+    assert focused.startswith(verdichtung.ANFRAGE_TEXT)
+    assert focused.rstrip("\n").endswith(sentence)
+    assert focused.count(sentence) == 1
+
+
+def test_a_blank_topic_is_no_topic(client):
+    from app.providers import MockProvider
+
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    _schwer(repositories, chat.id, 12)
+    fasser = _hand(client, MockProvider(haeppchen=["## Done\n- compacted"]))
+
+    _compact(client, chat.id, topic="   ")
+
+    assert fasser.alle_anfragen[-1].nachrichten[-1].content == verdichtung.ANFRAGE_TEXT
+
+
+def test_a_busy_chat_answers_409_and_is_not_touched(client):
+    from app.providers import MockProvider
+
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    _schwer(repositories, chat.id, 12)
+    before = _unfolded(repositories, chat.id)
+    fasser = _hand(client, MockProvider())
+    generierungen = client.app.state.generierungen
+    assert generierungen.reservieren(chat.id)
+    try:
+        antwort = _compact(client, chat.id)
+    finally:
+        generierungen.freigeben(chat.id)
+
+    assert antwort.status_code == 409
+    assert fasser.alle_anfragen == []
+    assert _unfolded(repositories, chat.id) == before
+    # And the claim of the one that held it is not taken away by the loser.
+    assert generierungen.beansprucht(chat.id) is False
+
+
+def test_a_chat_without_a_model_or_with_an_unknown_one_is_refused(client):
+    repositories = client.app.state.repositories
+    chat = repositories.chats.erstellen(user_id="standard", title="Ohne Modell")
+
+    assert _compact(client, chat.id).status_code == 400
+    assert _compact(client, chat.id, endpoint_id="nowhere").status_code == 404
+    assert client.post(
+        "/api/v1/chats/nope/compact", json={}
+    ).status_code == 404
+
+
+def test_a_message_that_only_says_compact_is_a_message(client):
+    """The slash line is the window's; the service folds only on its own way."""
+    from app.providers import MockProvider
+    from tests.conftest import senden
+
+    chat_id = client.post("/api/v1/chats", json={"title": "T"}).json()["id"]
+    provider = _hand(client, MockProvider(haeppchen=["ok"]))
+
+    senden(client, chat_id, content="/compact")
+
+    rows = client.app.state.repositories.messages.auflisten(chat_id=chat_id)
+    assert rows[0].content == "/compact" and rows[0].role == "user"
+    # It went to the model as what it is, a message; the request builder
+    # puts its own block in front of the newest turn.
+    assert provider.alle_anfragen[-1].nachrichten[-1].content.endswith("/compact")
+    assert not [m for m in rows if m.art == "verdichtung"]
+
+
+def test_a_hand_made_fold_of_a_chat_with_documents_names_them_and_counts_exactly(client):
+    """The document plan is read from the rows, so a chat of short turns that
+    each carry a big document folds, and the request asks the summary to
+    record what each document was — the same rule the automatic fold gives."""
+    from app.providers import MockProvider
+
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    _mit_dokumenten(repositories, chat.id, 12)
+    fasser = _hand(client, MockProvider(haeppchen=["## Done\n- compacted"]))
+
+    antwort = _compact(client, chat.id).json()
+
+    assert antwort["result"] == "folded"
+    summary = next(
+        m for m in repositories.messages.auflisten(chat_id=chat.id) if m.art == "verdichtung"
+    )
+    assert antwort["replaced"] == summary.verdichtete_anzahl > 0
+    request = fasser.alle_anfragen[-1].nachrichten
+    assert chatverdichtung.DOKUMENTREGEL in request[-1].content
+    # The documents go in named and measured, never with their bodies.
+    history = "\n".join(m.content for m in request[:-1])
+    assert "is not included here" in history
+    assert "D" * 1_000 not in history
+
+
+def _middle_of(client, zeilen_daten):
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    for daten in zeilen_daten:
+        repositories.messages.speichern(chat_id=chat.id, **daten)
+    return repositories, repositories.messages.auflisten(chat_id=chat.id)
+
+
+def test_the_middle_weighs_its_tools_in_the_shape_of_the_offer(client):
+    """The middle is weighed as the request that is asked about carries it:
+    the calls as turns where tools are offered, as the text block over the
+    answer where they are not."""
+    repositories, zeilen = _middle_of(client, [
+        {"role": "user", "content": "Zeig mir den Ordner."},
+        {"role": "assistant", "content": "Hier.", "zustand": "fertig",
+         "stats": {"werkzeuge": [
+             {"name": "run_command", "argumente": {"command": "ls"}, "ergebnis": "file.txt\n"},
+         ]}},
+    ])
+
+    mit = chatverdichtung._mitte_wirklich(zeilen, [], repositories, None, offers_tools=True)
+    ohne = chatverdichtung._mitte_wirklich(zeilen, [], repositories, None, offers_tools=False)
+
+    assert ohne - mit == verlaufsbau.werkzeuggewicht(zeilen[1], offers_tools=False) - (
+        verlaufsbau.werkzeuggewicht(zeilen[1], offers_tools=True)
+    )
+    assert ohne > mit
+
+
+def test_the_middle_weighs_a_picture_at_its_price_where_the_model_sees(client):
+    from app import kontextdruck
+
+    repositories, zeilen = _middle_of(client, [
+        {"role": "user", "content": "", "anhaenge": ["foto.png"]},
+    ])
+
+    sieht = chatverdichtung._mitte_wirklich(zeilen, [], repositories, None, vision=True)
+    blind = chatverdichtung._mitte_wirklich(zeilen, [], repositories, None, vision=False)
+
+    assert sieht == kontextdruck.bild_zeichen(1)
+    assert blind == len("[An image was attached here that this model cannot see.]")
+
+
+def test_silence_a_middle_of_text_weighs_its_text(client):
+    repositories, zeilen = _middle_of(client, [
+        {"role": "user", "content": "Hallo"},
+        {"role": "assistant", "content": "Welt", "zustand": "fertig"},
+    ])
+
+    assert chatverdichtung._mitte_wirklich(zeilen, [], repositories, None) == len("Hallo") + len("Welt")
+
+
+# --- the boundary of the verbatim tail weighs what the request carries -----
+
+
+def test_a_row_weighs_its_words_its_pictures_and_its_tool_log(client):
+    from app import kontextdruck
+
+    repositories, zeilen = _middle_of(client, [
+        {"role": "user", "content": "", "anhaenge": ["foto.png"]},
+        {"role": "user", "content": "Hallo", "anhaenge": ["foto.png", "zwei.png"]},
+        {"role": "assistant", "content": "Hier.", "zustand": "fertig",
+         "stats": {"werkzeuge": [
+             {"name": "run_command", "argumente": {"command": "ls"}, "ergebnis": "y" * 300},
+         ]}},
+    ])
+
+    gewichte = fold_row_weights.fold_row_weights(zeilen, repositories, document_plan=None)
+
+    # A picture alone says nothing in words: it weighs its price, and not the
+    # sentence that stands in for an empty row as well.
+    assert gewichte[0] == kontextdruck.bild_zeichen(1)
+    assert gewichte[1] == len("Hallo") + kontextdruck.bild_zeichen(2)
+    assert verlaufsbau.werkzeuggewicht(zeilen[2]) > 300
+    assert gewichte[2] == len("Hier.") + verlaufsbau.werkzeuggewicht(zeilen[2])
+    # A caller that stays inside what a fold of messages counts leaves the
+    # tool log out.
+    ohne_log = fold_row_weights.fold_row_weights(
+        zeilen, repositories, document_plan=None, tool_log=False
+    )
+    assert ohne_log[2] == len("Hier.")
+    # A model that cannot see weighs the sentence that goes instead.
+    blind = fold_row_weights.fold_row_weights(
+        zeilen, repositories, document_plan=None, vision=False
+    )
+    assert blind[0] == len("[An image was attached here that this model cannot see.]")
+
+
+async def test_a_chat_of_pictures_and_little_text_folds(client):
+    """Twenty pictures and a few words each: by its text the history is a few
+    hundred characters and never passes the tail budget, by what the request
+    carries it is twenty times the price of a picture."""
+    from app import kontextdruck
+
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    for nr in range(20):
+        repositories.messages.speichern(
+            chat_id=chat.id, role="user", content=f"Look at {nr}.", anhaenge=["foto.png"]
+        )
+        repositories.messages.speichern(
+            chat_id=chat.id, role="assistant", content=f"Seen {nr}.", zustand="fertig"
+        )
+    zeilen = repositories.messages.fuer_das_modell(chat_id=chat.id)
+    assert sum(len(z.content) for z in zeilen) < 1_000
+    assert 20 * kontextdruck.bild_zeichen(1) > verdichtung.LETZTE_ZEICHEN
+
+    fasser = _Zusammenfasser()
+    kennung = await chatverdichtung.vielleicht_verdichten(
+        zustand=_Zustand(fasser),
+        repositories=repositories,
+        chat=chat,
+        endpoint_id="test",
+        modellname="test",
+        vorheriger_stand=90_000,
+    )
+
+    assert len(fasser.anfragen) == 1, "no summary was asked for"
+    assert kennung is not None
+    # The newest rows stay verbatim: the tail is not folded away.
+    sichtbar = repositories.messages.fuer_das_modell(chat_id=chat.id)
+    assert sichtbar[-1].content == "Seen 19."
+
+
+async def test_silence_a_chat_of_text_alone_of_the_same_size_does_not_fold(client):
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    for nr in range(20):
+        repositories.messages.speichern(chat_id=chat.id, role="user", content=f"Look at {nr}.")
+        repositories.messages.speichern(
+            chat_id=chat.id, role="assistant", content=f"Seen {nr}.", zustand="fertig"
+        )
+
+    fasser = _Zusammenfasser()
+    kennung = await chatverdichtung.vielleicht_verdichten(
+        zustand=_Zustand(fasser),
+        repositories=repositories,
+        chat=chat,
+        endpoint_id="test",
+        modellname="test",
+        vorheriger_stand=90_000,
+    )
+
+    assert fasser.anfragen == []
+    assert kennung is None
+
+
+# --- compacting by hand: the stop button ---
+
+
+class _HaengendeBitte(MockProvider):
+    """A provider whose summary request hangs until it is closed. Stop is
+    pressed shortly after the request went out."""
+
+    def __init__(self, stoppen=None):
+        super().__init__(mock_endpunkt("test"), haeppchen=["## Done\n- compacted"])
+        self.stoppen = stoppen
+        self.bitten = 0
+        self.geschlossen = False
+
+    async def streamen(self, anfrage):
+        self.bitten += 1
+        if self.stoppen is not None:
+            asyncio.get_running_loop().call_later(0.2, self.stoppen)
+        try:
+            await asyncio.sleep(60)
+        finally:
+            self.geschlossen = True
+        async for stueck in super().streamen(anfrage):
+            yield stueck
+
+
+def test_a_stop_during_a_hand_made_fold_closes_the_request_and_folds_nothing(client):
+    import time
+
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    _schwer(repositories, chat.id, 12)
+    before = _unfolded(repositories, chat.id)
+    generierungen = client.app.state.generierungen
+    fasser = _hand(
+        client, _HaengendeBitte(stoppen=lambda: generierungen.alle_im_chat_abbrechen(chat.id))
+    )
+    begonnen = time.monotonic()
+
+    antwort = _compact(client, chat.id)
+
+    assert time.monotonic() - begonnen < 15
+    assert antwort.status_code == 200
+    assert antwort.json() == {"result": "stopped", "replaced": 0}
+    assert fasser.bitten == 1
+    assert fasser.geschlossen, "the summary request ran on after the stop"
+    # Nothing folded, nothing booked, the claim given back.
+    assert _unfolded(repositories, chat.id) == before
+    assert not [
+        m for m in repositories.messages.auflisten(chat_id=chat.id) if m.art == "verdichtung"
+    ]
+    assert not faltpause.pausiert(chat.id)
+    assert not faltpause.automatik_gesperrt(chat.id)
+    assert not generierungen.beansprucht(chat.id)
+
+
+def test_silence_a_stop_in_another_chat_lets_a_hand_made_fold_run(client):
+    from app.providers import MockProvider
+
+    repositories = client.app.state.repositories
+    chat = _chat(client)
+    _schwer(repositories, chat.id, 12)
+    generierungen = client.app.state.generierungen
+    _hand(client, MockProvider(haeppchen=["## Done\n- compacted"]))
+
+    assert generierungen.alle_im_chat_abbrechen("some-other-chat") == 0
+    antwort = _compact(client, chat.id)
+
+    assert antwort.json()["result"] == "folded"

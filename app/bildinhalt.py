@@ -27,10 +27,12 @@ Two formats, read only at the front of the file:
 from __future__ import annotations
 
 import functools
+import io
 import json
 import os
 import struct
 from pathlib import Path
+from typing import NamedTuple
 
 from app import ggufmtp as gguf
 
@@ -54,9 +56,7 @@ def sorte(pfad: Path) -> str:
     if gelesen is None:
         return UNBEKANNT
     is_gguf, architecture, names = gelesen
-    if is_gguf:
-        return _gguf_sorte(architecture)
-    return _sorte_aus_tensornamen(list(names or {}))
+    return header_kind(names, architecture, is_gguf=is_gguf)
 
 
 # --- safetensors -------------------------------------------------------
@@ -293,6 +293,131 @@ def family(path: Path) -> str | None:
     return _family_from_names(names, sort=not is_gguf) or _GGUF_FAMILIES.get(architecture or "")
 
 
+# --- The family a catalogue or a kit is built for -------------------------
+#
+# The same reading of a header as ``family``, with one more refusal: a LoRA
+# or a ControlNet names its weights after the model it was made for
+# (``double_blocks…lora_A.weight``, ``controlnet_blocks``), so the rules above
+# would call it a model of that family and a kit would be assembled for it.
+# These are the marks that tell the two apart (measured on LoRAs of the
+# kohya, peft, diffusers and ComfyUI forms and on a ControlNet).
+_COMPANION_MARKS = ("lora_A.", "lora_B.", "lora_up.", "lora_down.", "controlnet_blocks")
+
+
+def _is_companion_header(names: dict[str, list[int]]) -> bool:
+    return any(
+        name.startswith("lora_") or any(mark in name for mark in _COMPANION_MARKS)
+        for name in names
+    )
+
+
+def header_family(
+    names: dict[str, list[int]] | None, architecture: str | None, *, is_gguf: bool
+) -> tuple[str | None, bool]:
+    """The family a header names and whether the file is a LoRA or a
+    ControlNet: ``(family, companion)``. A companion has no family here — no
+    kit is assembled for it. ``(None, False)`` where the header names none."""
+    if names is None:
+        return _GGUF_FAMILIES.get(architecture or ""), False
+    if _is_companion_header(names):
+        return None, True
+    return _family_from_names(names, sort=not is_gguf) or _GGUF_FAMILIES.get(architecture or ""), False
+
+
+def header_kind(
+    names: dict[str, list[int]] | None, architecture: str | None, *, is_gguf: bool
+) -> str:
+    """Which of the three kinds a header says the file is, or ``unbekannt``
+    — what ``sorte`` answers for a file that lies in a folder."""
+    if is_gguf:
+        return _gguf_sorte(architecture)
+    return _sorte_aus_tensornamen(list(names or {}))
+
+
+class HeadReading(NamedTuple):
+    """What a header says: the family it names (``None`` where it names
+    none), the kind of file (``BILDMODELL``, ``TEXTVERSTEHER``, ``VAE`` or
+    ``UNBEKANNT``) and whether the file is a LoRA or a ControlNet — which
+    has no kind and no family here."""
+
+    family: str | None
+    kind: str
+    companion: bool
+
+
+def read_header(
+    names: dict[str, list[int]] | None, architecture: str | None, *, is_gguf: bool
+) -> HeadReading:
+    family, companion = header_family(names, architecture, is_gguf=is_gguf)
+    kind = UNBEKANNT if companion else header_kind(names, architecture, is_gguf=is_gguf)
+    return HeadReading(family, kind, companion)
+
+
+def file_family(path: Path) -> tuple[str | None, bool]:
+    """``header_family`` of a file that lies in a folder — ``(None, False)``
+    for one that cannot be read or is none of this program's families."""
+    read = tensors(path)
+    if read is None:
+        return None, False
+    names, architecture = read
+    return header_family(names, architecture, is_gguf=architecture is not None or _is_gguf(path))
+
+
+class HeaderIncomplete(Exception):
+    """The bytes handed in end inside the header. ``needed`` is how many
+    bytes from the front the header takes, when its length says; None where
+    only more bytes will tell."""
+
+    def __init__(self, needed: int | None = None) -> None:
+        super().__init__(needed)
+        self.needed = needed
+
+
+# The most a remote header may take. A safetensors header of a model with
+# thousands of tensors is a few megabytes; this is the hub library's own
+# ceiling for it.
+REMOTE_SAFETENSORS_HEADER_MAX = 25_000_000
+
+
+def header_from_bytes(data: bytes, file_size: int) -> _ImageHeader | None:
+    """What ``_image_header`` answers, read from the front of a file that
+    lives elsewhere: ``data`` is its first bytes, ``file_size`` its whole
+    size. Raises ``HeaderIncomplete`` when ``data`` ends inside the header,
+    answers None for a file that is no header this program reads."""
+    if data[:4] == b"GGUF":
+        stream = io.BytesIO(data)
+        try:
+            header = gguf._walk_header(stream, end=file_size)  # noqa: SLF001 - one reader, one place
+        except EOFError:
+            raise HeaderIncomplete() from None
+        except Exception:  # noqa: BLE001 - a broken or foreign header answers nothing
+            return None
+        # A skipped value may have left the position past the bytes held.
+        if stream.tell() > len(data):
+            raise HeaderIncomplete()
+        if header is None:
+            return None
+        return True, _gguf_architecture(header), _gguf_names(header)
+    if len(data) < 8:
+        raise HeaderIncomplete(8)
+    length = struct.unpack("<Q", data[:8])[0]
+    if not 0 < length <= REMOTE_SAFETENSORS_HEADER_MAX or 8 + length > file_size:
+        return None
+    if len(data) < 8 + length:
+        raise HeaderIncomplete(8 + length)
+    try:
+        loaded = json.loads(data[8:8 + length])
+    except ValueError:
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    return False, None, {
+        name: list(value.get("shape") or [])
+        for name, value in loaded.items()
+        if name != "__metadata__" and isinstance(value, dict)
+    }
+
+
 def _is_gguf(path: Path) -> bool:
     try:
         state = path.stat()
@@ -306,6 +431,28 @@ def _is_gguf_cached(path: str, size: int, mtime_ns: int) -> bool:
     try:
         with open(path, "rb") as file:
             return file.read(4) == b"GGUF"
+    except OSError:
+        return False
+
+
+def is_sqlite(path: Path) -> bool:
+    """Whether the file is a SQLite database, told by its first 16 bytes.
+    Some tools keep their weights in one under a checkpoint's extension; the
+    loader reads GGUF, safetensors and PyTorch files only, so such a file
+    can never act as a weight file. A file that cannot be read says nothing
+    and is not told apart."""
+    try:
+        state = path.stat()
+    except OSError:
+        return False
+    return _is_sqlite_cached(str(path), state.st_size, state.st_mtime_ns)
+
+
+@functools.lru_cache(maxsize=256)
+def _is_sqlite_cached(path: str, size: int, mtime_ns: int) -> bool:
+    try:
+        with open(path, "rb") as file:
+            return file.read(16) == b"SQLite format 3\x00"
     except OSError:
         return False
 

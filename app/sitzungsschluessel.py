@@ -35,7 +35,10 @@ log = logging.getLogger(__name__)
 # redirect, which knows nothing of this session and cannot be made to
 # send it. Secured instead by its own one-time, time-limited state token
 # (app/api/v1/werkzeuge.py).
-AUSGENOMMEN = frozenset({"/api/v1/tools/oauth/callback"})
+# The second one is where a client WITHOUT a key gets one: a service beyond
+# the loopback address hands its key out only against the password sent
+# there (app/api/v1/anmeldung.py).
+AUSGENOMMEN = frozenset({"/api/v1/tools/oauth/callback", "/api/v1/login"})
 
 # The header the app's own frontend sends on every fetch; the query
 # parameter is the fallback for the places a browser cannot attach a header

@@ -84,7 +84,7 @@
 
   $effect(() => {
     if (!offen) return
-    if (!modellwahl.geladen) auswahlLaden()
+    auswahlLaden()
   })
 
   /* The vision word, by hand: a cloud provider's model list says nothing
@@ -187,11 +187,14 @@
     }
   }
 
-  /* Removes a provider — the way out of the mistake that had none. The key
-     itself stays in the .env (the route never touches it), so adding the
-     same provider back later needs no new one. */
+  /* Removes a provider — the way out of the mistake that had none. Its key
+     line leaves the .env with it, unless another provider reads the same
+     variable; the question says which of the two happens. */
   async function anbieterEntfernen(haus) {
-    const ja = await frage(t('modell.anbieter_loeschen_frage', { name: haus.name }), {
+    const frageSchluessel = haus.key_goes_with_provider
+      ? 'modell.anbieter_loeschen_frage_mit_schluessel'
+      : 'modell.anbieter_loeschen_frage'
+    const ja = await frage(t(frageSchluessel, { name: haus.name }), {
       okSchluessel: 'modell.anbieter_entfernen',
     })
     if (!ja) return

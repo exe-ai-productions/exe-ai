@@ -24,6 +24,8 @@
   unknown.
 */
 
+import { ownName } from './mcpWerkzeuge.js'
+
 /* Step 1 — by tool name. */
 const NACH_WERKZEUG = {
   web_search: 'globus',
@@ -37,6 +39,7 @@ const NACH_WERKZEUG = {
   create_folder: 'ordner',
   ask_user: 'question',
   draw_image: 'bild',
+  draw_video: 'clapperboard',
   generate_image: 'bild',
   image_to_image: 'bild',
   inpaint_image: 'bild',
@@ -115,7 +118,11 @@ export const RUECKFALL = 'winkel'
  * knowing; what the kind adds is the DIFFERENCE, and only the caller who
  * knows it can draw it.
  */
-export function zeichenFuer(name = '', server = '', eingebaut = null) {
+export function zeichenFuer(rohname = '', server = '', eingebaut = null) {
+  /* A server's tool reaches the chat under the server's own word (the
+     program shows that), the lists and the window under
+     `mcp__<server>__<tool>` — the mark is the same for both. */
+  const name = ownName(rohname, server)
   if (NACH_WERKZEUG[name]) return NACH_WERKZEUG[name]
   const nachServer =
     eingebaut === true

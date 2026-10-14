@@ -189,7 +189,7 @@ async def test_schluessel_wird_als_bearer_mitgeschickt():
 async def test_ohne_schluessel_kommt_eine_klare_meldung():
     server = EchoServer(schluessel="geheim")
     k = klient(server)
-    with pytest.raises(MCPFehler, match="not signed in"):
+    with pytest.raises(MCPFehler, match="authentication required"):
         await k.starten()
 
 
@@ -239,7 +239,7 @@ async def test_toter_zugang_ohne_erneuerung_meldet_sich_klar():
     await k.starten()
     try:
         server.schluessel = "anders"
-        with pytest.raises(MCPFehler, match="not signed in"):
+        with pytest.raises(MCPFehler, match="authentication required"):
             await k.werkzeug_aufrufen("echo", {"text": "x"})
     finally:
         await k.stoppen()
@@ -381,7 +381,7 @@ def test_pruefung_meldet_unbekannten_typ():
 
 def test_pruefung_meldet_http_ohne_url():
     meldung = konfiguration_pruefen(_konfig({"type": "http"}), "de")
-    assert meldung is not None and "braucht eine 'url'" in meldung
+    assert meldung is not None and "erfordert eine 'url'" in meldung
 
 
 def test_pruefung_meldet_falsche_feldarten():

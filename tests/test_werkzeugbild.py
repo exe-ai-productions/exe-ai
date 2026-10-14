@@ -17,9 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from app import verlaufsbau, werkzeugbild
-from app.providers import MockProvider, mock_endpunkt
-from app.providers.base import Werkzeugaufruf
+from app import verlaufsbau, werkzeugbild, werkzeugkuerzung
+from app.providers import MockProvider, ProviderFehler, mock_endpunkt
+from app.providers.base import Stueck, Werkzeugaufruf
 from app.tools.registry import WerkzeugRegistry
 from tests.conftest import pdf_mit_seiten, png_bytes, provider_setzen
 
@@ -235,14 +235,13 @@ def _zweite_frage(client, chat_id):
     return provider
 
 
-def test_die_naechste_antwort_sagt_wo_das_bild_liegt(client, tmp_path):
-    """The sentence the result carried was true for one round only.
+def test_the_next_answer_carries_the_picture_again(client, tmp_path):
+    """A picture a tool read does not vanish with its round.
 
-    The picture rides on a message of its own round and a rebuilt history
-    carries the stored text alone — so from the second answer on, "is
-    attached below" pointed the model at nothing. It now reads the note the
-    house gives for every picture that is no longer in the request: where the
-    file is and which tool reads it back.
+    The history is rebuilt from the stored rows for the next answer; the
+    newest few tool pictures go out again there, in the shape their own round
+    had: the result with the sentence it returned, and the picture on a user
+    turn behind the round's results.
     """
     _echte_werkzeuge(client, tmp_path, bildsicht=True)
     (tmp_path / "foto.png").write_bytes(png_bytes())
@@ -259,13 +258,448 @@ def test_die_naechste_antwort_sagt_wo_das_bild_liegt(client, tmp_path):
     zweiter = _zweite_frage(client, chat_id)
     verlauf = zweiter.alle_anfragen[0].nachrichten
     ergebnis = next(n for n in verlauf if n.role == "tool")
-    assert werkzeugbild.ANHANG_SATZ not in ergebnis.content
-    assert werkzeugbild.NICHT_MEHR_DABEI in ergebnis.content
-    # The path the model passed itself, and the tool that reads it again.
-    assert "foto.png" in ergebnis.content
-    assert "read_file" in ergebnis.content
-    # And nothing smuggles the picture back in: it is not in this request.
+    assert werkzeugbild.ANHANG_SATZ in ergebnis.content
+    assert werkzeugbild.NICHT_MEHR_DABEI not in ergebnis.content
+    mit_bild = [n for n in verlauf if n.alle_bild_urls()]
+    assert len(mit_bild) == 1
+    assert mit_bild[0].role == "user"
+    assert mit_bild[0].alle_bild_urls()[0].startswith("data:image/png;base64,")
+    assert "foto.png" in mit_bild[0].content
+    # Behind the results, never between call and result.
+    assert verlauf.index(mit_bild[0]) > verlauf.index(ergebnis)
+    # The same bytes the round itself sent.
+    damals = next(n for n in erster.alle_anfragen[1].nachrichten if n.alle_bild_urls())
+    assert mit_bild[0].alle_bild_urls() == damals.alle_bild_urls()
+
+
+def _five_pictures_read(client, tmp_path):
+    _echte_werkzeuge(client, tmp_path, bildsicht=True)
+    chat_id = _chat_mit_ordner(client, tmp_path)
+    for nummer in range(5):
+        (tmp_path / f"foto{nummer}.png").write_bytes(png_bytes())
+        _lauf(client, chat_id, {"path": f"foto{nummer}.png"})
+    return chat_id
+
+
+@pytest.fixture
+def small_limits(monkeypatch):
+    """The way a retired picture is told and rebuilt, shown with five
+    pictures: three stay and the older ones go one at a time. The real
+    numbers have their own tests (tests/test_werkzeugkuerzung.py)."""
+    monkeypatch.setattr(werkzeugkuerzung, "OUTBOUND_IMAGE_LIMIT", 3)
+    monkeypatch.setattr(werkzeugkuerzung, "IMAGE_EVICTION_BATCH", 1)
+
+
+@pytest.mark.usefixtures("small_limits")
+def test_only_the_three_newest_pictures_of_the_chat_ride_again(client, tmp_path):
+    """Five answers each read one picture: the next request carries the
+    newest three and says where the two older ones lie."""
+    chat_id = _five_pictures_read(client, tmp_path)
+
+    zweiter = _zweite_frage(client, chat_id)
+    verlauf = zweiter.alle_anfragen[0].nachrichten
+
+    mit_bild = [n for n in verlauf if n.alle_bild_urls()]
+    assert len(mit_bild) == 3
+    assert [n.werkzeugbilder[0].rsplit("/", 1)[-1] for n in mit_bild] == [
+        "foto2.png",
+        "foto3.png",
+        "foto4.png",
+    ]
+    ergebnisse = [n.content for n in verlauf if n.role == "tool"]
+    assert [werkzeugbild.NICHT_MEHR_DABEI in text for text in ergebnisse] == [
+        True, True, False, False, False,
+    ]
+    assert [werkzeugbild.ANHANG_SATZ in text for text in ergebnisse] == [
+        False, False, True, True, True,
+    ]
+    # The shape the run gave a retired picture: the bare sentence on the
+    # result, and the note with the path on a turn of its own behind it.
+    assert ergebnisse[:2] == [werkzeugbild.NICHT_MEHR_DABEI] * 2
+    notes = [
+        n
+        for n in verlauf
+        if n.role == "user" and werkzeugkuerzung.BILD_ENTFERNT in n.content
+    ]
+    assert len(notes) == 2
+    assert not any(n.alle_bild_urls() for n in notes)
+    for nummer in (0, 1):
+        assert f"foto{nummer}.png" in notes[nummer].content
+    # What the rows remember: the files, oldest first.
+    messages = client.app.state.repositories.messages
+    all_values = messages.tool_entry_values(
+        chat_id=chat_id, key=werkzeugbild.READ_IMAGE_PATH, newest=10
+    )
+    assert [Path(pfad).name for pfad in all_values] == [f"foto{n}.png" for n in range(5)]
+    newest_values = messages.tool_entry_values(
+        chat_id=chat_id, key=werkzeugbild.READ_IMAGE_PATH, newest=3
+    )
+    assert [Path(pfad).name for pfad in newest_values] == ["foto2.png", "foto3.png", "foto4.png"]
+
+
+def test_the_next_message_takes_the_same_pictures_out_as_the_run_did(client, tmp_path):
+    """The real numbers: twenty-one answers each read one picture. The run
+    of the last one sends the newest thirteen and takes the oldest eight out
+    at once; the next message, rebuilt from the stored rows, carries the same
+    thirteen and the same eight notes — so it starts with the bytes the run's
+    request ended with, and the server reads it from its cache."""
+    _echte_werkzeuge(client, tmp_path, bildsicht=True)
+    chat_id = _chat_mit_ordner(client, tmp_path)
+    reads = werkzeugkuerzung.OUTBOUND_IMAGE_LIMIT + 1
+    last = None
+    for nummer in range(reads):
+        (tmp_path / f"foto{nummer}.png").write_bytes(png_bytes())
+        last = _lauf(client, chat_id, {"path": f"foto{nummer}.png"})
+    run_request = last.alle_anfragen[1].nachrichten
+
+    history = _zweite_frage(client, chat_id).alle_anfragen[0].nachrichten
+
+    def _told(verlauf):
+        pictures = [n for n in verlauf if n.alle_bild_urls()]
+        notes = [
+            n for n in verlauf
+            if n.role == "user" and werkzeugkuerzung.BILD_ENTFERNT in n.content
+        ]
+        return len(pictures), len(notes)
+
+    leaving = werkzeugkuerzung.IMAGE_EVICTION_BATCH
+    assert _told(run_request) == (reads - leaving, leaving)
+    assert _told(history) == _told(run_request)
+
+
+def test_silence_up_to_the_limit_no_picture_leaves_the_next_message(client, tmp_path):
+    """Twenty answers each read one picture: all twenty ride again."""
+    _echte_werkzeuge(client, tmp_path, bildsicht=True)
+    chat_id = _chat_mit_ordner(client, tmp_path)
+    reads = werkzeugkuerzung.OUTBOUND_IMAGE_LIMIT
+    for nummer in range(reads):
+        (tmp_path / f"foto{nummer}.png").write_bytes(png_bytes())
+        _lauf(client, chat_id, {"path": f"foto{nummer}.png"})
+
+    history = _zweite_frage(client, chat_id).alle_anfragen[0].nachrichten
+
+    assert len([n for n in history if n.alle_bild_urls()]) == reads
+    assert not any(werkzeugkuerzung.BILD_ENTFERNT in n.content for n in history)
+
+
+def _wie_gesendet(nachricht):
+    """What the model is told by one message: role, words, pictures, and the
+    calls with their ids — the parts a server reads its cache by."""
+    return (
+        nachricht.role,
+        nachricht.content,
+        tuple(nachricht.alle_bild_urls()),
+        nachricht.werkzeugaufruf_id,
+        tuple((a.id, a.name, str(a.argumente)) for a in nachricht.werkzeugaufrufe or ()),
+    )
+
+
+def _lauf_mit_bildern(client, chat_id, namen):
+    """One answer whose first round reads every file in ``namen`` at once."""
+    return provider_setzen(
+        client,
+        MockProvider(
+            mock_endpunkt("test"),
+            haeppchen=["Gesehen."],
+            werkzeugaufrufe=[
+                Werkzeugaufruf(id=f"a{n}", name="read_file", argumente={"path": name})
+                for n, name in enumerate(namen)
+            ],
+        ),
+    )
+
+
+def _frage_stellen(client, chat_id, provider):
+    client.post(
+        "/api/v1/chat/completions",
+        json={"chat_id": chat_id, "endpoint_id": "test", "content": "Sieh nach."},
+    )
+    return provider
+
+
+@pytest.mark.usefixtures("small_limits")
+def test_the_history_after_a_retired_picture_begins_with_what_the_run_sent(client, tmp_path):
+    """Four answers each read one picture; the fourth retires the first from
+    its own request. The next message rebuilds the history from the rows, and
+    its first messages are those the run sent after the retirement, one for
+    one — the result with the bare sentence, the turn with the note — so the
+    model server reads the rest from its cache."""
+    _echte_werkzeuge(client, tmp_path, bildsicht=True)
+    chat_id = _chat_mit_ordner(client, tmp_path)
+    for nummer in range(4):
+        (tmp_path / f"foto{nummer}.png").write_bytes(png_bytes())
+        letzter = _lauf(client, chat_id, {"path": f"foto{nummer}.png"})
+    gesendet = letzter.alle_anfragen[1].nachrichten
+
+    zweiter = _zweite_frage(client, chat_id)
+    verlauf = zweiter.alle_anfragen[0].nachrichten
+
+    assert len(verlauf) > len(gesendet) - 1
+    assert [_wie_gesendet(n) for n in verlauf[: len(gesendet)]] == [
+        _wie_gesendet(n) for n in gesendet
+    ]
+    # And what stands at the retired picture is the run's own form.
+    ersatz = [n for n in gesendet if werkzeugkuerzung.BILD_ENTFERNT in n.content]
+    assert len(ersatz) == 1 and "foto0.png" in ersatz[0].content
+
+
+@pytest.mark.usefixtures("small_limits")
+def test_a_round_that_retired_only_some_of_its_pictures_keeps_the_turn_of_the_rest(
+    client, tmp_path
+):
+    """The first answer reads two pictures in one round, two more answers one
+    each: only the first picture of that round goes out of the request. The
+    round's turn is rewritten with the remaining picture, the way the run
+    wrote it, and the history built afterwards says the same."""
+    _echte_werkzeuge(client, tmp_path, bildsicht=True)
+    chat_id = _chat_mit_ordner(client, tmp_path)
+    for nummer in range(4):
+        (tmp_path / f"foto{nummer}.png").write_bytes(png_bytes())
+    _frage_stellen(client, chat_id, _lauf_mit_bildern(client, chat_id, ["foto0.png", "foto1.png"]))
+    _lauf(client, chat_id, {"path": "foto2.png"})
+    letzter = _lauf(client, chat_id, {"path": "foto3.png"})
+    gesendet = letzter.alle_anfragen[1].nachrichten
+
+    zweiter = _zweite_frage(client, chat_id)
+    verlauf = zweiter.alle_anfragen[0].nachrichten
+
+    assert [_wie_gesendet(n) for n in verlauf[: len(gesendet)]] == [
+        _wie_gesendet(n) for n in gesendet
+    ]
+    teil = next(n for n in verlauf if werkzeugkuerzung.BILD_ENTFERNT in n.content)
+    assert len(teil.alle_bild_urls()) == 1
+    assert "foto0.png" in teil.content
+    assert werkzeugbild.EINLEITUNG.format(namen="foto1.png") in teil.content
+    ergebnisse = [n.content for n in verlauf if n.role == "tool"]
+    assert ergebnisse[0] == werkzeugbild.NICHT_MEHR_DABEI
+    assert werkzeugbild.ANHANG_SATZ in ergebnisse[1]
+
+
+def test_the_weight_counts_the_turn_of_a_retired_picture(tmp_path):
+    """The fold is judged on what the rebuilt history sends: for a picture
+    that went out of the request, the bare sentence on the result and, on a
+    turn of its own, the sentence of the retirement with the note."""
+    eintrag = _bildeintrag()
+    eintrag[werkzeugbild.READ_IMAGE_PATH] = "/geteilt/bilder/foto.png"
+    zeile = _Zeile([eintrag])
+
+    ohne_bilder = verlaufsbau.werkzeuggewicht(zeile)
+    mit_bildern = verlaufsbau.werkzeuggewicht(zeile, True, set())
+
+    assert mit_bildern - ohne_bilder == len(werkzeugkuerzung.BILD_ENTFERNT)
+    # A picture of the newest few rides along: no retirement is counted.
+    reitet = verlaufsbau.werkzeuggewicht(zeile, True, {id(eintrag)})
+    assert reitet != mit_bildern
+
+
+class _LiestDannScheitert(MockProvider):
+    """The first call reads a picture, the call behind its result fails, the
+    ones after that answer — and every request is kept as the model's server
+    reads it: role, words, pictures, calls and their ids."""
+
+    def __init__(self, *args, pfad, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pfad = pfad
+        self.aufrufe_gezaehlt = 0
+        self.anfragen_gesehen = []
+
+    async def streamen(self, anfrage):
+        self.letzte_anfrage = anfrage
+        self.anfragen_gesehen.append(
+            [_wie_gesendet(n) for n in anfrage.nachrichten if n.role != "system"]
+        )
+        self.aufrufe_gezaehlt += 1
+        if self.aufrufe_gezaehlt == 1:
+            yield Stueck(
+                "tool_call",
+                werkzeugaufrufe=[
+                    Werkzeugaufruf(id="a1", name="read_file", argumente={"path": self.pfad})
+                ],
+            )
+            return
+        if self.aufrufe_gezaehlt == 2:
+            raise ProviderFehler("the server went away")
+        yield Stueck("content", text="Gesehen.")
+
+
+def _gescheitert_und_wiederholt(client, chat_id, pfad):
+    """A question whose answer reads ``pfad`` and fails in the next call, then
+    the arrow: the provider, which has kept the failed call's request and the
+    repeated one."""
+    provider = provider_setzen(client, _LiestDannScheitert(mock_endpunkt("test"), pfad=pfad))
+    client.post(
+        "/api/v1/chat/completions",
+        json={"chat_id": chat_id, "endpoint_id": "test", "content": "Sieh nach."},
+    )
+    zeilen = client.get(f"/api/v1/chats/{chat_id}/messages").json()["nachrichten"]
+    gescheitert = [z for z in zeilen if z["role"] == "assistant"][-1]
+    assert gescheitert["zustand"] == "fehler"
+    antwort = client.post(
+        "/api/v1/chat/completions",
+        json={"chat_id": chat_id, "endpoint_id": "test", "retries": gescheitert["id"]},
+    )
+    assert antwort.status_code == 200
+    assert len(provider.anfragen_gesehen) == 3
+    return provider
+
+
+def test_the_repeated_call_carries_the_picture_the_failed_call_carried(client, tmp_path):
+    """The answer read a picture and failed in the call behind its result.
+    The arrow asks that call again: the request holds the same messages the
+    failed call held, the picture as a picture — not the note with its path
+    that a request without the answer's pictures wrote."""
+    _echte_werkzeuge(client, tmp_path, bildsicht=True)
+    (tmp_path / "foto.png").write_bytes(png_bytes())
+    chat_id = _chat_mit_ordner(client, tmp_path)
+
+    provider = _gescheitert_und_wiederholt(client, chat_id, "foto.png")
+
+    gescheitert, wiederholt = provider.anfragen_gesehen[1], provider.anfragen_gesehen[2]
+    assert any(bilder for _, _, bilder, _, _ in gescheitert)
+    assert wiederholt == gescheitert
+
+
+@pytest.mark.usefixtures("small_limits")
+def test_the_pictures_of_the_failed_answer_count_with_those_before_it(client, tmp_path):
+    """Three pictures were read in earlier answers, the failed answer reads a
+    fourth: the run retired the first from its own request, and the repeated
+    call retires it the same way — one rule over the rows and the answer."""
+    _echte_werkzeuge(client, tmp_path, bildsicht=True)
+    chat_id = _chat_mit_ordner(client, tmp_path)
+    for nummer in range(3):
+        (tmp_path / f"foto{nummer}.png").write_bytes(png_bytes())
+        _lauf(client, chat_id, {"path": f"foto{nummer}.png"})
+    (tmp_path / "foto3.png").write_bytes(png_bytes())
+
+    provider = _gescheitert_und_wiederholt(client, chat_id, "foto3.png")
+
+    gescheitert, wiederholt = provider.anfragen_gesehen[1], provider.anfragen_gesehen[2]
+    assert wiederholt == gescheitert
+    # Three pictures ride, the first one stands as the run's own sentence.
+    assert sum(len(bilder) for _, _, bilder, _, _ in wiederholt) == 3
+    assert any(
+        werkzeugkuerzung.BILD_ENTFERNT in inhalt and "foto0.png" in inhalt
+        for _, inhalt, _, _, _ in wiederholt
+    )
+
+
+def test_silence_a_model_without_vision_asks_the_failed_answer_again_with_the_note(
+    client, tmp_path
+):
+    """A model that cannot see never carried the picture: the repeated call
+    keeps the note with the path in the result, as before."""
+    _echte_werkzeuge(client, tmp_path, bildsicht=False)
+    (tmp_path / "foto.png").write_bytes(png_bytes())
+    chat_id = _chat_mit_ordner(client, tmp_path)
+
+    provider = _gescheitert_und_wiederholt(client, chat_id, "foto.png")
+
+    wiederholt = provider.anfragen_gesehen[2]
+    assert not any(bilder for _, _, bilder, _, _ in wiederholt)
+    assert provider.anfragen_gesehen[1][-1][0] == "tool"
+    assert wiederholt == provider.anfragen_gesehen[1]
+
+
+def test_silence_a_model_without_vision_gets_no_old_picture_again(client, tmp_path):
+    _echte_werkzeuge(client, tmp_path, bildsicht=True)
+    (tmp_path / "foto.png").write_bytes(png_bytes())
+    chat_id = _chat_mit_ordner(client, tmp_path)
+    _lauf(client, chat_id, {"path": "foto.png"})
+    # The model at the wheel now cannot see.
+    client.app.state.discovery.zustaende["test"].endpunkt.capabilities.vision = False
+
+    zweiter = _zweite_frage(client, chat_id)
+    verlauf = zweiter.alle_anfragen[0].nachrichten
+
     assert not any(n.alle_bild_urls() for n in verlauf)
+    ergebnis = next(n for n in verlauf if n.role == "tool")
+    assert werkzeugbild.NICHT_MEHR_DABEI in ergebnis.content
+
+
+def test_a_picture_that_is_gone_stays_a_note_with_its_path(client, tmp_path):
+    _echte_werkzeuge(client, tmp_path, bildsicht=True)
+    (tmp_path / "foto.png").write_bytes(png_bytes())
+    chat_id = _chat_mit_ordner(client, tmp_path)
+    _lauf(client, chat_id, {"path": "foto.png"})
+    (tmp_path / "foto.png").unlink()
+
+    zweiter = _zweite_frage(client, chat_id)
+    verlauf = zweiter.alle_anfragen[0].nachrichten
+
+    assert not any(n.alle_bild_urls() for n in verlauf)
+    ergebnis = next(n for n in verlauf if n.role == "tool")
+    assert werkzeugbild.NICHT_MEHR_DABEI in ergebnis.content
+    assert "foto.png" in ergebnis.content
+
+
+def test_silence_a_text_that_imitates_the_picture_sentence_attaches_no_picture(client, tmp_path):
+    """The note comes from the run, not from the result's words: a text file
+    that says what a picture result says must not make the next request send
+    the file it names."""
+    _echte_werkzeuge(client, tmp_path, bildsicht=True)
+    geheim = tmp_path / "geheim"
+    geheim.mkdir()
+    (geheim / "privat.png").write_bytes(png_bytes())
+    nachgemacht = werkzeugbild.bildsatz(str(geheim / "privat.png"), 123)
+    (tmp_path / "notiz.txt").write_text(nachgemacht, encoding="utf-8")
+    chat_id = _chat_mit_ordner(client, tmp_path)
+
+    _lauf(client, chat_id, {"path": "notiz.txt"})
+    zweiter = _zweite_frage(client, chat_id)
+
+    assert not any(n.alle_bild_urls() for n in zweiter.alle_anfragen[0].nachrichten)
+
+
+@pytest.mark.usefixtures("small_limits")
+def test_pictures_read_in_one_round_are_cut_to_three_without_a_threshold(client, tmp_path):
+    """Far below any threshold: five pictures one round read go out as three
+    and two notes in the very next request of the same answer."""
+    _echte_werkzeuge(client, tmp_path, bildsicht=True)
+    for nummer in range(5):
+        (tmp_path / f"foto{nummer}.png").write_bytes(png_bytes())
+    chat_id = _chat_mit_ordner(client, tmp_path)
+    provider = provider_setzen(
+        client,
+        MockProvider(
+            mock_endpunkt("test"),
+            haeppchen=["Gesehen."],
+            werkzeugaufrufe=[
+                Werkzeugaufruf(id=f"a{n}", name="read_file", argumente={"path": f"foto{n}.png"})
+                for n in range(5)
+            ],
+        ),
+    )
+    client.post(
+        "/api/v1/chat/completions",
+        json={"chat_id": chat_id, "endpoint_id": "test", "content": "Sieh nach."},
+    )
+
+    zweite = provider.alle_anfragen[1].nachrichten
+    mit_bild = [n for n in zweite if n.alle_bild_urls()]
+    assert sum(len(n.alle_bild_urls()) for n in mit_bild) == 3
+    ergebnisse = [n.content for n in zweite if n.role == "tool"]
+    assert sum(werkzeugbild.NICHT_MEHR_DABEI in text for text in ergebnisse) == 2
+
+
+@pytest.mark.usefixtures("small_limits")
+def test_the_copies_of_the_newest_tool_pictures_are_prepared(monkeypatch, tmp_path):
+    """The copy of a picture read from the user's folder is removed at every
+    start; the answer route warms the newest three before the history is
+    built, off the loop."""
+    from app import model_image
+
+    warmed: list[Path] = []
+    monkeypatch.setattr(verlaufsbau, "_picture_places", lambda config: (tmp_path, tmp_path))
+    monkeypatch.setattr(model_image, "kopie", lambda quelle, ziel: warmed.append(quelle))
+    paths = [str(tmp_path / f"bild{n}.png") for n in range(5)] + [str(tmp_path / "notiz.txt")]
+
+    verlaufsbau.bilder_vorbereiten(None, [], paths[:5])
+    assert warmed == [Path(p) for p in paths[2:5]]
+
+    warmed.clear()
+    verlaufsbau.bilder_vorbereiten(None, [], paths[:2] + paths[5:])
+    # A name that is no picture's is left alone.
+    assert warmed == [Path(p) for p in paths[:2]]
 
 
 def test_ein_abgelehntes_bild_behaelt_seinen_satz(client, tmp_path):
@@ -285,7 +719,7 @@ def test_ein_abgelehntes_bild_behaelt_seinen_satz(client, tmp_path):
     ergebnis = next(
         n for n in zweiter.alle_anfragen[0].nachrichten if n.role == "tool"
     )
-    assert "cannot be shown images" in ergebnis.content
+    assert "does not support image input" in ergebnis.content
     assert werkzeugbild.NICHT_MEHR_DABEI not in ergebnis.content
 
 
@@ -299,7 +733,7 @@ def test_chat_ohne_bildsicht_bekommt_einen_satz(client, tmp_path):
     zweite = provider.alle_anfragen[1].nachrichten
     assert not any(n.alle_bild_urls() for n in zweite)
     ergebnis = next(n for n in zweite if n.role == "tool")
-    assert "cannot be shown images" in ergebnis.content
+    assert "does not support image input" in ergebnis.content
 
 
 def test_gelesenes_bild_zaehlt_beim_fuellstand_mit(client, tmp_path, monkeypatch):
@@ -428,7 +862,7 @@ def test_auftrag_ohne_bildsicht_bekommt_einen_satz(auftrags_client, config, tmp_
     zweite = provider.alle_anfragen[1].nachrichten
     assert not any(n.alle_bild_urls() for n in zweite)
     ergebnis = next(n for n in zweite if n.role == "tool")
-    assert "cannot be shown images" in ergebnis.content
+    assert "does not support image input" in ergebnis.content
 
 
 def test_auftrag_liest_eine_seite_aus_dem_pdf(auftrags_client, config, tmp_path):

@@ -107,10 +107,15 @@ def _mitteilung_befehl_windows(text: str) -> list[str]:
     return [_windows_powershell() or "powershell.exe", "-NoProfile", "-Command", schrift]
 
 
-def mit_grund(aufgabentext: str, grund: str | None) -> str:
+def mit_grund(aufgabentext: str, grund: str | None, sprache: str | None = None) -> str:
     """``aufgabentext`` with the ending's reason behind it — the notification
     an entry on ``deliver = 'announce'`` gets, and the reason travelling IN
     it rather than in one of its own.
+
+    Two notifications are built this way (app/cronablauf.py): a run's own
+    closing one, where the text is the task, and the failure limit's, where
+    the text is the limit's whole sentence — the run that reaches the limit
+    gets that one alone, so the reason has to be in it.
 
     Why this exists at all: a failing schedule announced "Failed — <task>"
     and nothing else. The reason WAS written — as the run's ``ende`` step —
@@ -120,12 +125,11 @@ def mit_grund(aufgabentext: str, grund: str | None) -> str:
     to find out why.
 
     The words come out of the catalogue block that already holds every
-    reason (``jobs.grund.*``), never a second wording invented here. In
-    English, which is this module's language throughout ("Failed — ",
-    "stopped after N failed runs", "waiting for a model"): a sentence that
-    switched languages halfway would read worse than one that does not
-    translate at all, and asking the catalogue means the words are already
-    there the day this module learns whose language to speak.
+    reason (``jobs.grund.*``), never a second wording invented here, and in
+    the language handed in — the same one the frame around them ("Failed — ",
+    "stopped after N failed runs", "waiting for a model") is written in, so
+    the sentence never switches languages halfway. Without a language the
+    catalogue's primary one answers.
 
     An ending with nothing to explain is left exactly as it was — no reason
     at all (a script that simply exited 0), or ``fertig``, whose notification
@@ -143,11 +147,11 @@ def mit_grund(aufgabentext: str, grund: str | None) -> str:
     if not grund or grund == "fertig":
         return aufgabentext
     schluessel = f"jobs.grund.{grund}"
-    satz = i18n.t(schluessel)
+    satz = i18n.t(schluessel, sprache)
     return f"{aufgabentext} — {grund if satz == schluessel else satz}"
 
 
-def melden(aufgabentext: str, *, erfolgreich: bool) -> None:
+def melden(aufgabentext: str, *, erfolgreich: bool, sprache: str | None = None) -> None:
     """Plays a sound and shows ``aufgabentext``. Blocking — call via
     ``asyncio.to_thread`` from async code, the same way the folder dialog
     is kept off the event loop.
@@ -159,7 +163,11 @@ def melden(aufgabentext: str, *, erfolgreich: bool) -> None:
     """
     if not verfuegbar():
         return
-    mitteilungstext = aufgabentext if erfolgreich else f"Failed — {aufgabentext}"
+    mitteilungstext = (
+        aufgabentext
+        if erfolgreich
+        else i18n.t("cronjobs.fehlgeschlagen", sprache, aufgabe=aufgabentext)
+    )
     klangpfad = _klang_pfad(erfolgreich)
     if sys.platform == "darwin":
         befehle = []

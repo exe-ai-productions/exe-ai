@@ -25,7 +25,7 @@ from app import kit_bond, modellzuordnung, paketierung, runnermodellwahl, server
 from app.api.abhaengigkeiten import hole_config, hole_sprache
 from app.config import Config, EndpointConfig
 from app.i18n import t
-from app.modelldownload import BILD_ENDUNGEN, DownloadFehler, Modelldownload
+from app.modelldownload import BILD_ENDUNGEN, DownloadFehler, Modelldownload, place_for
 from app.modellrunner import Modellrunner, RunnerFehler, SCHLUESSEL_VARIABLE
 from app.systemspeicher import gesamt_gb
 from app.ordner_oeffnen import OeffnenNichtMoeglich, ordner_oeffnen
@@ -278,7 +278,7 @@ def auskunft(runner: Modellrunner, config: Config | None = None) -> Auskunft:
     )
 
 
-@router.get("/log", response_model=list[str], summary="What the server says")
+@router.get("/log", response_model=list[str], summary="Server messages")
 def protokoll(runner: Modellrunner = Depends(hole_runner)) -> list[str]:
     return runner.protokoll()
 
@@ -366,6 +366,11 @@ class Holen(BaseModel):
     unterordner: Literal[
         "vae", "text_encoders", "lora", "adetailer", "mtp", "vision"
     ] | None = None
+    # The file's size in bytes as the hub states it (the file list's
+    # ``bytes``). With it, a file of the same name and another size is not
+    # taken for this one: the new file is kept as ``<repo>-<name>``, and a
+    # kit part is tied under that name. Absent, the name alone decides.
+    size: int | None = Field(None, ge=0)
 
 
 class Fortschritt(BaseModel):
@@ -395,12 +400,12 @@ def _stand(download: Modelldownload) -> Fortschritt | None:
     )
 
 
-@router.get("/download", response_model=Fortschritt | None, summary="How far the model download is")
+@router.get("/download", response_model=Fortschritt | None, summary="Model download progress")
 def fortschritt(download: Modelldownload = Depends(hole_download)) -> Fortschritt | None:
     return _stand(download)
 
 
-@router.post("/download", response_model=Fortschritt, summary="Fetch a model")
+@router.post("/download", response_model=Fortschritt, summary="Download a model")
 def holen(
     daten: Holen,
     request: Request,
@@ -432,20 +437,43 @@ def holen(
             modell = daten.gehoert_zu
             repositories = request.app.state.repositories
             folder = Path(wurzel)
+            # A part counts as there when a file of its name and size lies in
+            # its own sub-folder or loose in the model folder; another file
+            # of the same name is never tied — the part comes under
+            # ``<repo>-<name>`` and is tied under that.
+            place = place_for(
+                Path(ordner) if ordner else folder, name, daten.size, daten.repo,
+                also_in=(folder,),
+            )
+            if place.collision:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, t("fehler.download_schon_da", sprache)
+                )
+            name = place.name
+            if name != (daten.ziel or daten.datei.rsplit("/", 1)[-1]):
+                daten = daten.model_copy(update={"ziel": name})
 
             def tie_part() -> None:
                 kit_bond.tie(repositories, folder, modell, field, name)
 
             nach = tie_part
-            if name in kit_bond.offered(folder, field):
+            if place.da or (
+                daten.size is None and name in kit_bond.offered(folder, field)
+            ):
                 kit_bond.tie(repositories, folder, modell, field, name, keep_own=True)
                 # Nothing was fetched, so there is nothing to count.
                 return Fortschritt(datei=name, geladen=0, gesamt=0, anteil=1.0, fertig=True)
     elif rolle is None and daten.art == "bild" and wurzel is not None and not daten.unterordner:
         # A picture model: once it lies in the folder, the parts of its kit
         # that are there already are written at it — it may have been asked
-        # for while they were still on their way for another model.
-        arrived = daten.ziel or daten.datei.rsplit("/", 1)[-1]
+        # for while they were still on their way for another model. The name
+        # it arrives under is the one the folder decides (``place_for``).
+        arrived = place_for(
+            Path(wurzel), daten.ziel or daten.datei.rsplit("/", 1)[-1],
+            daten.size, daten.repo,
+        ).name
+        if arrived != (daten.ziel or daten.datei.rsplit("/", 1)[-1]):
+            daten = daten.model_copy(update={"ziel": arrived})
         model_folder = Path(wurzel)
         model_repositories = request.app.state.repositories
 
@@ -457,6 +485,7 @@ def holen(
         download.starten(
             daten.repo, daten.datei, daten.ziel, daten.gehoert_zu, rolle,
             ordner=ordner, endungen=endungen, manifest_ordner=wurzel, nach=nach,
+            **({} if daten.size is None else {"size": daten.size}),
         )
     except DownloadFehler as fehler:
         lage = {
@@ -469,7 +498,7 @@ def holen(
     return stand
 
 
-@router.delete("/download", response_model=bool, summary="Cancel the fetch")
+@router.delete("/download", response_model=bool, summary="Cancel the download")
 def abbrechen(download: Modelldownload = Depends(hole_download)) -> bool:
     return download.abbrechen()
 
@@ -503,7 +532,7 @@ def _serverstand(download: Serverdownload) -> ServerFortschritt | None:
 
 
 @router.get(
-    "/programm", response_model=ServerFortschritt | None, summary="How far the server download is"
+    "/programm", response_model=ServerFortschritt | None, summary="Server download progress"
 )
 def server_fortschritt(
     download: Serverdownload = Depends(hole_serverdownload),
@@ -530,12 +559,15 @@ class ProgramUpdate(BaseModel):
     # available": an unreachable list compares nothing, and the window must
     # not answer that with "up to date".
     aktuell: bool = False
+    # True when there was a program to compare and the release list could
+    # not be read: the window says so, instead of showing nothing.
+    unreadable: bool = False
 
 
 @router.get(
     "/programm/aktualisierung",
     response_model=ProgramUpdate,
-    summary="Whether a newer build of the model server is out",
+    summary="Whether a newer model server build is available",
 )
 def program_update(
     runner: Modellrunner = Depends(hole_runner), config: Config = Depends(hole_config)
@@ -551,13 +583,13 @@ def program_update(
         return ProgramUpdate(verfuegbar=False)
     newest = serverdownload.newest_build()
     if newest is None:
-        return ProgramUpdate(verfuegbar=False)
+        return ProgramUpdate(verfuegbar=False, unreadable=True)
     if serverdownload.is_ahead(newest, program.version):
         return ProgramUpdate(verfuegbar=True, bau=newest)
     return ProgramUpdate(verfuegbar=False, aktuell=True)
 
 
-@router.post("/programm", response_model=ServerFortschritt, summary="Fetch the model server")
+@router.post("/programm", response_model=ServerFortschritt, summary="Download the model server")
 def server_holen(
     wanted: ProgramFetch | None = None,
     download: Serverdownload = Depends(hole_serverdownload),

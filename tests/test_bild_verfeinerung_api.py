@@ -155,6 +155,15 @@ def test_the_built_in_name_still_draws_beside_a_file_of_that_name(bild_senden, t
     assert auftrag.hires_upscaler == "Lanczos"
 
 
+def test_a_lower_case_file_is_a_name_of_its_own_beside_the_built_in_one(bild_senden, tmp_path: Path):
+    """sd.cpp compares its built-in upscaler names exactly as spelled, so
+    `lanczos.pth` in the folder is not the built-in `Lanczos`: it is taken and
+    sent as `lanczos`."""
+    (tmp_path / "bildmodelle" / "upscaler" / "lanczos.pth").write_bytes(b"x")
+    auftrag = bild_senden(hires=True, hires_upscaler="lanczos.pth")
+    assert auftrag.hires_upscaler == "lanczos"
+
+
 def test_a_shared_name_does_not_stop_a_picture_without_highres(bild_senden, tmp_path: Path):
     """The window sends the locked field along while highres is off; nothing
     is upscaled then, so nothing is refused."""

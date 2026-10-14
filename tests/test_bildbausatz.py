@@ -231,6 +231,25 @@ def test_ein_ganzer_bausatz_und_ein_checkpoint_fehlen_nichts():
     assert fehlendes_teil("", {}) is None
 
 
+def test_bei_den_familien_ohne_kanalzahl_zaehlt_die_vae_mit_wenn_der_bausatz_sie_nennt():
+    """Krea 2 names a VAE in its kit and no channel count: without a VAE the
+    kit is incomplete, with it whole."""
+    from app.bildbausatz import fehlendes_teil
+
+    assert fehlendes_teil("krea2", {"llm": "q.gguf"}) == "vae"
+    assert fehlendes_teil("krea2", {"llm": "q.gguf", "vae": "wan_2.1_vae.safetensors"}) is None
+    assert fehlendes_teil("krea2", {"vae": "wan_2.1_vae.safetensors"}) == "llm"
+
+
+def test_eine_familie_ohne_vae_im_bausatz_braucht_keine():
+    """The silence probe: a kit family that names no VAE is not refused for
+    the lack of one."""
+    from app.bildbausatz import fehlendes_teil
+
+    assert fehlendes_teil("sd3", {"t5xxl": "t", "clip_l": "c", "clip_g": "g"}) is None
+    assert fehlendes_teil("chroma_radiance", {"t5xxl": "t"}) is None
+
+
 def test_der_name_des_teils_folgt_der_familie():
     from app.bildbausatz import teil_name
 

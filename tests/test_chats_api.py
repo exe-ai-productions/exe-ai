@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+import itertools
+import logging
+import threading
+import time
+
 import pytest
 
+from app import generationen
+from app.api.v1.chats import remove_chat
 from app.db.models import Message
+from app.events import Ereignisse, bus
+from app.providers import MockProvider, mock_endpunkt
+from tests.conftest import provider_setzen, senden
 
 
 def test_chat_anlegen_mit_titel(client):
@@ -203,13 +214,186 @@ def test_ein_geloeschter_chat_stoppt_seine_laufende_antwort(client, chat_id):
         chat_id=chat_id, endpoint_id="test", an_verbindung_gebunden=False
     )
     fremd = verwaltung.anmelden(chat_id="ein-anderer", endpoint_id="test")
+    _ends_when_stopped(geweckt, verwaltung)
 
     assert client.delete(f"/api/v1/chats/{chat_id}").status_code == 204
 
     assert geweckt.soll_abbrechen, "the woken run kept going after the deletion"
     assert not fremd.soll_abbrechen, "a foreign chat was stopped along with it"
-    verwaltung.abmelden(geweckt.id)
     verwaltung.abmelden(fremd.id)
+
+
+def _ends_when_stopped(run, registry) -> None:
+    """A registered run that deregisters itself once it has been stopped, the
+    way a real run does at the end of its closing write."""
+
+    def end() -> None:
+        while not run.soll_abbrechen:
+            time.sleep(0.01)
+        registry.abmelden(run.id)
+
+    threading.Thread(target=end, daemon=True).start()
+
+
+def test_deleting_a_chat_waits_for_its_run_to_end(client, chat_id, monkeypatch):
+    """The chat goes only after its run has deregistered and said it ended.
+
+    Deleted at once, the run's closing write met a chat that was gone: its
+    summary row failed the foreign key and the run stayed registered for
+    good. The order of the three steps is the whole rule.
+    """
+    state = client.app.state
+    order: list[str] = []
+    real_deregister = state.generierungen.abmelden
+    real_delete = state.repositories.chats.loeschen
+
+    def deregister(generierung_id):
+        order.append("deregistered")
+        real_deregister(generierung_id)
+
+    def delete(*args, **kwargs):
+        order.append("deleted")
+        return real_delete(*args, **kwargs)
+
+    async def ended(**_daten):
+        order.append("ended")
+
+    monkeypatch.setattr(state.generierungen, "abmelden", deregister)
+    monkeypatch.setattr(state.repositories.chats, "loeschen", delete)
+    deletes: list[asyncio.Task] = []
+
+    class DeletesMidway(MockProvider):
+        async def streamen(self, anfrage):
+            deletes.append(asyncio.ensure_future(remove_chat(
+                chat_id,
+                repositories=state.repositories,
+                generierungen=state.generierungen,
+                user_id="standard",
+                config=state.config,
+                sprache="en",
+            )))
+            # The delete sends its stop signal at its first step.
+            await asyncio.sleep(0)
+            async for stueck in super().streamen(anfrage):
+                yield stueck
+
+    provider_setzen(
+        client,
+        DeletesMidway(mock_endpunkt("test"), haeppchen=["a ", "b ", "c ", "d "], verzoegerung=0.05),
+    )
+    bus.abonnieren(Ereignisse.ANTWORT_ABGEBROCHEN, ended)
+    try:
+        senden(client, chat_id)
+
+        async def finished() -> None:
+            await deletes[0]
+
+        client.portal.call(finished)
+    finally:
+        bus.abbestellen(Ereignisse.ANTWORT_ABGEBROCHEN, ended)
+
+    assert order == ["deregistered", "ended", "deleted"]
+    assert state.generierungen.fuer_chat(chat_id) is None
+    assert client.get(f"/api/v1/chats/{chat_id}").status_code == 404
+
+
+def test_a_run_that_does_not_end_keeps_the_chat(client, chat_id, monkeypatch):
+    """A run that never deregisters is no reason to lose the chat: the
+    delete says so, in the person's language, and nothing was touched."""
+    monkeypatch.setattr(generationen, "RUN_END_TIMEOUT_SECONDS", 0.3)
+    registry = client.app.state.generierungen
+    stuck = registry.anmelden(
+        chat_id=chat_id, endpoint_id="test", an_verbindung_gebunden=False
+    )
+
+    german = client.delete(f"/api/v1/chats/{chat_id}", headers={"Accept-Language": "de"})
+    english = client.delete(f"/api/v1/chats/{chat_id}", headers={"Accept-Language": "en"})
+
+    assert german.status_code == english.status_code == 409
+    assert german.json()["detail"] == "Der Chat wurde nicht gelöscht: Eine Antwort läuft noch."
+    assert english.json()["detail"] == "The chat was not deleted: an answer is still running."
+    assert client.get(f"/api/v1/chats/{chat_id}").status_code == 200
+    assert stuck.soll_abbrechen
+    # Once it has ended, the same delete goes through.
+    registry.abmelden(stuck.id)
+    assert client.delete(f"/api/v1/chats/{chat_id}").status_code == 204
+
+
+def test_a_run_that_finished_without_deregistering_does_not_block_the_delete(client, chat_id):
+    """Its task is over, so it can never deregister: waiting for it would
+    keep the chat for good."""
+    registry = client.app.state.generierungen
+
+    async def finish():
+        run = registry.anmelden(chat_id=chat_id, endpoint_id="test")
+        run.aufgabe = asyncio.ensure_future(asyncio.sleep(0))
+        await run.aufgabe
+
+    client.portal.call(finish)
+    assert registry.fuer_chat(chat_id) is not None
+
+    assert client.delete(f"/api/v1/chats/{chat_id}").status_code == 204
+    assert registry.fuer_chat(chat_id) is None
+
+
+def _record_closing_writes(client, monkeypatch) -> list[str]:
+    """What the run writes into the chat when it ends: the closing write of
+    its answer row (the one that carries the state) and the chat's touch."""
+    writes: list[str] = []
+    messages = client.app.state.repositories.messages
+    chats = client.app.state.repositories.chats
+    real_update = messages.inhalt_aktualisieren
+    real_touch = chats.zeitstempel_auffrischen
+
+    def update(message_id, **felder):
+        if felder.get("zustand") is not None:
+            writes.append("closing write")
+        return real_update(message_id, **felder)
+
+    def touch(chat_id):
+        writes.append("touch")
+        return real_touch(chat_id)
+
+    monkeypatch.setattr(messages, "inhalt_aktualisieren", update)
+    monkeypatch.setattr(chats, "zeitstempel_auffrischen", touch)
+    return writes
+
+
+def test_a_run_whose_chat_is_gone_writes_nothing_into_it(client, chat_id, monkeypatch, caplog):
+    """Only the ask_user path used to look; every other write at the end of
+    a run went on as if the chat were there."""
+    state = client.app.state
+    writes = _record_closing_writes(client, monkeypatch)
+
+    class ChatVanishes(MockProvider):
+        async def streamen(self, anfrage):
+            state.repositories.chats.loeschen(chat_id)
+            # What the run wrote while it began does not count.
+            writes.clear()
+            async for stueck in super().streamen(anfrage):
+                yield stueck
+
+    provider_setzen(client, ChatVanishes(mock_endpunkt("test")))
+    with caplog.at_level(logging.INFO, logger="app.api.v1.generierung"):
+        senden(client, chat_id)
+
+    assert writes == []
+    assert [r.getMessage() for r in caplog.records if "is gone" in r.getMessage()] == [
+        f"Chat {chat_id} is gone, its run stops"
+    ]
+    assert state.generierungen.fuer_chat(chat_id) is None
+
+
+def test_a_run_whose_chat_is_there_still_writes_its_ending(client, chat_id, monkeypatch, caplog):
+    """The silent case: nothing changes for a chat that is still there."""
+    writes = _record_closing_writes(client, monkeypatch)
+
+    provider_setzen(client, MockProvider(mock_endpunkt("test")))
+    with caplog.at_level(logging.INFO, logger="app.api.v1.generierung"):
+        senden(client, chat_id)
+
+    assert writes[-2:] == ["closing write", "touch"]
+    assert not [r for r in caplog.records if "is gone" in r.getMessage()]
 
 
 def test_vergessener_hintergrundlauf_schreibt_keine_nachricht(repos, caplog):
@@ -454,7 +638,9 @@ def test_aussetzen_gilt_nur_fuer_diesen_chat(client, chat_id):
         json={"chat_id": neuer_id, "endpoint_id": "test", "content": "hallo"},
     )
     system = [n for n in provider.letzte_anfrage.nachrichten if n.role == "system"]
-    assert system[0].content.endswith("Sei Mana.")
+    # Only the chat's own folder is named behind the user's prompt.
+    before_folder = system[0].content.split("\n\nThis conversation has a folder of its own")[0]
+    assert before_folder.endswith("Sei Mana.")
 
 
 def test_leerer_prompt_wird_nicht_vorangestellt(client, chat_id):
@@ -886,11 +1072,14 @@ def test_a_summary_row_is_marked_as_one_in_the_request(client, chat_id):
 # --- A chat's pictures go with it -------------------------------------------
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"testbild"
+_UPLOADS = itertools.count()
 
 
 def _bild(client) -> str:
+    # Every call is a picture of its own: the same bytes would be one file.
     return client.post(
-        "/api/v1/images", content=PNG, headers={"Content-Type": "image/png"}
+        "/api/v1/images", content=PNG + str(next(_UPLOADS)).encode(),
+        headers={"Content-Type": "image/png"},
     ).json()["bild"]
 
 

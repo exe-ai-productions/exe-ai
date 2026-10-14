@@ -17,11 +17,8 @@ export const pictureProgress = $state({
 
 let watchers = 0
 let timer = null
-// The generation a question is on its way for, or -1 with none.
-let askingFor = -1
-/* Counted up each time the watching ends: an answer still on its way from
-   a watch that has ended belongs to a picture that is gone. */
-let generation = 0
+// The handle of the question on its way, or null with none.
+let pending = null
 
 /* The live preview, fetched in one place and one at a time, for every
    surface that shows it. Each preview arrives whole or not at all (the
@@ -124,20 +121,24 @@ function set(running, share, step, total, preview = 0) {
 }
 
 async function ask() {
-  // One question at a time — but one left over from an ended watch does
-  // not hold up the new one.
-  if (askingFor === generation) return
-  const asked = generation
-  askingFor = asked
+  /* One question at a time: a beat that comes while the question before it
+     is still on its way asks nothing, and that question is not given up —
+     its answer moves the counter when it arrives, and the next beat asks
+     again. A slow line is slow, not stuck; giving the question up at every
+     beat would leave a line that needs more than one beat to answer with a
+     counter that never moves. */
+  if (pending) return
+  const mine = new AbortController()
+  pending = mine
   try {
-    const answer = await api.bildFortschritt()
-    if (asked !== generation) return
+    const answer = await api.bildFortschritt(mine.signal)
+    if (pending !== mine) return
     if (answer.laeuft) set(true, answer.anteil, answer.schritt, answer.gesamt, answer.preview ?? 0)
     else set(false, 0, 0, 0)
   } catch {
     /* no counter is no error — the surfaces just show no number */
   } finally {
-    if (askingFor === asked) askingFor = -1
+    if (pending === mine) pending = null
   }
 }
 
@@ -154,7 +155,9 @@ export function watchPictureProgress() {
     if (watchers === 0) {
       clearInterval(timer)
       timer = null
-      generation += 1
+      // An answer still on its way belongs to a picture that is gone.
+      pending?.abort()
+      pending = null
       set(false, 0, 0, 0)
     }
   }

@@ -32,13 +32,13 @@ import { mitSchutzregel } from %(modul)s
 
 const faelle = {
   leer: mitSchutzregel(''),
-  nichts: mitSchutzregel(null),
+  nothing: mitSchutzregel(null),
   undefiniert: mitSchutzregel(undefined),
   zahl: mitSchutzregel(42),
-  ohne_doctype: mitSchutzregel('<h1>hi</h1>'),
-  mit_doctype: mitSchutzregel('<!DOCTYPE html>\\n<html><body>hi</body></html>'),
+  without_doctype: mitSchutzregel('<h1>hi</h1>'),
+  with_doctype: mitSchutzregel('<!DOCTYPE html>\\n<html><body>hi</body></html>'),
   doctype_gross: mitSchutzregel('<!doctype HTML><html></html>'),
-  doctype_mit_leerraum: mitSchutzregel('\\n  <!DOCTYPE html><html></html>'),
+  doctype_after_whitespace: mitSchutzregel('\\n  <!DOCTYPE html><html></html>'),
   svg: mitSchutzregel('<svg xmlns="http://www.w3.org/2000/svg"><circle r="1"/></svg>'),
   kommentar_zuerst: mitSchutzregel('<!-- hi --><!DOCTYPE html><html></html>'),
 }
@@ -69,7 +69,7 @@ class TestSchutzregel:
             assert MARKE in ergebnis, name
 
     def test_die_regel_schliesst_den_weg_nach_draussen(self):
-        ergebnis = _faelle()["ohne_doctype"]
+        ergebnis = _faelle()["without_doctype"]
         assert "default-src 'none'" in ergebnis
         assert "connect-src 'none'" in ergebnis
         # Only what cannot leave the machine is allowed in.
@@ -78,24 +78,24 @@ class TestSchutzregel:
 
     def test_die_regel_laesst_das_dokument_leben(self):
         """A page that cannot run is not a preview of that page."""
-        ergebnis = _faelle()["ohne_doctype"]
+        ergebnis = _faelle()["without_doctype"]
         assert "script-src 'unsafe-inline'" in ergebnis
         assert "style-src 'unsafe-inline'" in ergebnis
 
     def test_ein_doctype_bleibt_vorn(self):
         """In front of it the browser would switch to quirks mode."""
         faelle = _faelle()
-        for name in ("mit_doctype", "doctype_gross", "doctype_mit_leerraum"):
+        for name in ("with_doctype", "doctype_gross", "doctype_after_whitespace"):
             assert faelle[name].lstrip().lower().startswith("<!doctype"), name
             assert faelle[name].index(MARKE) < faelle[name].lower().index("<html"), name
 
     def test_ohne_doctype_steht_die_regel_ganz_vorn(self):
         """A rule governs what is parsed after it, so nothing may precede it."""
-        assert _faelle()["ohne_doctype"].startswith(MARKE)
+        assert _faelle()["without_doctype"].startswith(MARKE)
 
     def test_der_inhalt_bleibt_erhalten(self):
         """The rule is added, never at the cost of the document."""
         faelle = _faelle()
-        assert "<h1>hi</h1>" in faelle["ohne_doctype"]
-        assert "<body>hi</body>" in faelle["mit_doctype"]
+        assert "<h1>hi</h1>" in faelle["without_doctype"]
+        assert "<body>hi</body>" in faelle["with_doctype"]
         assert "<circle r=\"1\"/>" in faelle["svg"]

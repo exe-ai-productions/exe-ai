@@ -225,6 +225,16 @@ _FENSTER_MUSTER = (
 )
 
 
+# vLLM's refusal of the ceiling alone against the window, as one sentence that
+# names both numbers: "max_tokens=70000 cannot be greater than
+# max_model_len=65536". Only the window is read. The input is not in it, so
+# the caller's own estimate of the input is what the room left is worked out
+# from (:func:`_falten_oder_zu_gross`).
+_CEILING_AGAINST_WINDOW = re.compile(
+    r"max_tokens=\d+ cannot be greater than max_model_len=(\d+)"
+)
+
+
 # vLLM's further forms:
 # "max_model_len (32768)", "max_model_len: 32768", "max_model_len is 32768",
 # "maximum model length 131072". The first one also reads the responses
@@ -482,6 +492,7 @@ def abhilfe(
     *,
     eingestellte_grenze: int | None = None,
     fenster: int | None = None,
+    input_tokens: int | None = None,
 ) -> tuple[str, int | None]:
     """What makes a request the provider called too long fit.
 
@@ -518,6 +529,12 @@ def abhilfe(
     * ``(FALTEN, None)``: everything else — the input is what did not fit,
       or the refusal names no numbers that can be read for sure. Nothing is
       guessed from a window or ceiling known elsewhere.
+
+    ``input_tokens`` is the caller's estimate of the request's input.
+    It is read only for the one wording that names the ceiling and the
+    window but not the input (``_CEILING_AGAINST_WINDOW``): the window the
+    refusal names is then the one this request is worked out against, the
+    way ``_senken`` does with a window and an input the refusal counted.
     """
     if _nennt_die_eingabe(fehler):
         return FALTEN, None
@@ -529,18 +546,22 @@ def abhilfe(
         return _senken(zahlen[0], zahlen[1])
     zahlen = _zahlen(fehler, _ANTWORTANTEIL)
     if zahlen is None:
-        return _falten_oder_zu_gross(fehler, eingestellte_grenze, fenster)
-    gemeldetes_fenster, eingabe, antwort = zahlen
+        return _falten_oder_zu_gross(fehler, eingestellte_grenze, fenster, input_tokens)
+    gemeldetes_fenster, reported_input, antwort = zahlen
     if antwort < gemeldetes_fenster:
-        return _falten_oder_zu_gross(fehler, eingestellte_grenze, fenster)
-    return _senken(gemeldetes_fenster, eingabe)
+        return _falten_oder_zu_gross(fehler, eingestellte_grenze, fenster, input_tokens)
+    return _senken(gemeldetes_fenster, reported_input)
 
 
 def _falten_oder_zu_gross(
-    fehler: BaseException, eingestellte_grenze: int | None, fenster: int | None
+    fehler: BaseException,
+    eingestellte_grenze: int | None,
+    fenster: int | None,
+    input_tokens: int | None = None,
 ) -> tuple[str, int | None]:
     """Folding — unless the answer length somebody SET is on its own as
-    large as the window.
+    large as the window, or the refusal names a ceiling that is past the
+    window.
 
     Reached where no number in the refusal could be read for sure: the
     refusal says the request was too long and leaves it at that (vLLM's
@@ -549,6 +570,13 @@ def _falten_oder_zu_gross(
     long — but not where the ceiling ALONE already fills the window: three
     folds would cost three summaries and change nothing, and the numbers say
     so rather than guess it.
+
+    "max_tokens=Z cannot be greater than max_model_len=W" names that ceiling
+    and the window in one sentence, so the request is worked out against W
+    from the caller's estimate of the input (``input_tokens``): the room that is
+    free beside it as the lowered ceiling, the card where none is, a fold
+    where the input alone is past W (``_senken``). Without an estimate
+    nothing is guessed and the answer is the one it has always been.
 
     The window comes out of the refusal where it names one, otherwise from
     what the endpoint resolved. Nothing here is halved or estimated: where
@@ -568,7 +596,17 @@ def _falten_oder_zu_gross(
         and eingestellte_grenze >= gemeldetes_fenster
     ):
         return LIMIT_TOO_LARGE, None
+    named_window = _read_refusal(fehler, _window_beside_ceiling)
+    if named_window is not None and input_tokens is not None:
+        return _senken(named_window, input_tokens)
     return FALTEN, None
+
+
+def _window_beside_ceiling(klein: str) -> int | None:
+    """The window one lowercased text names beside the ceiling that did not
+    fit it (``_CEILING_AGAINST_WINDOW``), or ``None``."""
+    match = _CEILING_AGAINST_WINDOW.search(klein)
+    return int(match.group(1)) if match else None
 
 
 def mit_grenze(anfrage, grenze: int | None, zustand):

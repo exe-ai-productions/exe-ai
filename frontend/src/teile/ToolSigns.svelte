@@ -1,8 +1,8 @@
 <script module>
   /* Browser first, then the agents and the schedules, each a tool of its
-     own, the terminal, the pictures and — right beside them, because they
-     are both walls of files — the doc folder. */
-  export const ORDER = ['vorschau', 'agenten', 'cronjobs', 'terminal', 'bilder', 'docfolder']
+     own, the terminal and beside it the CLI, the pictures and — right
+     beside them, because they are both walls of files — the doc folder. */
+  export const ORDER = ['vorschau', 'agenten', 'cronjobs', 'terminal', 'cli', 'bilder', 'docfolder']
 </script>
 
 <script>
@@ -39,6 +39,7 @@
     agenten: 'agenten.titel',
     cronjobs: 'cronjobs.titel',
     terminal: 'terminal.titel',
+    cli: 'cli.titel',
     bilder: 'bilder.titel',
     docfolder: 'docfolder.title',
   }
@@ -165,7 +166,7 @@
     class:aktiv={shown(name)}
     class:atmet={atmetVon(name)}
     data-zustand={zustandVon(name) || null}
-    onclick={() => modulWaehlen(name)}
+    onclick={() => modulWaehlen(name, detailsShown)}
     title={t(LABELS[name])}
     aria-label={t(LABELS[name])}
     aria-pressed={shown(name)}

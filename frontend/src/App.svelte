@@ -48,11 +48,13 @@
     rahmenNeuZeichnen, geraet,
   } from './lib/zustand.svelte.js'
   import { protokollOffen } from './lib/protokollfenster.svelte.js'
-  import { deferQuestion, isDeferred, standingQuestion } from './lib/questionbox.svelte.js'
+  import { deferQuestion, isDeferred, questionCardStands, standingQuestion } from './lib/questionbox.svelte.js'
   import { VORGABE_MODUS, anzeigeLaden, modusSpeichern } from './lib/anzeige.js'
   import { chatanzeige, scrollstelleSpeichern } from './lib/chatanzeige.svelte.js'
   import { begruessung, begruessungLaden } from './lib/begruessung.svelte.js'
   import { updatesStart } from './lib/updates.svelte.js'
+  import { tellShellWords } from './lib/shellWords.js'
+  import { chatNameFrom } from './lib/chatName.js'
   import { verbinden as terminalVerbinden } from './lib/terminalfenster.svelte.js'
   import { klangwahlLaden } from './lib/klaenge.svelte.js'
   import {
@@ -60,16 +62,30 @@
   } from './lib/meldewesen.svelte.js'
   import { auftraegeBeobachten } from './lib/auftragsmelder.js'
   import { verbinden as ereignisseVerbinden, trennen as ereignisseTrennen } from './lib/ereignisstrom.svelte.js'
-  import { dateienAus, endsInFence, openFile } from './lib/markdown.js'
+  import {
+    dateienAus, dateienDavor, dateienVorherJeNachricht, endsInFence, openFile,
+  } from './lib/markdown.js'
   import { seedlage } from './lib/bildseed.svelte.js'
   import { standLaden as agentenserverStandLaden } from './lib/agentenserver.svelte.js'
   import { tabWriter } from './lib/vorschautabs.svelte.js'
-  import { leiste, leisteAnwenden, schalten as leisteSchalten } from './lib/arbeitsleiste.svelte.js'
+  import {
+    leiste, leisteAnwenden, moduleShow, schalten as leisteSchalten, schliessen as leisteSchliessen,
+  } from './lib/arbeitsleiste.svelte.js'
   import Warteblasen from './teile/Warteblasen.svelte'
-  import { anhalten, ausreihen, entfernen, haelt, loesen } from './lib/warteschlange.svelte.js'
-  import { chatOeffnen, openNewChat, nachrichtenSetzen, nachrichtenAnzeige, eigeneZeilenSichern, eigeneZeilenZurueckgeben, bildlaufPlatzhalter, answerDrawingTile } from './lib/zustand.svelte.js'
+  import {
+    anhalten, ausreihen, entfernen, haelt, loesen, zurueckEinreihen,
+  } from './lib/warteschlange.svelte.js'
+  import { chatOeffnen, openNewChat, nachrichtenSetzen, nachrichtenAnzeige, eigeneZeilenSichern, eigeneZeilenZurueckgeben, bildlaufPlatzhalter, answerDrawingTile, isDrawingTool } from './lib/zustand.svelte.js'
   import { chosenModelOff } from './lib/modelle.svelte.js'
+  import { answerEnding } from './lib/answerEnding.js'
+  import { fitColumns, watchWindowWidth } from './lib/columnRoom.svelte.js'
   import { chatFehlerGesehen, chatFehlerMerken, fragtNach } from './lib/chatringe.svelte.js'
+
+  /* The window gives the chat its minimum width before it gives a column its
+     own: when the room runs short the tools fold first, then the sidebar,
+     and each comes back by itself when the room returns. */
+  $effect(() => watchWindowWidth())
+  $effect(() => fitColumns())
 
   /* The terminal listens to the open chat: its runs, its lines. */
   $effect(() => {
@@ -144,6 +160,10 @@
   /* What the shell found of a newer version of the program, and every
      change of it from here on. In a browser there is no shell to ask. */
   updatesStart()
+  /* The shell's own words — the right-click entries for a link and a
+     picture — come from this page's catalogue, at the start and again
+     whenever the language changes. */
+  $effect(() => tellShellWords())
 
   /* What the service last handed out or was last told. The mode is bound
      into two components, so there is no setter to hook — the effect below
@@ -156,23 +176,8 @@
      only while it stands. Every other look mounts none, and "auto" never
      resolves to this one. */
   const moune = $derived(modus === 'moune')
-  /* Pearl carries four drawings on Moune's four surfaces; "auto" is Pearl
-     while the device reports light. */
-  const pearl = $derived(modus === 'hell' || (modus === 'auto' && !geraet.dunkel))
-  /* Heaven carries four drawings on Moune's four surfaces: the frame, the
-     right column, the chat tile and the input bar. The drawing a surface
-     shows is named per look. */
-  const heaven = $derived(modus === 'heaven')
-  /* Exe carries one drawing, on the frame alone — the cubes under the side
-     rails; "auto" is Exe while the device reports dark. The rails, the
-     chat tile and the input bar take nothing: whatever stands on the
-     frame is left as it is. */
-  const exe = $derived(modus === 'dunkel' || (modus === 'auto' && geraet.dunkel))
-  /* Dark Matter carries one drawing too, on the frame alone: the net of
-     stars. */
-  const darkmatter = $derived(modus === 'darkmatter')
-  const leistenZeichnung = $derived(moune ? 'huegel' : heaven ? 'balloons' : pearl ? 'waves' : false)
-  const eingabeZeichnung = $derived(moune ? 'pusteblume' : heaven ? 'paper-plane' : pearl ? 'oyster' : false)
+  const leistenZeichnung = $derived(moune ? 'huegel' : false)
+  const eingabeZeichnung = $derived(moune ? 'pusteblume' : false)
 
   $effect(() => {
     const jetzt = modus
@@ -435,8 +440,38 @@
       return
     }
     folgtMit = false
-    nachsetzenZiel = { chatId, versatz: stelle.versatz }
-    requestAnimationFrame(stelleNachsetzen)
+    const ziel = { chatId, versatz: stelle.versatz, bilder: 0 }
+    nachsetzenZiel = ziel
+    requestAnimationFrame(() => stelleBild(ziel))
+  }
+
+  /* How long a place is waited for: this many animation frames from the
+     moment it was set. A chat that is shorter than the place it was left at
+     (messages taken out since) never reaches it, and waiting on for ever
+     meant that a list growing past the old place much later set the view
+     there again, away from the end, with following switched off. */
+  const STELLE_BILDER_MAX = 30
+
+  /* One frame of the wait: the place is set again (the list may have grown
+     since), and after the last frame the view stays where it can stand, the
+     remembered place is brought to it, and following depends on where that
+     is — the floor follows again. Frames are counted here and nowhere else;
+     the observer of the list's size calls `stelleNachsetzen` as often as it
+     likes without costing any. A target that was reached, dropped or
+     replaced by another chat's ends this chain. */
+  function stelleBild(ziel) {
+    if (nachsetzenZiel !== ziel) return
+    stelleNachsetzen()
+    if (nachsetzenZiel !== ziel) return
+    ziel.bilder += 1
+    if (ziel.bilder < STELLE_BILDER_MAX) {
+      requestAnimationFrame(() => stelleBild(ziel))
+      return
+    }
+    nachsetzenZiel = null
+    if (!verlauf) return
+    folgtMit = verlauf.scrollHeight - verlauf.scrollTop - verlauf.clientHeight <= AM_BODEN
+    stelleMerken()
   }
 
   /* The place still waiting to be reached, and the chat the reader has
@@ -715,7 +750,7 @@
   const laufMarke = $derived.by(() => {
     const zeile = [...nachrichtenAnzeige()]
       .reverse()
-      .find((n) => n.zustand === 'laeuft' || (laufenderId && n.id === laufenderId))
+      .find(zeileLaeuft)
     if (!zeile) return null
     // A run that has ended carries its closing word ('fertig',
     // 'abgebrochen', ...) while this window still holds its placeholder —
@@ -742,6 +777,13 @@
        stretch's own clock, in place of a waiting word — a sentence that
        carries its time, so only with a start to count from. */
     if (zeile.taetigkeit === 'kontext' && zeile.taetigkeitSeit != null) return { ...marke, kontext: true }
+    /* The thinking head above counts this very stretch, and a second clock
+       for the same seconds under it would only repeat it. The mark stays,
+       with its word and its line's height, and counts nothing while the
+       head does; with the first tool or text the activity changes and the
+       clock starts again from that moment. The same reading the head makes
+       of the row (teile/Nachricht.svelte, `denktJetzt`). */
+    if (zeile.taetigkeit === 'denkt') return { ...marke, seit: null }
     return marke
   })
   /* ONE word per waiting stretch, picked when the mark appears and then
@@ -777,6 +819,19 @@
     return taktHalten()
   })
   const laufZeit = $derived(markeZaehlt ? stoppuhr(takt.jetzt - laufMarke.seit) : '')
+  /* The chats a hand-made compaction (`/compact`) is running in, by the
+     moment it began. Not a row's activity like the marks above: there is no
+     answer being written, so the mark stands on its own at the end of the
+     list and counts from here. */
+  let compactSince = $state({})
+  const compactFrom = $derived(compactSince[zustand.aktiverChat] ?? null)
+  $effect(() => {
+    if (compactFrom === null) return
+    return taktHalten()
+  })
+  const compactClock = $derived(
+    compactFrom === null ? '' : stoppuhr(takt.jetzt - compactFrom),
+  )
   /* An empty list is a real state, not a mistake — a catalogue shipped
      without this group — and picking out of nothing would put the word
      `undefined` on the screen. Empty then, and the mark shows its own text,
@@ -822,6 +877,10 @@
       .reverse()
       .find((n) => n.role === 'user' && (n.art ?? 'nachricht') === 'nachricht'),
   )
+  /* Where each answer's file numbering stands: file names run across the
+     whole chat (lib/markdown.js), so a message is told how many files the
+     ones before it carry. */
+  const dateienVorherKarte = $derived(dateienVorherJeNachricht(nachrichtenAnzeige()))
 
   /* The row a run in THIS window is writing — by id, never by position.
      `laufenderPlatzhalter` is the very object the stream writes into, so
@@ -831,6 +890,18 @@
   const laufenderId = $derived(
     zustand.laufenderPlatzhalter[zustand.aktiverChat]?.id ?? null,
   )
+  /* Whether a row counts as running: the service names it so on the row, or
+     it is the row of a run of this window that has not ended here. A run
+     ends here with its closing event or with the break of its stream — what
+     the window does after that (fetching the stored list, up to
+     `NACHLADE_FRIST_MS`) is the run's own bookkeeping, and the row is no
+     longer live during it. The mark and the bubble both read this one. */
+  function zeileLaeuft(zeile) {
+    return (
+      zeile.zustand === 'laeuft' ||
+      (Boolean(laufenderId) && zeile.id === laufenderId && !zeile.runEnded)
+    )
+  }
 
   // The tile size inside a run's row — the exact same card component as a
   // single picture, only told to draw itself smaller (see Nachricht.svelte's
@@ -1047,12 +1118,18 @@
     // A new answer, so the same rule as sending: none from a model that is off.
     if (chosenModelOff()) return
     /* `letzteAntwort`, not the last row: that one may be a finished
-       background command, and `neuErzeugen` DELETES what it is given. The
-       `traegtBild` test stays — it closed the same door for picture rows
-       before `art` existed, and a row can still carry a picture without
-       being one. */
+       background command, and `neuErzeugen` names what it is given as the
+       answer a new one takes the place of. The `traegtBild` test stays —
+       it closed the same door for picture rows before `art` existed, and a
+       row can still carry a picture without being one. */
     const letzte = letzteAntwort
-    if (letzte && letzte.id && !traegtBild(letzte) && antwortAufLetzteFrage(zustand.nachrichten, letzte, letzteFrage)) {
+    /* A failed answer is asked again where it stands, and nothing of it is
+       deleted — so it goes that way with a picture on it as well. */
+    const failedAnswer = Boolean(letzte?.id) && answerEnding(letzte) === 'fehler'
+    if (
+      (failedAnswer || (letzte && letzte.id && !traegtBild(letzte)))
+      && antwortAufLetzteFrage(zustand.nachrichten, letzte, letzteFrage)
+    ) {
       await neuErzeugen(letzte.id)
     } else {
       await antwortHolen(null)
@@ -1137,7 +1214,7 @@
 
   async function senden(
     inhalt, anhaenge = null, dokumente = null, denken = null, skill = null, gespraech = false,
-    messageId = null,
+    messageId = null, kept = null, ausReihe = null,
   ) {
     /* A question from the model is waiting: then what was typed IS the
        answer, not a new message. Free text always counts — the buttons are
@@ -1149,12 +1226,29 @@
       await benutzerfrageBeantworten(inhalt.trim())
       return
     }
+    /* A send that ends before the request leaves gives back what was typed
+       and what was attached to it, to the chat they were written for — the
+       same way as a send the service refuses. Only a send that came out of
+       the bar has anything to give back: its own id, or the entries a queued
+       message kept, which are put in the bar's keeping under this send's id
+       and let go of again when the send is over. */
+    const writtenIn = zustand.aktiverChat
+    const sendId = messageId ?? Math.random().toString(36).slice(2, 9)
+    const fromBar = messageId != null || kept != null
+    const release = kept ? eingabe?.keep(sendId, kept) : null
+    const giveBack = () => {
+      if (fromBar) eingabe?.zurueckgeben(inhalt, writtenIn, sendId)
+    }
     if (!zustand.modellId) {
       melde(t('fehler.kein_modell_verfuegbar'), 'fehler')
+      giveBack()
       return
     }
     // Switched off in the quick picker: nothing goes to it (lib/modelle).
-    if (chosenModelOff()) return
+    if (chosenModelOff()) {
+      giveBack()
+      return
+    }
     /* The images first: if an upload fails, the chat stays untouched and
        the input is still there. The chat is claimed for the uploads' sake
        already (see the send mark below): a queued entry with a picture
@@ -1178,6 +1272,7 @@
           bilder.push((await api.bildHochladen(datei)).bild)
         } catch (fehler) {
           melde(String(fehler.message || fehler), 'fehler')
+          giveBack()
           return
         }
       }
@@ -1189,11 +1284,14 @@
        to get there — so a picked skill is cut off the front of it. */
     const fuerTitel = skill ? inhalt.slice(skill.length + 1).trim() || inhalt : inhalt
     const ersterTitel =
-      fuerTitel.length > 40
-        ? fuerTitel.slice(0, 40) + '…'
-        : fuerTitel || dokumentListe[0]?.name || t('eingabe.bild_titel')
+      chatNameFrom(fuerTitel) || dokumentListe[0]?.name || t('eingabe.bild_titel')
     if (!zustand.aktiverChat) {
-      await openNewChat({ title: ersterTitel, endpoint_id: zustand.modellId })
+      try {
+        await openNewChat({ title: ersterTitel, endpoint_id: zustand.modellId })
+      } catch (fehler) {
+        giveBack()
+        throw fehler
+      }
     } else if (!nachrichtenAnzeige().length) {
       /* A chat can now exist before the first message — setting a working
          folder creates one. It is still untitled
@@ -1229,7 +1327,7 @@
        document ids).
        The input bar brings its own: it is the key under which the bar keeps
        what this send took out of it, so a refusal gives back exactly that. */
-    const frageKennung = messageId ?? Math.random().toString(36).slice(2, 9)
+    const frageKennung = sendId
     /* The document's own card is real from the first frame — the meta IS
        the server's, read the moment it was attached, not a guess off the
        File that gets replaced later. Nothing here can fail any more: a
@@ -1245,9 +1343,12 @@
     })
     runter(true)
     const dokumentIds = dokumentListe.map((dokument) => dokument.id)
-    await antwortHolen(inhalt, bilder, dokumentIds, denken, skill, null, gespraech, frageKennung)
+    await antwortHolen(
+      inhalt, bilder, dokumentIds, denken, skill, null, gespraech, frageKennung, null, ausReihe,
+    )
     } finally {
       delete zustand.sendet[sendeChat]
+      release?.()
     }
   }
 
@@ -1326,7 +1427,6 @@
     const gone = bildQueue.find((w) => w.queue_id === id)
     if (!gone) return
     bildQueue = bildQueue.filter((w) => w !== gone)
-    gone.settle(false)
     const run = gone.lauf_kennung
     if (run) {
       const rest = bildQueue.filter((w) => w.lauf_kennung === run)
@@ -1359,18 +1459,13 @@
 
   /* Counted per page: the id only tells the wishes of this one line apart. */
   let queueCounter = 0
-  /* Enqueue and, if nothing is drawing yet, start working the queue off.
-     Answers how this one picture ended, once it has: true when it was
-     drawn, false when it failed, was stopped or left the line undrawn. */
+  /* Enqueue and, if nothing is drawing yet, start working the queue off. */
   function bildLokalZeichnen(wunsch) {
     queueCounter += 1
-    let settle
-    const outcome = new Promise((resolve) => { settle = resolve })
-    bildQueue.push({ ...wunsch, queue_id: queueCounter, settle })
+    bildQueue.push({ ...wunsch, queue_id: queueCounter })
     bildZahlSetzen()
     bildChatsAktualisieren()
     if (!bildLokalLaeuft) workPictureLine()
-    return outcome
   }
 
   async function workPictureLine() {
@@ -1386,9 +1481,6 @@
         // unless it still has more of its own waiting in the queue.
         bildLaufWunsch = null
         bildChatsAktualisieren()
-        // Said only now: whoever hears it finds the line as it stands
-        // without this picture.
-        naechste.settle(Boolean(naechste.drawn))
       }
     } finally {
       bildLokalLaeuft = false
@@ -1437,7 +1529,7 @@
     try {
       // The line's own marks stay here; the service takes no field it does
       // not know.
-      const { queue_id: _, settle: _settle, ...request } = wunsch
+      const { queue_id: _, ...request } = wunsch
       const antwort = await api.bildZeichnen(request)
       // Drawn: it leaves the line to come at once, not only once the chat
       // has caught up with it.
@@ -1639,14 +1731,15 @@
     }
   }
 
-  /* A picture the model draws while it answers (`draw_image`) goes the
-     picture window's way on screen too: the same working tile while it is
-     drawn, and the same run row its finished pictures stand in. The server
-     writes that row itself, the answer's id is its run, and every result of
-     a drawing call hands the row over as it stands (`bildlauf`) — so the
-     window only puts it in place, it never builds a row of its own. Only
-     on the drawing chat's own list: another chat's gets nothing, the row
-     is on the server and comes with the next open. */
+  /* A picture or a video the model makes while it answers (`draw_image`,
+     `draw_video`) goes the picture window's way on screen too: the same
+     working tile while it is drawn, and the same run row its finished
+     pictures stand in. The server writes that row itself, the answer's id
+     is its run, and every result of a drawing call hands the row over as it
+     stands (`bildlauf`) — so the window only puts it in place, it never
+     builds a row of its own. Only on the drawing chat's own list: another
+     chat's gets nothing, the row is on the server and comes with the next
+     open. */
   function drawingStarted(chatId, answerId) {
     if (zustand.aktiverChat !== chatId || zustand.nachrichtenChatId !== chatId) return
     if (!zustand.nachrichten.some((n) => n.answerId === answerId)) {
@@ -1683,7 +1776,6 @@
   function bildStoppen() {
     // Cancel everything, not only the one drawing: the queued ones were
     // asked for by the same hand and stopping means stopping.
-    for (const waiting of bildQueue) waiting.settle(false)
     bildQueue = []
     bildZahlSetzen()
     // The queued chats drop from the set right away; the one still drawing
@@ -1704,25 +1796,88 @@
     if (bildLokalLaeuft) api.bildZeichnenStoppen().catch(() => {})
   }
 
-  /* Regenerate the answer (3.4): delete the old one and recompute on the
-     remaining history, without sending the question again. */
+  /* The arrow under the last answer (3.4), without sending the question
+     again — and the window deletes nothing for it.
+
+     Under a finished or a stopped answer a new one is written on the
+     history without it. The service keeps the old answer until the new one
+     is finished and stored, and only then takes it away; a new answer that
+     fails or is stopped leaves the old one standing and no row of its own
+     (app/answer_redo.py). It used to be deleted HERE, before the new answer
+     had begun — and an answer that then failed had cost the old one, tool
+     calls and all.
+
+     Under a failed answer the model call it died in is asked again, in the
+     same answer, with everything the run had already done.
+
+     Which of the two a press means is read off how the run behind the
+     answer ended, the way the arrow's own label reads it
+     (lib/answerEnding.js). */
   async function neuErzeugen(messageId) {
     if (laufVon(zustand.aktiverChat)) {
       melde(t('eingabe.laeuft_schon'))
       return
     }
-    // Checked before the old answer is deleted: a switched-off model gives no
-    // new one, so the old one stays.
+    // A switched-off model gives no new answer, and none is asked for.
     if (chosenModelOff()) return
-    try {
-      await api.nachrichtLoeschen(zustand.aktiverChat, messageId)
-    } catch {
-      melde(t('nachricht.nicht_entfernt'), 'fehler')
+    const antwort = zustand.nachrichten.find((n) => n.id === messageId)
+    await antwortHolen(
+      null, null, null, null, null, null, false, null,
+      answerEnding(antwort) === 'fehler' ? { retries: messageId } : { replaces: messageId },
+    )
+  }
+
+  /* `/compact` in the input field: the service folds the middle of the
+     open chat once, with the words behind the command as the topic. The
+     window waits for it like for a send — the chat counts as busy for the
+     whole request, so what is typed meanwhile lines up and goes on when it
+     is over — and then shows what happened: the seam where it folded, or a
+     hint saying why it did not. Nothing is folded here; the window only
+     asks. */
+  async function compactChat(topic) {
+    const chatId = zustand.aktiverChat
+    // A window with no chat has nothing to fold, and says what a chat that
+    // is too small to fold says.
+    if (!chatId) {
+      melde(t('eingabe.compact_too_short'))
       return
     }
-    const stelle = zustand.nachrichten.findIndex((n) => n.id === messageId)
-    if (stelle !== -1) zustand.nachrichten.splice(stelle, 1)
-    await antwortHolen(null)
+    if (laufVon(chatId) || zustand.sendet[chatId] || compactSince[chatId]) {
+      melde(t('fehler.antwort_laeuft_schon'))
+      return
+    }
+    zustand.sendet[chatId] = true
+    compactSince[chatId] = Date.now()
+    try {
+      const antwort = await api.chatCompact(chatId, {
+        endpoint_id: zustand.modellId,
+        topic: topic || null,
+      })
+      if (antwort.result === 'folded') {
+        const frisch = await api.nachrichten(chatId)
+        if (zustand.aktiverChat === chatId) {
+          nachrichtenSetzen(chatId, frisch.nachrichten)
+          // A picture drawing in this chat lives only in this list.
+          if (zustand.bildLaeuftChat[chatId] && !zustand.nachrichten.some((n) => n.bildLaeuft)) {
+            zustand.nachrichten.push(bildlaufPlatzhalter(chatId))
+          }
+        }
+      } else if (antwort.result === 'too_short') {
+        melde(t('eingabe.compact_too_short'))
+      } else if (antwort.result === 'no_saving') {
+        melde(t('eingabe.compact_no_saving'))
+      } else if (antwort.result === 'stopped') {
+        // Stopped by the person: nothing folded, nothing to say — as after
+        // the stop of an answer.
+      } else {
+        melde(t('nachricht.komprimieren_fehlgeschlagen'), 'fehler')
+      }
+    } catch (fehler) {
+      melde(String(fehler.message || fehler), 'fehler')
+    } finally {
+      delete compactSince[chatId]
+      delete zustand.sendet[chatId]
+    }
   }
 
   /* The queue moves on: whenever nothing is running, the open chat gets
@@ -1750,7 +1905,10 @@
     if (chosenModelOff()) return
     const eintrag = ausreihen(chatId)
     if (!eintrag) return
-    senden(eintrag.inhalt, eintrag.bilder, eintrag.dokumente, eintrag.denken, eintrag.skill)
+    senden(
+      eintrag.inhalt, eintrag.bilder, eintrag.dokumente, eintrag.denken, eintrag.skill,
+      false, null, eintrag.kept, eintrag,
+    )
   }
 
   /* The button on a held bubble. Sending by hand is also the answer to
@@ -1766,7 +1924,10 @@
     if (chosenModelOff()) return
     entfernen(eintrag.id)
     loesen(eintrag.chatId)
-    senden(eintrag.inhalt, eintrag.bilder, eintrag.dokumente, eintrag.denken, eintrag.skill)
+    senden(
+      eintrag.inhalt, eintrag.bilder, eintrag.dokumente, eintrag.denken, eintrag.skill,
+      false, null, eintrag.kept, eintrag,
+    )
   }
 
   /* `wiederanhang` (shape: { generationId, ab }) turns this into a resume
@@ -1774,9 +1935,12 @@
      Everything past the very first stream source is shared: a resumed run
      drops and reconnects exactly like a freshly started one, through the
      same catch block a few lines down. */
+  /* `redo` (shape: { replaces: id } or { retries: id }) names the chat's
+     last answer this request is for instead of a turn of its own — see
+     `neuErzeugen`. */
   async function antwortHolen(
     inhalt, bilder = null, dokumente = null, denken = null, skill = null, wiederanhang = null,
-    gespraech = false, nachrichtId = null,
+    gespraech = false, nachrichtId = null, redo = null, ausReihe = null,
   ) {
     /* The chat this run belongs to, fixed for its whole life. A fresh send
        and a visible reattachment both start with that chat on screen, so
@@ -1846,7 +2010,28 @@
          current one until the next event happened to arrive. */
       uebernehmen.gesamt_tokens = null
     }
-    if (!uebernehmen) zustand.nachrichten.push({
+    /* The failed answer a retry goes on in (`redo.retries`): the same row,
+       found by its id like an adopted one. Unlike an adopted one it is left
+       as it stands until the service says the run has begun — a request the
+       service turns away has then changed nothing on screen. At `start` it
+       is emptied of the very fields the adoption above empties, because
+       that stream opens with everything the run had done before it failed
+       (app/answer_replay.py). */
+    const retried = redo?.retries
+      ? zustand.nachrichten.find((n) => n.id === redo.retries) ?? null
+      : null
+    const retriedState = retried?.zustand ?? null
+    if (retried) {
+      /* A stored row carries neither of the two lists a running answer is
+         drawn from. Empty, they change nothing on screen — the bubble
+         draws a row without them from what is stored — and the stream's
+         handlers find them there from its very first event on. */
+      retried.abschnitte ??= []
+      retried.werkzeuge ??= []
+      retried.vision = frageTrugBild(retried)
+      taetigkeitSetzen(retried, 'kontext', undefined, true)
+    }
+    if (!uebernehmen && !retried) zustand.nachrichten.push({
       // Stable key, same reason as the picture placeholder's `bildlauf-`
       // (see zustand.svelte.js): a message keyed by its POSITION is the
       // same message as whatever stood there before it. One running answer
@@ -1893,7 +2078,7 @@
       taetigkeit: 'kontext',
       taetigkeitSeit: Date.now(),
     })
-    const platzhalter = uebernehmen ?? zustand.nachrichten[zustand.nachrichten.length - 1]
+    const platzhalter = uebernehmen ?? retried ?? zustand.nachrichten[zustand.nachrichten.length - 1]
     /* Held here too, not just in the message list: switching chats while
        this runs replaces `zustand.nachrichten` wholesale with the server's
        fetch (zustand.svelte.js, chatOeffnen) — losing the array entry, but
@@ -1902,6 +2087,16 @@
        already does for a running picture. Keyed by chat so a second run in
        another chat keeps its own placeholder. */
     zustand.laufenderPlatzhalter[zielChat] = platzhalter
+    /* How many files the answers before this one carry. File names count
+       across the whole chat (lib/markdown.js, dateienDavor), and the list
+       is the chat's only while it is the one on screen — the run itself
+       goes on in the background after a switch, so the number is taken
+       here, once, from the list this run began in. */
+    const dateienVorher = zustand.nachrichtenChatId === zielChat
+      ? dateienDavor(zustand.nachrichten, platzhalter)
+      : 0
+    // A row taken over (a retry, a reattach) may carry the end of an earlier run.
+    platzhalter.runEnded = false
 
     /* Text lands in the section that is already open, or opens a new one.
        Two thinking passes separated by a paragraph therefore stay two
@@ -2031,13 +2226,13 @@
        out and rebuilt has to stand exactly as long as one that was
        rewritten — otherwise the same event lasts two different times by a
        circumstance nobody can see. */
-    const werkzeugSagen = (pfad, werte, art, dauerhaft, dauer = 0) => {
+    const werkzeugSagen = (pfad, werte, art, dauerhaft, dauer = 0, server = '') => {
       const vorhanden = werkzeugMeldungen.get(werkzeugToast)
       if (
         vorhanden
         && aktualisiereMeldung(vorhanden, {
           text: t(pfad, werte), art, dauerhaft, dauer,
-          schluessel: pfad, werte, werkzeug: werte.name ?? '',
+          schluessel: pfad, werte, werkzeug: werte.name ?? '', server,
         })
       ) return
       /* Nothing to rewrite — either the first call of this answer, or the
@@ -2052,7 +2247,7 @@
       werkzeugMeldungen.set(
         werkzeugToast,
         meldeText(pfad, werte, art, {
-          dauerhaft, dauer, werkzeug: werte.name ?? '', stumm: true,
+          dauerhaft, dauer, werkzeug: werte.name ?? '', server, stumm: true,
         }),
       )
     }
@@ -2121,8 +2316,27 @@
       werkzeugOffen = false
     }
     let schlussZustand = null
+    /* Whether the service said this run has begun (`start`). A retry that
+       never got that far has not touched its answer. */
+    let begun = false
+    /* A new answer written in another one's place, as its `done` puts it:
+       the id of the answer it took the place of, or that the new one was
+       dropped because it did not finish (app/api/v1/generierung.py). Read
+       off the event and not off `redo`, so a window that only attached to
+       such a run — after a reload — takes the same row down. */
+    let replacedId = null
+    let discarded = false
+    /* Whether the service's closing event (`done`) came at all. A run that
+       ends without it — stopped from this window, a line that broke for good
+       — has not said what became of the answer it was to replace. */
+    let doneSeen = false
     let fremderLauf = null
     let heldWithoutRun = false
+    /* Whether a message of the queue was turned away because another window
+       holds the chat, and went back in line: the run lets go below, waits
+       for the claim the way the end of a held chat does, and the queue then
+       sends it again. */
+    let zurueckInReihe = false
     /* Whether the stored row has to be fetched instead of replayed: a
        reattach the service refused, or a run it no longer knows. Both leave
        the window with a row and no stream behind it, and without the fetch
@@ -2189,6 +2403,31 @@
       }
     }
 
+    /* Whether the row `antwortId` stands behind this send's question with no
+       other question between the two — the one place an answer to this
+       question can stand. Unknown where the row is not among the newest
+       rows or the list cannot be read: then it is taken as the own. The
+       question left out of the newest rows by nothing but the window's
+       edge (the row is the oldest one) is the own as well; any other row
+       without its question has none of this send. */
+    async function antwortetAufEigene(chatId, antwortId, signal) {
+      let recent
+      try {
+        recent = await api.nachrichten(chatId, { signal: withDeadline(signal), limit: 50 })
+      } catch {
+        return true
+      }
+      const reihe = recent?.nachrichten ?? []
+      const antwort = reihe.findIndex((n) => n.id === antwortId)
+      if (antwort < 0) return true
+      const frage = reihe.findIndex((n) => n.id === nachrichtId)
+      if (frage < 0) return antwort === 0
+      if (antwort < frage) return false
+      return !reihe
+        .slice(frage + 1, antwort)
+        .some((n) => n.role === 'user' && (n.art ?? 'nachricht') === 'nachricht')
+    }
+
     /* Where the answer of a line that broke too early went. Broken BEFORE
        the service named the run, there is no id to reattach to — this is
        the stretch in which the service folds the history, and a fold costs
@@ -2217,10 +2456,19 @@
       const { run, reachable } = await claimOutcome(chatId, signal)
       if (!reachable) return false
       if (run) {
+        /* A run the service names for the chat is only this send's own when
+           its row answers this send's question. Another window may have sent
+           since — this send ended without a run — and its answer would
+           stream into this bubble with no error. A send that gave its
+           question an id and a run that names its row are compared in the
+           stored rows; anything else attaches as before. */
+        if (nachrichtId && run.message_id && !(await antwortetAufEigene(chatId, run.message_id, signal))) {
+          return false
+        }
         laufJetzt.generationId = run.generation_id
         return 'run'
       }
-      if (!nachrichtId) return false
+      if (!nachrichtId && !redo?.replaces) return false
       /* The newest rows, oldest first: is this send's question among them?
          Fifty leave room for a run that filed its pictures as rows of their
          own behind it. */
@@ -2231,6 +2479,22 @@
         return false
       }
       const reihe = recent?.nachrichten ?? []
+      if (!nachrichtId) {
+        /* A regeneration has no question of its own to look for. The service
+           takes the replaced answer away in the very step that stores the new
+           one as finished (app/answer_redo.py): the replaced answer gone from
+           the newest rows with an answer standing last says the new one is
+           stored; the replaced one still there says nothing was written. */
+        const letzte = reihe[reihe.length - 1]
+        const gespeichert =
+          letzte != null &&
+          !reihe.some((n) => n.id === redo.replaces) &&
+          letzte.role === 'assistant' &&
+          (letzte.art ?? 'nachricht') === 'nachricht'
+        if (!gespeichert) return false
+        zeileNachladen = true
+        return 'stored'
+      }
       const stelle = reihe.findIndex((n) => n.id === nachrichtId)
       if (stelle < 0) return false
       const beantwortet = reihe
@@ -2262,6 +2526,10 @@
       // The user cut the previous spoken answer short: one line for the
       // model in this request only (app/diktatsprachewahl.py).
       if (gespraech?.unterbrochen) koerper.unterbrochen = true
+      /* The arrow under the last answer: which answer this request is for
+         — a new one in its place, or its failed call asked again. */
+      if (redo?.replaces) koerper.replaces = redo.replaces
+      if (redo?.retries) koerper.retries = redo.retries
 
       /* Counts every event actually handled — the position to resume from
          if the connection itself drops (below), not a byte offset. */
@@ -2277,6 +2545,17 @@
         if (ereignis.typ === 'reasoning' || ereignis.typ === 'content') modelGoesOn()
         if (ereignis.typ === 'start') {
           lauf.generationId = ereignis.generation_id
+          /* A retry has begun: everything the failed run had done arrives
+             again right behind this event, so the row is emptied for it
+             here — and on every `start`, a stream watched anew from its
+             first event brings all of it once more. */
+          if (retried) {
+            Object.assign(retried, {
+              content: '', reasoning: '', werkzeuge: [], stats: {}, abschnitte: [],
+              ziel: null, zustand: null, gesamt_tokens: null,
+            })
+          }
+          begun = true
           platzhalter.id = ereignis.message_id
           /* The stream opens once the fold before it is over; a
              "compressing" the program's line put on this row has said its
@@ -2353,10 +2632,10 @@
           if (fenceMoved) {
             // A file that was open and has closed gets its last piece here;
             // one that arrived whole is seen for the first time.
-            for (const file of dateienAus(platzhalter.content)) carryFile(file)
+            for (const file of dateienAus(platzhalter.content, dateienVorher)) carryFile(file)
           }
           if (fenceMoved || fileGrowing) {
-            const unfinished = openFile(platzhalter.content)
+            const unfinished = openFile(platzhalter.content, dateienVorher)
             fileGrowing = !!unfinished
             if (unfinished) carryFile(unfinished)
             fenceUnsettled = endsInFence(platzhalter.content)
@@ -2525,7 +2804,13 @@
           /* The same notice moves on: it was reporting the argument being
              written, and now reports the call itself. Stays up until the
              result is in. */
-          werkzeugSagen('werkzeug.laeuft', { name: ereignis.name }, 'werkzeug', true)
+          /* The server comes with the call itself — while the model was
+             still writing it there was none to name, and the mark was the
+             one the tool's name alone finds. */
+          werkzeugSagen(
+            'werkzeug.laeuft', { name: ereignis.name }, 'werkzeug', true, 0,
+            ereignis.server || '',
+          )
           werkzeugOffen = true
           // Also attached to the message: the notification disappears
           // again, but the history should keep a traceable record of what
@@ -2554,8 +2839,8 @@
                its row here. */
             rowOfCall(ereignis.aufruf_id, ereignis.name, ereignis.zeitpunkt_ms)
           }
-          // A picture being drawn: the picture window's working tile.
-          if (ereignis.name === 'draw_image') {
+          // A picture or a video being made: the picture window's working tile.
+          if (isDrawingTool(ereignis.name)) {
             drawing = true
             drawingStarted(zielChat, platzhalter.id)
           }
@@ -2571,9 +2856,32 @@
           lesungenLeeren(platzhalter)
           runter()
         } else if (ereignis.typ === 'tool_result') {
-          const eintrag = platzhalter.werkzeuge.find(
-            (w) => w.aufruf_id === ereignis.aufruf_id,
+          /* The result belongs to the oldest call of this id that still
+             waits for one, the way the service stores it: a server without
+             ids of its own numbers every round from zero, so the same id
+             stands for several calls, and an entry that has its result is
+             never written over. */
+          let eintrag = platzhalter.werkzeuge.find(
+            (w) => w.aufruf_id === ereignis.aufruf_id && w.ergebnis === null,
           )
+          if (!eintrag) {
+            /* A call the service turned away before it announced it (an
+               invalid question, a refused job) has only its result. It gets
+               its own entry and its row here — the row it was written in, or
+               one at this place in the answer — the row a stored answer
+               shows for it after the chat is opened again
+               (app/answer_sections.py). */
+            platzhalter.werkzeuge.push({
+              aufruf_id: ereignis.aufruf_id,
+              name: ereignis.name,
+              server: '',
+              argumente: {},
+              ergebnis: null,
+              fehlgeschlagen: false,
+            })
+            rowOfCall(ereignis.aufruf_id, ereignis.name, ereignis.zeitpunkt_ms)
+            eintrag = platzhalter.werkzeuge[platzhalter.werkzeuge.length - 1]
+          }
           if (eintrag) {
             eintrag.ergebnis = ereignis.text
             eintrag.fehlgeschlagen = ereignis.fehlgeschlagen
@@ -2616,9 +2924,9 @@
             platzhalter.dokument = ereignis.dokumente.length === 1 ? ereignis.dokumente[0] : null
             platzhalter.dokumente = ereignis.dokumente.length > 1 ? ereignis.dokumente : null
           }
-          // A drawing call is over: its picture, if it came, stands in the
-          // answer's run row the server hands over; the working tile goes.
-          if (ereignis.name === 'draw_image') {
+          // A drawing call is over: its picture or video, if it came, stands
+          // in the answer's run row the server hands over; the tile goes.
+          if (isDrawingTool(ereignis.name)) {
             drawing = false
             drawingDone(zielChat, platzhalter.id, ereignis.bildlauf ?? null)
           }
@@ -2634,13 +2942,26 @@
              on every position of that field, "Auto" included. It is the one
              line of this commentary that has to be read; the rest is
              progress. */
-          werkzeugSagen(
-            ereignis.fehlgeschlagen ? 'werkzeug.fehlgeschlagen' : 'werkzeug.fertig',
-            { name: ereignis.name },
-            ereignis.fehlgeschlagen ? 'fehler' : 'erfolg',
-            false,
-            ereignis.fehlgeschlagen ? WERKZEUG_FEHLER_MS : werkzeugFertigDauer(),
-          )
+          if (ereignis.stopped) {
+            /* The person pressed stop while the call waited: nothing failed.
+               No notice of a failure — and the one standing for the call
+               goes, or it would stay up as "running". The row and its
+               stored result stay as they are. */
+            const standing = werkzeugMeldungen.get(werkzeugToast)
+            if (standing) schliesseMeldung(standing)
+          } else {
+            werkzeugSagen(
+              ereignis.fehlgeschlagen ? 'werkzeug.fehlgeschlagen' : 'werkzeug.fertig',
+              { name: ereignis.name },
+              ereignis.fehlgeschlagen ? 'fehler' : 'erfolg',
+              false,
+              ereignis.fehlgeschlagen ? WERKZEUG_FEHLER_MS : werkzeugFertigDauer(),
+              /* The result event names no server; the call's own entry does,
+                 and it is what a notice pushed out meanwhile needs to come
+                 back with the same mark. */
+              eintrag?.server || '',
+            )
+          }
           werkzeugOffen = false
         } else if (ereignis.typ === 'ziel') {
           /* The model has reported a reached goal (the `goal` tool). The
@@ -2678,6 +2999,7 @@
              rule — from here on it comes out of the stats just handed in. */
           lesungenLeeren(platzhalter)
         } else if (ereignis.typ === 'done') {
+          doneSeen = true
           verdichtetZu = ereignis.verdichtet ?? null
           schlussZustand = ereignis.zustand ?? null
           /* Stopped on the service — from another window, or before the
@@ -2685,6 +3007,8 @@
              queue holds as it does after a stop of this window's own.
              Stopped, failed and answered are three outcomes, not two. */
           if (ereignis.abgebrochen) abgebrochen = true
+          if (ereignis.replaced) replacedId = ereignis.replaced
+          if (ereignis.discarded) discarded = true
           /* The answer the run really ended with — it rides along only where
              it is NOT the one the streamed pieces spelled out, so the bubble
              that is standing there has to be lifted the same way the row
@@ -2917,8 +3241,10 @@
                 (n) => n.role === 'user' && (n.id === nachrichtId || n.id === 'eigen-' + nachrichtId),
               )
             : null
+          /* A retry put no placeholder up: the row it names is the failed
+             answer itself, and that one stays where it is. */
           zustand.nachrichten = zustand.nachrichten.filter(
-            (n) => n !== platzhalter && n !== eigene,
+            (n) => (n !== platzhalter || n === retried) && n !== eigene,
           )
           void chatOeffnen(zielChat)
         }
@@ -2929,7 +3255,25 @@
            real SEND: a regenerate (`inhalt === null`) never went through the
            bar, so the bar has nothing of its own to hand back. The message
            id tells the bar which of its sends this was. */
-        if (inhalt != null) eingabe?.zurueckgeben(inhalt, zielChat, nachrichtId)
+        if (inhalt != null) {
+          /* Turned away again within one check of the claim's clock: this
+             is no claim that ends — whatever refuses it does not go away by
+             waiting — and going round once more would only ask the service
+             in a tight circle. The words go back to the field then. */
+          const gleichWiederAbgewiesen =
+            ausReihe?.abgewiesenUm != null && Date.now() - ausReihe.abgewiesenUm < HALTEPRUEFUNG_MS
+          if (ausReihe) ausReihe.abgewiesenUm = Date.now()
+          if (ausReihe && !gleichWiederAbgewiesen) {
+            /* Not typed just now: it stood in the line and was on its way.
+               Handed back to the field it would have left the line and
+               turned into a draft; it goes back in front of its own chat's
+               line instead, and leaves again once the claim is over. */
+            zurueckEinreihen(ausReihe)
+            zurueckInReihe = true
+          } else {
+            eingabe?.zurueckgeben(inhalt, zielChat, nachrichtId)
+          }
+        }
       }
       // If the answer aborts while the confirmation stands, nobody is
       // waiting for it anymore — the box has to go, otherwise it points
@@ -2971,6 +3315,37 @@
          stopped itself gets no `done` either, but its word is known: it
          was stopped — not an answer in which the model wrote nothing. */
       platzhalter.zustand = schlussZustand ?? (abgebrochen ? 'abgebrochen' : null)
+      // The run is over in this window, with or without a closing word.
+      platzhalter.runEnded = true
+      /* A retry the service never began — turned away, or stopped before it
+         started: the answer is the failed one it was. */
+      if (retried && !begun) retried.zustand = retriedState
+      /* A new answer written in another one's place. Finished, the answer
+         it replaced is gone on the service, and its row goes here. Not
+         finished — failed, stopped, or never begun — the old answer stands
+         and of the attempt nothing is left, so the row this run was filling
+         goes instead. The service says which on `done`; a run this window
+         asked for and that ended without one (stopped from here, turned
+         away) is NOT known by its request: the stop can land in the very
+         moment the service stores the finished new answer and drops the old
+         one, and a window that guessed "the old one stands" showed an
+         answer that no longer existed and hid the one that did. Such a run
+         asks the service what it stored — the reconcile below — and shows
+         that. Only on the chat on screen: any other chat is fetched afresh
+         when it is opened. */
+      if (zielChat === zustand.aktiverChat && !belegt) {
+        if (redo?.replaces && !doneSeen) {
+          zeileNachladen = true
+        } else {
+          const gone = replacedId
+            ? zustand.nachrichten.find((n) => n.id === replacedId)
+            : discarded || (redo?.replaces && schlussZustand !== 'fertig')
+              ? platzhalter
+              : null
+          const stelle = gone ? zustand.nachrichten.indexOf(gone) : -1
+          if (stelle !== -1) zustand.nachrichten.splice(stelle, 1)
+        }
+      }
       // A drawing call this run never saw the result of: its tile goes too.
       if (drawing) drawingDone(zielChat, platzhalter.id, null)
       /* A compaction folded the middle of the history away and left a
@@ -3004,6 +3379,28 @@
              the session: input greyed, Stop offered for a run that was
              over, the queue never fired. A timeout lands in the catch,
              and the catch lets the release run. */
+          /* A replacing run that ended without its closing event: the stop
+             went out from here as a request of its own, and until it lands
+             the run is still going — a list fetched in that stretch carries
+             its half-written row beside the answer it was to replace, and
+             both would stay on screen. Asked until the service no longer
+             names the run, bounded like the fetch itself. */
+          if (redo?.replaces && !doneSeen) {
+            const bis = Date.now() + NACHLADE_FRIST_MS
+            while (Date.now() < bis) {
+              const lage = await api.nachrichten(zielChat, {
+                signal: AbortSignal.timeout(NACHLADE_FRIST_MS),
+                limit: 1,
+              })
+              /* The run is named by its id once the stream has said it; a
+                 stop before that stands in the claim the service holds. */
+              const going = lauf.generationId
+                ? lage?.laufend?.generation_id === lauf.generationId
+                : Boolean(lage?.laufend || lage?.gehalten)
+              if (!going) break
+              await new Promise((frei) => setTimeout(frei, HALTEPRUEFUNG_MS))
+            }
+          }
           const frisch = await api.nachrichten(zielChat, {
             signal: AbortSignal.timeout(NACHLADE_FRIST_MS),
           })
@@ -3034,7 +3431,15 @@
             heldWithoutRun = !frisch.laufend && Boolean(frisch.gehalten)
           }
         } catch {
-          /* the answer stands; the fresh list arrives with the next open */
+          /* the answer stands; the fresh list arrives with the next open.
+             A replacing run that could not ask what the service stored has
+             its half-written row beside the old answer, and the stop of
+             this window, where the service could not be asked, leaves
+             nothing of the attempt: it goes, as it always did. */
+          if (redo?.replaces && !doneSeen && zielChat === zustand.aktiverChat) {
+            const stelle = zustand.nachrichten.indexOf(platzhalter)
+            if (stelle !== -1) zustand.nachrichten.splice(stelle, 1)
+          }
         }
       }
       /* A clean end lets the line move; a failed or stopped run holds it
@@ -3114,7 +3519,8 @@
          same send-in-flight mark that holds the queue while a send of this
          window's own uploads — a send of this window still holds it
          anyway, and then it is left to that send to lift. */
-      const holdMark = heldWithoutRun && !zustand.sendet[zielChat]
+      const warteAufAnspruch = heldWithoutRun || zurueckInReihe
+      const holdMark = warteAufAnspruch && !zustand.sendet[zielChat]
       if (holdMark) zustand.sendet[zielChat] = true
       delete zustand.laeuft[zielChat]
       if (zustand.laufenderPlatzhalter[zielChat] === platzhalter) {
@@ -3135,9 +3541,13 @@
         }, { nachholen: false })
       }
       await chatsLaden()
-      if (heldWithoutRun) {
+      if (warteAufAnspruch) {
+        /* The wait can be ended from the stop button: it reaches the claim
+           through the chat's id (`abbrechen`) and cuts this question short. */
+        const wartet = new AbortController()
+        anspruchWarten.set(zielChat, wartet)
         try {
-          const { run, reachable } = await claimOutcome(zielChat)
+          const { run, reachable } = await claimOutcome(zielChat, wartet.signal)
           if (reachable && zielChat === zustand.aktiverChat && !laufVon(zielChat)) {
             /* The list was fetched while the chat was held: fetched again, so
                the other send's question and its answer are there — running,
@@ -3177,6 +3587,7 @@
           }
         } finally {
           // Whatever happens in the wait, the gate does not stay shut.
+          if (anspruchWarten.get(zielChat) === wartet) anspruchWarten.delete(zielChat)
           if (holdMark) delete zustand.sendet[zielChat]
         }
       }
@@ -3192,6 +3603,10 @@
      below). A set, not one slot: two runs naming each other in turn
      walked one slot back and forth and fetched for ever. */
   const nachgeholtFuer = new Set()
+  /* The chats whose run has let go and which wait for another window's claim
+     to end: the controller that cuts that wait short, by chat. Read by the
+     stop button, which has no run of its own to stop in that stretch. */
+  const anspruchWarten = new Map()
   /* The runs whose own end attached them again once (see the end of
      `antwortHolen`) — never a second time. */
   const ownRunsReattached = new Set()
@@ -3268,11 +3683,55 @@
     return false
   }
 
+  /* Stops a run that has no name yet, again and again, until a stop lands.
+     Before the service has taken this send's claim the count it answers is
+     0 and nothing is cancelled — and a moment later it takes the claim and
+     begins the answer nobody wants any more. So the stop is sent again in
+     the clock of the other waits, as long as this very send is going; the
+     send itself is cut only once a stop has landed (or the run has been
+     named, which the next round reaches by its id). */
+  async function stoppWiederholen(lauf) {
+    for (;;) {
+      const mitKennung = Boolean(lauf.generationId)
+      let getroffen = false
+      try {
+        const antwort = await api.abbrechen(lauf.generationId, lauf.chatId)
+        getroffen = Number(antwort?.abgebrochen ?? 0) > 0
+      } catch {
+        /* Not answered: asked again below, while the send goes on. */
+      }
+      if (getroffen || mitKennung) break
+      await new Promise((frei) => setTimeout(frei, HALTEPRUEFUNG_MS))
+      if (laufVon(lauf.chatId) !== lauf || lauf.abbruch.signal.aborted) break
+    }
+    lauf.abbruch.abort()
+  }
+
   /* Always the run of the chat on screen — never one in the background, and
      never more than one. */
   async function abbrechen() {
     const lauf = laufVon(zustand.aktiverChat)
-    if (!lauf) return
+    if (!lauf) {
+      /* No run of this window, but the window waits for another one's claim
+         on the chat (the end of an answer while the chat is held, or a queued
+         message the service turned away): the stop reaches that claim through
+         the chat's id, the wait ends at once, and the queue holds as after
+         any stop. */
+      const chatId = zustand.aktiverChat
+      /* The window folds this chat by hand (`/compact`): the stop reaches the
+         service's claim through the chat's id and closes the summary request.
+         The answer of the fold itself ends the wait. */
+      if (chatId && compactSince[chatId]) {
+        void api.abbrechen(null, chatId).catch(() => {})
+        return
+      }
+      const wartet = chatId ? anspruchWarten.get(chatId) : null
+      if (!wartet) return
+      anhalten(chatId)
+      void api.abbrechen(null, chatId).catch(() => {})
+      wartet.abort()
+      return
+    }
     /* Both handles, always: the run's id where the stream has named it, the
        chat's always. Before `start` there is no run id — the service is
        still folding its history — and the chat id is what reaches the claim
@@ -3280,6 +3739,15 @@
        the run id, the press reached nothing: no run was registered yet, so
        nothing was cancelled, and the answer began into the window that had
        just stopped it. */
+    if (!lauf.generationId) {
+      /* Nothing named yet: the stop may arrive before the claim stands and
+         count 0. It is repeated beside the button — the press itself waits
+         for nothing, and a second press starts no second repetition. */
+      if (lauf.stoppt) return
+      lauf.stoppt = true
+      void stoppWiederholen(lauf)
+      return
+    }
     lauf.abbruch.abort()
     /* Told, not waited for: the press must not hang on a request that may
        never settle (the route runs in the service's worker pool and carries
@@ -3294,6 +3762,18 @@
   /* The picture studio lies over the chat tile (teile/ImageStudio.svelte):
      the chat stays mounted underneath, hidden and out of reach. */
   const studioAn = $derived(studioSichtbar())
+  /* The question card lies over the chat column: head, history and the part
+     with the bar are out of reach for Tab while it stands, the card and its
+     veil (moved into the column) stay operable. */
+  const kartenSteht = $derived(questionCardStands(zustand.aktiverChat))
+
+  /* The CLI on the right: shown, or folded away while it is what the
+     column shows. Folded, the client keeps running (teile/Terminal.svelte). */
+  const cliOffen = $derived(leiste.offen && leiste.modul === 'cli')
+  function cliSchalten() {
+    if (cliOffen) leisteSchliessen()
+    else moduleShow('cli')
+  }
 
   function tastatur(ereignis) {
     if (tasteHoch(ereignis)) {
@@ -3322,6 +3802,11 @@
       // The mirror of ⌘B: the work rail on the right.
       ereignis.preventDefault()
       leisteSchalten()
+    } else if (ereignis.ctrlKey && !ereignis.metaKey && !ereignis.altKey && ereignis.key === '`') {
+      // The CLI on the right, in and out of view — the same key the
+      // editors with a built-in terminal answer to.
+      ereignis.preventDefault()
+      cliSchalten()
     } else if (halte && ereignis.key === 'k') {
       ereignis.preventDefault()
       sucheZeigen()
@@ -3365,7 +3850,7 @@
          is audible right now. Only that reading — a conversation's voice
          keeps its own interrupts, and Escape there stays as it was. */
       else if (eingabe?.readingMarked?.()) eingabe.stopMarkedReading()
-      else if (laufVon(zustand.aktiverChat)) abbrechen()
+      else if (laufVon(zustand.aktiverChat) || anspruchWarten.has(zustand.aktiverChat) || compactSince[zustand.aktiverChat]) abbrechen()
     }
   }
 
@@ -3462,14 +3947,6 @@
        gradient stays the ground, the drawing lies on top of it. -->
   {#if moune}
     <Vektorfeld art="gras" />
-  {:else if heaven}
-    <Vektorfeld art="clouds" />
-  {:else if pearl}
-    <Vektorfeld art="dunes" />
-  {:else if exe}
-    <Vektorfeld art="wuerfel" />
-  {:else if darkmatter}
-    <Vektorfeld art="sternnetz" />
   {/if}
   <!-- `--seite-links`: where the chat surface starts, the left edge every
        menu page takes (Seitenrahmen.svelte) — the same sum the status strip
@@ -3483,16 +3960,12 @@
       <!-- The chat tile's drawing, the first layer of the surface. -->
       {#if moune}
         <Vektorfeld art="farn" />
-      {:else if heaven}
-        <Vektorfeld art="birds" />
-      {:else if pearl}
-        <Vektorfeld art="shell" />
       {/if}
       <!-- The chat's own head: its name. The tools have their signs in the
            column on the right. It lies over the top of the surface rather
            than pushing the history down, so the empty chat keeps its
            centred input. -->
-      <div class="chatkopf" inert={seiteOffen || studioAn}>
+      <div class="chatkopf" inert={seiteOffen || studioAn || kartenSteht}>
         {#if !nochLeer && chatTitel}
           <span class="chatname">{chatTitel}</span>
         {/if}
@@ -3514,7 +3987,7 @@
 
       <div class="verlauf" class:under-head={!nochLeer} bind:this={verlauf} onscroll={gescrollt}
            onwheel={radGedreht} ontouchstart={beruehrungBeginnt} ontouchmove={beruehrungZieht}
-           ontouchend={beruehrungEndet} inert={seiteOffen || studioAn}>
+           ontouchend={beruehrungEndet} inert={seiteOffen || studioAn || kartenSteht}>
         <div class="spur">
           <!-- Keyed by `id` alone, deliberately without a fallback to `i`.
                That fallback was the bug, not the safety net it looked like:
@@ -3633,11 +4106,12 @@
                 <div in:fly={{ y: 12, duration: 420, easing: backOut }}>
                   <Nachricht
                     {nachricht}
+                    dateienVorher={dateienVorherKarte.get(nachricht.id) ?? 0}
                     istLetzte={letzteAntwort && nachricht.id === letzteAntwort.id}
                     istLetzteFrage={letzteFrage && nachricht.id === letzteFrage.id}
-                    laeuft={nachricht.zustand === 'laeuft'
-                      || (Boolean(laufVon(zustand.aktiverChat))
-                          && nachricht.id === laufenderId)}
+                    laeuft={zeileLaeuft(nachricht)
+                      && (nachricht.zustand === 'laeuft'
+                          || Boolean(laufVon(zustand.aktiverChat)))}
                     marke={laufMarke && laufMarke.id === nachricht.id ? wartemarke : null}
                     {neuErzeugen}
                     neuSenden={frageNeuSenden}
@@ -3646,6 +4120,18 @@
               {/if}
             {/if}
           {/each}
+          <!-- A compaction asked for by hand is running: the same mark the
+               fold in front of an answer wears, standing at the end of the
+               track because no answer is there to carry it. -->
+          {#if compactFrom !== null}
+            <div class="komprimiert">
+              <Wartezeile
+                art="verdichtung"
+                text={t('status.komprimiert')}
+                zeit={compactClock}
+              />
+            </div>
+          {/if}
           <!-- What has been typed but not yet said. Sits at the end of the
                track, exactly where it will land once the line moves on. -->
           <Warteblasen losschicken={warteschlangeLosschicken} />
@@ -3656,14 +4142,14 @@
            absolutely positioned: the empty space below shares the room
            with the history, which puts the group exactly in the middle.
            On send it shrinks to zero and pushes the group down. -->
-      <div class="anlauf" inert={seiteOffen || studioAn}>
+      <div class="anlauf" inert={seiteOffen || studioAn || kartenSteht}>
         <div class="marke" class:weg={!nochLeer} aria-hidden={!nochLeer}>
           <div class="wortmarke"><Wortmarke hoehe={55} zentriert /></div>
           <!-- Mounted afresh whenever a chat turns empty, so greeting and
                date are those of that moment, not of the program's start. -->
           {#key nochLeer}<Begruessungsecke />{/key}
         </div>
-        <Eingabeleiste bind:this={eingabe} {senden} {abbrechen} {bildStoppen} {bildLokalLaeuft}
+        <Eingabeleiste bind:this={eingabe} {senden} {abbrechen} {bildStoppen} {compactChat} {bildLokalLaeuft}
           vektoren={eingabeZeichnung}
           gruss={nochLeer && begruessung.an ? t('eingabe.los') : null} />
       </div>
@@ -3774,6 +4260,12 @@
   }
   /* A hairline between two readouts that report different things: without
      it the dots and words run together into one sentence. */
+  /* The waiting mark of a hand-made compaction, indented the way an
+     answer's line is (Nachricht.svelte, `.antwortlinie`) so the mark sits
+     where it sits under an answer. */
+  .komprimiert {
+    padding: 6px 0 6px 22px;
+  }
   .statustrenner {
     flex: none;
     width: 1px;

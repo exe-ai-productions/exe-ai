@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -525,6 +526,73 @@ async def test_ein_modellwechsel_laesst_das_fenster_nie_leer_stehen(discovery: D
             assert tokens is not None, "reachable, but the window read empty mid-pass"
 
 
+class _LoadingServer(MockProvider):
+    """A server that names a provisional window until its model is loaded:
+    ``answers`` is a list of (window, provisional) taken one per question,
+    the last one standing."""
+
+    def __init__(self, answers: list[tuple[int, bool]]):
+        super().__init__()
+        self.answers = list(answers)
+        self.asked = 0
+        self._provisional = False
+
+    async def modellname(self, timeout: float = 3.0):
+        return "gemma"
+
+    async def kontextgroesse(self, timeout: float = 3.0, modellname=None):
+        self.asked += 1
+        window, self._provisional = self.answers[0]
+        if len(self.answers) > 1:
+            self.answers.pop(0)
+        return window
+
+    def kontext_vorlaeufig(self) -> bool:
+        return self._provisional
+
+
+@pytest.mark.asyncio
+async def test_a_provisional_window_is_asked_again_until_the_model_is_loaded(
+    discovery: Discovery,
+):
+    """Falls over without the fix: the first answer, the most the unloaded
+    model can take, is the server's number and is never asked again."""
+    state = discovery.zustaende["test"]
+    state.provider = _LoadingServer([(131_072, True), (8_192, False)])
+    await discovery.einmal_pruefen()
+    assert state.context_tokens == 131_072
+    assert state.kontext_quelle == fenstergroesse.QUELLE_SERVER
+
+    await discovery.einmal_pruefen()
+    assert state.context_tokens == 8_192
+    assert state.kontext_quelle == fenstergroesse.QUELLE_SERVER
+
+
+@pytest.mark.asyncio
+async def test_silence_a_final_window_is_not_asked_again(discovery: Discovery):
+    """Silence probe: a number the provider does not call provisional is
+    asked once, as before."""
+    state = discovery.zustaende["test"]
+    provider = _LoadingServer([(8_192, False)])
+    state.provider = provider
+    for _ in range(3):
+        await discovery.einmal_pruefen()
+    assert provider.asked == 1
+    assert state.context_tokens == 8_192
+
+
+@pytest.mark.asyncio
+async def test_silence_a_window_entered_by_hand_is_not_asked_again(discovery: Discovery):
+    state = discovery.zustaende["test"]
+    state.endpunkt.context_tokens = 50_000
+    provider = _LoadingServer([(131_072, True)])
+    state.provider = provider
+    for _ in range(3):
+        await discovery.einmal_pruefen()
+    assert state.context_tokens == 50_000
+    assert provider.asked == 1, "asked once for the first number, never again"
+
+
 @pytest.mark.asyncio
 async def test_ein_leerer_name_loescht_den_bekannten_nicht(discovery: Discovery):
     """A single pass where the model name cannot be read must not blank a
@@ -582,6 +650,83 @@ async def test_eine_gelernte_groesse_schlaegt_den_ersatzwert(config: Config):
     await discovery.einmal_pruefen()
 
     zustand = discovery.zustaende["test"]
+    assert zustand.context_tokens == 16_384
+    assert zustand.kontext_quelle == fenstergroesse.QUELLE_GELERNT
+    db.schliessen()
+
+
+class _ReportsWindow(MockProvider):
+    """A server that reports one window of its own, whatever it is asked."""
+
+    def __init__(self, tokens: int):
+        super().__init__()
+        self._tokens = tokens
+
+    async def kontextgroesse(self, timeout: float = 3.0, modellname=None):
+        return self._tokens
+
+
+async def _passes_with_learned_window(config: Config, base_url: str, count: int = 3):
+    """Discovery passes on an endpoint at ``base_url`` whose server reports
+    32,768 while 16,384 was learned from a refusal. Returns the state."""
+    db = Database(":memory:")
+    db.schema_einrichten()
+    repositories = repositories_erstellen(db)
+    fenstergroesse.gelernt_merken(repositories, "test", None, 16_384)
+    discovery = Discovery(config, EventBus(), repositories)
+    zustand = discovery.zustaende["test"]
+    zustand.endpunkt = zustand.endpunkt.model_copy(update={"base_url": base_url})
+    zustand.provider = _ReportsWindow(32_768)
+    for _ in range(count):
+        await discovery.einmal_pruefen()
+    db.schliessen()
+    return zustand
+
+
+@pytest.mark.asyncio
+async def test_a_learned_size_stays_before_the_server_answer_across_the_net(config: Config):
+    """The server reports more than a refusal named. Passes after passes the
+    learned size stays in force: before, the next pass put the server's
+    number back and the same refusal came again."""
+    zustand = await _passes_with_learned_window(config, "https://api.example.com/v1")
+
+    assert zustand.context_tokens == 16_384
+    assert zustand.kontext_quelle == fenstergroesse.QUELLE_GELERNT
+
+
+@pytest.mark.asyncio
+async def test_on_the_own_network_the_servers_own_answer_replaces_a_learned_size(config: Config):
+    zustand = await _passes_with_learned_window(config, "http://127.0.0.1:8080/v1")
+
+    assert zustand.context_tokens == 32_768
+    assert zustand.kontext_quelle == fenstergroesse.QUELLE_SERVER
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_learned_over_the_server_holds_through_the_next_pass(config: Config):
+    """The whole path: the pass resolves the server's number, a refusal names
+    a smaller one and is learned, and the next pass keeps it."""
+    db = Database(":memory:")
+    db.schema_einrichten()
+    repositories = repositories_erstellen(db)
+    discovery = Discovery(config, EventBus(), repositories)
+    zustand = discovery.zustaende["test"]
+    zustand.endpunkt = zustand.endpunkt.model_copy(
+        update={"base_url": "https://api.example.com/v1"}
+    )
+    zustand.provider = _ReportsWindow(32_768)
+    await discovery.einmal_pruefen()
+    assert (zustand.context_tokens, zustand.kontext_quelle) == (
+        32_768, fenstergroesse.QUELLE_SERVER
+    )
+
+    refusal = ProviderFehler(
+        "provider answered with 400: This model's maximum context length is 16384 tokens.",
+        status=400,
+    )
+    fenstergroesse.aus_fehler_lernen(repositories, zustand, refusal)
+    await discovery.einmal_pruefen()
+
     assert zustand.context_tokens == 16_384
     assert zustand.kontext_quelle == fenstergroesse.QUELLE_GELERNT
     db.schliessen()
@@ -693,14 +838,12 @@ async def test_faehigkeitsstand_bleibt_bei_einer_stummen_zweiten_props_frage_ste
     assert _erkannt(zustand)["tool_calls"] is True
     assert _erkannt(zustand)["vision"] is True
 
-    # A dialect switch forces the question again.
-    zustand.props_beantwortet = False
+    # The next pass asks again and gets the silence.
     await discovery.einmal_pruefen()
     assert _erkannt(zustand)["tool_calls"] is True
     assert _erkannt(zustand)["vision"] is True
 
     # And a real answer still updates the state as before.
-    zustand.props_beantwortet = False
     await discovery.einmal_pruefen()
     assert _erkannt(zustand)["vision"] is False
 
@@ -734,10 +877,81 @@ async def test_faehigkeitsstand_wird_nach_anhaltender_stille_doch_geleert(
 
     monkeypatch.setattr(discovery_modul, "_faehigkeiten_erkennen", _stumm)
     for _ in range(STILLE_BIS_WEG):
-        zustand.props_beantwortet = False
         await discovery.einmal_pruefen()
 
     assert "vision" not in (zustand.faehigkeiten_erkannt or {})
+
+
+@pytest.mark.asyncio
+async def test_what_the_provider_said_survives_the_silence_cap(
+    discovery: Discovery, monkeypatch
+):
+    """Past the cap only the keys that came from /props fall away. The model
+    families the provider named stay: a failing provider request in the same
+    pass is no statement that they are gone."""
+    import app.discovery as discovery_modul
+    from app.discovery import STILLE_BIS_WEG
+
+    answers = iter([{"tool_calls": True, "vision": True}])
+
+    async def _props(*args, **kwargs):
+        return next(answers, None)
+
+    monkeypatch.setattr(discovery_modul, "_faehigkeiten_erkennen", _props)
+
+    zustand = discovery.zustaende["test"]
+    provider_answers = [{"familien": {"a-model": "qwen3_5"}}]
+
+    async def _provider_says(timeout: float = 3.0):
+        if provider_answers:
+            return provider_answers.pop()
+        raise RuntimeError("the provider does not answer")
+
+    monkeypatch.setattr(zustand.provider, "denkquellen", _provider_says)
+
+    await discovery.einmal_pruefen()
+    assert zustand.faehigkeiten_erkannt == {
+        "tool_calls": True,
+        "vision": True,
+        "familien": {"a-model": "qwen3_5"},
+    }
+
+    for _ in range(STILLE_BIS_WEG):
+        await discovery.einmal_pruefen()
+
+    assert zustand.faehigkeiten_erkannt == {"familien": {"a-model": "qwen3_5"}}
+
+
+@pytest.mark.asyncio
+async def test_silence_probe_a_failing_provider_request_does_not_blank_its_last_answer(
+    discovery: Discovery, monkeypatch
+):
+    """The same holds on a pass where /props answers: the provider's keys are
+    replaced only by a newer answer of the provider."""
+    import app.discovery as discovery_modul
+
+    async def _props(*args, **kwargs):
+        return {"tool_calls": True}
+
+    monkeypatch.setattr(discovery_modul, "_faehigkeiten_erkennen", _props)
+
+    zustand = discovery.zustaende["test"]
+    provider_answers = [{"familien": {"a-model": "qwen3_5"}}]
+
+    async def _provider_says(timeout: float = 3.0):
+        if provider_answers:
+            return provider_answers.pop()
+        return {}
+
+    monkeypatch.setattr(zustand.provider, "denkquellen", _provider_says)
+
+    await discovery.einmal_pruefen()
+    await discovery.einmal_pruefen()
+
+    assert zustand.faehigkeiten_erkannt == {
+        "tool_calls": True,
+        "familien": {"a-model": "qwen3_5"},
+    }
 
 
 # --- /api/v1/models ------------------------------------------------------
@@ -759,6 +973,30 @@ def test_models_mit_alle_zeigt_auch_die_abwesenden(client):
 def test_models_kann_frisch_pruefen(client):
     daten = client.get("/api/v1/models", params={"jetzt_pruefen": True}).json()
     assert daten[0]["zuletzt_geprueft"] is not None
+
+
+@pytest.mark.asyncio
+async def test_an_entry_says_whether_its_name_is_one_its_server_reports(discovery: Discovery):
+    """Falls over without the field: a client keeping the name of its chosen
+    model followed the list to the name the configuration gives a server
+    that reports none, and stored that as the model's."""
+    zustand = discovery.zustaende["test"]
+    zustand.gemeldeter_name = None
+    unnamed = zustand.als_dict()
+    assert unnamed["name"] == (zustand.endpunkt.name or zustand.endpunkt.id)
+    assert unnamed["name_gemeldet"] is False
+    zustand.gemeldeter_name = "a-model"
+    named = zustand.als_dict()
+    assert (named["name"], named["name_gemeldet"]) == ("a-model", True)
+    # A model of a catalogue is named by the catalogue, whatever the server
+    # reports for itself.
+    zustand.gemeldeter_name = None
+    assert zustand.als_dict("a-model")["name_gemeldet"] is True
+
+
+def test_the_models_route_hands_the_field_on(client):
+    entry = client.get("/api/v1/models").json()[0]
+    assert isinstance(entry["name_gemeldet"], bool)
 
 
 # --- Arriving and leaving at runtime --------------------------------------
@@ -914,6 +1152,156 @@ async def test_a_server_with_one_model_is_not_asked_per_model(discovery: Discove
     assert state.als_dict()["context_tokens"] == 8_192
 
 
+class _ChangingCatalogue(MockProvider):
+    """A catalogue whose list the server changes between passes: each pass
+    takes the next entry of ``lists`` (the last one stays), and the name the
+    server reports is the first of it. ``windows`` names a window per model."""
+
+    def __init__(self, lists: list, windows: dict[str, int] | None = None):
+        super().__init__()
+        self.lists = list(lists)
+        self.windows = windows or {}
+
+    def next_pass(self) -> None:
+        if len(self.lists) > 1:
+            self.lists.pop(0)
+
+    async def modellname(self, timeout: float = 3.0):
+        answer = self.lists[0]
+        return None if answer is None or answer == [] else answer[0]
+
+    async def modelle_auflisten(self, timeout: float = 3.0):
+        answer = self.lists[0]
+        if answer is None:
+            raise RuntimeError("the model list request hung")
+        return list(answer)
+
+    async def kontextgroesse(self, timeout: float = 3.0, modellname=None):
+        return self.windows.get(modellname or "", 8_192)
+
+    async def context_per_model(self, timeout: float = 3.0):
+        return dict(self.windows)
+
+
+async def _passes(discovery: Discovery, provider: _ChangingCatalogue, count: int) -> None:
+    discovery.zustaende["test"].provider = provider
+    for _ in range(count):
+        await discovery.einmal_pruefen()
+        provider.next_pass()
+
+
+@pytest.mark.asyncio
+async def test_a_catalogue_that_loses_and_gains_a_model_is_followed(discovery: Discovery):
+    """Falls over without the fix: the list stays ``a, b, c`` until a restart,
+    the retired model stays pickable and the new one is missing."""
+    windows = {"a": 100_000, "b": 100_000, "c": 100_000, "d": 64_000}
+    provider = _ChangingCatalogue([["a", "b", "c"], ["a", "b", "c"], ["a", "b", "d"]], windows)
+    await _passes(discovery, provider, 3)
+
+    state = discovery.zustaende["test"]
+    assert state.modelle == ["a", "b", "d"]
+    assert state.als_dict("d")["context_tokens"] == 64_000
+    assert discovery.aufloesen("test:c") is None
+    found = discovery.aufloesen("test:d")
+    assert found is not None and found[1] == "d"
+
+
+@pytest.mark.asyncio
+async def test_a_reported_name_that_leaves_the_list_becomes_the_name_now_reported(
+    discovery: Discovery, caplog
+):
+    """The bare provider id means the reported model: once that model is
+    gone it must mean the one the server names now, with that model's window
+    asked on the very pass the list changed."""
+    caplog.set_level("INFO", logger="app.discovery")
+    windows = {"c": 200_000, "a": 50_000, "b": 50_000, "d": 32_000}
+    provider = _ChangingCatalogue([["c", "a", "b"], ["a", "b", "d"]], windows)
+    discovery.zustaende["test"].provider = provider
+    await discovery.einmal_pruefen()
+    state = discovery.zustaende["test"]
+    assert state.gemeldeter_name == "c"
+    assert state.context_tokens == 200_000
+
+    provider.next_pass()
+    await discovery.einmal_pruefen()
+
+    assert state.gemeldeter_name == "a"
+    assert state.context_tokens == 50_000
+    assert discovery.aufloesen("test")[1] == "a"
+    assert "model changed from c to a" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_silence_the_same_models_in_a_new_order_change_nothing(discovery: Discovery):
+    """Silence probe: the order of a catalogue is not promised — the list the
+    picker shows, the reported name and the numbers stay."""
+    windows = {"a": 100_000, "b": 90_000, "c": 80_000}
+    provider = _ChangingCatalogue(
+        [["a", "b", "c"], ["c", "a", "b"], ["b", "c", "a"]], windows
+    )
+    await _passes(discovery, provider, 3)
+
+    state = discovery.zustaende["test"]
+    assert state.modelle == ["a", "b", "c"]
+    assert state.gemeldeter_name == "a"
+    assert state.als_dict("b")["context_tokens"] == 90_000
+
+
+@pytest.mark.asyncio
+async def test_silence_an_empty_or_failed_list_leaves_the_old_one(discovery: Discovery):
+    """Silence probe: the list request is the one that hangs every other
+    time — an empty answer, a failure and a single model each leave the list
+    standing, and the model from the picker keeps resolving."""
+    provider = _ChangingCatalogue([["a", "b", "c"], [], None, ["a"], ["a", "b", "c"]])
+    await _passes(discovery, provider, 5)
+
+    state = discovery.zustaende["test"]
+    assert state.modelle == ["a", "b", "c"]
+    assert discovery.aufloesen("test:b") is not None
+
+
+@pytest.mark.asyncio
+async def test_a_changed_list_that_fails_its_window_question_keeps_the_old_numbers(
+    discovery: Discovery,
+):
+    """The new numbers replace the old ones in one step: where that answer
+    does not come, nothing was cleared in front of it."""
+    windows = {"a": 100_000, "b": 90_000, "c": 80_000}
+    provider = _ChangingCatalogue([["a", "b", "c"], ["a", "b", "d"]], windows)
+    discovery.zustaende["test"].provider = provider
+    await discovery.einmal_pruefen()
+
+    async def silent(timeout: float = 3.0):
+        return None
+
+    provider.context_per_model = silent
+    provider.next_pass()
+    await discovery.einmal_pruefen()
+
+    state = discovery.zustaende["test"]
+    assert state.modelle == ["a", "b", "d"]
+    assert state.context_per_model == windows
+    assert state.als_dict("b")["context_tokens"] == 90_000
+
+
+@pytest.mark.asyncio
+async def test_a_name_from_the_configuration_is_never_replaced_by_the_list(config: Config):
+    """Silence probe: a pinned model is the configuration's word. A list that
+    stops naming it changes the list, not the pin."""
+    endpoint = config.endpoints[0].model_copy(update={"modell": "pinned"})
+    config = config.model_copy(update={"endpoints": [endpoint]})
+    discovery = Discovery(config, EventBus())
+    provider = _ChangingCatalogue([["a", "b", "c"], ["a", "b", "d"]])
+    discovery.zustaende[endpoint.id].provider = provider
+    await discovery.einmal_pruefen()
+    provider.next_pass()
+    await discovery.einmal_pruefen()
+
+    state = discovery.zustaende[endpoint.id]
+    assert state.modelle == ["a", "b", "d"]
+    assert state.gemeldeter_name == "pinned"
+
+
 @pytest.mark.asyncio
 async def test_an_unanswered_window_question_is_asked_again(discovery: Discovery):
     """The first answer per model went missing (`None`): the next pass asks
@@ -963,6 +1351,75 @@ async def test_a_server_elsewhere_has_no_template_read(discovery: Discovery, tmp
     here — it may be a different file on this one."""
     templates = await _templates_after_a_pass(discovery, tmp_path, "https://remote.example.net/v1")
     assert templates is None
+
+
+def _folder(tmp_path, *, jinja=None, config=None):
+    """A model folder with the given files; `config` is written as given."""
+    (tmp_path / "m").mkdir(exist_ok=True)
+    if jinja is not None:
+        (tmp_path / "m" / "chat_template.jinja").write_text(jinja, encoding="utf-8")
+    if config is not None:
+        (tmp_path / "m" / "tokenizer_config.json").write_text(config, encoding="utf-8")
+    return str(tmp_path / "m")
+
+
+def test_a_template_in_the_tokenizer_config_is_read(tmp_path):
+    from app.discovery import templates_read
+
+    folder = _folder(
+        tmp_path, config=json.dumps({"chat_template": "reasoning_effort not in ('low', 'medium')"})
+    )
+
+    assert templates_read({"m": folder})["m"]["effort_werte"] == ["low", "medium"]
+
+
+def test_a_named_template_list_gives_the_default(tmp_path):
+    from app.discovery import templates_read
+
+    named = [
+        {"name": "tool_use", "template": "reasoning_effort not in ('a', 'b')"},
+        {"name": "default", "template": "reasoning_effort not in ('low', 'medium')"},
+    ]
+    folder = _folder(tmp_path, config=json.dumps({"chat_template": named}))
+
+    assert templates_read({"m": folder})["m"]["effort_werte"] == ["low", "medium"]
+
+
+def test_the_template_file_wins_over_the_config(tmp_path):
+    """Silence probe: both are in the folder, the file is the template."""
+    from app.discovery import templates_read
+
+    folder = _folder(
+        tmp_path,
+        jinja="reasoning_effort not in ('low', 'medium')",
+        config=json.dumps({"chat_template": "reasoning_effort not in ('a', 'b')"}),
+    )
+
+    assert templates_read({"m": folder})["m"]["effort_werte"] == ["low", "medium"]
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        json.dumps({"model_max_length": 1}),
+        json.dumps({"chat_template": ""}),
+        json.dumps({"chat_template": [{"name": "tool_use", "template": "x"}]}),
+        json.dumps({"chat_template": 7}),
+        json.dumps([1, 2]),
+        "{ not json",
+    ],
+    ids=["no-field", "empty-field", "no-default", "not-text", "not-an-object", "broken"],
+)
+def test_silence_a_config_without_a_usable_template_gives_nothing(tmp_path, config):
+    from app.discovery import templates_read
+
+    assert templates_read({"m": _folder(tmp_path, config=config)}) == {}
+
+
+def test_silence_a_folder_with_neither_file_gives_nothing(tmp_path):
+    from app.discovery import templates_read
+
+    assert templates_read({"m": _folder(tmp_path)}) == {}
 
 
 def test_a_single_model_server_keeps_its_limit_under_another_name():

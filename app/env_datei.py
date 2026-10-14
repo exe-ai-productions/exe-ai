@@ -29,14 +29,28 @@ def env_schreiben(datei: Path, name: str, wert: str) -> None:
     datei.chmod(0o600)
 
 
-def env_entfernen(datei: Path, name: str) -> None:
+def key_leaves_with(endpoints, endpoint_id: str) -> bool:
+    """Whether removing this provider takes its key line along: it names a
+    key variable and no other provider reads the same one.
+
+    The one rule behind both the removal and the question put before it, so
+    the window and the route cannot disagree."""
+    own = next((e for e in endpoints if e.id == endpoint_id), None)
+    name = own.api_key_env if own else None
+    return bool(name) and not any(
+        e.id != endpoint_id and e.api_key_env == name for e in endpoints
+    )
+
+
+def env_entfernen(datei: Path, name: str) -> bool:
     """Takes the key's active line out; commented lines and every other key
-    stay as the user wrote them."""
+    stay as the user wrote them. Says whether there was a line to take."""
     if not datei.exists():
-        return
+        return False
     zeilen = datei.read_text(encoding="utf-8").splitlines()
     neu = [z for z in zeilen if not re.match(rf"^\s*{re.escape(name)}\s*=", z)]
     if len(neu) == len(zeilen):
-        return
+        return False
     datei.write_text("\n".join(neu).rstrip() + "\n" if neu else "", encoding="utf-8")
     datei.chmod(0o600)
+    return True

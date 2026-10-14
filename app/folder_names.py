@@ -612,11 +612,21 @@ def _touches(path: Path, pinned: set[str], text: Callable[[str], str]) -> bool:
 
 
 # What a file manager leaves in a folder it only showed: not the user's.
-_VIEWER_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+# The one list of these names; the doc folder leaves them out by it too
+# (app/docfolder.py), through ``is_viewer_file``.
+VIEWER_FILES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
+_VIEWER_FILES_FOLDED = frozenset(name.casefold() for name in VIEWER_FILES)
+
+
+def is_viewer_file(name: str) -> bool:
+    """Whether ``name`` is one of ``VIEWER_FILES``, in any capitals: a file
+    manager of one system writes ``Thumbs.db`` and another finds ``thumbs.db``
+    on its disk. A name that only contains one of them is none of them."""
+    return name.casefold() in _VIEWER_FILES_FOLDED
 
 
 def _only_viewer_files(folder: Path) -> bool:
-    return all(entry.name in _VIEWER_FILES and entry.is_file() for entry in folder.iterdir())
+    return all(is_viewer_file(entry.name) and entry.is_file() for entry in folder.iterdir())
 
 
 def _present(path: Path) -> bool:

@@ -13,9 +13,10 @@ from pathlib import Path
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "src"
 COMPONENT = (FRONTEND / "teile" / "Vektorfeld.svelte").read_text(encoding="utf-8")
 WINDOW = (FRONTEND / "App.svelte").read_text(encoding="utf-8")
-# Exe and Dark Matter carry one drawing each, on the frame alone
-# (tests/test_wuerfelmuster.py).
-LOOKS_WITH_DRAWINGS = ("moune", "pearl", "heaven", "exe", "darkmatter")
+# Moune is the one look that carries drawings; Pearl, Heaven, Exe and Dark
+# Matter carry none (tests/test_wuerfelmuster.py).
+LOOKS_WITH_DRAWINGS = ("moune",)
+MOUNES_DRAWINGS = {"gras", "huegel", "farn", "pusteblume"}
 
 
 def _table_names() -> set[str]:
@@ -50,3 +51,25 @@ def test_every_drawing_file_is_imported():
     }
     assert imported <= on_disk, f"imported but missing: {sorted(imported - on_disk)}"
     assert on_disk <= imported, f"on disk but imported nowhere: {sorted(on_disk - imported)}"
+
+
+def test_the_table_holds_exactly_the_four_drawings_of_moune():
+    assert _table_names() == MOUNES_DRAWINGS
+
+
+def test_moune_keeps_its_four_drawings_with_the_weights_of_its_design():
+    """Silence probe: the four stand as they stood, each at its weight."""
+    for name, weight in (("gras", "0.34"), ("huegel", "0.289"), ("farn", "0.34"), ("pusteblume", "0.374")):
+        assert f"{name}: {{ roh: {name}, deckkraft: {weight} }}," in COMPONENT, name
+
+
+def test_a_surface_mounts_a_drawing_under_moune_alone():
+    """Every drawing of the window sits under `moune` and under no other
+    look; the two named per surface for the bars hold nothing else."""
+    for hit in re.finditer(r"<Vektorfeld art=", WINDOW):
+        before = WINDOW[max(0, hit.start() - 80):hit.start()]
+        assert re.search(r"\{#if moune\}\s*(<!--.*?-->\s*)?$", before, re.S), before
+    for name in ("leistenZeichnung", "eingabeZeichnung"):
+        line = re.search(rf"const {name} = \$derived\((.+)\)", WINDOW).group(1)
+        assert re.fullmatch(r"moune \? '[\w-]+' : false", line), line
+    assert not re.search(r"\{:else if (heaven|pearl|exe|darkmatter)\}", WINDOW)

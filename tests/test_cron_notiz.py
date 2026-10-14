@@ -77,7 +77,7 @@ def test_eine_notiz_aus_lauter_unsichtbarem_ist_keine():
 def test_zu_lang_wird_abgewiesen_nicht_gekuerzt():
     """Refused, not trimmed — a model whose 4000 characters came back
     shortened would learn that 4000 is fine and keep writing them."""
-    with pytest.raises(cron_notiz.NotizVerboten, match="Too long"):
+    with pytest.raises(cron_notiz.NotizVerboten, match="too long"):
         cron_notiz.notiz({"note": "x" * (cron_notiz.MAX_LAENGE + 1)})
 
 
@@ -128,7 +128,7 @@ async def test_zu_lang_schreibt_nichts_und_laesst_die_alte_stehen(repos):
 async def test_ohne_eintrag_wird_nichts_geschrieben(repos):
     """A chat, or a job started by hand — there is no entry a note could
     belong to."""
-    with pytest.raises(cron_notiz.NotizVerboten, match="only works in a run"):
+    with pytest.raises(cron_notiz.NotizVerboten, match="only available in scheduled runs"):
         await cron_notiz.ausfuehren({"note": "x"}, repos.cronjobs, None)
 
 
@@ -199,7 +199,7 @@ def test_ueber_die_registry_ohne_eintrag_abgelehnt(repos):
     """The registry is the outer boundary: a call that got here from a chat
     is refused, not stored somewhere plausible."""
     registry = WerkzeugRegistry([], cronjobs_repo=repos.cronjobs)
-    with pytest.raises(WerkzeugVerboten, match="only works in a run"):
+    with pytest.raises(WerkzeugVerboten, match="only available in scheduled runs"):
         asyncio.run(registry.ausfuehren(cron_notiz.WERKZEUG_NAME, {"note": "x"}))
 
 
@@ -272,4 +272,4 @@ def test_notiz_und_ziel_stehen_beide_drin_und_das_ziel_zuletzt():
         )
     )
     assert text.index("Mail 5") < text.index("Goal:")
-    assert text.rstrip().endswith("Otherwise finish quietly.")
+    assert text.rstrip().endswith("Otherwise, finish without a notification.")

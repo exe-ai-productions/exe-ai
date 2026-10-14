@@ -84,7 +84,7 @@ def test_die_gewaehlte_anleitung_erreicht_das_modell(client, chat_id):
     provider = _fragen(client, chat_id, skill="handoff")
     turn = _newest_turn(provider)
     # Behind the date block a first turn carries, in front of the words.
-    assert '[IMPORTANT: The user has invoked the "handoff" skill' in turn
+    assert '[IMPORTANT: The user invoked the "handoff" skill' in turn
     assert "Erst dies, dann das." in turn
     assert turn.endswith(f"{skills.INVOCATION_HANDOVER}\n\nbitte")
     assert "Erst dies, dann das." not in _system(provider)

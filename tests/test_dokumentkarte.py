@@ -432,13 +432,13 @@ def test_the_stream_hands_every_file_to_the_writer():
     """The wiring in the stream: the closed files and the one still open all
     go through the one writer of this answer."""
     app = APP.read_text(encoding="utf-8")
-    assert "import { dateienAus, endsInFence, openFile } from './lib/markdown.js'" in app
+    assert "dateienAus, dateienDavor, dateienVorherJeNachricht, endsInFence, openFile," in app
     assert "const carryFile = tabWriter(zielChat, () => {" in app
-    assert "for (const file of dateienAus(platzhalter.content)) carryFile(file)" in app
+    assert "for (const file of dateienAus(platzhalter.content, dateienVorher)) carryFile(file)" in app
     # A fence left unsettled is looked at again with the next piece.
     assert "const fenceMoved = ereignis.text.includes('`') || fenceUnsettled" in app
     assert "fenceUnsettled = endsInFence(platzhalter.content)" in app
-    assert "const unfinished = openFile(platzhalter.content)" in app
+    assert "const unfinished = openFile(platzhalter.content, dateienVorher)" in app
     assert "if (unfinished) carryFile(unfinished)" in app
     # No second way into the rail beside it.
     assert "tabOeffnen(" not in app and "followTab(" not in app
@@ -523,7 +523,10 @@ def test_the_rail_is_tabs_an_address_line_and_the_page():
         assert f'<Hauszeichen zeichen="{sign}"' in markup, sign
     # In the rail itself the name stands once beside the tabs: in the
     # address line, and only where the file has no path to show there.
-    assert '<span class="adresse-name" title={offen?.pfad || null}>{offen?.pfad || offen?.name}</span>' in markup
+    assert (
+        '<span class="adresse-name" title={offen?.pfad || null}><span>{offen?.pfad || offen?.name}</span></span>'
+        in markup
+    )
     assert markup.count("offen?.name}") == 1
 
     # No footer, no fading edge, no frame around the page.
@@ -541,13 +544,20 @@ def test_the_rail_is_tabs_an_address_line_and_the_page():
 def test_the_head_of_the_column_does_not_name_the_file_again():
     """The name stood three times: in the head of the column, on the tab and
     in the address line. The head says which tool it is and nothing of the
-    file; the terminal keeps its detail, the number of its runs."""
+    file — and no detail beside the name for any tool, the terminal's
+    number of runs included: sign, name, fold button."""
     column = COLUMN.read_text(encoding="utf-8")
     assert "aktiverTab" not in column and "vorschautabs" not in column
     assert "leiste.modul === 'vorschau'" not in column.split("const MODULE", 1)[0]
-    assert "if (leiste.modul === 'terminal') {" in column
-    assert "t('terminal.laeufe', { n: anzahl })" in column
-    assert '<span class="detail">{detail}</span>' in column
+    assert "const detail = " not in column and "{detail}" not in column
+    assert "terminal.laeufe.length" not in column and "t('terminal.laeufe'" not in column
+    head = column.split('<div class="kopf">', 1)[1].split("<!-- Folds the column", 1)[0]
+    assert '<span class="modulname">{titel}</span>' in head
+    assert head.count('<span class="spacer"></span>') == 3
+    # The text is gone from both catalogues: nothing reads it any more.
+    for language in ("de", "en"):
+        catalogue = json.loads((ROOT / "app" / "locales" / f"{language}.json").read_text(encoding="utf-8"))
+        assert "laeufe" not in catalogue["terminal"], language
 
 
 def test_the_rail_draws_markdown_and_can_show_its_source():
@@ -560,3 +570,168 @@ def test_the_rail_draws_markdown_and_can_show_its_source():
     assert "aria-pressed={quelltextZeigen}" in rail
     # What the browser draws stays sealed.
     assert 'sandbox="allow-scripts"' in rail and "mitSchutzregel(offen.inhalt)" in rail
+
+
+# --- A document with a block inside it ---------------------------------------
+
+FENCE = "`" * 3
+INNER_DOC = (
+    f"{FENCE}markdown\n# A\n{FENCE}python\nprint(1)\n{FENCE}\nMore\n"
+)
+
+
+@needs_node
+def test_a_document_that_holds_a_block_is_open_until_its_own_closing_fence():
+    """The inner block's closing fence closes the inner block only: the
+    document is still open, carries the block and the text behind it, and
+    its card is the only thing the answer shows."""
+    opened = _run(f"openFile({json.dumps(INNER_DOC)})")
+    assert opened is not None and opened["open"] is True
+    assert opened["inhalt"] == f"# A\n{FENCE}python\nprint(1)\n{FENCE}\nMore"
+    assert _run(f"dateienAus({json.dumps(INNER_DOC)})") == []
+    html = _run(f"rendern({json.dumps(INNER_DOC)})")
+    assert FILE_MARK.findall(html) == ["0"]
+    # Nothing of the source runs on into the answer as text.
+    assert "More" not in html and "print" not in html
+
+
+@needs_node
+def test_a_document_that_holds_a_block_is_finished_at_its_own_closing_fence():
+    closed = INNER_DOC + FENCE
+    (file,) = _run(f"dateienAus({json.dumps(closed)})")
+    assert file["name"] == "markdown-1.md"
+    assert file["inhalt"] == f"# A\n{FENCE}python\nprint(1)\n{FENCE}\nMore"
+    assert _run(f"openFile({json.dumps(closed)})") is None
+    html = _run(f"rendern({json.dumps(closed)})")
+    assert FILE_MARK.findall(html) == ["0"]
+    assert "More" not in html and "print" not in html
+
+
+@needs_node
+def test_text_after_a_finished_document_with_a_block_stays_text():
+    text = INNER_DOC + FENCE + "\n\nAfter the file."
+    (file,) = _run(f"dateienAus({json.dumps(text)})")
+    assert file["inhalt"].endswith("More")
+    html = _run(f"rendern({json.dumps(text)})")
+    assert "After the file." in html
+
+
+@needs_node
+def test_a_document_with_two_blocks_keeps_both():
+    text = (
+        f"{FENCE}markdown\n{FENCE}js\na\n{FENCE}\nmid\n{FENCE}python\nb\n{FENCE}\n{FENCE}"
+    )
+    (file,) = _run(f"dateienAus({json.dumps(text)})")
+    assert file["inhalt"].count(FENCE) == 4 and "mid" in file["inhalt"]
+
+
+@needs_node
+def test_the_fences_that_close_at_the_first_bare_fence_still_do():
+    """Silence: a code block keeps CommonMark's rule, a document without a
+    block inside closes at the first bare fence, a longer fence survives the
+    shorter ones inside it, and a block in a quote is read as before."""
+    # A code block holding a fence with a language: closes at the first bare one.
+    code = f"{FENCE}python\nx\n{FENCE}js\ny\n{FENCE}\nafter"
+    html = _run(f"rendern({json.dumps(code)})")
+    assert html.count("<pre>") == 1 and "after" in html
+    # A document without a block inside it.
+    doc = f"{FENCE}markdown\n# A\n{FENCE}\ntext"
+    (file,) = _run(f"dateienAus({json.dumps(doc)})")
+    assert file["inhalt"] == "# A"
+    # A longer document fence holds ``` examples whole, as before.
+    longer = f"````markdown\n{FENCE}python\nx\n{FENCE}\n````"
+    (file,) = _run(f"dateienAus({json.dumps(longer)})")
+    assert file["inhalt"] == f"{FENCE}python\nx\n{FENCE}"
+    # A document in a quote, with no block inside it.
+    quoted = f"> {FENCE}markdown\n> # A\n> {FENCE}"
+    (file,) = _run(f"dateienAus({json.dumps(quoted)})")
+    assert file["inhalt"] == "# A"
+
+
+@needs_node
+def test_a_document_in_a_quote_holds_its_block_too():
+    quoted = f"> {FENCE}markdown\n> # A\n> {FENCE}python\n> x\n> {FENCE}\n> {FENCE}"
+    (file,) = _run(f"dateienAus({json.dumps(quoted)})")
+    assert file["inhalt"] == f"# A\n{FENCE}python\nx\n{FENCE}"
+
+
+@needs_node
+def test_the_unsettled_end_still_looks_once_more():
+    """`test_a_fence_is_unsettled_until_more_text_comes` stays what it is:
+    the end of a document that holds a block is a bare fence that may close
+    the block or the document."""
+    assert _run(f"endsInFence({json.dumps(INNER_DOC + FENCE)})") is True
+
+
+# --- File names run across the chat ------------------------------------------
+
+
+@needs_node
+def test_two_answers_of_one_chat_do_not_hand_out_the_same_name():
+    """The second answer's first document goes on from the first's count —
+    as it is written (the stream's offset) and as it is drawn after a
+    reload (the message's offset) — and the two have two tabs."""
+    answer = f"{FENCE}markdown\n# One\n{FENCE}"
+    second = f"{FENCE}markdown\n# Two\n{FENCE}"
+    result = _run(
+        f"""(() => {{
+          const chat = [
+            {{ id: 'u1', role: 'user', content: 'a' }},
+            {{ id: 'a1', role: 'assistant', content: {json.dumps(answer)} }},
+            {{ id: 'u2', role: 'user', content: 'b' }},
+            {{ id: 'a2', role: 'assistant', content: {json.dumps(second)} }},
+          ]
+          const karte = dateienVorherJeNachricht(chat)
+          return {{
+            offsets: ['u1', 'a1', 'u2', 'a2'].map((id) => karte.get(id)),
+            davor: dateienDavor(chat, 'a2'),
+            stream: dateienAus({json.dumps(second)}, dateienDavor(chat, 'a2')).map((f) => f.name),
+            loaded: dateiTeile({json.dumps(second)}, karte.get('a2'))
+              .filter((p) => p.art === 'datei').map((p) => p.wert.name),
+            first: dateienAus({json.dumps(answer)}, karte.get('a1')).map((f) => f.name),
+          }}
+        }})()"""
+    )
+    assert result["offsets"] == [0, 0, 1, 1]
+    assert result["davor"] == 1
+    assert result["first"] == ["markdown-1.md"]
+    assert result["stream"] == ["markdown-2.md"]
+    assert result["loaded"] == ["markdown-2.md"]
+
+
+@needs_node
+def test_names_that_differ_take_two_tabs():
+    state = _tabs(
+        """
+        tabWriter('chat-1')({ name: 'markdown-1.md', art: 'md', inhalt: '# One' })
+        tabWriter('chat-1')({ name: 'markdown-2.md', art: 'md', inhalt: '# Two' })
+        console.log(JSON.stringify(tabsVon('chat-1').map((t) => t.name)))
+        """
+    )
+    assert state == ["markdown-1.md", "markdown-2.md"]
+
+
+@needs_node
+def test_counting_across_a_chat_leaves_the_rest_as_it_was():
+    """Silence: two documents of one answer count as before, and rows that
+    carry no document move nothing — a report of a finished background
+    command and the person's own rows take no number."""
+    two = f"{FENCE}markdown\n# A\n{FENCE}\n\n{FENCE}markdown\n# B\n{FENCE}"
+    result = _run(
+        f"""(() => {{
+          const chat = [
+            {{ id: 'u1', role: 'user', content: {json.dumps(two)} }},
+            {{ id: 'r1', role: 'assistant', art: 'werkzeugmeldung', content: {json.dumps(two)} }},
+            {{ id: 'a1', role: 'assistant', content: 'no document here' }},
+            {{ id: 'a2', role: 'assistant', content: {json.dumps(two)} }},
+            {{ id: 'a3', role: 'assistant', content: {json.dumps(two)} }},
+          ]
+          const karte = dateienVorherJeNachricht(chat)
+          return {{
+            offsets: chat.map((n) => karte.get(n.id)),
+            names: dateienAus({json.dumps(two)}).map((f) => f.name),
+          }}
+        }})()"""
+    )
+    assert result["offsets"] == [0, 0, 0, 0, 2]
+    assert result["names"] == ["markdown-1.md", "markdown-2.md"]

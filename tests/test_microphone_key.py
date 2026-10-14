@@ -185,7 +185,8 @@ def _list(system: str, names: str = "null") -> dict[str, dict[str, str]]:
 _MAC_LIST = {
     "shortcuts.group_window": {
         "shortcuts.new_chat": "⌘N", "shortcuts.settings": "⌘,", "shortcuts.sidebar": "⌘B",
-        "shortcuts.tools": "⌘J", "shortcuts.search": "⌘K", "shortcuts.close": "Esc",
+        "shortcuts.tools": "⌘J", "shortcuts.cli": "⌃`", "shortcuts.search": "⌘K",
+        "shortcuts.close": "Esc",
     },
     "shortcuts.group_app": {
         "shortcuts.reload": "⌘R", "shortcuts.devtools": "⌘⌥I", "shortcuts.zoom_in": "⌘+",
@@ -203,7 +204,8 @@ def test_off_the_mac_the_shortcut_list_names_the_keys_the_program_answers_to_the
     windows = _list("windows", _WORDS)
     assert windows["shortcuts.group_window"] == {
         "shortcuts.new_chat": "Strg+N", "shortcuts.settings": "Strg+,", "shortcuts.sidebar": "Strg+B",
-        "shortcuts.tools": "Strg+J", "shortcuts.search": "Strg+K", "shortcuts.close": "Esc",
+        "shortcuts.tools": "Strg+J", "shortcuts.cli": "Strg+`", "shortcuts.search": "Strg+K",
+        "shortcuts.close": "Esc",
     }
     # The menu's roles answer to other keys there, and it has no Quit.
     assert windows["shortcuts.group_app"] == {
@@ -513,6 +515,24 @@ def test_recording_and_recognising_go_by_the_system_they_are_told():
         " inUse('Control+KeyR', null, 'windows'), inUse('Control+KeyR', null, 'mac'), inUse('Control+KeyR')]))"
     )
     assert fired == [False, False, True, True, True, False, False]
+
+
+def test_the_path_field_shows_a_mac_path_only_on_the_mac_and_is_named_by_its_label():
+    """The example path is a Mac path: the field carries it as a hint on the
+    Mac only, with the same switch as the sentence below it. Its name for a
+    screen reader is the label that stands above it, not the hint."""
+    folders = (MODULE.parent.parent / "teile" / "Arbeitsordner.svelte").read_text(encoding="utf-8")
+    field = folders[folders.index('class="pfadfeld"') : folders.index("/>", folders.index('class="pfadfeld"'))]
+    assert "placeholder={system === 'mac' ? t('arbeitsordner.pfad_platzhalter') : undefined}" in field
+    assert "aria-label={t('arbeitsordner.oder')}" in field
+    # Silence: the name is never the example path, and the sentence below
+    # still goes by the system.
+    assert "aria-label={t('arbeitsordner.pfad_platzhalter')}" not in folders
+    assert "{t(system === 'mac' ? 'arbeitsordner.pfad_hilfe' : 'arbeitsordner.pfad_hilfe_windows')}" in folders
+    locales = MODULE.parents[3] / "app" / "locales"
+    for language in ("de", "en"):
+        texts = json.loads((locales / f"{language}.json").read_text(encoding="utf-8"))["arbeitsordner"]
+        assert texts["oder"] and texts["pfad_platzhalter"].startswith("/Users/")
 
 
 def test_the_page_and_the_bar_tell_the_system_and_two_texts_go_by_it():

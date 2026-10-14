@@ -28,6 +28,7 @@ import logging
 
 import httpx
 
+from app import runnerzustand
 from app.modellrunner import Modellrunner
 
 log = logging.getLogger(__name__)
@@ -80,6 +81,7 @@ def runner_bauen(modellordner, programm: str | None, port: int) -> Modellrunner:
         # No sampling lore and no --jinja: this server never samples and is
         # never handed a tool.
         sampling_flags=False,
+        zustand_callback=runnerzustand.melder(runnerzustand.EMBEDDING),
     )
 
 

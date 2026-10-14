@@ -32,7 +32,12 @@ export function verlaufBauen(schritte, laeuft) {
     runde = null
   }
   for (const schritt of schritte) {
-    if (schritt.typ === 'text') {
+    /* A `text` step with nothing to read — empty, or only line breaks and
+       spaces — is no sentence: the run writes one for any text piece, also
+       a lone line break before a call. It draws no ring, and it does not
+       end the stretch; it stays among that stretch's steps, behind the
+       click. */
+    if (schritt.typ === 'text' && String(schritt.inhalt ?? '').trim() !== '') {
       abschliessen()
       eintraege.push({ art: 'satz', schluessel: schritt.nummer, text: schritt.inhalt })
       continue

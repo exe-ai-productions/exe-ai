@@ -39,6 +39,11 @@ BLOCKED_TOOLS = frozenset({
     cron_notiz.WERKZEUG_NAME,
     auftrag_werkzeug.WERKZEUG_NAME,
 })
+# What a scheduled run with no agent is not offered: the same list without
+# the schedule's note. The note is the run's own — it belongs to the entry
+# that fired it and is read by that entry's next run — so a run nobody
+# attends keeps it, where a helper (which has no entry) does not.
+BLOCKED_WITHOUT_AGENT = BLOCKED_TOOLS - {cron_notiz.WERKZEUG_NAME}
 
 AT_ONCE_KEY = "helpers_at_once"
 AT_ONCE_DEFAULT = 10
@@ -65,24 +70,23 @@ PROMPT = (
 # tool is offered to a helper; these answer a call made anyway, because a
 # tool that is not offered must still not run.
 NO_QUESTIONS = (
-    "A helper cannot ask the user. Stop here and say in your report what you "
-    "need from them and why; the chat's model will ask them."
+    "A helper cannot ask the user questions. Stop here and state in your report what you need "
+    "from the user and why. The chat's model will ask them."
 )
 NO_FURTHER_RUNS = (
-    "A helper cannot start further runs. Do the work yourself, or say in "
-    "your report what else should be handed off."
+    "A helper cannot start additional runs. Complete the work yourself, or state in your "
+    "report which tasks still need to be delegated."
 )
 NOT_FOR_HELPERS = (
-    "A helper cannot write the memory or schedule anything. Say in your "
-    "report what should be kept or scheduled; the chat's model will see to it."
+    "A helper cannot update memory or schedule tasks. State in your report what should be "
+    "remembered or scheduled; the chat's model will handle it."
 )
-CHAT_ONLY = "Name an agent: a helper is started from a chat only."
-# The same five tools, answered for a scheduled run with no agent
-# (app/ohne_agent.py): it is not offered them either, and nobody is there.
+CHAT_ONLY = "Specify an agent. A helper can only be started from a chat."
+# The same tools but the note, answered for a scheduled run with no agent
+# (app/no_agent.py): it is not offered them either, and nobody is there.
 NOT_FOR_RUNS_WITHOUT_AGENT = (
-    "A scheduled run with no agent cannot ask the user, write the memory, "
-    "schedule anything or start further runs. Say in your answer what is "
-    "needed instead."
+    "A scheduled run without an agent cannot ask the user questions, update memory, schedule "
+    "tasks, or start additional runs. State what is needed in your response."
 )
 
 
@@ -93,14 +97,14 @@ def is_helper(name: str | None) -> bool:
 
 def refused_call(agent_name: str | None, tool_name: str) -> str | None:
     """Why this run may not make this call, or None. Only a helper and a
-    scheduled run with no agent are refused anything here, and only the five
+    scheduled run with no agent are refused anything here, and only the
     tools they are not offered — whatever the rule file says."""
-    from app import ohne_agent
+    from app import no_agent
 
+    if no_agent.is_no_agent(agent_name):
+        return NOT_FOR_RUNS_WITHOUT_AGENT if tool_name in BLOCKED_WITHOUT_AGENT else None
     if tool_name not in BLOCKED_TOOLS:
         return None
-    if ohne_agent.is_no_agent(agent_name):
-        return NOT_FOR_RUNS_WITHOUT_AGENT
     if not is_helper(agent_name):
         return None
     if tool_name == frage_werkzeug.WERKZEUG_NAME:
@@ -127,17 +131,15 @@ def steps(repositories) -> int:
     )
 
 
-def refusal(repositories) -> str | None:
-    """Why no further helper may start now, or None when one may."""
+def limit_reached(repositories) -> dict[str, int] | None:
+    """How many helpers run and how many may, when no further one may start
+    now; None when one may. The two numbers are what the refusal's sentence
+    names (``jobs.helper_limit``)."""
     limit = at_once(repositories)
     running = repositories.auftraege.open_count(agent=HELPER_NAME)
     if running < limit:
         return None
-    return (
-        f"No helper started: {running} are already at work, and at most "
-        f"{limit} may run at the same time. Wait for one to finish, or name "
-        "an agent instead."
-    )
+    return {"running": running, "limit": limit}
 
 
 def helper_agent(repositories, registry) -> Agent:
@@ -154,11 +156,11 @@ def helper_agent(repositories, registry) -> Agent:
 
 def agent_named(name: str, agenten, repositories, registry) -> Agent | None:
     """The agent a stored name stands for: the helper, the run with no agent
-    (app/ohne_agent.py), or a file's agent."""
-    from app import ohne_agent
+    (app/no_agent.py), or a file's agent."""
+    from app import no_agent
 
     if is_helper(name):
         return helper_agent(repositories, registry)
-    if ohne_agent.is_no_agent(name):
-        return ohne_agent.agent(registry)
+    if no_agent.is_no_agent(name):
+        return no_agent.agent(registry)
     return agenten.get(name)

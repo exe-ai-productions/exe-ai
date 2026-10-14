@@ -16,7 +16,7 @@ def test_die_wahl_wird_beim_schliessen_des_formulars_geleert():
     speicher = (FRONTEND / "lib/skriptwahl.svelte.js").read_text(encoding="utf-8")
     liste = (FRONTEND / "teile/SettingsCronjobs.svelte").read_text(encoding="utf-8")
     assert "export function skriptWahlLeeren()" in speicher
-    schliessen = liste.split("function geschlossen(row) {", 1)[1].split("\n  }\n", 1)[0]
+    schliessen = liste.split("function geschlossen(row, own = form) {", 1)[1].split("\n  }\n", 1)[0]
     assert "skriptWahlLeeren()" in schliessen, "closing the form leaves the pick standing"
     # Leaving the page with the form still open spends the pick too.
     assert "$effect(() => () => skriptWahlLeeren())" in liste

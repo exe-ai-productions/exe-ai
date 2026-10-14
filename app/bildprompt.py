@@ -66,26 +66,25 @@ _CLIP = (
     "chunks of 77 tokens, so keep it short. Return only the prompt."
 )
 _T5 = (
-    "You write prompts for {name}, an image model that reads its prompt "
-    "through T5. Write one or two clear English sentences: the main subject "
-    "first, then action, setting, light and style. Return only the prompt."
+    "You write prompts for {name}, an image model that uses T5 to interpret prompts. Write "
+    "one or two clear English sentences, starting with the main subject, followed by the "
+    "action, setting, lighting, and style. Return only the prompt."
 )
 _LLM = (
-    "You write prompts for {name}, an image model that reads its prompt "
-    "through a language model. Write a detailed English description of the "
-    "finished picture: subject, composition, setting, light, colours and "
-    "style. Put any text that must appear in the picture in double quotes. "
-    "Return only the prompt."
+    "You write prompts for {name}, an image model that uses a language model to interpret "
+    "prompts. Write a detailed English description of the finished image, including the "
+    "subject, composition, setting, lighting, colours, and style. Enclose any text that must "
+    "appear in the image in double quotes. Return only the prompt."
 )
 _VORLAGE = {"clip": _CLIP, "t5": _T5, "llm": _LLM}
 
 _EIGENE: dict[str, str] = {
     # huggingface.co/lodestones/Chroma1-HD: one long English paragraph.
     "chroma": (
-        "You write prompts for Chroma, an image model that reads its prompt "
-        "through T5. Write one detailed English paragraph in plain prose: "
-        "the main subject first, then action, setting, light, colours and "
-        "style. Return only the prompt."
+        "You write prompts for Chroma, an image model that uses T5 to interpret prompts. "
+        "Write one detailed English paragraph in plain prose, starting with the main subject, "
+        "followed by the action, setting, lighting, colours, and style. Return only the "
+        "prompt."
     ),
     # docs.bfl.ai/guides/prompting_guide_flux2: subject, action, style,
     # context, the key items first; no negative prompt; text in quotes.
@@ -292,21 +291,21 @@ def _saeubern(text: str) -> str:
 # family, and the facts are what this one request is about. The request
 # itself comes last and is marked as what it is, so a style or a note never
 # reads as the thing to draw.
-FAKT_MODELL = "The picture is drawn with the image model {datei} ({familie})."
+FAKT_MODELL = "The image will be generated using model {datei} ({familie})."
 FAKT_OHNE_NEGATIV = (
-    "This model ignores a negative prompt at its current settings, so keep "
-    "everything that must stay out of the picture out of the prompt as well."
+    "This model ignores negative prompts with its current settings. Do not mention elements "
+    "that should be excluded in the prompt either."
 )
 FAKT_TRIGGER = (
-    "This model was trained on these trigger words; include them in the "
-    "prompt: {trigger}"
+    "This model was trained with the following trigger words. Include them in the prompt: "
+    "{trigger}"
 )
-FAKT_HINWEIS = "A note the user keeps on this model: {hinweis}"
+FAKT_HINWEIS = "User note about this model: {hinweis}"
 FAKT_STIL = (
-    "The user wants this style for the picture: {stil}. Where the request "
-    "below asks for something else, the request wins."
+    "The user wants this image style: {stil}. If the request below specifies a different "
+    "style, follow that request."
 )
-FAKT_WUNSCH = "The request to write the prompt for:\n{wunsch}"
+FAKT_WUNSCH = "Write a prompt for the following request:\n{wunsch}"
 
 
 def nachricht(
@@ -325,7 +324,7 @@ def nachricht(
     same message, byte for byte."""
     zeilen: list[str] = []
     if datei:
-        zeilen.append(FAKT_MODELL.format(datei=datei, familie=familie or "family not known"))
+        zeilen.append(FAKT_MODELL.format(datei=datei, familie=familie or "unknown model family"))
     if not negativ_wirkt:
         zeilen.append(FAKT_OHNE_NEGATIV)
     if trigger.strip():
@@ -355,9 +354,9 @@ async def verbessern(
     """
     eingabe = eingabe.strip()
     if not eingabe:
-        raise PromptFehler("empty prompt")
+        raise PromptFehler("Empty prompt")
     if len(eingabe) > MAX_NACHRICHT:
-        raise PromptFehler("prompt too long")
+        raise PromptFehler("Prompt too long")
 
     anfrage = Generierungsanfrage(
         nachrichten=[
@@ -391,7 +390,7 @@ async def verbessern(
                 if stueck.sorte == "content":
                     stuecke.append(stueck.text)
                 elif stueck.sorte == "error":
-                    raise PromptFehler(stueck.text or "model error")
+                    raise PromptFehler(stueck.text or "Model error")
     except faltversuche.Stille as fehler:
         log.warning("%s", fehler)
         raise PromptFehler(str(fehler)) from fehler
@@ -400,5 +399,5 @@ async def verbessern(
     if not ergebnis:
         # A model that thought until the budget ran out is the common case
         # here, and it is still nothing to put in the field.
-        raise PromptFehler("model returned nothing")
+        raise PromptFehler("The model returned no output.")
     return ergebnis

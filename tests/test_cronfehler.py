@@ -22,7 +22,7 @@ def gemeldet(monkeypatch):
     aufrufe: list[tuple[str, bool]] = []
     monkeypatch.setattr(
         cronablauf.cronmeldung, "melden",
-        lambda text, *, erfolgreich: aufrufe.append((text, erfolgreich)),
+        lambda text, *, erfolgreich, sprache=None: aufrufe.append((text, erfolgreich)),
     )
     return aufrufe
 

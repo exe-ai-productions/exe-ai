@@ -76,20 +76,19 @@ MELDUNG = "exe.md > 4 KB"
 # model mistakes for a fact is the worst kind of wrong. English like
 # everything that becomes prompt content — what the user or the model then
 # writes underneath is in whatever language they speak.
-GERUEST = """\
-# exe.md
+GERUEST = """# exe.md
 
-What Exe AI should know about this folder. This file is sent with every
-message while the folder is shared. Keep it short, keep it true, and leave
-out anything that can be read out of the files themselves.
+Information Exe AI needs about this folder. This file accompanies every
+message while the folder is shared. Keep it concise and accurate; omit
+information that can be obtained directly from the files.
 
-## Rules you cannot guess
+## Rules that cannot be inferred
 
-## How things are done here
+## How work is done here
 
 ## Where things belong
 
-## Why it is built this way
+## Reasons behind the design
 """
 
 # Our own data, never the shared folder: a register that lived where anyone

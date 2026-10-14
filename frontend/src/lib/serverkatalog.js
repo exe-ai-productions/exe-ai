@@ -19,6 +19,21 @@ export const SERVERKATALOG = [
      to, no address to reach, no key to set — it is simply on. The name in
      the file is a plain id; the title is the product it belongs to. */
   { name: 'websuche', titel: 'Exe Web Search', url: null, anmeldung: 'keine', vorauswahl: null },
+  /* The search of one's own instance. Nothing ships for it: there is no
+     address of ours to put in, so the card asks for one and writes the entry
+     only with it. `command` and `args` are the program that starts here;
+     `address_env` is the variable it reads the address from — by it the
+     sheet knows to ask. */
+  {
+    name: 'searxng',
+    titel: 'SearXNG',
+    url: null,
+    anmeldung: 'keine',
+    command: '.venv/bin/python',
+    args: ['mcp/searxng_server.py'],
+    address_env: 'SEARXNG_URL',
+    vorauswahl: null,
+  },
   /* Recraft preselection, set while testing: generate, image-to-image,
      background removal — and inpainting, because the second wish after every
      first image is "change the sunglasses". The rest stays selectable. */
@@ -53,16 +68,20 @@ export const SERVERKATALOG = [
   { name: 'sentry', titel: 'Sentry', url: 'https://mcp.sentry.dev/mcp', anmeldung: 'oauth', vorauswahl: null },
 ]
 
-/* Servers the program knows by name without offering to connect them. The
-   self-hosted search is the one there is: it has no address to ship, so it
-   is no entry above — but whoever registered it reads its proper name, and
-   its card says what it is for. */
-export const NAMED_ONLY = { searxng: 'SearXNG' }
-
 /** The proper name of a server — its own id if we do not know one. Asked
     for the table's OWN entries only: an id may be any word, also one every
     object answers to. */
 export function serverTitel(name) {
-  const shipped = SERVERKATALOG.find((k) => k.name === name)?.titel
-  return shipped || (Object.hasOwn(NAMED_ONLY, name) ? NAMED_ONLY[name] : name)
+  return SERVERKATALOG.find((k) => k.name === name)?.titel || name
+}
+
+/** Whether a server entry on file is the shipped server `katalog`. The name
+    has to match, and a shipped server that has an address also needs the
+    entry to reach that same address (the string the card writes itself): a
+    server of one's own that carries a shipped name but points elsewhere is
+    another server. A shipped server without an address — the one that runs
+    here — is its entry's name alone. */
+export function gehoertZurKachel(katalog, eintrag) {
+  if (katalog.name !== eintrag.name) return false
+  return !katalog.url || eintrag.url === katalog.url
 }

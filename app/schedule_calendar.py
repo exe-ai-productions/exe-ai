@@ -21,10 +21,9 @@ where that day really begins, summer time or not.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from itertools import takewhile
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
-
-from croniter import croniter
 
 from app import cronablauf, terminplan
 from app.api.v1.meta import service_zone
@@ -39,35 +38,29 @@ def _moments(entry, now: datetime, start: datetime, end: datetime) -> list[datet
     """The due moments of an entry in ``[start, end)`` by its rule.
 
     A one-off names one moment: its fixed day and time, or — without a day —
-    the next occurrence of its time from now, the one the tick will fire. A
-    cron expression is walked with one iterator, not one per moment: a
-    schedule every minute has forty thousand moments in a month. Raises
-    ``ValueError`` for a schedule that cannot be read."""
+    the next occurrence of its time from now, the one the tick will fire.
+    Any other rule is walked once, moment after moment, up to the end of the
+    span: a schedule every minute has forty thousand moments in a month.
+    Raises ``ValueError`` for a schedule that cannot be read.
+
+    The moments come from the module the tick fires by, so a day in the
+    calendar shows what the clock will do, clock changes included. They are
+    compared on the absolute clock: two moments of one zone compare by their
+    wall-clock fields, which loses the repeated hour."""
+    first, finish = terminplan.absolute(start), terminplan.absolute(end)
     if entry.einmalig:
         moment = (
             cronablauf._termin_mit_datum(entry, now)
             if entry.datum
             else terminplan.naechster_termin(entry.zeitplan, now)
         )
-        return [moment] if start <= moment < end else []
-    shape = terminplan.sorte(entry.zeitplan)
-    moments: list[datetime] = []
-    if shape == terminplan.SORTE_CRON:
-        steps = croniter(entry.zeitplan.strip(), start - timedelta(seconds=1))
-        moment = steps.get_next(datetime)
-        while moment < end:
-            moments.append(moment)
-            moment = steps.get_next(datetime)
-        return moments
-    moment = terminplan.naechster_termin(entry.zeitplan, start)
-    while moment < end:
-        moments.append(moment)
-        following = terminplan.naechster_termin(entry.zeitplan, moment + timedelta(minutes=1))
-        # A fixed instant names itself again, and would never end.
-        if following <= moment:
-            break
-        moment = following
-    return moments
+        return [moment] if first <= terminplan.absolute(moment) < finish else []
+    return list(
+        takewhile(
+            lambda moment: terminplan.absolute(moment) < finish,
+            terminplan.upcoming(entry.zeitplan, start),
+        )
+    )
 
 
 def days(

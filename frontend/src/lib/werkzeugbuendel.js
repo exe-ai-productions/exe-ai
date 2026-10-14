@@ -71,6 +71,32 @@ export function schlechtesterPunkt(punkte) {
   return bester
 }
 
+/* What a bundle's closed row says about the newest call without a result:
+   its name, and whether it goes. A call that waits for the reader (a
+   permission, a question, a job to confirm — `waits` is asked with its id)
+   has no result either, but nothing runs: the row names it and leaves
+   "running" out, and the dot says the waiting. Where no call is open, a
+   command that runs in the background is named instead and goes for as
+   long as its run does (`inBackground` is asked with the call and says
+   whether its run still goes); `background` tells the row which word to say.
+   Null where nothing is open and nothing runs. */
+export function openCall(eintraege, waits, inBackground = () => false) {
+  const werkzeug = laufenderAufruf(eintraege)
+  if (werkzeug) return { name: werkzeug.name, going: !waits(werkzeug.aufruf_id), background: false }
+  const lauf = runningBackgroundCall(eintraege, inBackground)
+  if (lauf) return { name: lauf.name, going: true, background: true }
+  return null
+}
+
+/* The newest call whose background run still goes. */
+function runningBackgroundCall(eintraege, inBackground) {
+  for (let k = eintraege.length - 1; k >= 0; k -= 1) {
+    const werkzeug = eintraege[k].teil.werkzeug
+    if (werkzeug && inBackground(werkzeug)) return werkzeug
+  }
+  return null
+}
+
 /* The call that is running now — the newest one still without a result. */
 export function laufenderAufruf(eintraege) {
   for (let k = eintraege.length - 1; k >= 0; k -= 1) {

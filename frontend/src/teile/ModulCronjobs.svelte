@@ -10,11 +10,12 @@
   import Modulabschnitte from './Modulabschnitte.svelte'
   import ScheduleCalendar from './ScheduleCalendar.svelte'
   import ScheduleDayRuns from './ScheduleDayRuns.svelte'
-  import { ScheduleCalendar as Kalender } from '../lib/schedulecalendar.svelte.js'
+  import { kalender } from '../lib/schedulecalendar.svelte.js'
   import { cronampel, cronjobsGesehen } from '../lib/cronjobampel.svelte.js'
   import { flaeche } from '../lib/flaeche.svelte.js'
 
-  const kalender = new Kalender()
+  /* Held while this face stands: the clock and the loading run for it. */
+  $effect(() => kalender.hold())
 
   /* Seen, while the day's runs are in view on today or under the month.
      The shared sign's schedule colour is fed by an entry's last outcome:

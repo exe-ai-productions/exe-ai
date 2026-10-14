@@ -57,6 +57,7 @@ export const anbieten = (was) => protokoll.push(['anbieten', was])
 export const chatOeffnen = async (id) => protokoll.push(['chatOeffnen', id])
 export const auftraegeStillLaden = () => protokoll.push(['auftraege'])
 export const modelleLaden = () => protokoll.push(['modelle'])
+export const auswahlLaden = () => protokoll.push(['auswahl'])
 export const standLaden = () => protokoll.push(['cronstand'])
 export const laden = () => protokoll.push(['serverzustand'])
 export const serverzustand = { geladen: true }
@@ -78,6 +79,7 @@ const bauen = (quelle, ziel, name) => {
     .replace(/from '\\.\\/zustand\\.svelte\\.js'/g, "from './p751.stubs.mjs'")
     .replace(/from '\\.\\/cronjobampel\\.svelte\\.js'/g, "from './p751.stubs.mjs'")
     .replace(/from '\\.\\/serverzustand\\.svelte\\.js'/g, "from './p751.stubs.mjs'")
+    .replace(/from '\\.\\/modelle\\.svelte\\.js'/g, "from './p751.stubs.mjs'")
     .replace(/from '\\.\\/werkzeughistorie\\.js'/g, "from './src/lib/werkzeughistorie.js'")
   writeFileSync(ziel, code)
 }
@@ -166,6 +168,24 @@ def test_das_ende_eines_hintergrundlaufs_landet_auf_der_karte():
     assert karte["dauer_sekunden"] == 2.5
     assert bericht["lauf"]["zustand"] == "fertig"
     assert ["chatOeffnen", "A"] in bericht["protokoll"]
+
+
+@braucht_node
+def test_ein_startender_lauf_fuellt_die_liste_und_bietet_die_spalte_nicht_an():
+    """A command that starts changes nothing about the column: the list
+    holds the run and follows its end, and no offer to come forward goes
+    out. (The ones of the preview and the agents are not this module's.)"""
+    bericht = _fahren(CHAT + """
+    senden(quelle, { n: 3, typ: 'lauf_start', lauf: 2, befehl: 'ls', hintergrund: false })
+    return {
+      laeufe: terminal.terminal.laeufe.map((l) => [l.lauf, l.befehl, l.zustand]),
+      klebt: terminal.terminal.klebt,
+      angeboten: protokoll.filter((p) => p[0] === 'anbieten'),
+    }
+    """)
+    assert bericht["laeufe"] == [[1, "npm install", "laeuft"], [2, "ls", "laeuft"]]
+    assert bericht["klebt"] is True
+    assert bericht["angeboten"] == []
 
 
 @braucht_node
@@ -292,7 +312,7 @@ def test_der_wiederaufbau_fragt_auch_die_modelle_nach():
     assert bericht["erstes"] == ["auftraege", "cronstand", "serverzustand"]
     assert bericht["nachAbbruch"] == []
     assert bericht["rueckkehr"] == [
-        "auftraege", "cronstand", "serverzustand", "modelle",
+        "auftraege", "cronstand", "serverzustand", "modelle", "auswahl",
     ]
 
 
@@ -365,5 +385,5 @@ def test_die_uebrigen_abfragen_bleiben_wie_sie_waren():
     """)
     assert bericht["erstes"] == ["auftraege", "cronstand", "serverzustand"]
     assert bericht["rueckkehr"] == [
-        "auftraege", "cronstand", "serverzustand", "modelle", "chatOeffnen",
+        "auftraege", "cronstand", "serverzustand", "modelle", "auswahl", "chatOeffnen",
     ]

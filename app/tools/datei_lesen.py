@@ -65,21 +65,22 @@ def werkzeug_beschreibung() -> MCPWerkzeug:
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "The file to read, e.g. \"notes/todo.md\".",
+                    "description": 'File to read, e.g. "notes/todo.md".',
                 },
                 "offset": {
                     "type": "integer",
-                    "description": "First line to return, counting from 1. Default: the start of the file.",
+                    "description": "First line to return, counting from 1. Defaults to the "
+                                   "start of the file.",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "How many lines to return. Default: as many as fit.",
+                    "description": "Number of lines to return. Defaults to as many as will fit.",
                 },
                 "page": {
                     "type": "integer",
                     "description": (
-                        "PDF only: the single page to return, counting from 1. "
-                        "Left out, the whole document is read with offset and limit."
+                        "PDF only: a single page to return, counting from 1. If omitted, the "
+                        "document is read using offset and limit."
                     ),
                 },
             },
@@ -137,8 +138,8 @@ def _ausschnitt(
 
     if not ausschnitt:
         return (
-            f"lines {ab}–{ab} of {gesamt}{kopfzusatz}\n"
-            "(nothing there — the file ends earlier)"
+            f"lines {ab}–{ab} of {gesamt}{kopfzusatz}\n(no content: the file ends before this "
+            "position)"
         )
 
     kopf_platz = len(f"lines {gesamt}–{gesamt} of {gesamt}{kopfzusatz}\n")
@@ -164,7 +165,7 @@ def _ausschnitt(
         bis = ab + len(gekuerzt) - 1
         weiter = f"offset {bis + 1}" + (f" and page {seite}" if seite is not None else "")
         koerper = "\n".join(gekuerzt) + (
-            f"\n… [cut off at {MAX_ZEICHEN:,} characters — continue with {weiter}]"
+            f"\n… [truncated at {MAX_ZEICHEN:,} characters; continue with {weiter}]"
         )
 
     return f"lines {ab}–{bis} of {gesamt}{kopfzusatz}\n{koerper}"
@@ -187,26 +188,25 @@ def _pdf_lesen(ziel, daten: bytes, argumente: dict[str, Any]) -> str:
         seitentexte = pdfseiten.seiten(daten)
     except pdfseiten.PdfUnlesbar as fehler:
         raise grenzen.GrenzeVerletzt(
-            f"'{ziel}' is a PDF this machine cannot read ({fehler}). Use "
-            "run_command with a suitable tool instead."
+            f"'{ziel}' is a PDF that cannot be read on this machine ({fehler}). Use "
+            "run_command with a suitable program instead."
         ) from fehler
     anzahl = len(seitentexte)
     if not anzahl:
-        raise grenzen.GrenzeVerletzt(f"'{ziel}' is a PDF with no pages in it.")
+        raise grenzen.GrenzeVerletzt(f"'{ziel}' is a PDF with no pages.")
 
     seite = _zahl(argumente.get("page"))
     if seite is not None:
         if seite < 1 or seite > anzahl:
             raise grenzen.GrenzeVerletzt(
-                f"'{ziel}' has {anzahl} pages — there is no page {seite}."
+                f"'{ziel}' has {anzahl} pages; page {seite} does not exist."
             )
         text = seitentexte[seite - 1]
         if not text.strip():
             # A scan, or a page holding only pictures. Said out loud: a model
             # handed an empty result reads it as an empty page.
             return (
-                f"page {seite} of {anzahl}\n"
-                "(no text on this page — it carries no text layer)"
+                f"page {seite} of {anzahl}\n(no text available: this page has no text layer)"
             )
         return _ausschnitt(
             text, argumente, kopfzusatz=f" on page {seite} of {anzahl}", seite=seite
@@ -216,8 +216,7 @@ def _pdf_lesen(ziel, daten: bytes, argumente: dict[str, Any]) -> str:
         # Asked of the page marks alone this would look like content: they
         # are written here, not in the file.
         return (
-            f"{anzahl} pages\n"
-            "(no text in this PDF — it carries no text layer)"
+            f"{anzahl} pages\n(no text available: this PDF has no text layer)"
         )
     zusatz = f" of the PDF, {anzahl} pages, each marked [page N]"
     return _ausschnitt(_mit_seitenmarken(seitentexte), argumente, kopfzusatz=zusatz)
@@ -272,6 +271,18 @@ def medientyp_aus_pfad(pfad: str) -> str | None:
     except (OSError, ValueError):
         return None
     return medientyp(kopf)
+
+
+def _opens_like_pdf(target: Path) -> bool:
+    """Whether the file on disk opens with a PDF header: its first bytes
+    only, never the file. A file that cannot be opened is no PDF here — the
+    text path below says why it cannot be read."""
+    try:
+        with target.open("rb") as handle:
+            head = handle.read(len(pdfseiten.KENNUNG))
+    except OSError:
+        return False
+    return pdfseiten.ist_pdf(head)
 
 
 def _bild_bereiten(ziel: Path, data_dir) -> tuple[str, int]:
@@ -362,8 +373,8 @@ async def _bild_lesen(ziel, modellbild, data_dir=None) -> str:
         # to be an honest one: a picture it never saw must not come back as a
         # description it invented.
         return (
-            f"'{ziel}' is an image, and this model cannot be shown images. "
-            "Nothing was read. Say so rather than describing the picture."
+            f"'{ziel}' is an image, but this model does not support image input. Nothing was "
+            "read. Explain this rather than describing the image."
         )
 
     import asyncio
@@ -374,8 +385,8 @@ async def _bild_lesen(ziel, modellbild, data_dir=None) -> str:
         raise grenzen.GrenzeVerletzt(f"'{ziel}' could not be read ({fehler}).") from fehler
     except MemoryError:
         raise grenzen.GrenzeVerletzt(
-            f"'{ziel}' does not fit into this machine's memory. Use run_command "
-            "with a suitable tool instead."
+            f"'{ziel}' exceeds this machine's available memory. Use run_command with a "
+            "suitable program instead."
         ) from None
 
     modellbild(ziel.name, daten_url, str(ziel))
@@ -405,24 +416,28 @@ async def ausfuehren(
 
     roh = str(argumente.get("path") or "").strip()
     if not roh:
-        raise grenzen.GrenzeVerletzt("No path given.")
+        raise grenzen.GrenzeVerletzt("No path provided.")
     ziel = grenzen.ziel(roh, ordner, data_dir)
 
     if not ziel.exists():
         raise grenzen.GrenzeVerletzt(grenzen.missing(ziel, ordner, data_dir))
     if ziel.is_dir():
-        raise grenzen.GrenzeVerletzt(f"'{ziel}' is a folder — use list_dir for that.")
+        raise grenzen.GrenzeVerletzt(f"'{ziel}' is a folder. Use list_dir to read it.")
 
     endung = ziel.suffix.lower()
     if endung in ANZEIGBARE_ENDUNGEN and medientyp_aus_pfad(str(ziel)) is not None:
         # The SIGNATURE decides first, on the handful of bytes it needs: a
         # real picture goes in whatever its size — through the same one
         # place as an upload (app/model_image.py) — and only what is NOT a
-        # picture falls into the whole-file reading below, with its ceiling
-        # exactly as before (a 25 MB text file named .png keeps its refusal).
+        # picture is read as the text it may be, below.
         return await _bild_lesen(ziel, modellbild, data_dir=data_dir)
 
-    if endung in ANZEIGBARE_ENDUNGEN or endung == pdfseiten.ENDUNG:
+    if endung == pdfseiten.ENDUNG and _opens_like_pdf(ziel):
+        # The BYTES decide, not the name: only a file that opens with a PDF
+        # header is read whole here. A picture name or a .pdf name on
+        # something else is read like any text file below, in pieces and
+        # once, whatever its size.
+        #
         # Read whole, so a ceiling has to stand before the read rather than
         # after it: a raw scan dump in a shared folder would otherwise be
         # pulled into memory at whatever size it happens to have. The ceiling
@@ -438,12 +453,11 @@ async def ausfuehren(
             ) from fehler
         if groesse > GANZ_LESEN_HOECHSTENS:
             raise grenzen.GrenzeVerletzt(
-                f"'{ziel}' is {groesse:,} bytes and too large to open whole "
-                f"(the limit is {GANZ_LESEN_HOECHSTENS:,}). Use run_command with "
-                "a suitable tool instead."
+                f"'{ziel}' is {groesse:,} bytes, exceeding the limit of "
+                f"{GANZ_LESEN_HOECHSTENS:,} for reading a file in full. Use run_command with a "
+                "suitable program instead."
             )
-        # Read whole, and answered before the binary guard below from the
-        # whole file, because a page cannot be taken out of the first block
+        # Read whole, because a page cannot be taken out of the first block
         # alone.
         try:
             daten = ziel.read_bytes()
@@ -451,12 +465,7 @@ async def ausfuehren(
             raise grenzen.GrenzeVerletzt(
                 f"'{ziel}' could not be read ({fehler})."
             ) from fehler
-        if endung == pdfseiten.ENDUNG and pdfseiten.ist_pdf(daten):
-            # Only a file NAMED .pdf is read as one — the branch a picture
-            # name never took, whatever the picture's size.
-            return _pdf_lesen(ziel, daten, argumente)
-        # Named like a picture and made of something else, or named .pdf and
-        # is not one: read as whatever it really is, below.
+        return _pdf_lesen(ziel, daten, argumente)
 
     try:
         with ziel.open("rb") as datei:
@@ -465,8 +474,8 @@ async def ausfuehren(
         raise grenzen.GrenzeVerletzt(f"'{ziel}' could not be read ({fehler}).") from fehler
     if b"\0" in probe:
         raise grenzen.GrenzeVerletzt(
-            f"'{ziel}' is a binary file; if you have run_command, read it with a "
-            "suitable program instead."
+            f"'{ziel}' is a binary file. If run_command is available, use it with a suitable "
+            "program to read the file."
         )
 
     try:

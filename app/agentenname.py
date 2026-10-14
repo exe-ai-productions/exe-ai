@@ -36,8 +36,8 @@ def unbekannt_text(name: str | None, vorhandene: Iterable[str]) -> str:
     repeats the rejected word leaves the caller exactly where it was.
     """
     return (
-        f"Unknown agent {str(name or '').strip()!r}. "
-        f"Available: {namen_satz(vorhandene)}."
+        f"Unknown agent {str(name or '').strip()!r}. Available agents: "
+        f"{namen_satz(vorhandene)}."
     )
 
 

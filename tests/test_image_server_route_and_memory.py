@@ -2,11 +2,12 @@
 memory check counts.
 
 The picture server draws everything its own route carries; a picture that
-needs something only sd-cli can do goes to sd-cli, with nothing greyed out
-and nothing said. The memory check counts what the server holds and every
-file of the picture; when an sd-cli picture does not fit beside the server
-but fits without it, the server steps aside for that picture and comes back
-on the same model.
+needs something only sd-cli can do goes to sd-cli, with nothing greyed out.
+Only one of the two draws at a time: the server steps aside for every sd-cli
+picture and comes back on the same model, whatever the memory figures say.
+The memory check counts what the server holds and every file of the picture,
+and only asks whether the picture fits without the server. The footer names
+the control that sends a picture to sd-cli — the service says which.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from app import bildrunner, bildspeicher, systemspeicher
 from app.api.v1 import bild as bildapi
 from app.bildrunner import Auftrag, Bildrunner
 from app.config import Config
+from app.i18n import t
 from app.speicherorte import ort
 
 GIB = 1024**3
@@ -41,6 +43,7 @@ class Route:
     server_gb: float | None = None
     sequence: list[str] = field(default_factory=list)
     body: dict | None = None
+    paused_for: str | None = None
 
     def send(self, status: int = 201, **fields) -> list[str]:
         body = {"prompt": "x", "modell": "base.safetensors", **fields}
@@ -74,8 +77,9 @@ def route(config: Config, client: TestClient, monkeypatch, tmp_path: Path) -> Ro
         state.body = body
         return b"PNG"
 
-    def _pause_stub():
+    def _pause_stub(control=None):
         state.sequence.append("pause")
+        state.paused_for = control
         return True
 
     monkeypatch.setattr(server, "laeuft", lambda: state.running)
@@ -104,7 +108,7 @@ def test_server_draws_without_live_preview(route: Route):
 
 def test_sd_cli_draws_with_live_preview(route: Route, caplog):
     with caplog.at_level(logging.INFO, logger="app.api.v1.bild"):
-        assert route.send(live_preview="proj") == ["sd-cli"]
+        assert route.send(live_preview="proj") == ["pause", "sd-cli", "resume"]
     assert any("live preview" in line for line in caplog.messages)
 
 
@@ -178,28 +182,45 @@ def test_check_counts_every_kit_file(tmp_path: Path):
     assert bildapi._kit_files_gb(job) == pytest.approx(11.5)
 
 
-def test_server_steps_aside_for_an_sd_cli_picture_that_does_not_fit(
+def test_server_steps_aside_for_an_sd_cli_picture_that_does_not_fit_beside_it(
     route: Route, monkeypatch, caplog
 ):
     """8 GB held, 4 of them by the server, a 2 GB picture on 10 GB: it does
     not fit beside the server (8 + 2 + 2.5), it fits without it (4 + 2 +
     2.5). The server pauses, sd-cli draws, the server comes back — and the
-    log carries the numbers."""
+    log names the step with the time it took."""
     _memory(monkeypatch, total=10.0, held=8.0, files=2.0)
     route.server_gb = 4.0
     with caplog.at_level(logging.INFO, logger="app.api.v1.bild"):
         assert route.send(live_preview="proj") == ["pause", "sd-cli", "resume"]
-    line = next(s for s in caplog.messages if "steps aside" in s)
-    assert "8.0 GB held" in line
-    assert "4.0 GB of it by the image server" in line
-    assert "picture files 2.0 GB" in line
+    assert any("Image server steps aside for an sd-cli picture" in s for s in caplog.messages)
 
 
-def test_server_stays_when_memory_is_enough(route: Route, monkeypatch):
-    """Silence probe: when the picture fits beside the server, nothing
-    pauses."""
+def test_server_steps_aside_for_every_sd_cli_picture_whatever_the_memory(
+    route: Route, monkeypatch
+):
+    """Enough room for both: the same model still never lies in memory
+    twice, so the server pauses and the control that sent the picture to
+    sd-cli goes with it."""
     _memory(monkeypatch, total=64.0, held=8.0, files=2.0)
     route.server_gb = 4.0
+    assert route.send(live_preview="proj") == ["pause", "sd-cli", "resume"]
+    assert route.paused_for == "bild.live_preview"
+
+
+def test_server_steps_aside_when_the_model_file_cannot_be_read(route: Route, monkeypatch):
+    """No honest figure to add up — and still the server pauses."""
+    monkeypatch.setattr(bildapi, "_kit_files_gb", lambda job: None)
+    assert route.send(live_preview="proj") == ["pause", "sd-cli", "resume"]
+
+
+def test_a_picture_the_server_draws_pauses_nothing(route: Route, monkeypatch):
+    """Silence probe: what the server draws is drawn by it, and a picture
+    drawn while no server runs has no server to pause."""
+    _memory(monkeypatch, total=64.0, held=8.0, files=2.0)
+    assert route.send() == ["server"]
+    route.sequence.clear()
+    route.running = False
     assert route.send(live_preview="proj") == ["sd-cli"]
 
 
@@ -315,7 +336,7 @@ def test_a_stop_while_the_server_steps_aside_never_starts_sd_cli(
     answers: list[bool] = []
     started: list = []
 
-    def pause():
+    def pause(control=None):
         route.sequence.append("pause")
         answers.append(client.post("/api/v1/bild/stop").json())
         return True
@@ -423,3 +444,159 @@ def test_a_reserved_draw_leaves_the_lock_to_its_caller(tmp_path: Path, monkeypat
     finally:
         runner.freigeben()
     assert not runner.laeuft()
+
+
+# --- The footer names the control ------------------------------------------
+
+
+def _asked(route: Route, **values) -> str | None:
+    answer = route.client.post(
+        "/api/v1/bild/turbo/reason", json={"modell": "base.safetensors", **values}
+    )
+    assert answer.status_code == 200, answer.text
+    return answer.json()["control"]
+
+
+@pytest.mark.parametrize(
+    ("values", "control"),
+    [
+        ({"live_preview": "proj"}, "bild.live_preview"),
+        ({"pulid_weights": "p.safetensors", "pulid_id_embedding": "e.safetensors"}, "bild.pulid"),
+        ({"sigmas": "a,b"}, "bild.sigmas"),
+        ({"slg_scale": 2.5, "skip_layers": "[7,x]"}, "bild.skip_layers"),
+        ({"hires": True, "switches": {"hires_sigmas": "a,b"}}, "bild.sw_hires_sigmas"),
+        ({"ref_video": True, "video": True}, "bild.referenzvideo"),
+        ({"lora": True, "lora_apply_mode": "auto"}, "bild.lora_modus"),
+    ],
+)
+def test_the_service_names_the_control_that_sends_a_picture_to_sd_cli(
+    route: Route, values: dict, control: str
+):
+    assert _asked(route, **values) == control
+    # Every name is a label the window can show, in both languages.
+    for language in ("de", "en"):
+        assert t(control, language) != control
+
+
+def test_the_service_names_no_control_for_values_the_server_draws(route: Route):
+    """Silence probe: the same questions with the values that stay on the
+    server — and with a picture server that does not run, where every
+    picture is drawn by sd-cli and there is nothing to name."""
+    assert _asked(route) is None
+    assert _asked(route, sigmas="14.6,7.8,0", slg_scale=2.5, skip_layers="[7,8,9]") is None
+    assert _asked(route, lora=True, lora_apply_mode="at_runtime") is None
+    route.running = False
+    assert _asked(route, live_preview="proj") is None
+
+
+def test_the_question_and_the_draw_route_decide_alike(route: Route):
+    """The footer's answer and the route's choice come from one rule: a
+    value the question names goes to sd-cli, and one it does not stays."""
+    assert _asked(route, live_preview="proj") == "bild.live_preview"
+    assert route.send(live_preview="proj") == ["pause", "sd-cli", "resume"]
+    route.sequence.clear()
+    assert _asked(route) is None
+    assert route.send() == ["server"]
+
+
+def _give_second_model(route: Route, tmp_path: Path) -> None:
+    """The model's kit brings a second, high-noise diffusion model — a
+    model whose family is not read has exactly the parts given to it."""
+    from app import bildmodellwerte
+    from app.db.repositories.einstellungen import GLOBAL
+
+    (tmp_path / "bildmodelle" / "high.safetensors").write_bytes(b"x")
+    route.client.app.state.repositories.einstellungen.zusammenlegen(
+        GLOBAL, bildmodellwerte.SCHLUESSEL,
+        {"base.safetensors": {
+            bildmodellwerte.FAMILY_DETECTION: False,
+            "high_noise_diffusion_model": "high.safetensors",
+        }},
+        pruefen=bildmodellwerte.pruefen,
+    )
+
+
+def test_the_footer_counts_the_values_of_the_second_model_as_the_draw_does(
+    route: Route, tmp_path: Path
+):
+    """A kit with a high-noise model switches its pass's values on: a list
+    there that is no list of numbers goes to sd-cli, and the footer says so
+    before the picture is drawn — the same words the pause carries."""
+    bad = {"high_noise_skip_layers": "[7,x]"}
+    # Without the second model the values of its pass are not in play.
+    assert _asked(route, video=True, switches=bad) is None
+    assert route.send(video=True, switches=bad) == ["server"]
+    route.sequence.clear()
+
+    _give_second_model(route, tmp_path)
+    assert _asked(route, video=True, switches=bad) == "bild.sw_high_noise_skip_layers"
+    assert route.send(video=True, switches=bad) == ["pause", "sd-cli", "resume"]
+    assert route.paused_for == "bild.sw_high_noise_skip_layers"
+    # Silence probe: a list of numbers there stays on the server, with the
+    # second model as without it.
+    route.sequence.clear()
+    good = {"high_noise_skip_layers": "[7,8,9]"}
+    assert _asked(route, video=True, switches=good) is None
+    assert route.send(video=True, switches=good) == ["server"]
+
+
+def test_the_footer_reads_the_kit_only_for_a_value_of_the_second_models_pass(
+    route: Route, monkeypatch
+):
+    """The window asks every few seconds; the kit decides nothing unless a
+    value of the high-noise pass is among the studio's."""
+    def never(*a, **k):
+        raise AssertionError("the kit was read for a question it cannot change")
+
+    monkeypatch.setattr(bildapi, "_kit_has_high_noise", never)
+    assert _asked(route) is None
+    assert _asked(route, video=True, switches={"eta": 0.5}) is None
+    assert _asked(route, live_preview="proj") == "bild.live_preview"
+
+
+def test_the_state_names_what_the_server_is_paused_for(route: Route, client: TestClient):
+    """Between the pause and the start again the process is gone; the state
+    still says what it waits for — and says nothing when it was stopped."""
+    server = client.app.state.bildturbo
+    assert client.get("/api/v1/bild/turbo").json()["paused_for"] is None
+    server._start_values = ((), {})
+    server._paused_for = "bild.live_preview"
+    assert client.get("/api/v1/bild/turbo").json()["paused_for"] == "bild.live_preview"
+    server._start_values = None
+    assert client.get("/api/v1/bild/turbo").json()["paused_for"] is None
+
+
+def test_every_control_a_reason_can_name_is_a_label_in_both_languages():
+    """The footer shows the label under the key the service names: a key
+    that is not in the catalogue would show as a bare key."""
+    from app import image_switches
+
+    keys = {
+        "bild.nur_hochskalieren", "bild.nur_adetailer", "bild.referenzvideo",
+        "bild.live_preview", "bild.pulid", "bild.sigmas", "bild.skip_layers",
+        "bild.lora_modus", "bildserver.wichtigkeitsmatrix",
+        *(f"bild.sw_{key}" for key in (
+            "vae_tile_size", "vae_relative_tile_size", "hires_sigmas",
+            "high_noise_skip_layers", "audio", "ref_audio", "ref_video_audio",
+        )),
+    }
+    for key in keys:
+        for language in ("de", "en"):
+            assert t(key, language) != key, (key, language)
+    # And every switch the rule can name is one the table knows.
+    for key in ("vae_tile_size", "vae_relative_tile_size", "hires_sigmas",
+                "high_noise_skip_layers", "audio", "ref_audio", "ref_video_audio"):
+        assert image_switches.get(key) is not None
+
+
+def test_a_server_that_does_not_come_back_is_off_not_paused(client: TestClient, monkeypatch):
+    """The pause ends when the server is asked to come back — even when it
+    cannot: the footer must not keep saying 'pauses for' over a server
+    that stays down."""
+    server = client.app.state.bildturbo
+    server._start_values = ((), {})
+    server._paused_for = "bild.live_preview"
+    assert server.paused_for() == "bild.live_preview"
+    monkeypatch.setattr(server, "starten", lambda *a, **k: False)
+    assert server.resume() is False
+    assert server.paused_for() is None

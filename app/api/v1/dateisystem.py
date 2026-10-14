@@ -54,7 +54,7 @@ def _ist_lokal(request: Request) -> bool:
 @router.get(
     "/folder-dialog",
     response_model=DialogAuskunft,
-    summary="Does this system have a folder dialog?",
+    summary="Is a folder selection dialog available on this system?",
 )
 def dialog_auskunft(request: Request) -> DialogAuskunft:
     """The UI asks this before showing the button.
@@ -71,7 +71,7 @@ def dialog_auskunft(request: Request) -> DialogAuskunft:
 @router.post(
     "/choose-folder",
     response_model=OrdnerAntwort,
-    summary="Opens the system's folder dialog",
+    summary="Open the system's folder selection dialog",
 )
 def ordner_dialog_oeffnen(
     wunsch: OrdnerWunsch,

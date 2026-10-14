@@ -327,7 +327,7 @@ def test_ungenanntes_werkzeug_bleibt_bei_loch_b_egal_was_permissions_sagt(tmp_pa
         agent=_agent(["read_file"], {"web_search": "ja"}), regeln=regeln,
     )
     assert urteil.antwort == "nein"
-    assert "tools list" in urteil.grund
+    assert "tool list" in urteil.grund
 
 
 # --- End to end: the hook really lives inside ausfuehren() ------------------

@@ -47,11 +47,11 @@ def datenbank_oeffnen(config: Config | None = None, pfad: str | Path | None = No
     """Opens the database and sets up the schema when needed."""
     if pfad is None:
         if config is None:
-            raise ValueError("Entweder 'config' oder 'pfad' muss angegeben werden")
+            raise ValueError("Either 'config' or 'pfad' must be specified.")
         if config.database.backend != "sqlite":
             raise NotImplementedError(
-                f"Backend '{config.database.backend}' ist noch nicht umgesetzt. "
-                "Das Repository-Pattern erlaubt es, hier ein weiteres zu ergänzen."
+                f"Backend '{config.database.backend}' is not yet implemented. The repository "
+                "pattern allows another backend to be added here."
             )
         pfad = config.datenbankpfad
 

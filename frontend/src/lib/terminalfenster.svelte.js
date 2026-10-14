@@ -10,15 +10,15 @@
 
   Two habits are worth naming, because both were decided against something:
 
-    * The rail comes forward by itself when a command starts. Whoever closed
-      it on this module is not asked again — a panel that pops back up is a
-      panel people learn to hate.
+    * The rail does not come forward by itself when a command starts: the
+      list fills, and the sign of the terminal carries the colour of the
+      state; whoever wants it clicks the sign. A panel that takes the column
+      from the tool the reader chose is a panel people learn to hate.
     * The view sticks to the end while nobody scrolls. The moment somebody
       scrolls up, it stops following: reading beats watching.
 */
 
 import { api } from './api.js'
-import { anbieten } from './arbeitsleiste.svelte.js'
 import { chatOeffnen, zustand, nachrichtenAnzeige } from './zustand.svelte.js'
 import { historie } from './werkzeughistorie.js'
 
@@ -84,16 +84,6 @@ function aufrufkarte(nummer) {
     if (treffer) return treffer
   }
   return null
-}
-
-/** The runs of a chat that no longer exists, left standing while no chat is
-    open: a picture that failed keeps its run, as the service last had it,
-    in front of whoever pressed for it. The service has forgotten them with
-    the chat, so nothing more arrives for them; the next chat opened starts
-    its own list, as on every switch. */
-export function leaveStanding(runs) {
-  if (verbundenerChat !== null) return
-  terminal.laeufe = runs
 }
 
 /* ——— The stream ——— */
@@ -224,11 +214,9 @@ function aufnehmen(ereignis) {
         gelesen: false,
       },
     ]
-    /* Shipped switched on: a command that runs is a thing to watch. The
-       rail decides whether it may come forward — it knows whether the user
-       just closed it on this module. */
+    /* Shipped switched on: a command that runs is a thing to watch — for
+       whoever opens the list. The rail is left as it stands. */
     terminal.klebt = true
-    anbieten('terminal')
     return
   }
   const eintrag = lauf(ereignis.lauf)

@@ -12,14 +12,15 @@ difference from a plain page fetch.
 This is the variant for anyone running their own instance. It reaches
 further than the shipped one — a SearXNG asks hundreds of engines instead
 of a handful — but it needs that instance to exist, so it is not what a
-fresh installation starts with.
+fresh installation starts with, and it has no address of its own: without
+one it asks nothing.
 
 The server is deliberately standalone with no dependency on the terminal:
 it speaks MCP over standard input and output and can therefore be
 registered in any other MCP-capable program as well.
 
 Configuration via environment variables:
-    SEARXNG_URL        address of the instance (default: http://127.0.0.1:8888)
+    SEARXNG_URL        address of the instance (required)
     SUCHE_MAX_TREFFER  how many hits at most (default: 8)
     ABRUF_MAX_ZEICHEN  how much text per page at most (see webseite_lesen)
 """
@@ -34,31 +35,31 @@ import httpx
 import mcp_schleife
 import webseite_lesen
 
-SEARXNG_URL = os.getenv("SEARXNG_URL", "http://127.0.0.1:8888").rstrip("/")
+SEARXNG_URL = os.getenv("SEARXNG_URL", "").strip().rstrip("/")
 MAX_TREFFER = int(os.getenv("SUCHE_MAX_TREFFER", "8"))
 
 WERKZEUGE = [
     {
         "name": "web_search",
         "description": (
-            "Searches the web and returns a list of results with title, snippet "
-            "and address. For current events, facts, and anything that happened "
-            "after the model's knowledge cutoff."
+            "Searches the web and returns results with a title, excerpt, and URL. Use it for "
+            "current events, factual research, and developments after the model's knowledge "
+            "cutoff."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "What to search for.",
+                    "description": "Search query.",
                 },
                 "language": {
                     "type": "string",
-                    "description": "Language code such as 'de' or 'en'. Default: all.",
+                    "description": "Language code, such as 'de' or 'en'. Default: all.",
                 },
                 "count": {
                     "type": "integer",
-                    "description": f"How many results, at most {MAX_TREFFER}.",
+                    "description": f"Number of results to return, up to {MAX_TREFFER}.",
                 },
             },
             "required": ["query"],
@@ -69,6 +70,8 @@ WERKZEUGE = [
 
 
 async def websuche(suchbegriff: str, sprache: str | None = None, anzahl: int | None = None) -> str:
+    if not SEARXNG_URL:
+        raise ValueError("No SearXNG address is set. Set the address of your instance (SEARXNG_URL).")
     grenze = min(anzahl or MAX_TREFFER, MAX_TREFFER)
     parameter: dict[str, Any] = {"q": suchbegriff, "format": "json"}
     if sprache:
@@ -107,7 +110,7 @@ async def werkzeug_ausfuehren(name: str, argumente: dict[str, Any]) -> str:
         )
     if name == "read_webpage":
         return await webseite_lesen.lesen(argumente["url"])
-    raise ValueError(f"Unbekanntes Werkzeug: {name}")
+    raise ValueError(f"Unknown tool: {name}")
 
 
 if __name__ == "__main__":

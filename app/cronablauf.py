@@ -27,7 +27,7 @@ from app import (
     helper,
     i18n,
     modellvorlauf,
-    ohne_agent,
+    no_agent,
     reminder,
     skriptlauf,
     sprachwahl,
@@ -64,8 +64,8 @@ log = logging.getLogger(__name__)
 # nothing is announced — but the model has still spent a round explaining
 # its silence. With it, "found nothing" and "stop" are the same instruction.
 ZIEL_ZUSATZ = (
-    "Goal: {ziel}. Call the {werkzeug} tool with a short report ONLY when "
-    "this goal is met. Otherwise finish quietly."
+    "Goal: {ziel}. Call the {werkzeug} tool with a brief report ONLY when this goal has been "
+    "achieved. Otherwise, finish without a notification."
 )
 
 # What the previous run wrote down, handed to this one. The
@@ -75,8 +75,8 @@ ZIEL_ZUSATZ = (
 # It is the moment the note was WRITTEN — see ``auftragstext``.
 NOTIZ_ZUSATZ = (
     "Your note from the previous run ({wann}): {notiz}\n"
-    "Update it with the {werkzeug} tool when the state it describes has "
-    "moved on — the call replaces the whole note."
+    "Update it using the {werkzeug} tool when the state described in it changes. The call "
+    "replaces the entire note."
 )
 # The same block for the one case where there is a note but no time to put
 # on it. Note and time are written in one statement, so nothing new can get
@@ -85,16 +85,17 @@ NOTIZ_ZUSATZ = (
 # pair of brackets in the opening message of every run would be worse than
 # saying nothing about the time.
 NOTIZ_ZUSATZ_OHNE_ZEIT = (
-    "Your note from the previous run: {notiz}\n"
-    "Update it with the {werkzeug} tool when the state it describes has "
-    "moved on — the call replaces the whole note."
+    "Your note from the previous run: {notiz}\nUpdate it using the {werkzeug} tool when the "
+    "state described in it changes. The call replaces the entire note."
 )
 
 
 # --- The one gate every notification passes -------------------------------
 
 
-async def mitteilen(eintrag, text: str, *, erfolgreich: bool) -> bool:
+async def mitteilen(
+    eintrag, text: str, *, erfolgreich: bool, sprache: str | None = None
+) -> bool:
     """Plays the sound and shows the notification for ``eintrag``, unless the
     entry is on ``deliver = 'log'``. Returns whether anything went out.
 
@@ -136,7 +137,9 @@ async def mitteilen(eintrag, text: str, *, erfolgreich: bool) -> bool:
     """
     if eintrag is None or eintrag.deliver == "log":
         return False
-    await asyncio.to_thread(cronmeldung.melden, text, erfolgreich=erfolgreich)
+    await asyncio.to_thread(
+        cronmeldung.melden, text, erfolgreich=erfolgreich, sprache=sprache
+    )
     return True
 
 
@@ -168,6 +171,18 @@ def wartet_auf_modell(cronjob_id: str) -> bool:
     return cronjob_id in _wartend
 
 
+# Entries somebody started by hand while their model was still coming up. The
+# tick starts each of them once, as soon as the model answers, and forgets it.
+# Held in memory for the reason ``_wartend`` is: it is a fact about right now,
+# and a restart that stopped the model's start has stopped the wish with it.
+_hand_start_wanted: set[str] = set()
+
+
+def want_hand_start(cronjob_id: str) -> None:
+    """Notes that this entry is to run as soon as its model answers."""
+    _hand_start_wanted.add(cronjob_id)
+
+
 def start_verbuchen(repositories, eintrag, termin_iso: str) -> None:
     """Books a run this entry actually started: the wait is over, the due
     time is spent, and a one-off has done its one thing.
@@ -193,6 +208,7 @@ def start_verbuchen(repositories, eintrag, termin_iso: str) -> None:
         eintrag, als_aware(termin_iso)
     )
     _warten_vergessen(eintrag.id)
+    _hand_start_wanted.discard(eintrag.id)
     _uebersprungen_gesagt.pop(eintrag.id, None)
     _unreadable_reported.discard(eintrag.id)
     _ausgeloest_merken(repositories, eintrag.id, termin_iso)
@@ -359,7 +375,81 @@ def _modell_bereit(app, agent, *, hat_ziel: bool = False) -> bool:
     return gefunden is not None and gefunden[0].erreichbar
 
 
-async def _warten_vermerken(eintrag, jetzt: datetime) -> None:
+MODEL_READY = "ready"
+MODEL_STARTING = "starting"
+MODEL_MISSING = "missing"
+
+
+async def wake_model(app, agent, *, hat_ziel: bool = False) -> str:
+    """The way to the model, for the tick and for the hand start alike: is
+    the model answering — and if not, does the program bring its server up?
+
+    ``MODEL_READY``: the run can start now. ``MODEL_STARTING``: nothing
+    answered, the slot's server is up or has just been started, and the
+    model is on its way — what a run can wait for. ``MODEL_MISSING``: nothing
+    answers and the program has no server to start, which a run cannot wait
+    for.
+
+    The slot is woken even with the preload switch off
+    (``agentenserver.slot_starten_wenn_gewollt``, ``faellig``): that switch
+    only holds back the blind autostart at program launch, not the program
+    answering a run that needs the slot right now.
+    """
+    if _modell_bereit(app, agent, hat_ziel=hat_ziel):
+        return MODEL_READY
+    if not await agentenserver.slot_starten_wenn_gewollt(app, faellig=True):
+        return MODEL_MISSING
+    if _modell_bereit(app, agent, hat_ziel=hat_ziel):
+        return MODEL_READY
+    return MODEL_STARTING
+
+
+# The ending reason of a due time that found no model to run on. It is a key
+# of the reasons block of the catalogue (``jobs.grund``), the one place every
+# ending's words are kept (app/cronmeldung.py ``mit_grund``).
+END_REASON_NO_MODEL = "kein_modell_verfuegbar"
+
+
+async def _fail_without_model(app, eintrag, termin: datetime) -> None:
+    """One due time of an entry without an agent that finds no model: the
+    run is written down as failed at once, with the reason, and booked like
+    any other failed run — the failure counter, the notification.
+
+    An entry with an agent waits for its model (``_warten_vermerken``), for
+    a file it names can be brought up. An entry without one goes to the main
+    model, and when nothing answers and nothing can be started there is
+    nothing a wait would change: it stood on "waiting for a model" for good,
+    with no run and no reason anywhere. The due time is spent, so the
+    schedule's next one is read like every other."""
+    repositories = app.state.repositories
+    sprache = sprachwahl.interface_language(repositories, app.state.config.app.language)
+
+    from app.api.abhaengigkeiten import STANDARD_BENUTZER
+
+    run = repositories.auftraege.erstellen(
+        user_id=getattr(app.state, "standard_benutzer", STANDARD_BENUTZER),
+        agent=eintrag.agent,
+        auftrag=eintrag.task,
+        cronjob_id=eintrag.id,
+    )
+    auftragsende.beenden(repositories, run.id, "gescheitert", ende_grund=END_REASON_NO_MODEL)
+    start_verbuchen(repositories, eintrag, termin.isoformat())
+    log.warning(
+        "Cronjob: scheduled run of '%s' failed — no model reachable",
+        eintrag.agent,
+        extra={"ereignis": "cronjob_kein_modell", "cronjob": eintrag.id, "auftrag": run.id},
+    )
+    angehalten = await ausgang_verbuchen(
+        repositories, eintrag.id, eintrag.task, erfolgreich=False,
+        grund=END_REASON_NO_MODEL, sprache=sprache,
+    )
+    await melde_wenn_faellig(
+        repositories, eintrag.id, eintrag.task, erfolgreich=False,
+        grund=END_REASON_NO_MODEL, sprache=sprache, schon_gemeldet=angehalten,
+    )
+
+
+async def _warten_vermerken(eintrag, jetzt: datetime, sprache: str | None = None) -> None:
     """Books one tick that found no model, and announces a long wait once.
 
     The log line and the entry's own "waiting" state are written whatever
@@ -394,9 +484,14 @@ async def _warten_vermerken(eintrag, jetzt: datetime) -> None:
     )
     await mitteilen(
         eintrag,
-        f"{eintrag.task} — waiting for a model for "
-        f"{WARTEMELDUNG_SEKUNDEN // 60} minutes",
+        i18n.t(
+            "cronjobs.wartet_seit_minuten",
+            sprache,
+            aufgabe=eintrag.task,
+            minuten=WARTEMELDUNG_SEKUNDEN // 60,
+        ),
         erfolgreich=False,
+        sprache=sprache,
     )
 
 
@@ -537,13 +632,18 @@ def naechste_faelligkeit(eintrag, jetzt: datetime) -> datetime | None:
     try:
         frueher = _letzter_relevanter_termin(eintrag, jetzt)
         letzter_bekannt = eintrag.zuletzt_ausgeloest or eintrag.created_at
-        if frueher <= jetzt and als_aware(letzter_bekannt) < frueher:
+        # Compared on the absolute clock: two moments of one zone compare
+        # by their wall-clock fields, which loses the repeated hour.
+        if (
+            terminplan.absolute(frueher) <= terminplan.absolute(jetzt)
+            and als_aware(letzter_bekannt) < frueher
+        ):
             return frueher
         termin = _naechster_relevanter_termin(eintrag, jetzt)
     except ValueError:
         # Both ``TerminplanFehler`` and croniter's own refusals are one.
         return None
-    return termin if termin >= jetzt else None
+    return termin if terminplan.absolute(termin) >= terminplan.absolute(jetzt) else None
 
 
 # The entries whose unreadable schedule was already reported, so the log
@@ -594,13 +694,16 @@ def _bereitschaftstermine(repositories, agenten: dict, jetzt: datetime) -> list[
         if eintrag.skript or reminder.is_reminder(eintrag) or (
             agenten.get(eintrag.agent) is None
             and not helper.is_helper(eintrag.agent)
-            and not ohne_agent.is_no_agent(eintrag.agent)
+            and not no_agent.is_no_agent(eintrag.agent)
         ):
             continue
         try:
             frueher = _letzter_relevanter_termin(eintrag, jetzt)
             letzter_bekannt = eintrag.zuletzt_ausgeloest or eintrag.created_at
-            if frueher <= jetzt and als_aware(letzter_bekannt) < frueher:
+            if (
+                terminplan.absolute(frueher) <= terminplan.absolute(jetzt)
+                and als_aware(letzter_bekannt) < frueher
+            ):
                 termine.append((eintrag.id, frueher))
                 continue
             naechster = _naechster_relevanter_termin(eintrag, jetzt)
@@ -608,7 +711,7 @@ def _bereitschaftstermine(repositories, agenten: dict, jetzt: datetime) -> list[
             # Both ``TerminplanFehler`` and croniter's own refusals are one.
             _unreadable(eintrag)
             continue
-        if naechster >= jetzt:
+        if terminplan.absolute(naechster) >= terminplan.absolute(jetzt):
             termine.append((eintrag.id, naechster))
     return termine
 
@@ -718,6 +821,7 @@ async def _skriptfehler_vermerken(
             reason=i18n.t(fehler.schluessel, sprache, **fehler.werte),
         ),
         erfolgreich=False,
+        sprache=sprache,
     )
 
 
@@ -814,6 +918,7 @@ async def skript_starten(app, eintrag, termin: datetime):
     the due time open, a person gets told.
     """
     repositories = app.state.repositories
+    sprache = sprachwahl.interface_language(repositories, app.state.config.app.language)
     wurzel = skriptlauf.ordner(app.state.config)
     # Checked again here, not only when the entry was written: the folder can
     # be moved from the interface, the file can be swapped for a link pointing
@@ -856,6 +961,7 @@ async def skript_starten(app, eintrag, termin: datetime):
         endpoint_id="",
         arbeit=_skriptarbeit(
             repositories=repositories,
+            sprache=sprache,
             generierungen=app.state.generierungen,
             auftrag_id=auftrag.id,
             cronjob_id=eintrag.id,
@@ -889,6 +995,7 @@ async def skript_starten(app, eintrag, termin: datetime):
 def _skriptarbeit(
     *,
     repositories,
+    sprache: str | None = None,
     generierungen,
     auftrag_id: str,
     cronjob_id: str,
@@ -907,7 +1014,7 @@ def _skriptarbeit(
 
     async def arbeit(lauf) -> None:
         repositories.auftraege.schritt_anlegen(
-            auftrag_id, "status", f"Skript gestartet: {pfad.name}"
+            auftrag_id, "status", i18n.t("cronjobs.skript_gestartet", sprache, name=pfad.name)
         )
         try:
             # ``lauf.signal`` is the stop button, and this is the line that
@@ -918,7 +1025,7 @@ def _skriptarbeit(
             # of the job, whose comment promises "gone means gone, not keeps
             # running headless".
             ergebnis = await skriptlauf.starten(
-                pfad, wurzel, grenze, abbruch=lauf.signal, lauf=befehlslauf
+                pfad, wurzel, grenze, abbruch=lauf.signal, lauf=befehlslauf, sprache=sprache
             )
             if ergebnis.abgebrochen:
                 # The user's own doing a second ago, not a fault of the entry:
@@ -988,8 +1095,14 @@ def _skriptarbeit(
             # own result, and what a script that reports anything reports is
             # its last line — a script entry has no task text to put
             # there.
+            #
+            # The reason goes to both. On the run that reaches the limit the
+            # counter's sentence is the only one that goes out
+            # (``schon_gemeldet`` below), so it has to say why this last run
+            # failed as well.
             angehalten = await ausgang_verbuchen(
-                repositories, cronjob_id, pfad.name, erfolgreich=ergebnis.erfolgreich
+                repositories, cronjob_id, pfad.name, erfolgreich=ergebnis.erfolgreich,
+                grund=grund, sprache=sprache,
             )
             letzte = ergebnis.letzte_zeile
             await melde_wenn_faellig(
@@ -997,6 +1110,7 @@ def _skriptarbeit(
                 cronjob_id,
                 f"{pfad.name} — {letzte}" if letzte else pfad.name,
                 erfolgreich=ergebnis.erfolgreich,
+                sprache=sprache,
                 # Why it ended, the same as the model run's own end path
                 # does. Left out, a script stopped at its time limit
                 # announced "Failed — sicherung.sh — <its last line>", and
@@ -1029,9 +1143,10 @@ def entry_running(repositories, eintrag) -> bool:
     name, the way two runs of one agent queue behind each other. Except for
     a helper's continuation and an entry with no agent: every helper, and
     every entry without one, carries the same name (app/helper.py,
-    app/ohne_agent.py), and the name would make one piece of work wait for
-    every other one under it, so its own run is the question."""
-    if helper.is_helper(eintrag.agent) or ohne_agent.is_no_agent(eintrag.agent):
+    app/no_agent.py), and the name would make one piece of work wait for
+    every other one under it, so its own work is the question — its runs
+    and the continuations of them, which run under entries of their own."""
+    if helper.is_helper(eintrag.agent) or no_agent.is_no_agent(eintrag.agent):
         return repositories.auftraege.laeuft_fuer_cronjob(eintrag.id)
     return repositories.auftraege.laeuft_gerade(agent=eintrag.agent)
 
@@ -1045,28 +1160,39 @@ async def einmal_pruefen(app, jetzt: datetime) -> None:
     # agent just as well as at one the user wrote.
     agenten = agenten_laden(*config.agentenverzeichnisse)
 
-    for eintrag in repositories.cronjobs.aktive():
-        try:
-            termin = _letzter_relevanter_termin(eintrag, jetzt)
-            letzter_bekannt = als_aware(eintrag.zuletzt_ausgeloest or eintrag.created_at)
-        except ValueError:
-            # Both ``TerminplanFehler`` and croniter's own refusals are one,
-            # and so is a stamp that cannot be read.
-            _unreadable(eintrag)
-            continue
-        if termin > jetzt:
-            # A dated one-off entry whose day has not arrived
-            # yet — unlike a recurring schedule, its due moment can lie in
-            # the future, and it must wait rather than fire early.
-            continue
-        # A freshly created entry has no ``zuletzt_ausgeloest`` yet, and a
-        # recurring schedule always points at a moment in the past — without
-        # a baseline that past due time would fire the instant it is set,
-        # even for one still hours away. ``created_at`` stands in until the
-        # entry has actually fired once: only a due time strictly after
-        # creation counts as new.
-        if letzter_bekannt >= termin:
-            continue
+    aktive = repositories.cronjobs.aktive()
+    # An entry switched off or deleted while its wish was pending has no wish
+    # any more: switching it on again is a different act.
+    _hand_start_wanted.intersection_update(eintrag.id for eintrag in aktive)
+
+    for eintrag in aktive:
+        hand_start = eintrag.id in _hand_start_wanted
+        if hand_start:
+            # Started by hand while the model was coming up: due now, once.
+            # The stamp it books is this moment, like the hand start's own.
+            termin = jetzt
+        else:
+            try:
+                termin = _letzter_relevanter_termin(eintrag, jetzt)
+                letzter_bekannt = als_aware(eintrag.zuletzt_ausgeloest or eintrag.created_at)
+            except ValueError:
+                # Both ``TerminplanFehler`` and croniter's own refusals are
+                # one, and so is a stamp that cannot be read.
+                _unreadable(eintrag)
+                continue
+            if terminplan.absolute(termin) > terminplan.absolute(jetzt):
+                # A dated one-off entry whose day has not arrived
+                # yet — unlike a recurring schedule, its due moment can lie in
+                # the future, and it must wait rather than fire early.
+                continue
+            # A freshly created entry has no ``zuletzt_ausgeloest`` yet, and a
+            # recurring schedule always points at a moment in the past —
+            # without a baseline that past due time would fire the instant it
+            # is set, even for one still hours away. ``created_at`` stands in
+            # until the entry has actually fired once: only a due time
+            # strictly after creation counts as new.
+            if letzter_bekannt >= termin:
+                continue
 
         if reminder.is_reminder(eintrag):
             # A reminder runs nothing: its notification is the whole of it,
@@ -1086,6 +1212,11 @@ async def einmal_pruefen(app, jetzt: datetime) -> None:
             continue
 
         if entry_running(repositories, eintrag):
+            if hand_start:
+                # A run of this entry is going: what the hand start asked
+                # for is there, and a second one would only queue behind it.
+                _hand_start_wanted.discard(eintrag.id)
+                continue
             if _uebersprungen_merken(repositories, eintrag, termin):
                 log.info(
                     "Cronjob: scheduled run of '%s' skipped — a run is still active",
@@ -1101,7 +1232,7 @@ async def einmal_pruefen(app, jetzt: datetime) -> None:
             # The agent file behind this entry is gone — nothing to run as.
             # The due time stays open: a restored file picks the schedule
             # right back up, the same way a restored due time would. The
-            # settings row says so (``agent_fehlt``, app/api/v1/cronjobs.py).
+            # settings row says so (``agent_missing``, app/api/v1/cronjobs.py).
             log.warning(
                 "Cronjob: agent '%s' not found — the scheduled run stays open",
                 eintrag.agent,
@@ -1113,22 +1244,25 @@ async def einmal_pruefen(app, jetzt: datetime) -> None:
         # nothing is counted against the entry. Asked here rather
         # than after a failed start, so the entry can say what it is waiting
         # for instead of only that it did not fire.
-        hat_ziel = bool(eintrag.ziel)
-        if not _modell_bereit(app, agent, hat_ziel=hat_ziel):
-            # The slot is the one kind the program can fix by itself — it
-            # tries again on every tick until the model is up, which is what
-            # makes an autostart that lost a race harmless. This entry is
-            # due and found nothing to run on, so it wakes the slot even
-            # with the preload switch off (app/agentenserver.py
-            # ``faellig``) — that switch only holds back the blind autostart
-            # at program launch, not the program answering a run that needs
-            # the slot right now.
-            if (
-                not await agentenserver.slot_starten_wenn_gewollt(app, faellig=True)
-                or not _modell_bereit(app, agent, hat_ziel=hat_ziel)
-            ):
-                await _warten_vermerken(eintrag, jetzt)
-                continue
+        # The slot is the one kind the program can fix by itself — it tries
+        # again on every tick until the model is up, which is what makes an
+        # autostart that lost a race harmless (``wake_model``).
+        model = await wake_model(app, agent, hat_ziel=bool(eintrag.ziel))
+        if model == MODEL_MISSING and no_agent.is_no_agent(eintrag.agent):
+            # Nothing answers and the program has no server to bring up: a
+            # run without an agent has nothing to wait for. It fails, and
+            # says why, and the schedule's next due time starts normally.
+            await _fail_without_model(app, eintrag, termin)
+            continue
+        if model != MODEL_READY:
+            await _warten_vermerken(
+                eintrag,
+                jetzt,
+                sprachwahl.interface_language(
+                    app.state.repositories, app.state.config.app.language
+                ),
+            )
+            continue
 
         auftrag = await termin_ausloesen(
             app, agent, auftragstext(eintrag), cronjob_id=eintrag.id
@@ -1162,12 +1296,23 @@ async def einmal_pruefen(app, jetzt: datetime) -> None:
 
 
 async def ausgang_verbuchen(
-    repositories, cronjob_id: str | None, aufgabentext: str, *, erfolgreich: bool
+    repositories,
+    cronjob_id: str | None,
+    aufgabentext: str,
+    *,
+    erfolgreich: bool,
+    grund: str | None = None,
+    sprache: str | None = None,
 ) -> bool:
     """Books one ended run against its entry's failure count, and
     switches the entry off once the count reaches its limit. Returns whether
     an announcement went out over it — what the caller must not put a second
     one next to.
+
+    ``grund`` is why this run ended, as the run's own end path knows it. It
+    is read only on the run that reaches the limit, and only for the
+    announcement: that sentence is the one notification the run gets, so
+    the reason the run failed for travels in it (``_ausgang_buchen``).
 
     What counts as a failure is the run's technical outcome, and nothing
     else: the model was unreachable, a tool was refused, the run broke off.
@@ -1252,17 +1397,22 @@ async def ausgang_verbuchen(
         aufgabentext,
         erfolgreich=erfolgreich,
         melden=ursprung is None,
+        grund=grund,
+        sprache=sprache,
     )
     if ursprung is None:
         return gemeldet
     # Its own text, not the one handed in: the announcement speaks for the
     # origin, and the chain's ``basisaufgabe`` is a copy of that sentence as
-    # it read when the chain was made.
+    # it read when the chain was made. The reason is the run's, and the run
+    # is the one that just ended — whichever row it was booked on first.
     ursprung_gemeldet = await _ausgang_buchen(
         repositories,
         ursprung.id,
         ursprung.basisaufgabe or ursprung.task,
         erfolgreich=erfolgreich,
+        grund=grund,
+        sprache=sprache,
     )
     # Either announcement is one the caller must not put a second one next
     # to (``schon_gemeldet``, ``ziel_verbuchen``).
@@ -1276,12 +1426,26 @@ async def _ausgang_buchen(
     *,
     erfolgreich: bool,
     melden: bool = True,
+    grund: str | None = None,
+    sprache: str | None = None,
 ) -> bool:
     """The booking above, on one entry. Returns whether it announced.
 
     ``melden=False`` books and switches off in silence: the caller has a
     second row that says the same sentence better. Only the count and the
     switch belong to this row either way — the announcement does not.
+
+    The announcement names the limit AND why the last run failed. The limit
+    alone said that a schedule had stopped and not what had been wrong with
+    it, and on the run that reaches the limit nothing else says it: the
+    run's own closing notification, the one that carries the reason, is
+    held back so one ending is announced once (``melde_wenn_faellig``). The
+    reason stands behind the limit's sentence, put there by the same
+    function that puts it behind a run's own text
+    (``cronmeldung.mit_grund``) — so a run without a reason leaves the
+    sentence exactly as it was, and a long error message can only ever
+    push ITSELF out of a notification, never the fact that the schedule
+    has stopped.
     """
     if erfolgreich:
         eintrag = repositories.cronjobs.holen(cronjob_id)
@@ -1324,16 +1488,26 @@ async def _ausgang_buchen(
     # putting a second notification next to this one, and there is none.
     return await mitteilen(
         eintrag,
-        f"{aufgabentext} — stopped after {eintrag.fehlversuche} failed runs",
+        cronmeldung.mit_grund(
+            i18n.t(
+                "cronjobs.nach_fehlversuchen_gestoppt",
+                sprache,
+                aufgabe=aufgabentext,
+                n=eintrag.fehlversuche,
+            ),
+            grund,
+            sprache,
+        ),
         erfolgreich=False,
+        sprache=sprache,
     )
 
 
-# What a one-off entry with a goal says when its single run found nothing.
-#A standing watch stays quiet because there is
-# always a next pass; a `once` entry has none, so silence there means the
-# order simply vanished.
-ZIEL_NICHT_ERREICHT = "ran once, goal not reached"
+# The catalogue key of what a one-off entry with a goal says when its single
+# run found nothing. A standing watch stays quiet because there is always a
+# next pass; a `once` entry has none, so silence there means the order simply
+# vanished.
+ZIEL_NICHT_ERREICHT = "cronjobs.einmal_ohne_ziel"
 
 
 def _ziel_buchen(repositories, eintrag, wann: str) -> None:
@@ -1370,6 +1544,7 @@ async def ziel_verbuchen(
     erfolgreich: bool,
     fortsetzung_geplant: bool = False,
     schon_gemeldet: bool = False,
+    sprache: str | None = None,
 ) -> None:
     """Books one ended run against its entry's goal.
 
@@ -1482,8 +1657,9 @@ async def ziel_verbuchen(
             )
             await mitteilen(
                 eintrag,
-                f"{aufgabentext} — {ZIEL_NICHT_ERREICHT}",
+                f"{aufgabentext} — {i18n.t(ZIEL_NICHT_ERREICHT, sprache)}",
                 erfolgreich=False,
+                sprache=sprache,
             )
         return
 
@@ -1514,8 +1690,14 @@ async def ziel_verbuchen(
     # (``mitteilen``).
     await mitteilen(
         eintrag,
-        f"{aufgabentext} — no goal report in {eintrag.laeufe_ohne_ruf} runs",
+        i18n.t(
+            "cronjobs.ohne_zielmeldung_seit",
+            sprache,
+            aufgabe=aufgabentext,
+            n=eintrag.laeufe_ohne_ruf,
+        ),
         erfolgreich=False,
+        sprache=sprache,
     )
     # Back to zero, entry untouched: the next stretch of quiet runs earns
     # its own notice instead of one after every single run from here on.
@@ -1531,6 +1713,7 @@ async def melde_wenn_faellig(
     fortsetzung_geplant: bool = False,
     grund: str | None = None,
     schon_gemeldet: bool = False,
+    sprache: str | None = None,
 ) -> None:
     """Plays a sound and shows ``aufgabentext`` once a cron-fired run has
     ended, if the entry asks for it (``deliver = 'announce'``) — at the end,
@@ -1575,6 +1758,8 @@ async def melde_wenn_faellig(
     <reason>". One piece of work says its piece once, and the limit's
     sentence is the one that survives, because it carries the fact the other
     does not: this schedule has stopped and will not run again by itself.
+    What the other one carried is not lost with it — the limit's sentence
+    ends with the same reason (``_ausgang_buchen``).
     """
     if not cronjob_id or fortsetzung_geplant or schon_gemeldet:
         return
@@ -1596,6 +1781,7 @@ async def melde_wenn_faellig(
     # (``_ausgang_buchen``): one piece of work still says its piece once.
     await mitteilen(
         eintrag,
-        cronmeldung.mit_grund(aufgabentext, grund),
+        cronmeldung.mit_grund(aufgabentext, grund, sprache),
         erfolgreich=erfolgreich,
+        sprache=sprache,
     )

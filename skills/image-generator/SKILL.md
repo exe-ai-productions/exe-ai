@@ -1,22 +1,21 @@
 ---
-description: Turns the rest of the line into a picture, without asking back
+description: Generates an image from the rest of the user's message without asking follow-up questions.
 auto: true
 ---
 
-The rest of this message is a picture to make. Call the `draw_image` tool
-with it — that is the machine on this computer that actually draws. Do not
-try programs or commands; the tool is the whole way.
+Treat the rest of this message as the image brief. Use `draw_image` to
+generate it on this computer. Do not use alternative programs or commands.
 
-Do not ask what style, what format, or whether they are sure. A short brief
-is not an incomplete one — fill the gaps yourself and say in one line what
-you decided, so it can be corrected afterwards rather than negotiated first.
+Do not ask for a style, format, or confirmation. A brief request can still
+be complete. Resolve unspecified details yourself and state your choices in
+one line so the user can request adjustments afterward.
 
 Filling the gaps:
 
-- **No style named** — go for a clean, realistic photograph. It is the least
-  surprising thing to get back and the easiest to steer away from.
-- **Words in the picture** — only if they were asked for. Image models spell
-  badly, so keep any text short and say that it may come out wrong.
+- If no style is specified, use a clean, realistic photographic style. This
+  provides a straightforward starting point for later adjustments.
+- Include text in the image only when requested. Keep it short and explain
+  that the model may render it incorrectly.
 
 Write the `prompt` in English, whatever language the brief came in, and name
 what the picture shows: subject, setting, light, mood and look. Vague
@@ -28,7 +27,7 @@ plain prose. Follow the description. Things that must stay out go into
 `negative_prompt` — unless the description says it has no effect, as it does
 at CFG 1; then leave it out.
 
-In a chat the picture appears in your answer by itself. In a job nobody sees
-it there: hand it on with `deliver_file`, passing the path the tool reports
-for the picture. Either way, do not describe its contents afterwards — you
-have not seen it.
+In a chat, the image appears automatically in your response. In a job,
+deliver it with `deliver_file` using the path returned by the image tool. In
+either case, do not describe its contents afterward, because you have not
+seen it.

@@ -124,10 +124,26 @@ def _kein_pfad(name: str) -> str:
 WINDOWS_STARTABLE = (".exe", ".bat", ".cmd", ".ps1", ".py")
 
 
+def _is_store_placeholder(found: str) -> bool:
+    """Whether a program found on the path is the Microsoft Store's stand-in.
+
+    Windows puts an app-execution alias named ``python.exe`` into
+    ``...\\Microsoft\\WindowsApps`` even when no Python is installed; starting
+    it opens the Store and exits with code 9009. It is told by the folder, in
+    any spelling and with either kind of slash.
+    """
+    parts = found.replace("\\", "/").lower().split("/")
+    return "windowsapps" in parts
+
+
 def _python_on_windows() -> str | None:
-    """The Python that runs a .py script on Windows: the one on the path,
-    else the launcher. Neither — then a .py cannot be started here."""
-    return shutil.which("python") or shutil.which("py")
+    """The Python that runs a .py script on Windows: the one on the path
+    unless it is the Store's placeholder, else the launcher. Neither — then
+    a .py cannot be started here."""
+    found = shutil.which("python")
+    if found and not _is_store_placeholder(found):
+        return found
+    return shutil.which("py")
 
 
 def startable(path: Path, platform: str | None = None) -> bool:
@@ -201,7 +217,7 @@ ABBRUCH_TEXT = "Cancelled — the script was stopped."
 # The reason carried by the cancellation a shutdown raises. Nothing reads it —
 # it is what stands in a log line or a traceback when someone asks why a run
 # ended without an ending.
-DIENSTENDE_TEXT = "Service shutting down — the script was stopped."
+DIENSTENDE_TEXT = "The service is shutting down; the script was stopped."
 
 
 @dataclass(frozen=True)
@@ -257,6 +273,7 @@ async def starten(
     *,
     abbruch: asyncio.Event | None = None,
     lauf=None,
+    sprache: str | None = None,
 ) -> Ergebnis:
     """Runs the script and waits for it, up to ``grenze`` seconds.
 
@@ -320,8 +337,12 @@ async def starten(
         )
     except OSError as fehler:
         return Ergebnis(
-            ausgabe=f"{pfad.name} could not be started: {fehler.strerror or fehler}. "
-            "A script needs a '#!' line and the execute bit.",
+            ausgabe=i18n.t(
+                "cronjobs.skript_nicht_gestartet",
+                sprache,
+                name=pfad.name,
+                fehler=fehler.strerror or fehler,
+            ),
             code=None,
             abgelaufen=False,
         )
@@ -392,7 +413,7 @@ async def starten(
                 ausgabe=ABBRUCH_TEXT, code=None, abgelaufen=False, abgebrochen=True
             )
         return Ergebnis(
-            ausgabe=f"Stopped after {int(grenze)} seconds — the script was still running.",
+            ausgabe=i18n.t("cronjobs.skript_zeitgrenze", sprache, sekunden=int(grenze)),
             code=None,
             abgelaufen=True,
         )

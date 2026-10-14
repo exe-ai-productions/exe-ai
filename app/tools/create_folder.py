@@ -45,8 +45,7 @@ def werkzeug_beschreibung() -> MCPWerkzeug:
             "it like in every other shared folder. In a chat the share is kept "
             "with the chat; in a job it lasts for this run. A folder that "
             "already exists is only shared.\n"
-            "Relative paths resolve against the first shared folder, or against "
-            "a private working folder when none is shared. A folder "
+            "Relative paths resolve against the first shared folder. A folder "
             "outside the shared folders may need the user's confirmation first."
         ),
         schema={
@@ -91,11 +90,9 @@ async def ausfuehren(
         raise grenzen.GrenzeVerletzt("create_folder needs a path.")
     target = grenzen.ziel(raw, ordner, data_dir)
     if data_dir is not None and grenzen.inside(target, Path(data_dir)):
-        where = f"'{target}' lies in the program's own data folder."
-        if grenzen.no_folder_shared(ordner, data_dir):
-            raise grenzen.GrenzeVerletzt(f"{where} {grenzen.NO_FOLDER_SHARED}")
         raise grenzen.GrenzeVerletzt(
-            f"{where} Give a full path to a folder of the user's instead."
+            f"'{target}' is inside the program's own data folder. Provide an absolute path "
+            "to a user-owned folder instead."
         )
     if target.exists() and not target.is_dir():
         raise grenzen.GrenzeVerletzt(f"'{target}' is a file, not a folder.")
@@ -127,9 +124,9 @@ async def ausfuehren(
         ordner.append(path)
     where = "this chat" if share is not None else "this run"
     if already:
-        return f"'{path}' is already a working folder of {where}."
+        return f"'{path}' is already a working folder for {where}."
     if existed:
-        return f"'{path}' already existed and is now a working folder of {where}."
+        return f"'{path}' already existed and is now a working folder for {where}."
     return f"Created '{path}' as a working folder of {where}."
 
 

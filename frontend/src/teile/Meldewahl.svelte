@@ -83,10 +83,7 @@
     <div class="blocktitel tafelkopf">{t('meldewesen.gruppe_toene')}</div>
     <div class="kachelliste">
       <div class="einstellkachel">
-        <div class="zeilentext">
-          {t('meldewesen.toene')}
-          <span class="hinweis">{t('meldewesen.toene_hinweis')}</span>
-        </div>
+        <div class="zeilentext">{t('meldewesen.toene')}</div>
         <Schalter
           an={!klangwahl.aus}
           beschriftung={t('meldewesen.toene')}
@@ -98,10 +95,7 @@
            over the whole width under them. -->
       <div class="einstellkachel regel">
         <div class="kopfzeile">
-          <div class="zeilentext">
-            {t('meldewesen.lautstaerke')}
-            <span class="hinweis">{t('meldewesen.lautstaerke_hinweis')}</span>
-          </div>
+          <div class="zeilentext">{t('meldewesen.lautstaerke')}</div>
           <span class="zahl">{pegel}</span>
         </div>
         <!-- The slider owns its position while a hand is on it. Writing the
@@ -120,10 +114,7 @@
       </div>
 
       <div class="einstellkachel">
-        <div class="zeilentext">
-          {t('meldewesen.nur_hintergrund')}
-          <span class="hinweis">{t('meldewesen.nur_hintergrund_hinweis')}</span>
-        </div>
+        <div class="zeilentext">{t('meldewesen.nur_hintergrund')}</div>
         <Schalter
           an={klangwahl.nurHintergrund}
           beschriftung={t('meldewesen.nur_hintergrund')}
@@ -143,10 +134,7 @@
            the reader having to work out that "Answer" and "Done" were the
            same thing. -->
       <div class="einstellkachel probenkachel">
-        <div class="zeilentext">
-          {t('meldewesen.probe')}
-          <span class="hinweis">{t('meldewesen.probe_hinweis')}</span>
-        </div>
+        <div class="zeilentext">{t('meldewesen.probe')}</div>
         <div class="proben">
           {#each KLAENGE as name (name)}
             <button class="probe" onclick={() => probehoeren(name)}>
@@ -180,10 +168,7 @@
       {/each}
 
       <div class="einstellkachel">
-        <div class="zeilentext">
-          {t('meldewesen.popup')}
-          <span class="hinweis">{t('meldewesen.popup_hinweis')}</span>
-        </div>
+        <div class="zeilentext">{t('meldewesen.popup')}</div>
         <!-- A number, so a number field — and zero is not "no time at all"
              but the word standing in for it: a notice about a run then
              waits for that run to be looked at instead of for a clock.
@@ -282,12 +267,6 @@
     flex: 1;
     min-width: 0;
     font-size: 13px;
-  }
-  .hinweis {
-    display: block;
-    font-size: 11.5px;
-    color: var(--text-still);
-    margin-top: 2px;
   }
   .zahl {
     flex: none;

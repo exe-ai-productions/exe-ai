@@ -660,7 +660,7 @@ async def test_nach_der_grenze_ist_schluss_und_es_steht_im_chat(dienst):
     # It has no run of its own, so it claims no state — the same rule the
     # background report follows.
     assert letzte.zustand is None
-    assert "Stopping here" in letzte.content
+    assert "Work has stopped" in letzte.content
 
 
 async def test_die_notiz_steht_genau_einmal(dienst):
@@ -679,7 +679,7 @@ async def test_die_notiz_steht_genau_einmal(dienst):
     notizen = [
         n
         for n in dienst.state.repositories.messages.auflisten(chat_id=chat.id)
-        if "Stopping here" in (n.content or "")
+        if "Work has stopped" in (n.content or "")
     ]
     assert len(notizen) == 1
 
@@ -746,12 +746,12 @@ async def test_eine_gesenkte_grenze_sagt_es_im_chat(dienst):
 
     assert provider.durchlaeufe == 3, "the brake did not hold"
     letzte = dienst.state.repositories.messages.auflisten(chat_id=chat.id)[-1]
-    assert "Stopping here" in (letzte.content or ""), (
+    assert "Work has stopped" in (letzte.content or ""), (
         "the brake held without saying so in the chat"
     )
     # And it names what really happened, not the new number: the chat was
     # carried on three times, and the limit is now one.
-    assert "on 3 times" in letzte.content
+    assert "this chat 3 times" in letzte.content
     assert "limit is 1" in letzte.content
 
 
@@ -821,7 +821,7 @@ async def test_nach_dem_anheben_wird_erneut_gebremst_und_erneut_gesagt(dienst):
     notizen = [
         n
         for n in dienst.state.repositories.messages.auflisten(chat_id=chat.id)
-        if "Stopping here" in (n.content or "")
+        if "Work has stopped" in (n.content or "")
     ]
     assert len(notizen) == 2, "the second braking stayed silent"
 

@@ -27,7 +27,7 @@
   import Updatezeile from './Updatezeile.svelte'
   import Werkzeuge from './Werkzeuge.svelte'
   import { handbuchOeffnen } from '../lib/handbuch.js'
-  import { werkzeugeLaden, aktivStand } from '../lib/werkzeuge.svelte.js'
+  import { werkzeugeLaden, anzahlAlle, anzahlAn, serverStand } from '../lib/werkzeuge.svelte.js'
   import WachsendesFeld from './WachsendesFeld.svelte'
   import Hauszeichen from './Hauszeichen.svelte'
   import Menuezeile from './Menuezeile.svelte'
@@ -109,6 +109,9 @@
   const istAgent = $derived(art === 'agent')
   const istWerkzeuge = $derived(art === 'werkzeuge')
   const istDatei = $derived(art === 'konfiguration' || art === 'zugangsdaten')
+  /* The credentials and the tools file stand in a block of a fixed height,
+     like an agent's instruction; the other text pages fill the page. */
+  const istZugangsdaten = $derived(art === 'zugangsdaten')
   /* The agent page has two faces: the list of agents, and the editor for
      one of them. A name means the editor is open. */
   const agentBearbeiten = $derived(istAgent && agentName !== '')
@@ -445,9 +448,11 @@
      still on its way takes over, and the earlier one must not report a
      failure for a switch nobody is waiting for anymore. */
   let sprachversuch = 0
-  /* The pill shows the stored choice: `texte.wahl` is reactive, and every
-     switch writes it before its first await (`texte.svelte.js`), so the
-     pill follows at once — the return to "auto" included. */
+  /* The pill shows the stored choice: `texte.wahl` is reactive, and a
+     switch writes it once its catalogue has arrived (`texte.svelte.js`), so
+     the pill follows the texts — the return to "auto" included. The field is
+     bound to that value for reading only: left to itself it would keep the
+     entry that was clicked, whether or not the switch ever happened. */
   const sprachwahl = $derived(texte.wahl)
   const sprachauswahl = $derived([
     { wert: 'auto', text: t('einstellungen.sprache_auto') },
@@ -468,16 +473,15 @@
   /* The live state behind the subtitles — fetched once when the window
      opens, so a glance at the list shows where everything stands. */
   let stand = $state({
-    serverAnzahl: 0, werkzeugAnzahl: 0, skills: 0, skillsAuto: true,
+    skills: 0, skillsAngeboten: 0, skillsAuto: true,
     cronjobs: 0, cronjobsAktiv: 0,
   })
   async function standLaden() {
-    api.werkzeuge().then((wz) => {
-      stand.serverAnzahl = wz?.server?.length ?? 0
-      stand.werkzeugAnzahl = wz?.werkzeuge?.length ?? 0
-    }).catch(() => {})
     werkzeugeLaden()
-    api.skillsVerwaltung().then((z) => (stand.skills = z.length)).catch(() => {})
+    api.skillsVerwaltung().then((z) => {
+      stand.skills = z.length
+      stand.skillsAngeboten = z.filter((e) => e.auto).length
+    }).catch(() => {})
     api.cronjobs().then((z) => {
       stand.cronjobs = z.length
       stand.cronjobsAktiv = z.filter((e) => e.aktiv).length
@@ -550,17 +554,18 @@
       case 'memory':
         return ''
       case 'skills':
-        return t('editor.unter_skills', { n: stand.skills })
+        // The skills the model is offered by itself, of all there are.
+        return `${stand.skillsAuto ? stand.skillsAngeboten : 0}/${stand.skills}`
       case 'cronjobs':
         return `${stand.cronjobsAktiv}/${stand.cronjobs}`
       case 'system':
         return ''
       case 'agent':
-        return t('editor.unter_agenten', { n: dateien.length })
+        return String(dateien.length)
       case 'tools':
-        return t('editor.unter_server', { n: stand.serverAnzahl, w: stand.werkzeugAnzahl })
+        return `${serverStand().aktiv}/${serverStand().alle}`
       case 'werkzeuge':
-        return t('werkzeuge.aktiv_zahl', aktivStand())
+        return `${anzahlAn()}/${anzahlAlle()}`
       case 'zugangsdaten':
         return ''
       case 'konfiguration':
@@ -581,7 +586,7 @@
       case 'cronjobs':
         return stand.cronjobsAktiv > 0 ? 'gruen' : 'still'
       case 'tools':
-        return stand.serverAnzahl > 0 ? 'gruen' : 'still'
+        return serverStand().aktiv > 0 ? 'gruen' : 'still'
       default:
         return null
     }
@@ -837,7 +842,7 @@
        outlive the page. What was typed stays all the same — it lives in this
        file, not in the parts. -->
   {#if offen}
-  <Menueseite beschriftung={t('editor.titel')} fuellen festeHoehe={istWerkzeuge || istCronjobs}>
+  <Menueseite beschriftung={t('editor.titel')} fuellen festeHoehe={istWerkzeuge || istCronjobs} fillsFoot={istCronjobs}>
     {#snippet liste()}
       {#each GRUPPEN as g (g.name)}
         <div class="menuegruppe">{t(g.titel)}</div>
@@ -892,11 +897,10 @@
           <div class="einstellkachel">
             <div class="zeilentext">
               {t('einstellungen.sprache')}
-              <span class="hinweis">{t('einstellungen.sprache_hinweis')}</span>
             </div>
             <div class="auswahl">
               <Auswahlfeld
-                wert={sprachwahl}
+                bind:wert={() => sprachwahl, () => {}}
                 eintraege={sprachauswahl}
                 beschriftung={t('einstellungen.sprache')}
                 gewaehlt={spracheStellen}
@@ -927,7 +931,6 @@
           <div class="einstellkachel">
             <div class="zeilentext">
               {t('einstellungen.erscheinungsbild')}
-              <span class="hinweis">{t('einstellungen.auto_hinweis')}</span>
             </div>
             <Klappwahl
               optionen={MODI.map(([wert, schluessel]) => [wert, t(schluessel)])}
@@ -938,7 +941,6 @@
           <div class="einstellkachel">
             <div class="zeilentext">
               {t('einstellungen.codefarben')}
-              <span class="hinweis">{t('einstellungen.codefarben_hinweis')}</span>
             </div>
             <Klappwahl
               optionen={CODE_PACKS.map(([wert, schluessel]) => [wert, t(schluessel)])}
@@ -950,7 +952,6 @@
           <div class="einstellkachel">
             <div class="zeilentext">
               {t('einstellungen.blase')}
-              <span class="hinweis">{t('einstellungen.blase_hinweis')}</span>
             </div>
             <div class="farbwahl">
               {#if zustand.blasenfarbe}
@@ -1021,8 +1022,13 @@
              they come from. Their one way out leads next door. -->
         <Werkzeuge zuVerbindungen={() => navZiel('tools')} />
       {:else if istAgent && maske}
+        <!-- A file that cannot be read gives the mask's place back and the
+             list is read again: the page stands on what the service says
+             of the file now, with its warning box, not on the list that was
+             loaded while the file was still sound. -->
         <Agentenmaske agent={maske.agent} bind:geaendert={maskeGeaendert}
-                      onfertig={maskeFertig} onabbrechen={() => (maske = null)} />
+                      onfertig={maskeFertig} onabbrechen={() => (maske = null)}
+                      onunlesbar={() => { maske = null; dateienLaden() }} />
       {:else if istAgent && !agentBearbeiten}
         <SettingsAgents {dateien} {helpersAtOnce} {helperSteps}
                         onbearbeiten={(agent) => (maske = { agent })}
@@ -1041,14 +1047,15 @@
           quelle={istDatei || istTools || agentBearbeiten}
           platzhalter={istSystem ? t('systemprompt.platzhalter') : ''}
           beschriftung={t('editor.titel')}
-          volleHoehe
+          block={istZugangsdaten || istTools}
+          volleHoehe={!(istZugangsdaten || istTools)}
         />
         </div>
       {/if}
 
       {#if kaputt || unlesbar}
         <div class="warnung" transition:fade={{ duration: 120 }}>
-          {unlesbar ?? t(istTools ? 'werkzeuge.kaputt' : 'agenten.kaputt', { grund: kaputt })}
+          {unlesbar ?? t(istTools || istDatei ? 'werkzeuge.kaputt' : 'agenten.kaputt', { grund: kaputt })}
         </div>
       {/if}
 
@@ -1066,22 +1073,18 @@
       {#if istTools}
         <div class="lese">
           <div class="lesetitel tafelkopf">{t('werkzeuge.live')}</div>
-          {#if !lese}
-            <span class="leseleer">{t('werkzeuge.keine')}</span>
-          {:else if !lese.aktiv}
+          {#if lese && !lese.aktiv}
             <span class="leseleer">{t('werkzeuge.abgeschaltet')}</span>
-          {:else}
+          {:else if lese}
             {#each lese.server as server (server)}
               <span class="server"><Leuchtpunkt farbe="gruen" groesse={11} />{server}</span>
             {/each}
             {#if lese.werkzeuge.length}
               <div class="werkzeugpillen">
                 {#each lese.werkzeuge as werkzeug (werkzeug.name)}
-                  <Standpille farbe="werkzeug">{werkzeug.name}</Standpille>
+                  <Standpille farbe="werkzeug">{werkzeug.anzeige ?? werkzeug.name}</Standpille>
                 {/each}
               </div>
-            {:else}
-              <span class="leseleer">{t('werkzeuge.keine')}</span>
             {/if}
           {/if}
         </div>
@@ -1091,21 +1094,18 @@
         <div class="schalterzeile">
           <div class="beschriftung">
             {t('gedaechtnis.an_lokal')}
-            <span class="hinweis">{t('gedaechtnis.an_lokal_hinweis')}</span>
           </div>
           <Schalter an={gedaechtnisSchalter.lokal} beschriftung={t('gedaechtnis.an_lokal')} onschalten={(an) => gedaechtnisSchalten('lokal', an)} />
         </div>
         <div class="schalterzeile">
           <div class="beschriftung">
             {t('gedaechtnis.an_cloud')}
-            <span class="hinweis">{t('gedaechtnis.an_cloud_hinweis')}</span>
           </div>
           <Schalter an={gedaechtnisSchalter.cloud} beschriftung={t('gedaechtnis.an_cloud')} onschalten={(an) => gedaechtnisSchalten('cloud', an)} />
         </div>
         <div class="schalterzeile">
           <div class="beschriftung">
             {t('bildschutz.titel')}
-            <span class="hinweis">{t('bildschutz.hinweis')}</span>
           </div>
           <Schalter an={bildschutzSchalter.an} beschriftung={t('bildschutz.titel')} onschalten={(an) => bildschutzSchalten(an)} />
         </div>
@@ -1114,7 +1114,6 @@
       {#if istSystem}
         <div class="schalterzeile">
           <div class="beschriftung">{t('editor.werkzeugrunden_titel')}
-            <span class="hinweis">{t('editor.werkzeugrunden_unter')}</span>
           </div>
           <div class="zahlfeld">
             <Zahlenfeld bind:wert={werkzeugRunden} min={0} ganzzahlig
@@ -1123,7 +1122,6 @@
         </div>
         <div class="schalterzeile">
           <div class="beschriftung">{t('editor.befehlszeit_titel')}
-            <span class="hinweis">{t('editor.befehlszeit_unter')}</span>
           </div>
           <div class="zahlfeld">
             <Zahlenfeld bind:wert={befehlZeit} min={0} ganzzahlig
@@ -1132,7 +1130,6 @@
         </div>
         <div class="schalterzeile">
           <div class="beschriftung">{t('editor.kontextkomprimierung_titel')}
-            <span class="hinweis">{t('editor.kontextkomprimierung_unter')}</span>
           </div>
           <div class="zahlfeld">
             <!-- `max` matters here in a way it does not for the two
@@ -1152,7 +1149,6 @@
         </div>
         <div class="schalterzeile">
           <div class="beschriftung">{t('editor.anrede_titel')}
-            <span class="hinweis">{t('editor.anrede_unter')}</span>
           </div>
           <input class="anredefeld" value={begruessung.name} placeholder={begruessung.vorschlag}
                  aria-label={t('editor.anrede_titel')}
@@ -1160,7 +1156,6 @@
         </div>
         <div class="schalterzeile">
           <div class="beschriftung">{t('editor.anrede_schalter')}
-            <span class="hinweis">{t('editor.anrede_schalter_unter')}</span>
           </div>
           <Schalter an={begruessung.an} beschriftung={t('editor.anrede_schalter')}
                     onschalten={(an) => anredeSpeichern(begruessung.name, an)} />
@@ -1357,12 +1352,6 @@
     min-width: 0;
     font-size: 13px;
   }
-  .hinweis {
-    display: block;
-    font-size: var(--schrift-hinweis);
-    color: var(--text-still);
-    margin-top: 2px;
-  }
   /* The picker brings its own measure; the row only says how wide it may be
      so the label keeps the rest. */
   .auswahl {
@@ -1506,19 +1495,21 @@
     width: 108px;
     flex: none;
   }
-  /* Reaches down into the frame's foot room, so the scripts sit lower
-     without touching the edge. */
+  /* Fills the frame down to its foot (`fillsFoot` on the frame), so the
+     scripts sit low without touching the edge. */
   .cronjobseite {
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
-    margin-bottom: -32px;
   }
-  /* The scripts' part under the schedules, set off like a part of a view;
-     it keeps its own height and never scrolls out. */
+  /* The scripts' part under the schedules, set off like a part of a view.
+     It takes the room its scripts need up to a third of the page, and
+     scrolls inside beyond that: the schedules above it keep the rest. */
   .skriptteil {
-    flex: none;
+    flex: 0 1 auto;
+    max-height: 33%;
+    overflow-y: auto;
     margin-top: 22px;
   }
   .skriptteil h4 {

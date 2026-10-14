@@ -17,24 +17,6 @@
         "read_webpage"
       ],
       "needs_confirmation": []
-    },
-    "searxng": {
-      "command": ".venv/bin/python",
-      "args": [
-        "mcp/searxng_server.py"
-      ],
-      "env": {
-        "SEARXNG_URL": "${SEARXNG_URL}",
-        "SUCHE_MAX_TREFFER": "8",
-        "ABRUF_MAX_ZEICHEN": "6000"
-      },
-      "enabled": false,
-      "type": "stdio",
-      "allowed_tools": [
-        "web_search",
-        "read_webpage"
-      ],
-      "needs_confirmation": []
     }
   }
 }

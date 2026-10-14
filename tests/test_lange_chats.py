@@ -251,7 +251,7 @@ def test_die_verdichtung_faltet_den_angehefteten_anfang_nicht(client):
     _lange(repositories, chat_id, fuellung=300)
 
     zeilen = repositories.messages.fuer_das_modell(chat_id=chat_id)
-    mitte = chatverdichtung._mitte_suchen(zeilen, [z.content for z in zeilen])
+    mitte = chatverdichtung._mitte_suchen(zeilen, [len(z.content) for z in zeilen])
 
     assert mitte, "there has to be a middle here, or the rest checks nothing"
     gefaltet = {z.id for z in mitte}

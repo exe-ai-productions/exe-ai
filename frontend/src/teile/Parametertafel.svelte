@@ -8,7 +8,8 @@
 
      Which knobs appear is decided by the backend, not here: the model brings
      its own list, and it only contains what the dialect really evaluates. */
-  import { t } from '../lib/texte.svelte.js'
+  import { t, texte } from '../lib/texte.svelte.js'
+  import { fractionDigits, formatNumber, parseNumber } from '../lib/numberDisplay.js'
   import { melde } from '../lib/zustand.svelte.js'
   import Serverabschnitt from './Serverabschnitt.svelte'
   import Knopfreihe from './Knopfreihe.svelte'
@@ -110,7 +111,7 @@
 
 {#snippet regler(p)}
   {@const wert = wertVon(p)}
-  {@const nachkomma = p.ganzzahl ? 0 : (String(p.schritt).split('.')[1]?.length ?? 0)}
+  {@const nachkomma = p.ganzzahl ? 0 : fractionDigits(p.schritt)}
   {@const gesperrt = p.aktiv === false}
   {@const anteil = leer(wert) || p.maximum === p.minimum
     ? 0
@@ -128,7 +129,7 @@
       <input
         class="zahl"
         class:zahl-unversendet={!einstellungen.herkunft?.[p.name]}
-        value={leer(wert) ? t('parameter.auto') : Number(wert).toFixed(nachkomma)}
+        value={leer(wert) ? t('parameter.auto') : formatNumber(wert, nachkomma, texte.sprache)}
         disabled={gesperrt}
         title={gesperrt ? null : herkunftVon(p)}
         onchange={(e) => {
@@ -139,8 +140,8 @@
             setzen(p, null)
             return
           }
-          const zahl = Math.min(p.maximum, Math.max(p.minimum, Number(eingabe) || 0))
-          e.currentTarget.value = zahl.toFixed(nachkomma)
+          const zahl = Math.min(p.maximum, Math.max(p.minimum, parseNumber(eingabe) || 0))
+          e.currentTarget.value = formatNumber(zahl, nachkomma, texte.sprache)
           setzen(p, zahl)
         }}
         aria-label={p.label}
@@ -242,6 +243,7 @@
     border: none;
     border-radius: 9px;
     background: var(--bg-hoch);
+    box-shadow: inset 0 0 0 1px var(--feldstrich);
     color: var(--text);
     font: 400 13px/18px var(--schrift);
     font-variant-numeric: tabular-nums;

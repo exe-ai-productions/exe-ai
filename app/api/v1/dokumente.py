@@ -104,7 +104,7 @@ class DokumentHochgeladen(BaseModel):
     "/documents",
     response_model=DokumentHochgeladen,
     status_code=status.HTTP_201_CREATED,
-    summary="Upload a document for a message (raw bytes) and read out its text",
+    summary="Upload a document for a message (raw bytes) and extract its text",
 )
 async def dokument_hochladen(
     chat_id: str,
@@ -218,7 +218,7 @@ class DokumentInhalt(BaseModel):
 @router.get(
     "/documents/{dokument_id}",
     response_model=DokumentInhalt,
-    summary="The text read out of a document (for the preview)",
+    summary="Text extracted from a document (for the preview)",
 )
 def dokument_lesen(
     dokument_id: str,
@@ -239,7 +239,7 @@ def dokument_lesen(
 @router.post(
     "/documents/{dokument_id}/open",
     response_model=bool,
-    summary="Open a saved document with the system's default program",
+    summary="Open a saved document in the system's default application",
 )
 def dokument_oeffnen(
     dokument_id: str,
@@ -277,7 +277,7 @@ def dokument_oeffnen(
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
     response_model=None,
-    summary="Remove a document that was not sent yet",
+    summary="Remove a document that has not been sent",
 )
 def dokument_entfernen(
     dokument_id: str,
@@ -323,7 +323,7 @@ class DocFolderEntry(BaseModel):
 @router.get(
     "/doc-folder",
     response_model=list[DocFolderEntry],
-    summary="Every file in one list: uploaded and delivered, with its origin",
+    summary="List all uploaded and delivered files with their origins",
 )
 def doc_folder(
     request: Request,
@@ -345,7 +345,29 @@ def doc_folder(
     ]
 
 
-@router.get("/documents/{dokument_id}/file", summary="The uploaded file itself")
+class DocFolderPlace(BaseModel):
+    path: str
+
+
+@router.get(
+    "/doc-folder/place",
+    response_model=DocFolderPlace,
+    summary="The folder the doc folder's files of a chat lie in",
+)
+def doc_folder_place(
+    request: Request,
+    chat: str,
+    language: str = Depends(hole_sprache),
+) -> DocFolderPlace:
+    """The path the folder row of an open chat names. Without a chat the row
+    names the dock, which the storage locations already say."""
+    path = docfolder.chat_folder_path(request.app.state.config, chat)
+    if path is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, t("fehler.dokument_fehlt", language))
+    return DocFolderPlace(path=path)
+
+
+@router.get("/documents/{dokument_id}/file", summary="The uploaded file")
 def document_file(
     dokument_id: str,
     repositories: Repositories = Depends(hole_repositories),
@@ -369,7 +391,7 @@ def document_file(
 
 @router.get(
     "/chat-files/{chat_id}/{name:path}",
-    summary="A file lying below a chat's own folder that no document names",
+    summary="A file within a chat's own folder that is not referenced by any document",
 )
 def chat_file(
     chat_id: str,

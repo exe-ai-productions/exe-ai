@@ -18,15 +18,22 @@ Two holes this module closes:
 
 Both holes trace back to the same rule: for an agent, "asks" becomes "no",
 because an unattended run has nobody there to answer.
+
+One place is shut whatever the mode says: the program's own private places —
+the database with the chats, the notes, the folders of other chats, the files
+with keys and rules (``grenzen.private_check``). A call of the shell or a file
+tool that names one is refused before any rule is read.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from app.berechtigungsregeln import Antwort, GUELTIGE_ANTWORTEN, Regeldatei, laden
-from app.tools import dateiwerkzeuge, shell, uhr
+from app.tools import dateiwerkzeuge, grenzen, shell, uhr
 
 if TYPE_CHECKING:
     from app.agenten import Agent
@@ -76,6 +83,18 @@ def _dateiwerkzeug_aussenpfad(name: str, argumente: dict, ordner: list[str]) -> 
     return None
 
 
+def _private_pfad(
+    name: str, argumente: dict, ordner: list[str], private: Callable[[Path], bool]
+) -> str | None:
+    """The private place of the program this call names, for the shell and
+    the file tools, or None."""
+    if name == shell.WERKZEUG_NAME:
+        return shell.private_target(argumente, ordner, private)
+    if name in dateiwerkzeuge.NAMEN:
+        return dateiwerkzeuge.private_target(name, argumente, ordner, private)
+    return None
+
+
 def _niemals_treffer(name: str, argumente: dict, regeln: Regeldatei) -> str | None:
     """The only rule type meant to work on the command TEXT, not a path.
 
@@ -118,6 +137,7 @@ def urteil(
     regeln: Regeldatei | None = None,
     statisch_bestaetigen: bool = False,
     rules_of: Herkunft | None = None,
+    private: Callable[[Path], bool] | None = None,
 ) -> Urteil:
     """The judgment for one call: ``ja`` / ``fragen`` / ``nein`` (+ reason).
 
@@ -130,10 +150,14 @@ def urteil(
     ``statisch_bestaetigen`` is the static ``needs_confirmation`` flag from
     ``mcp_servers.json`` — the registry knows it, this function does not need
     to know about MCP entries to fold it into the same three-way decision.
+
+    ``private`` says whether a path is a private place of the program
+    (``grenzen.private_check``): a call of the shell or a file tool that
+    names one is refused in every mode.
     """
     ergebnis = _kern_urteil(
         name, argumente, ordner, herkunft, agent, regeln, statisch_bestaetigen,
-        rules_of or herkunft,
+        rules_of or herkunft, private,
     )
     return _agentregel_verschaerft(ergebnis, name, rules_of or herkunft, agent)
 
@@ -154,9 +178,8 @@ def _agentregel_verschaerft(
         return ergebnis
     if gewuenscht == "nein":
         return Urteil("nein", (
-            f"'{name}' is restricted by this agent's own permissions. "
-            "Work with a different tool, or ask the user to loosen it in the "
-            "agent file."
+            f"'{name}' is restricted by this agent's permissions. Use a different tool, or ask "
+            "the user to adjust the permissions in the agent file."
         ))
     # gewuenscht == "fragen": an agent cannot be asked either, same as
     # everywhere else "fragen" meets an unattended run.
@@ -172,15 +195,23 @@ def _kern_urteil(
     regeln: Regeldatei | None,
     statisch_bestaetigen: bool,
     rules_of: Herkunft,
+    private: Callable[[Path], bool] | None = None,
 ) -> Urteil:
     regeln = regeln or laden()
 
     if (muster := _niemals_treffer(name, argumente, regeln)) is not None:
         return Urteil("nein", (
-            f"This command matches a rule that is never allowed ('{muster}'). "
-            "Choose a different, narrower command, or ask the user to run it "
-            "themselves."
+            f"This command matches a rule that prohibits execution ('{muster}'). Choose a "
+            "different, more narrowly scoped command, or ask the user to run it themselves."
         ))
+
+    # The program's private places — its chats, settings, keys and notes —
+    # are shut to every tool call in every mode: before any per-tool rule,
+    # because no mode and no rule is meant to open them.
+    if private is not None and name in _BEKANNTE_DATEIWERKZEUGE:
+        privat = _private_pfad(name, argumente, ordner, private)
+        if privat is not None:
+            return Urteil("nein", grenzen.PRIVATE_PLACE.format(path=privat))
 
     # Hole B: what the agent did not name in tools: must not run at
     # execution time either — not only when it was offered to the model.
@@ -196,9 +227,8 @@ def _kern_urteil(
     ):
         genannt = ", ".join(agent.werkzeuge) or "(none)"
         return Urteil("nein", (
-            f"'{name}' is not in this agent's tools list. "
-            f"Named tools: {genannt}. "
-            "Work with those, or ask the user to add it to the agent."
+            f"'{name}' is not in this agent's tool list. Listed tools: {genannt}. Use those "
+            "tools, or ask the user to add this one to the agent."
         ))
 
     # An explicit per-tool rule is the strongest signal an operator can give,
@@ -278,8 +308,7 @@ def _abschliessen(antwort: Antwort, herkunft: Herkunft, name: str) -> Urteil:
     """
     if herkunft == "agent" and antwort == "fragen":
         return Urteil("nein", (
-            f"'{name}' needs confirmation, and nobody can answer in an "
-            "unattended run. Ask the user to run this in a chat instead, or "
-            "have them allow it in berechtigungen.json."
+            f"'{name}' requires confirmation, which is unavailable during an unattended run. "
+            "Ask the user to run this in a chat or allow it in berechtigungen.json."
         ))
     return Urteil(antwort)

@@ -43,7 +43,12 @@ def test_die_breiten_bleiben_in_ihren_grenzen():
     assert geklemmt == {"leiste_breite": 900, "seitenleiste_breite": 314}
 
     geklemmt = layoutwahl.wahl_pruefen({"leiste_breite": 1, "seitenleiste_breite": 9999})
-    assert geklemmt == {"leiste_breite": 314, "seitenleiste_breite": 400}
+    assert geklemmt == {"leiste_breite": 364, "seitenleiste_breite": 400}
+
+    # The column's former lower bound and default, as every layout written
+    # before the seventh sign carries it: it comes back at the width the
+    # row of signs needs today.
+    assert layoutwahl.wahl_pruefen({"leiste_breite": 314}) == {"leiste_breite": 364}
 
     # Silence probe: widths inside the bounds stay as they are.
     geklemmt = layoutwahl.wahl_pruefen({"leiste_breite": 400, "seitenleiste_breite": 340})
@@ -79,7 +84,7 @@ def test_die_vorgabe_steht_dahinter():
     assert layoutwahl.aufgeloest(None) == {
         "leiste_offen": False,
         "leiste_modul": "terminal",
-        "leiste_breite": 314,
+        "leiste_breite": 364,
         "seitenleiste_zu": True,
         "seitenleiste_breite": 314,
     }
@@ -118,6 +123,27 @@ def test_the_interface_holds_the_same_defaults_as_the_service():
     assert held == layoutwahl.VORGABE
 
 
+RAIL = Path(__file__).resolve().parent.parent / "frontend/src/lib/arbeitsleiste.svelte.js"
+
+
+def test_the_service_clamps_the_column_where_the_seam_does():
+    """The seam's lower bound is what the row of signs at the column's foot
+    needs. The service clamps to the same number and the default starts on
+    it: a default below it was clamped up at every load without being
+    stored, and the service took a width no drag could produce."""
+    source = RAIL.read_text(encoding="utf-8")
+    lowest = re.search(r"^export const BREITE_MIN = (\d+)$", source, re.M)
+    widest = re.search(r"^const BREITE_MAX = (\d+)$", source, re.M)
+    assert lowest and widest, "arbeitsleiste.svelte.js names no bounds for the column"
+    assert layoutwahl.LEISTE_MIN == int(lowest.group(1)) == 364
+    assert layoutwahl.VORGABE["leiste_breite"] == layoutwahl.LEISTE_MIN
+    # Silence probes: the upper bound stays, and the sidebar on the left
+    # keeps its own, smaller measure.
+    assert layoutwahl.LEISTE_MAX == int(widest.group(1)) == 900
+    assert layoutwahl.SEITE_MIN == layoutwahl.VORGABE["seitenleiste_breite"] == 314
+    assert layoutwahl.SEITE_MAX == 400
+
+
 def test_die_route_speichert_und_gibt_zurueck(client):
     antwort = client.put(
         "/api/v1/settings/global/layout",
@@ -132,6 +158,19 @@ def test_die_route_speichert_und_gibt_zurueck(client):
 
     gelesen = client.get("/api/v1/settings/resolved/layout").json()
     assert gelesen["wert"]["leiste_modul"] == "notiz"
+
+
+def test_the_route_answers_a_width_below_the_bound_with_the_bound(client):
+    """What a window wrote while the default was still 314 comes back as
+    the width the column can have."""
+    answer = client.put("/api/v1/settings/global/layout", json={"wert": {"leiste_breite": 314}})
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["wert"] == {"leiste_breite": 364}
+    assert client.get("/api/v1/settings/resolved/layout").json()["wert"] == {"leiste_breite": 364}
+
+    # Silence probe: the sidebar on the left may still be stored at 314.
+    answer = client.put("/api/v1/settings/global/layout", json={"wert": {"seitenleiste_breite": 314}})
+    assert answer.json()["wert"] == {"seitenleiste_breite": 314}
 
 
 def test_a_fresh_service_leaves_the_sidebar_to_the_interface(client):
@@ -164,7 +203,17 @@ def _width_for(raw: float, other: float | None, window: float) -> float:
     source = HANDLE.read_text(encoding="utf-8")
     module = re.search(r"<script module>\n(.*?)</script>", source, re.S)
     assert module, "Seitengriff.svelte has no module script"
-    script = module.group(1).replace("export function", "function") + (
+    # The three numbers come from the arithmetic module the seam imports; a
+    # plain `node -e` script cannot import, so they are put in front.
+    numbers = re.findall(
+        r"^export const \w+ = \d+$",
+        (HANDLE.parent.parent / "lib/columnRoom.js").read_text(encoding="utf-8"),
+        re.M,
+    )
+    body = re.sub(r"^\s*import .*\n", "", module.group(1), flags=re.M)
+    script = "\n".join(n.replace("export ", "") for n in numbers) + body.replace(
+        "export function", "function"
+    ) + (
         f"\nconsole.log(JSON.stringify(widthFor({json.dumps(raw)}, "
         f"{json.dumps(other)}, {json.dumps(window)})))\n"
     )

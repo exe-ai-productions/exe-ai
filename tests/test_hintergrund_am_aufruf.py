@@ -323,11 +323,11 @@ def test_ein_vordergrundaufruf_wird_von_der_schlussschrift_nicht_umgeschrieben(c
     suche = hintergrund.laeufe.anlegen(chat_id, "grep foo datei", False)
     hintergrund.laeufe.beenden(suche, 1)
     protokoll = [
-        {"name": "run_command", "lauf_nummer": still.nummer, "ergebnis": "(done, no output)", "fehlgeschlagen": False},
+        {"name": "run_command", "lauf_nummer": still.nummer, "ergebnis": "(completed without output)", "fehlgeschlagen": False},
         {"name": "run_command", "lauf_nummer": suche.nummer, "ergebnis": "[exit code 1]", "fehlgeschlagen": False},
     ]
     nachtragen(protokoll, chat_id)
-    assert protokoll[0]["ergebnis"] == "(done, no output)"
+    assert protokoll[0]["ergebnis"] == "(completed without output)"
     assert "exit_code" not in protokoll[0]
     assert protokoll[1]["ergebnis"] == "[exit code 1]"
     assert protokoll[1]["fehlgeschlagen"] is False

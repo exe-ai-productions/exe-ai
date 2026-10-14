@@ -22,9 +22,10 @@
   import { frage, melde, zustand } from '../lib/zustand.svelte.js'
   import { neuigkeit } from '../lib/ereignisstrom.svelte.js'
   import { dayIn } from '../lib/clock.js'
+  import { popupPlace } from '../lib/popupPlace.js'
   import { skriptwahl, skriptWahlLeeren } from '../lib/skriptwahl.svelte.js'
   import { formFromEntry, uhrzeit } from '../lib/terminform.js'
-  import { ScheduleCalendar as Kalender } from '../lib/schedulecalendar.svelte.js'
+  import { kalender } from '../lib/schedulecalendar.svelte.js'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import Hauszeichen from './Hauszeichen.svelte'
   import Schalter from './Schalter.svelte'
@@ -45,7 +46,8 @@
   const ABSTAND = 10
   const RAND = 12
 
-  const kalender = new Kalender()
+  /* Held while this page stands: the clock and the loading run for it. */
+  $effect(() => kalender.hold())
 
   let zeilen = $state([])
   let laeufe = $state([])
@@ -59,6 +61,12 @@
      ends: "next run", the dot and the history change with either. A quiet
      answer older than a change made here is dropped (`edits`). */
   let edits = 0
+  /* A schedule was made, changed, paused or removed here: the list's quiet
+     answers older than this are dropped. The calendar asks again on the
+     service's announcement of the change, here as in every other window. */
+  function scheduleChanged() {
+    edits += 1
+  }
   async function laden(quiet = false) {
     const vorher = edits
     try {
@@ -104,8 +112,13 @@
     const name = skriptwahl.name
     untrack(() => {
       form = { entry: null, script: name }
-      const spalte = rechtsteil.getBoundingClientRect()
-      zeigen({ left: spalte.left, right: spalte.left, top: spalte.top })
+      /* The column's left edge, read afresh each time the pop-up is placed. */
+      zeigen({
+        getBoundingClientRect() {
+          const spalte = rechtsteil.getBoundingClientRect()
+          return { left: spalte.left, right: spalte.left, top: spalte.top }
+        },
+      })
     })
   })
   $effect(() => () => skriptWahlLeeren())
@@ -124,26 +137,60 @@
   }
   function bearbeiten(ev) {
     form = { entry: zeile }
-    zeigen(ev.currentTarget.getBoundingClientRect())
+    zeigen(ev.currentTarget)
   }
-  /* The pop-up beside what opened it (`anker`, a rect on screen): to its
-     right where there is room, else to its left, and never past the
-     window's bottom edge. The browser would centre a popover; this one is
-     placed by hand. */
-  async function zeigen(anker) {
+  /* What the pop-up hangs on: the element that opened it (or anything that
+     can say where it stands, `getBoundingClientRect`). Its place is read
+     each time the pop-up is set, so a column that scrolls takes the pop-up
+     along. */
+  let anker = null
+  /* The pop-up beside what opened it: to its right where there is room,
+     else to its left, and never past the window's edge (`popupPlace`). The
+     browser would centre a popover; this one is placed by hand. */
+  async function zeigen(neuerAnker) {
+    anker = neuerAnker
     await tick()
     if (!popup) return
     if (!popup.matches(':popover-open')) popup.showPopover()
     popup.focus()
-    const breite = popup.offsetWidth
-    const hoehe = popup.offsetHeight
-    let x = anker.right + ABSTAND
-    if (x + breite > window.innerWidth - RAND) x = anker.left - ABSTAND - breite
-    let y = anker.top
-    if (y + hoehe > window.innerHeight - RAND) y = window.innerHeight - RAND - hoehe
-    popup.style.left = `${Math.max(RAND, x)}px`
-    popup.style.top = `${Math.max(RAND, y)}px`
+    platzieren()
   }
+  function platzieren() {
+    // An opener that left the page (the month turned) leaves the pop-up where it is.
+    if (!popup || !anker || anker.isConnected === false) return
+    /* At most as tall as the window leaves room: placed, it is moved up as
+       far as the window's edge, and what is longer scrolls inside — the two
+       buttons at its foot stay in reach in a small window. */
+    popup.style.maxHeight = `${Math.max(window.innerHeight - 2 * RAND, 0)}px`
+    const stelle = popupPlace(
+      anker.getBoundingClientRect(),
+      { breite: popup.offsetWidth, hoehe: popup.offsetHeight },
+      { breite: window.innerWidth, hoehe: window.innerHeight },
+      ABSTAND,
+      RAND,
+    )
+    popup.style.left = `${stelle.left}px`
+    popup.style.top = `${stelle.top}px`
+  }
+  /* While the pop-up stands, whatever scrolls (the right column, the page)
+     or resizes moves it after its opener — once per frame. */
+  $effect(() => {
+    if (!form) return
+    let bild = 0
+    const nachfuehren = (ereignis) => {
+      // What scrolls inside the pop-up (its text field, a list) moves nothing.
+      if (ereignis?.target instanceof Node && popup?.contains(ereignis.target)) return
+      cancelAnimationFrame(bild)
+      bild = requestAnimationFrame(platzieren)
+    }
+    window.addEventListener('scroll', nachfuehren, true)
+    window.addEventListener('resize', nachfuehren)
+    return () => {
+      cancelAnimationFrame(bild)
+      window.removeEventListener('scroll', nachfuehren, true)
+      window.removeEventListener('resize', nachfuehren)
+    }
+  })
   /* Closed by a click beside it or Escape: the form goes, and what was
      typed in it with it. */
   function umgeschaltet(ev) {
@@ -155,12 +202,24 @@
   function taste(ev) {
     if (ev.key === 'Escape') ev.stopPropagation()
   }
-  function geschlossen(row) {
+  /* `own` is the form the answer belongs to. A save that is answered late
+     finds another form standing (the pop-up was opened again meanwhile):
+     the row is saved and the lists are asked again, but the pop-up that
+     stands now is not that answer's to close. */
+  function geschlossen(row, own = form) {
+    if (own !== form) {
+      if (row) {
+        scheduleChanged()
+        laden()
+      }
+      return
+    }
     form = null
+    anker = null
     skriptWahlLeeren()
     if (popup?.matches(':popover-open')) popup.hidePopover()
     if (row) {
-      edits += 1
+      scheduleChanged()
       laden()
     }
   }
@@ -169,7 +228,7 @@
      start, yellow while it waits for a model, otherwise blue when on and
      grey when off. */
   function punkt(z) {
-    if (z.letzter_ausgang === 'gescheitert' || z.agent_fehlt || z.skript_nicht_startbar) return 'rot'
+    if (z.letzter_ausgang === 'gescheitert' || z.agent_missing || z.agent_broken || z.skript_nicht_startbar) return 'rot'
     if (z.wartet_auf_modell) return 'gelb'
     return z.aktiv ? 'blau' : 'still'
   }
@@ -224,14 +283,21 @@
 
   /* Why the chosen schedule stands where it stands, in the line under its
      head, in the colour of that state — exactly one answer: finished,
-     stopped by its failures, its agent file gone, waiting for a model, its
+     stopped by its failures, its agent file gone or broken, waiting for a model, its
      script not startable. With none of these, when it runs next. */
   function zustandszeile(z) {
     if (abgeschlossen(z))
       return { text: t('cronjobs.abgeschlossen', { wann: moment(z.ziel_erreicht_am) }), farbe: 'gruen' }
     if (angehalten(z))
       return { text: t('cronjobs.angehalten', { n: z.fehlversuche }), farbe: 'rot' }
-    if (z.agent_fehlt) return { text: t('cronjobs.agent_fehlt'), farbe: 'rot' }
+    if (z.agent_missing) return { text: t('cronjobs.agent_fehlt'), farbe: 'rot' }
+    if (z.agent_broken)
+      return {
+        text: z.agent_broken_line
+          ? t('cronjobs.agent_kaputt_zeile', { zeile: z.agent_broken_line })
+          : t('cronjobs.agent_kaputt'),
+        farbe: 'rot',
+      }
     if (z.wartet_auf_modell) return { text: t('cronjobs.wartet_auf_modell'), farbe: 'gelb' }
     if (z.skript_nicht_startbar)
       return { text: t('cronjobs.skript_nicht_startbar', { grund: z.skript_nicht_startbar }), farbe: 'rot' }
@@ -292,7 +358,7 @@
     z.aktiv = an
     try {
       const neu = an ? await api.cronjobFortsetzen(z.id) : await api.cronjobPausieren(z.id)
-      edits += 1
+      scheduleChanged()
       Object.assign(z, neu)
     } catch (fehler) {
       z.aktiv = vorher
@@ -304,10 +370,12 @@
     if (startet) return
     startet = z.id
     try {
-      const neu = await api.cronjobStarten(z.id)
+      const { notice, ...neu } = await api.cronjobStarten(z.id)
       edits += 1
       Object.assign(z, neu)
-      melde(t('cronjobs.gestartet'), 'erfolg')
+      // Where the model was still coming up the service says so itself, in
+      // the language of the request; the run follows without a second press.
+      melde(notice || t('cronjobs.gestartet'), 'erfolg')
       laden(true)
     } catch (fehler) {
       melde(String(fehler.message || fehler), 'fehler')
@@ -324,7 +392,7 @@
     if (!ja) return
     try {
       await api.cronjobLoeschen(z.id)
-      edits += 1
+      scheduleChanged()
       await laden()
       melde(t('cronjobs.geloescht'), 'erfolg')
     } catch (fehler) {
@@ -395,7 +463,7 @@
 
       <div class="abschnitt">
         <span>{t('cronjobs.letzte_laeufe')}</span><i></i>
-        <span class="zahl">{Math.min(LETZTE, eigene.length)}/{eigene.length}</span>
+        <span class="zahl">{Math.min(LETZTE, eigene.length)}/{eigene[0]?.total || eigene.length}</span>
       </div>
       {#if eigene.length}
         <!-- One row per run: when, and how it ended. A click unfolds the
@@ -463,12 +531,12 @@
 <div class="popup" popover="auto" role="dialog" tabindex="-1"
      aria-label={t(form?.entry ? 'cronjobs.form_change' : 'cronjobs.neuer_cronjob')}
      bind:this={popup} ontoggle={umgeschaltet} onkeydown={taste}>
-  {#if form}
-    {#key form}
-      <ScheduleForm entry={form.entry} day={form.entry ? kalender.today : kalender.chosen}
-                    script={form.script ?? ''} onclose={geschlossen} />
-    {/key}
-  {/if}
+  <!-- One pass per form object: `own` keeps the form this instance was made
+       for, where a `{@const}` would follow `form` to the next one. -->
+  {#each form ? [form] : [] as own (own)}
+    <ScheduleForm entry={own.entry} day={own.entry ? kalender.today : kalender.chosen}
+                  script={own.script ?? ''} onclose={(row) => geschlossen(row, own)} />
+  {/each}
 </div>
 
 <style>
@@ -741,11 +809,22 @@
     padding: 14px 16px 16px;
     border: none;
     border-radius: 9px;
+    /* Taller than the room the window leaves (`platzieren`), the form's
+       fields scroll inside it and its foot stays. A list opened in the form
+       is a popover of its own in the top layer (Auswahlfeld.svelte), so
+       this clips nothing of it. */
+    overflow: hidden;
     background: var(--glass-dropdown);
     color: var(--text);
     box-shadow: 0 18px 40px -8px rgba(0, 0, 0, 0.55), inset 0 0 0 1px var(--glass-button-edge);
     -webkit-backdrop-filter: blur(16px);
     backdrop-filter: blur(16px);
+  }
+  /* A column only while it stands open: a display set on the closed
+     element would show it. */
+  .popup:popover-open {
+    display: flex;
+    flex-direction: column;
   }
   .popup:focus {
     outline: none;

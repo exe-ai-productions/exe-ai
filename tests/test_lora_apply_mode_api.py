@@ -85,7 +85,7 @@ def turbo_oder_sdcli(config: Config, client: TestClient, monkeypatch, tmp_path: 
 
     gesehen: dict = {}
 
-    def _erzeugen(self, auftrag: Auftrag, ziel):
+    def _erzeugen(self, auftrag: Auftrag, ziel, **kwargs):
         gesehen["maler"] = "sd-cli"
         gesehen["auftrag"] = auftrag
         ziel.parent.mkdir(parents=True, exist_ok=True)

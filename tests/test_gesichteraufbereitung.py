@@ -179,3 +179,69 @@ def test_masse_einer_unlesbaren_datei_stuerzt_nicht_ab(tmp_path):
     datei = tmp_path / "kaputt.jpg"
     datei.write_bytes(b"kein echtes Bild")
     assert gesichteraufbereitung._masse(datei) == (None, None)
+
+
+def _rgba_foto(pfad: Path, kante: int = 300) -> None:
+    """A coloured face in the middle, a fully see-through frame, and one
+    column of half see-through black at the left edge."""
+    from PIL import Image
+
+    bild = Image.new("RGBA", (kante, kante), (0, 0, 0, 0))
+    mitte = Image.new("RGBA", (kante // 2, kante // 2), (200, 120, 60, 255))
+    bild.paste(mitte, (kante // 4, kante // 4))
+    halb = Image.new("RGBA", (10, kante), (0, 0, 0, 128))
+    bild.paste(halb, (0, 0))
+    bild.save(pfad, "PNG")
+
+
+def test_durchsichtige_flaechen_liegen_auf_weiss(gesichter, tmp_path):
+    from PIL import Image
+
+    _rgba_foto(gesichter / "ich.png")
+
+    aufbereitet = gesichteraufbereitung.aufbereiten(gesichter, tmp_path / "arbeit", kante=300)
+
+    with Image.open(aufbereitet / "ich-png.jpeg") as ergebnis:
+        rand = ergebnis.getpixel((150, 10))
+        mitte = ergebnis.getpixel((150, 150))
+        halb = ergebnis.getpixel((4, 150))
+    assert all(kanal >= 250 for kanal in rand), rand
+    assert all(abs(kanal - soll) <= 8 for kanal, soll in zip(mitte, (200, 120, 60))), mitte
+    # Half see-through black mixes with white by its alpha: mid grey.
+    assert all(110 <= kanal <= 145 for kanal in halb), halb
+
+
+def test_ein_foto_ohne_durchsicht_kommt_wie_zuvor_heraus(gesichter, tmp_path):
+    """Silence: an RGB photo keeps its colours, a grey one stays grey."""
+    from PIL import Image
+
+    Image.new("RGB", (300, 300), (90, 120, 200)).save(gesichter / "farbig.jpg", "JPEG", quality=100)
+    Image.new("L", (300, 300), 77).save(gesichter / "grau.png", "PNG")
+
+    aufbereitet = gesichteraufbereitung.aufbereiten(gesichter, tmp_path / "arbeit", kante=300)
+
+    with Image.open(aufbereitet / "farbig-jpg.jpeg") as farbig:
+        assert all(abs(k - s) <= 6 for k, s in zip(farbig.getpixel((150, 150)), (90, 120, 200)))
+    with Image.open(aufbereitet / "grau-png.jpeg") as grau:
+        r, g, b = grau.convert("RGB").getpixel((150, 150))
+    assert abs(r - 77) <= 4 and abs(g - 77) <= 4 and abs(b - 77) <= 4
+
+
+def test_ein_ordner_nach_dem_alten_verfahren_wird_neu_aufbereitet(gesichter, tmp_path):
+    """The photos have not changed, but the copies were made on black: the
+    marker of the old way does not count as current."""
+    from PIL import Image
+
+    from app.photomaker import fingerabdruck
+
+    _rgba_foto(gesichter / "ich.png")
+    arbeit = tmp_path / "arbeit"
+    arbeit.mkdir()
+    Image.new("RGB", (300, 300), (0, 0, 0)).save(arbeit / "ich-png.jpeg", "JPEG")
+    (arbeit / ".quelle-fingerabdruck").write_text(fingerabdruck(gesichter), encoding="utf-8")
+
+    aufbereitet = gesichteraufbereitung.aufbereiten(gesichter, arbeit, kante=300)
+
+    with Image.open(aufbereitet / "ich-png.jpeg") as ergebnis:
+        assert all(kanal >= 250 for kanal in ergebnis.getpixel((150, 10)))
+

@@ -42,10 +42,10 @@ def test_pulid_und_controlnet_felder_reisen_im_zeichnen_body_mit():
         r"pulid_weights:\s*w\.pulid_weights \|\| null,",
         r"pulid_id_embedding:\s*w\.pulid_id_embedding \|\| null,",
         r"pulid_id_weight:\s*w\.pulid_id_weight,",
-        r"control_net:\s*w\.control_net \|\| null,",
-        r"control_image:\s*w\.control_image \|\| null,",
+        r"control_net:\s*controlNet \? w\.control_net \|\| null : null,",
+        r"control_image:\s*controlNet \? w\.control_image \|\| null : null,",
         r"control_strength:\s*w\.control_strength,",
-        r"canny:\s*Boolean\(w\.canny\),",
+        r"canny:\s*controlNet && Boolean\(w\.canny\),",
     ):
         assert re.search(zeile, quelle), f"missing in the draw body: {zeile}"
 
@@ -61,6 +61,17 @@ def test_slg_felder_reisen_im_zeichnen_body_mit():
         r"skip_layers:\s*w\.skip_layers\.trim\(\),",
     ):
         assert re.search(zeile, quelle), f"missing in the draw body: {zeile}"
+
+
+def test_the_footers_question_names_the_family_as_the_draw_does():
+    """The service reads the model's kit with the family the studio states —
+    the same expression the draw sends — to know whether the kit brings a
+    second, high-noise model."""
+    quelle = DRAW.read_text(encoding="utf-8")
+    sent = re.findall(r"familie:\s*w\.familie \|\| fam\?\.name \|\| null,", quelle)
+    assert len(sent) == 2, "the draw and the footer's question must send the family alike"
+    query = quelle.split("export function painterQuery()", 1)[1]
+    assert re.search(r"familie:\s*w\.familie \|\| fam\?\.name \|\| null,", query)
 
 
 def test_the_hires_scale_travels_only_while_hires_is_on():
@@ -212,10 +223,9 @@ def test_a_new_chat_is_the_open_chat_of_the_window():
     assert "chatZustandLaden(chat.id)" in opened
     # What the window held without a chat is in the store before it is read.
     assert opened.index("einstellungSetzen(`chat:${chat.id}`, 'bildfenster'") < opened.index("chatZustandLaden(chat.id)")
-    # The four ways a chat comes into being all go through it.
+    # The ways a chat comes into being all go through it.
     assert "await openNewChat({ title: t('chat.unbenannt')" in state
     assert "await openNewChat({ title: ersterTitel" in (source / "App.svelte").read_text(encoding="utf-8")
-    assert "await openNewChat({ endpoint_id: zustand.modellId })" in (source / "lib" / "cli.svelte.js").read_text(encoding="utf-8")
     assert "await openNewChat({ title, endpoint_id: zustand.modellId || null })" in DRAW.read_text(encoding="utf-8")
     # The studio hands in what it holds without a chat, and stays silent
     # while a chat is open or while it neither shows nor prepares a draw.
@@ -312,18 +322,57 @@ def test_an_edit_sends_the_picture_in_the_area_as_its_first_reference():
     assert "if (!fam?.many_references) return first" in refs
     assert "return [...first, ...w.ref_bilder.filter((name) => name !== w.startbild)]" in refs
     # What the area holds is asked for an edit as for a picture to start from.
-    assert "const fromArea = nutztStart || kind.value === 'edit'" in draw
+    assert "const edits = kind.value === 'edit'" in draw
+    assert "const fromArea = nutztStart || edits" in draw
     assert "if (!modeWish && fromArea && w.startbild && leinwand.ausgeben) {" in draw
     # The silence check: the start picture and the mask still go with
-    # picture to picture and the videos only, never with an edit.
+    # picture to picture and the videos only — an edit sends them solely
+    # when a mask is painted over its picture (see the next test).
     assert "const nutztStart = ['img2img', 'i2v', 'flf2v'].includes(kind.value)" in draw
-    assert "maske: kind.value === 'img2img' ? flaeche?.maske ?? (w.maske || null) : null," in draw
+    assert "maske: kind.value === 'img2img' ? flaeche?.maske ?? (w.maske || null)" in draw
     column = DETAILS.read_text(encoding="utf-8")
     edit = column.split("{#if kind.value === 'edit'}", 1)[1].split("{:else if kind.input}", 1)[0]
     row = edit.split("{#if viele}", 1)
     assert len(row) == 2, "the further references are no longer tied to a family that takes several"
     assert "studio.referenzbilder" in row[1].split("{/if}", 1)[0]
     assert "studio.referenzbilder" not in row[0]
+
+
+def test_an_edit_with_a_painted_mask_sends_the_mask_and_the_picture_it_acts_on():
+    """An edit draws from its reference alone, and the mask layer paints
+    over that reference in the area. When a mask is painted, the request
+    carries the mask and the picture as the starting picture too, so the
+    mask has a picture to act on and the strength a start to measure from;
+    without a painted mask an edit sends neither, exactly as before. The
+    area hands an edit's picture over whole — it is never cut to a part to
+    be set back into the picture, since an edit's result is a new picture."""
+    draw = DRAW.read_text(encoding="utf-8")
+    assert "const paintedEdit = edits && Boolean(flaeche?.maske)" in draw
+    # Asked of the area as a picture to start from is, with the mask on.
+    assert "flaeche = await leinwand.ausgeben(w.startbild, kind.value === 'img2img' || edits, edits)" in draw
+    body = draw.split("startbild: nutztStart ? flaeche?.startbild ?? (w.startbild || null)", 1)[1]
+    assert body.startswith("\n      : paintedEdit ? flaeche.startbild : null,")
+    assert "maske: kind.value === 'img2img' ? flaeche?.maske ?? (w.maske || null)\n      : paintedEdit ? flaeche.maske : null," in draw
+    # The flag is computed before the body is built, and an edit sets back
+    # no part of a picture.
+    assert draw.index("const paintedEdit =") < draw.index("startbild: nutztStart ?")
+    # The strength is no control of an edit, and a picture laid into the
+    # area leaves it below 1 (`pictureInArea`): a reference that is also
+    # the start would stay almost unchanged, so a painted edit draws at 1.
+    assert "staerke: paintedEdit ? 1 : w.staerke," in draw
+    column = DETAILS.read_text(encoding="utf-8")
+    edit_part = column.split("{#if kind.value === 'edit'}", 1)[1].split("{:else if kind.input || strengthShown}", 1)[0]
+    assert "werte.staerke" not in edit_part
+    studio = (WURZEL / "frontend" / "src" / "lib" / "studio.svelte.js").read_text(encoding="utf-8")
+    assert "if (Number(werte.staerke) >= 1) werte.staerke = art().video ? 0.75 : 0.6" in studio
+    assert "const place = kind.value === 'img2img' ? flaeche?.place ?? null : null" in draw
+    canvas = _studio_parts()["StudioCanvas.svelte"]
+    assert "async function ausgeben(name, mitMaske, bearbeiten = false) {" in canvas
+    # What an edit hands over is not served from a hand-over made for a
+    # picture to start from: the flag is part of the memory key.
+    kept = canvas.split("async function ausgeben(name, mitMaske, bearbeiten = false) {", 1)[1].split("\n  }\n", 1)[0]
+    assert "name, mitMaske, bearbeiten, lage" in kept
+    assert "await ausgebenNeu(name, mitMaske, bearbeiten)" in kept
 
 
 def test_a_chat_stores_only_what_was_set_for_it():
@@ -672,10 +721,10 @@ def test_a_draw_from_a_part_of_the_picture_names_the_part_s_place():
     # Less than the whole picture.
     assert "const part = right - left < natur.w || bottom - top < natur.h" in place
     assert "? [left, top, right - left, bottom - top] : null" in place
-    handed = canvas.split("async function ausgebenNeu(name, mitMaske) {", 1)[1].split("\n  }\n", 1)[0]
+    handed = canvas.split("async function ausgebenNeu(name, mitMaske, bearbeiten) {", 1)[1].split("\n  }\n", 1)[0]
     # Only a picture drawn from the picture is set back, and it is cut at
     # exactly the place it is set back at: the picture's whole pixels.
-    assert "const place = wieEs || !mitMaske ? null : placeInPicture()" in handed
+    assert "const place = wieEs || !mitMaske || bearbeiten ? null : placeInPicture()" in handed
     assert "return { startbild, maske: maskenName, place }" in handed
     assert "const cut = wieEs ? null : aufDenBereich(bildKnoten, place)" in handed
     assert "cutMask = wieEs ? schwarzWeiss : aufDenBereich(schwarzWeiss, place)" in handed
@@ -693,7 +742,7 @@ def test_a_draw_from_a_part_of_the_picture_names_the_part_s_place():
     assert "const place = kind.value === 'img2img' ? flaeche?.place ?? null : null" in drawn
     assert "crop_of: place ? w.startbild : null," in drawn
     assert "crop_box: place," in drawn
-    assert "startbild: nutztStart ? flaeche?.startbild ?? (w.startbild || null) : null," in drawn
+    assert "startbild: nutztStart ? flaeche?.startbild ?? (w.startbild || null)" in drawn
     # The names are the draw route's own.
     route = (WURZEL / "app" / "api" / "v1" / "bild.py").read_text(encoding="utf-8")
     assert "    crop_of: str | None = None\n    crop_box: tuple[int, int, int, int] | None = None\n" in route
@@ -847,8 +896,10 @@ def test_what_was_set_since_a_chat_opened_stays_when_its_stored_values_arrive():
     studio = (WURZEL / "frontend" / "src" / "lib" / "studio.svelte.js").read_text(encoding="utf-8")
     filling = studio.split("export function werteFuellen() {", 1)[1].split("\n}\n", 1)[0]
     # Late is the read store of the chat the values were last filled for unread.
-    assert ("const late = chatanzeige.geladen && !filledFor.read && filledFor.chat === chatanzeige.chatId\n"
-            "  const touched = late ? setValues() : {}\n") in filling
+    assert "const late = chatanzeige.geladen && !filledFor.read && filledFor.chat === chatanzeige.chatId\n" in filling
+    # What a chat opened from the window takes along stands where the late
+    # store's set values stand: it is kept like them, and written like them.
+    assert "const touched = late ? setValues() : carried\n" in filling
     loop = filling.split("for (const [name, start] of Object.entries(ANFANG)) {", 1)[1].split("\n  }\n", 1)[0]
     order = [loop.index(part) for part in (
         "read[name] = structuredClone($state.snapshot(eigen ? stand[name] : start))",
@@ -860,7 +911,7 @@ def test_what_was_set_since_a_chat_opened_stays_when_its_stored_values_arrive():
     assert "\n  geschrieben = read\n" in filling
     assert filling.index("geschrieben = read") < filling.index(
         "Object.assign(filledFor, { chat: chatanzeige.chatId, read: chatanzeige.geladen })")
-    assert "if (Object.keys(touched).length) werteSchreiben()\n  return fehlen" in filling
+    assert "if (Object.keys(touched).length && chatanzeige.geladen) werteSchreiben()\n  return fehlen" in filling
     # The silence check: an untouched field is filled as before, and what
     # counts as set is what differs from what was read or shown.
     assert "const eigen = stand[name] !== undefined" in loop
@@ -882,12 +933,12 @@ def test_a_draw_without_a_prompt_says_so_and_the_two_sentences_read_as_decided()
         for language in ("de", "en")
     }
     assert {language: catalogue["studio"]["no_prompt"] for language, catalogue in texts.items()} == {
-        "de": "Kein Prompt eingegeben. Schreib in die Prompt-Leiste, was gezeichnet werden soll.",
-        "en": "No prompt entered. Write in the prompt bar what should be drawn.",
+        "de": "Kein Prompt eingegeben. Beschreibe das gewünschte Bild in der Prompt-Leiste.",
+        "en": "No prompt entered. Describe the image you want in the prompt bar.",
     }
     assert {language: catalogue["bildserver"]["kein_standardmodell"] for language, catalogue in texts.items()} == {
-        "de": "Kein Bildmodell ausgewählt. Wähle es auf der Seite Bild-Server.",
-        "en": "No picture model selected. Choose it on the picture server page.",
+        "de": "Kein Bildmodell ausgewählt. Wähle eines auf der Seite Bild-Server.",
+        "en": "No image model selected. Choose one on the Image server page.",
     }
     # The silence check: a press with a prompt goes on to the model as
     # before, and a mode on a finished picture is asked for no prompt.

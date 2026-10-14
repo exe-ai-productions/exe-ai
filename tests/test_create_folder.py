@@ -63,6 +63,14 @@ def test_the_folder_is_made_shared_with_the_chat_and_counts_inside_in_the_same_r
     assert (tmp_path / "drafts" / "exe.md").exists()
 
 
+def test_the_description_promises_no_private_working_folder():
+    """A bare name with nothing shared is refused in the program's own data
+    folder, so the description must not offer that folder as a target."""
+    text = create_folder.werkzeug_beschreibung().beschreibung
+    assert "private working folder" not in text
+    assert "Relative paths resolve against the first shared folder." in text
+
+
 def test_in_a_project_every_chat_of_the_project_gets_it(repos, tmp_path):
     shared = tmp_path / "shared"
     shared.mkdir()

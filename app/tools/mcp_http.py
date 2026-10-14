@@ -22,6 +22,7 @@ browser sign-in (OAuth) is the next build step and docks on here.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -29,11 +30,14 @@ from typing import Any
 import httpx
 
 from app.tools.mcp_client import (
+    CALL_TIMEOUT,
     MCPFehler,
     MCPWerkzeug,
     PROTOKOLL_VERSION,
+    START_TIMEOUT,
     ergebnis_zu_text,
     werkzeuge_aus_antwort,
+    time_limit_sentence,
 )
 
 log = logging.getLogger(__name__)
@@ -59,13 +63,15 @@ class MCPHttpClient:
         name: str,
         url: str,
         api_key: str | None = None,
-        timeout: float = 30.0,
+        timeout: float = CALL_TIMEOUT,
         transport: httpx.AsyncBaseTransport | None = None,
         token_erneuern=None,
     ) -> None:
         self.name = name
         self.url = url
         self.api_key = api_key
+        # What one tool call may take, as a whole. The start keeps
+        # ``START_TIMEOUT``.
         self.timeout = timeout
         # If the access dies mid-run (401), this callback fetches a fresh
         # one once — the registry's OAuth renewal. None means: fixed key,
@@ -89,8 +95,11 @@ class MCPHttpClient:
     # --- Connection ------------------------------------------------------
 
     async def starten(self) -> None:
+        # The limit of each request is set where it is made: a call may take
+        # as long as its server's entry says, the handshake and the list
+        # keep the start's own.
         self._client = httpx.AsyncClient(
-            timeout=self.timeout, transport=self._transport
+            timeout=START_TIMEOUT, transport=self._transport
         )
         antwort = await self._initialisieren()
         log.info(
@@ -154,24 +163,28 @@ class MCPHttpClient:
 
     def _anmeldefehler(self, status: int) -> MCPFehler:
         return MCPFehler(
-            f"MCP server '{self.name}': not signed in "
-            f"(HTTP {status}) — check the key or the sign-in"
+            f"MCP server '{self.name}': authentication required (HTTP {status}). Check the key "
+            "or sign-in."
         )
 
-    async def _aufrufen(self, methode: str, parameter: dict[str, Any]) -> dict[str, Any]:
+    async def _aufrufen(
+        self, methode: str, parameter: dict[str, Any], limit: float = START_TIMEOUT
+    ) -> dict[str, Any]:
+        """One request, renewed once where the session or the access ran
+        out. ``limit`` is how long a stretch of the answer may take — the
+        whole call is held to it by the caller."""
         sitzung_erneuert = False
         token_erneuert = False
         while True:
             try:
-                return await self._einmal_aufrufen(methode, parameter)
+                return await self._einmal_aufrufen(methode, parameter, limit)
             except _SitzungVerfallen:
                 # The server discarded the session (restart, timeout).
                 # Sign in again completely once and repeat the request —
                 # if that fails too, the error is real and becomes visible.
                 if sitzung_erneuert:
                     raise MCPFehler(
-                        f"MCP server '{self.name}': the session cannot be "
-                        "renewed"
+                        f"MCP server '{self.name}': the session cannot be renewed."
                     ) from None
                 sitzung_erneuert = True
                 log.info("MCP '%s': session expired — signing in again", self.name)
@@ -191,9 +204,11 @@ class MCPHttpClient:
                 log.info("MCP '%s': access renewed after HTTP %d", self.name, fehler.status)
                 self.api_key = neu
 
-    async def _einmal_aufrufen(self, methode: str, parameter: dict[str, Any]) -> dict[str, Any]:
+    async def _einmal_aufrufen(
+        self, methode: str, parameter: dict[str, Any], limit: float = START_TIMEOUT
+    ) -> dict[str, Any]:
         if self._client is None:
-            raise MCPFehler(f"MCP server '{self.name}' is not running")
+            raise MCPFehler(f"MCP server '{self.name}' is not running.")
         self._zaehler += 1
         kennung = self._zaehler
         nachricht = {"jsonrpc": "2.0", "id": kennung, "method": methode, "params": parameter}
@@ -206,6 +221,9 @@ class MCPHttpClient:
             self.url,
             content=json.dumps(nachricht, ensure_ascii=False).encode("utf-8"),
             headers=self._koepfe(),
+            # Connecting and sending keep the start's limit; waiting for the
+            # server to answer is what a call may take.
+            timeout=httpx.Timeout(limit, connect=START_TIMEOUT, write=START_TIMEOUT),
         ) as antwort:
             sitzung = antwort.headers.get("mcp-session-id")
             if sitzung:
@@ -260,12 +278,12 @@ class MCPHttpClient:
             ):
                 return nachricht
         raise MCPFehler(
-            f"{self.name}: the event stream ended without an answer to the request"
+            f"{self.name}: the event stream ended without a response to the request."
         )
 
     async def _benachrichtigen(self, methode: str, parameter: dict | None = None) -> None:
         if self._client is None:
-            raise MCPFehler(f"MCP server '{self.name}' is not running")
+            raise MCPFehler(f"MCP server '{self.name}' is not running.")
         antwort = await self._client.post(
             self.url,
             content=json.dumps(
@@ -291,7 +309,16 @@ class MCPHttpClient:
         self, name: str, argumente: dict[str, Any], bild_senke=None
     ) -> str:
         """Executes a tool and returns the result as text."""
-        ergebnis = await self._aufrufen(
-            "tools/call", {"name": name, "arguments": argumente}
-        )
+        try:
+            # The limit of the call as a whole: the one above is a limit on
+            # each stretch of the answer, and a server that keeps sending
+            # a line now and then would never run into it.
+            ergebnis = await asyncio.wait_for(
+                self._aufrufen(
+                    "tools/call", {"name": name, "arguments": argumente}, self.timeout
+                ),
+                timeout=self.timeout,
+            )
+        except (asyncio.TimeoutError, httpx.TimeoutException):
+            raise MCPFehler(time_limit_sentence(self.name, name, self.timeout)) from None
         return ergebnis_zu_text(ergebnis, f"{self.name}/{name}", bild_senke)

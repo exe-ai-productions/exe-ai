@@ -98,12 +98,17 @@ def test_gpt5_und_die_o_serie_bekommen_weder_sampling_noch_strafen(modell):
     assert koerper["max_completion_tokens"] == 1000
 
 
+# A model of none of the families that want the newer name: with it, only
+# the host can ask for the rename.
+OTHER_MODEL = "mistral-large-latest"
+
+
 def test_der_umbenannte_name_haengt_am_wirt_nicht_am_pfad():
     """The second half of the same finding: `api.openai.com` was searched in
     the whole address, so a proxy at `https://proxy.test/api.openai.com/v1`
     had `max_tokens` renamed to `max_completion_tokens` — and every request
     to it refused, because that server wants the old name."""
-    koerper = _openai("gpt-5.6", basis="https://proxy.test/api.openai.com/v1")
+    koerper = _openai(OTHER_MODEL, basis="https://proxy.test/api.openai.com/v1")
     assert koerper["max_tokens"] == 1000
     assert "max_completion_tokens" not in koerper
 
@@ -111,9 +116,93 @@ def test_der_umbenannte_name_haengt_am_wirt_nicht_am_pfad():
 def test_ein_name_der_nur_so_anfaengt_ist_nicht_der_wirt():
     """`api.openai.com.example.net` is somebody else's machine. Matched as a
     piece of the host, it got the rename and answered 400."""
-    koerper = _openai("gpt-5.6", basis="https://api.openai.com.example.net/v1")
+    koerper = _openai(OTHER_MODEL, basis="https://api.openai.com.example.net/v1")
     assert koerper["max_tokens"] == 1000
     assert "max_completion_tokens" not in koerper
+
+
+# Somebody else's servers: a gateway, a proxy whose path names OpenAI, and a
+# local server speaking the same protocol.
+OTHER_HOSTS = (
+    "https://gateway.example/v1",
+    "https://proxy.test/api.openai.com/v1",
+    "http://127.0.0.1:8080/v1",
+)
+
+
+@pytest.mark.parametrize("basis", OTHER_HOSTS)
+@pytest.mark.parametrize(
+    "modell",
+    [
+        "gpt-5.6", "gpt-5-mini", "GPT-5.6-Luna", "openai/gpt-5.6-luna",
+        "gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-nano",
+        "o1", "o3-mini", "o4-mini", "vendor/o3",
+    ],
+)
+def test_a_model_that_refuses_the_old_name_gets_the_new_one_on_any_host(modell, basis):
+    """The defect: only the address was asked. A gateway serving one of
+    OpenAI's newer models got `max_tokens` with a set answer length, and the
+    model behind it refuses that name. The family of the model asks for the
+    new name too, with or without a vendor in front of it."""
+    koerper = _openai(modell, basis=basis)
+    assert koerper["max_completion_tokens"] == 1000
+    assert "max_tokens" not in koerper
+
+
+@pytest.mark.parametrize("basis", OTHER_HOSTS)
+@pytest.mark.parametrize(
+    "modell",
+    [
+        OTHER_MODEL, "Qwen3.5-9B", "gpt-4", "gpt-4-turbo", "gpt-3.5-turbo", "gpt-oss-20b",
+        "o2", "omni-moderation", "my-gpt-5-clone", "gpt-5/custom-name", "",
+    ],
+)
+def test_every_other_model_keeps_the_old_name_on_another_host(modell, basis):
+    """Silence probe: a model of none of the families keeps `max_tokens` on
+    a server that is not OpenAI's — also one whose name merely contains a
+    family's, one that only starts with the same letter, and one whose
+    vendor is named like a family."""
+    koerper = _openai(modell, basis=basis)
+    assert koerper["max_tokens"] == 1000
+    assert "max_completion_tokens" not in koerper
+
+
+@pytest.mark.parametrize("dialekt", ["llama_cpp", "mlx"])
+def test_the_name_decides_the_same_way_in_a_local_dialect(dialekt):
+    """The rule asks the model's name and nothing about the server: a local
+    server that serves a model of one of the families gets the newer name,
+    and every other model there keeps the old one."""
+    basis = "http://127.0.0.1:8080/v1"
+    renamed = _openai("gpt-5-mini", basis=basis, dialekt=dialekt)
+    assert renamed["max_completion_tokens"] == 1000
+    assert "max_tokens" not in renamed
+    kept = _openai("Qwen3.5-9B", basis=basis, dialekt=dialekt)
+    assert kept["max_tokens"] == 1000
+    assert "max_completion_tokens" not in kept
+
+
+@pytest.mark.parametrize("basis", ["https://api.openai.com/v1", *OTHER_HOSTS])
+def test_without_a_set_length_no_number_travels_under_either_name(basis):
+    """Silence probe: the rename only ever renames. An answer length nobody
+    set is not sent, whatever the host and the model."""
+    endpunkt = EndpointConfig.model_validate(
+        {"id": "wolke", "base_url": basis, "parameter_dialect": "openai"}
+    )
+    anfrage = _anfrage("gpt-5.6")
+    anfrage.max_tokens = None
+    koerper = OpenAIKompatiblerProvider(endpunkt)._koerper_bauen(anfrage)
+    assert not {"max_tokens", "max_completion_tokens", "max_output_tokens"} & koerper.keys()
+
+
+def test_the_families_are_asked_of_the_name_without_its_vendor():
+    """The rule itself, where it is written: lower case, the part behind the
+    last slash, from its first letter on."""
+    from app.providers.openai_kompatibel import COMPLETION_TOKEN_FAMILIES, wants_completion_tokens
+
+    assert COMPLETION_TOKEN_FAMILIES == ("gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4")
+    assert all(wants_completion_tokens(f"  Vendor/{family.upper()}-x ") for family in COMPLETION_TOKEN_FAMILIES)
+    assert not wants_completion_tokens(None)
+    assert not wants_completion_tokens("")
 
 
 def test_am_echten_wirt_wird_weiter_umbenannt():

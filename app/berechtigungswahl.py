@@ -43,7 +43,7 @@ SCHLUESSEL = {"chat": "berechtigungsmodus_chat", "agent": "berechtigungsmodus_ag
 
 GUELTIGE_MODI = {"auto", "manuell", "restricted"}
 
-# modus -> (innerhalb der Ordner, alles andere)
+# modus -> (within the folders, everything else)
 MODUS_FELDER: dict[str, tuple[Antwort, Antwort]] = {
     "auto": ("ja", "ja"),
     "manuell": ("ja", "fragen"),

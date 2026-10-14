@@ -16,6 +16,7 @@ import json
 
 import pytest
 
+from app import kontextvoll
 from app.providers.base import ProviderFehler
 from tests import test_openai_provider
 from tests.test_openai_provider import _einsammeln, _provider, _text
@@ -60,10 +61,10 @@ async def test_an_error_packet_ends_the_stream_with_the_servers_words(modellserv
     assert error is not None, "the error packet passed unnoticed"
     assert error.key == "fehler.anbieter_antwortet_mit"
     assert str(error) == (
-        "Prüflabor answered with 400: failed to find 7909 available cells in kv cache"
+        "Prüflabor returned status 400: failed to find 7909 available cells in kv cache"
     )
     assert error.text("de") == (
-        "Prüflabor hat mit 400 geantwortet: failed to find 7909 available cells in kv cache"
+        "Prüflabor hat Status 400 zurückgegeben: failed to find 7909 available cells in kv cache"
     )
     assert error.status == 400
 
@@ -94,14 +95,14 @@ async def test_an_error_packet_as_the_first_packet_ends_the_stream_too(modellser
     [
         # A code in words stands where the status would, and is no status.
         ({"message": "Rate limit reached", "type": "requests", "code": "rate_limit_exceeded"},
-         "Prüflabor answered with rate_limit_exceeded: Rate limit reached"),
+         "Prüflabor returned status rate_limit_exceeded: Rate limit reached"),
         # No code at all: the kind of error the server named.
         ({"message": "The server had an error", "type": "server_error", "code": None},
-         "Prüflabor answered with server_error: The server had an error"),
+         "Prüflabor returned status server_error: The server had an error"),
         # No message: the kind is all there is to say.
-        ({"type": "server_error"}, "Prüflabor answered with server_error: server_error"),
+        ({"type": "server_error"}, "Prüflabor returned status server_error: server_error"),
         # Some servers write the error as one plain sentence.
-        ("the model crashed", "Prüflabor answered with error: the model crashed"),
+        ("the model crashed", "Prüflabor returned status error: the model crashed"),
     ],
 )
 async def test_an_error_without_a_number_is_named_by_what_the_server_gave(
@@ -134,7 +135,7 @@ async def test_a_stream_that_breaks_off_without_either_still_reports_no_ending(m
     _, error = await _read(_provider(modellserver.basis))
 
     assert error is not None and error.key == "fehler.anbieter_ende_fehlt"
-    assert str(error) == "The answer from Prüflabor reported no ending"
+    assert str(error) == "The response from Prüflabor did not include a completion signal."
 
 
 @pytest.mark.asyncio
@@ -146,3 +147,33 @@ async def test_an_empty_error_field_in_an_ordinary_packet_is_no_error(modellserv
 
     assert error is None
     assert _text(pieces, "content") == "Half"
+
+
+@pytest.mark.asyncio
+async def test_the_packet_travels_with_the_error_as_its_raw_text(modellserver):
+    """The `type` says a full context where the sentence names no context at
+    all ("failed to find 7909 available cells in kv cache")."""
+    modellserver.rohzeilen = [_error_packet(KV_CACHE)]
+
+    _, error = await _read(_provider(modellserver.basis))
+
+    assert error is not None
+    assert "exceed_context_size_error" in (error.rohtext or "")
+    assert kontextvoll.bei_fehler(error)
+    # The sentence stays as it was, and no window is learned from it.
+    assert str(error) == (
+        "Prüflabor returned status 400: failed to find 7909 available cells in kv cache"
+    )
+    assert kontextvoll.grenze_aus_fehler(error) is None
+
+
+@pytest.mark.asyncio
+async def test_silence_a_server_error_packet_is_no_full_context(modellserver):
+    modellserver.rohzeilen = [_error_packet({
+        "code": 500, "message": "model crashed", "type": "server_error",
+    })]
+
+    _, error = await _read(_provider(modellserver.basis))
+
+    assert error is not None
+    assert not kontextvoll.bei_fehler(error)

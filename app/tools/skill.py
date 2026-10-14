@@ -63,15 +63,12 @@ def werkzeug_beschreibungen() -> list[MCPWerkzeug]:
         MCPWerkzeug(
             name=LADEN,
             beschreibung=(
-                "Loads a written-down instruction for a kind of work and "
-                "returns it in full. Use it when the task in front of you is "
-                "what the instruction describes, then follow what it says — "
-                "this is the one tool result that is an instruction rather "
-                "than data, because it comes from the user's own folder.\n"
-                "Load one only when you are going to act on it, not to find "
-                "out what is in it. Use a name listed in your context, or "
-                "one the user names; a name that does not exist is refused "
-                "with the names that do."
+                "Loads the complete instructions for a type of task. Load a skill when it "
+                "applies to the current task, then follow it. This tool's output is treated "
+                "as instructions rather than data because it comes from the user's own "
+                "folder.\nLoad a skill only when you intend to use it, not merely to inspect "
+                "it. Use a name listed in your context or specified by the user. If the name "
+                "is unknown, the request is rejected and the available names are returned."
             ),
             schema={
                 "type": "object",
@@ -79,8 +76,7 @@ def werkzeug_beschreibungen() -> list[MCPWerkzeug]:
                     "name": {
                         "type": "string",
                         "description": (
-                            "The skill's name, exactly as listed or as the "
-                            "user named it."
+                            "The skill name, exactly as listed or specified by the user."
                         ),
                     }
                 },
@@ -91,16 +87,14 @@ def werkzeug_beschreibungen() -> list[MCPWerkzeug]:
         MCPWerkzeug(
             name=SCHREIBEN,
             beschreibung=(
-                "Writes down a way of working so it can be loaded again "
-                "later. Use it when the user describes a procedure they will "
+                "Saves a reusable workflow. Use it when the user describes a procedure they "
                 "want repeated, not for a one-off request.\n"
-                "An existing name is overwritten, so pass the whole "
-                "instruction, not just the part that changed.\n"
-                "Set 'auto' only when the work it describes is something you "
-                "should recognise on your own. It costs a line of every later "
-                "request, so a skill the user will name themselves is better "
-                "left without it.\n"
-                f"At most {MAX_ANLEITUNG:,} characters of instruction."
+                "An existing skill with the same name is overwritten, so provide the complete "
+                "instructions, not just the changes.\nSet 'auto' only when you should "
+                "recognize the relevant task without the user naming the skill. Each such "
+                "skill adds a line to every subsequent request; omit 'auto' when the user "
+                "will invoke it explicitly.\nInstructions may contain at most "
+                f"{MAX_ANLEITUNG:,} characters."
             ),
             schema={
                 "type": "object",
@@ -108,30 +102,30 @@ def werkzeug_beschreibungen() -> list[MCPWerkzeug]:
                     "name": {
                         "type": "string",
                         "description": (
-                            "Lower case, digits and hyphens, e.g. "
-                            '"release-checklist". This is what the user types.'
+                            'Lowercase letters, digits, and hyphens, e.g. '
+                            '"release-checklist". This is the name the user enters.'
                         ),
                     },
                     "description": {
                         "type": "string",
                         "description": (
-                            "One line saying when this applies, at most "
-                            f"{skills.MAX_BESCHREIBUNG} characters. It is what "
-                            "the skill is recognised by."
+                            "What the skill does and when it applies, in no more than "
+                            f"{skills.MAX_BESCHREIBUNG} characters. This description is used "
+                            "to identify relevant skills."
                         ),
                     },
                     "instruction": {
                         "type": "string",
                         "description": (
-                            "The instruction itself, in full: the steps, what "
-                            "is easy to get wrong, and what does not belong."
+                            "The complete instructions: steps, common pitfalls, and "
+                            "exclusions."
                         ),
                     },
                     "auto": {
                         "type": "boolean",
                         "description": (
-                            "May you reach for this without the user naming "
-                            "it? Leave out for no."
+                            "Whether the skill may be used without the user naming it. Omit "
+                            "for no."
                         ),
                     },
                 },
@@ -140,6 +134,19 @@ def werkzeug_beschreibungen() -> list[MCPWerkzeug]:
             server=SERVER_NAME,
         ),
     ]
+
+
+def _auto_requested(value: Any) -> bool:
+    """Whether the model asked for the skill to load without being named.
+
+    The field is a boolean: ``true`` asks, and so does the word ``true`` in
+    any case, because a model sometimes sends the word. Everything else is
+    no, the same as leaving the field out — a text like ``"false"`` is a
+    non-empty string and would count as yes under a plain truth test.
+    """
+    if isinstance(value, str):
+        return value.lower() == "true"
+    return value is True
 
 
 def _name_von(argumente: dict[str, Any]) -> str:
@@ -155,7 +162,7 @@ async def laden(argumente: dict[str, Any], mitgeliefert: Path, eigen: Path) -> s
         # Naming the alternatives beats a bare miss: a model that guessed the
         # name is one line away from the right one.
         bekannt = ", ".join(vorhanden) or "none"
-        raise SkillVerboten(f"No skill called '{name}'. Available: {bekannt}.")
+        raise SkillVerboten(f"No skill named '{name}' exists. Available skills: {bekannt}.")
     log.info("Skill loaded: %s", name)
     return skill.anleitung
 
@@ -173,11 +180,12 @@ async def schreiben(argumente: dict[str, Any], eigen: Path) -> str:
 
     if len(anleitung) > MAX_ANLEITUNG:
         raise SkillVerboten(
-            f"Too long ({len(anleitung):,} characters, at most "
-            f"{MAX_ANLEITUNG:,}). Split it, or leave out what is not a step."
+            f"Instructions are too long ({len(anleitung):,} characters; maximum: "
+            f"{MAX_ANLEITUNG:,}). Split them up or remove content that is not part of the "
+            "procedure."
         )
 
-    selbst = bool(argumente.get("auto"))
+    selbst = _auto_requested(argumente.get("auto"))
     text = skills.skill_file_text(beschreibung, selbst, anleitung)
     ziel = eigen / name
     try:
@@ -199,5 +207,5 @@ async def schreiben(argumente: dict[str, Any], eigen: Path) -> str:
     log.info("Skill written: %s (auto=%s)", name, selbst)
     wie = "Replaced" if ersetzt else "Saved"
     if selbst:
-        return f"{wie}. Reachable as /{name}, and you may load it yourself."
-    return f"{wie}. Reachable as /{name} when the user names it."
+        return f"{wie}. Available as /{name}; you may also load it without an explicit request."
+    return f"{wie}. Available as /{name} when invoked by the user."

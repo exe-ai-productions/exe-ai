@@ -25,6 +25,11 @@
 import { api } from './api.js'
 import { aktuellesModell, zustand } from './zustand.svelte.js'
 
+/* The endpoint id of the agent server — the one word `SLOT_ENDPUNKT` in
+   agentenserver.svelte.js says, kept here so this module needs no import
+   of it (tests pin the two together). */
+const AGENT_SERVER_ID = 'agentenmodell'
+
 /* What is switched OFF in the quick picker. */
 const SCHLUESSEL_AUS = 'modelle_aus'
 /* Which models of each catalogue provider were picked: { anbieter: [modell] }. */
@@ -36,17 +41,37 @@ export const modellwahl = $state({
   geladen: false,
 })
 
+/* Every load counts; only the newest one may write. The switches are read
+   each time a window opens and each time the service announces a write, so
+   two loads can be on the way at once, and the older answer must not land
+   on top of the newer. */
+let ladung = 0
+/* A switch flipped while a load is on its way: the load may have read the
+   setting before the switch was stored, and would put the old state back
+   under the hand that just moved it. Counted at the start and at the end of
+   every switch, with the ones still running beside it. */
+let schaltungen = 0
+let offeneSchaltungen = 0
+
+/* Reads both switches. A read that failed leaves what stands as it is: the
+   failure used to become an empty list, which says "everything is on". */
 export async function auswahlLaden() {
+  const meine = ++ladung
+  const schaltStand = schaltungen
   const [aus, wahl] = await Promise.all([
     api.einstellungAufgeloest(SCHLUESSEL_AUS).catch(() => null),
     api.einstellungAufgeloest(SCHLUESSEL_WAHL).catch(() => null),
   ])
-  modellwahl.aus = Array.isArray(aus?.wert) ? aus.wert : []
-  modellwahl.gewaehlt =
-    wahl?.wert && typeof wahl.wert === 'object' && !Array.isArray(wahl.wert)
-      ? wahl.wert
-      : {}
-  modellwahl.geladen = true
+  if (meine !== ladung) return
+  /* A switch moved while the read was on its way: the read may predate it,
+     and puts nothing back. The window has still heard from the service. */
+  const stabil = schaltStand === schaltungen && offeneSchaltungen === 0
+  if (aus && stabil) modellwahl.aus = Array.isArray(aus.wert) ? aus.wert : []
+  if (wahl && stabil) {
+    modellwahl.gewaehlt =
+      wahl.wert && typeof wahl.wert === 'object' && !Array.isArray(wahl.wert) ? wahl.wert : {}
+  }
+  if (aus || wahl) modellwahl.geladen = true
 }
 
 /* ——— The catalogue: what is in the list at all ——— */
@@ -86,6 +111,8 @@ export async function katalogAlle(anbieter, alle) {
 }
 
 async function katalogSichern(neu, vorher) {
+  schaltungen += 1
+  offeneSchaltungen += 1
   modellwahl.gewaehlt = neu
   /* Providers without a single pick are dropped instead of stored as an
      empty list — an empty entry says nothing the absence does not. */
@@ -99,6 +126,9 @@ async function katalogSichern(neu, vorher) {
   } catch {
     /* Put it back rather than showing a state that was never stored. */
     modellwahl.gewaehlt = vorher
+  } finally {
+    offeneSchaltungen -= 1
+    schaltungen += 1
   }
 }
 
@@ -118,6 +148,8 @@ export function chosenModelOff() {
 }
 
 export async function schalten(modellId, an) {
+  schaltungen += 1
+  offeneSchaltungen += 1
   const vorher = modellwahl.aus
   const neu = an
     ? vorher.filter((id) => id !== modellId)
@@ -127,6 +159,9 @@ export async function schalten(modellId, an) {
     await api.einstellungSetzen('global', SCHLUESSEL_AUS, neu.length ? neu : null)
   } catch {
     modellwahl.aus = vorher
+  } finally {
+    offeneSchaltungen -= 1
+    schaltungen += 1
   }
 }
 
@@ -153,6 +188,7 @@ export function anbieter() {
         erreichbar: modell.erreichbar,
         schluessel_env: modell.schluessel_env,
         schluessel_gesetzt: modell.schluessel_gesetzt,
+        key_goes_with_provider: Boolean(modell.key_goes_with_provider),
         /* Endpoint-wide: every model of a provider carries the same
            capability answer, so the first one speaks for the house. */
         vision: Boolean(modell.capabilities?.vision),
@@ -162,7 +198,8 @@ export function anbieter() {
            that as the older form of the same word. */
         denken: (modell.capabilities?.thinking?.length ?? 0) > 0,
         werkzeuge: Boolean(modell.capabilities?.tool_calls),
-        /* Endpoint-wide, same as the three above: the "Zeitgrenze" switch.
+        /* Applies to the entire endpoint, like the three settings above:
+           the "Timeout" setting.
            On by default — a bare endpoint with no answer yet has always
            meant the 600 s it always had. */
         zeitgrenze: modell.timeout_enabled ?? true,
@@ -201,7 +238,11 @@ export function anbieter() {
   return haeuser
 }
 
-/** What the quick picker may show: picked from the catalogue, and switched on. */
+/** What the chat's choice may show: picked from the catalogue, switched on,
+    and not a model of the agent server — those stay on `zustand.modelle` for
+    the runs and the agent mask, but the chat does not offer them. */
 export function sichtbare() {
-  return zustand.modelle.filter((m) => istGewaehlt(m) && istAn(m.id))
+  return zustand.modelle.filter(
+    (m) => m.anbieter !== AGENT_SERVER_ID && istGewaehlt(m) && istAn(m.id),
+  )
 }

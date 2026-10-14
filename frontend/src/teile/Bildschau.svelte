@@ -94,6 +94,18 @@
     closeReader()
   }
 
+  /* In the shell the PDF viewer is a window part of its own: Escape pressed
+     with the focus inside it never reaches this page. The shell hears it
+     there and says so; an open reader closes on it, as on every other
+     Escape. In a browser there is no shell, and nothing is listened for. */
+  $effect(() => {
+    const huelle = typeof window !== 'undefined' ? window.exeHuelle : null
+    if (!huelle || typeof huelle.aufBetrachterEscape !== 'function') return undefined
+    return huelle.aufBetrachterEscape(() => {
+      if (bildschau.offen) closeReader()
+    })
+  })
+
   async function openFolder() {
     try {
       await api.speicherortOeffnen(bildschau.folder)
@@ -108,7 +120,9 @@
       return
     }
     if (report) {
-      dateiHerunterladen(`${report.name || 'report'}.md`, report.text ?? '', 'text/markdown')
+      // A script's output is plain text, an agent's report is markdown.
+      const [ending, type] = report.plain ? ['txt', 'text/plain'] : ['md', 'text/markdown']
+      dateiHerunterladen(`${report.name || 'report'}.${ending}`, report.text ?? '', type)
       return
     }
     saveFromAddress(bildschau.name, bildschau.adresse)
@@ -191,22 +205,28 @@
             <span>{report.reason}</span>
           </p>
         {/if}
-        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-        <div class="body berichttext" onclick={copyCode}>
-          {#each dateiTeile(report.text ?? '') as piece, i (i)}
-            {#if piece.art === 'html'}
-              {@html piece.wert}
-            {:else if piece.wert}
-              <Dateikarte
-                zeichenHtml={dateizeichen(piece.wert.art)}
-                name={piece.wert.name}
-                fakten={report.facts?.(piece.wert) ?? ''}
-                sprache={piece.wert.art}
-                inhalt={piece.wert.inhalt}
-              />
-            {/if}
-          {/each}
-        </div>
+        {#if report.plain}
+          <!-- What a script wrote is not markdown: its lines stand as it
+               wrote them, not folded into one by the markdown reader. -->
+          <div class="body"><p class="prose">{report.text ?? ''}</p></div>
+        {:else}
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <div class="body berichttext" onclick={copyCode}>
+            {#each dateiTeile(report.text ?? '') as piece, i (i)}
+              {#if piece.art === 'html'}
+                {@html piece.wert}
+              {:else if piece.wert}
+                <Dateikarte
+                  zeichenHtml={dateizeichen(piece.wert.art)}
+                  name={piece.wert.name}
+                  fakten={report.facts?.(piece.wert) ?? ''}
+                  sprache={piece.wert.art}
+                  inhalt={piece.wert.inhalt}
+                />
+              {/if}
+            {/each}
+          </div>
+        {/if}
       </div>
     {:else if bildschau.framed}
       <!-- A file the browser's own viewer draws: its pages, one under the
@@ -341,10 +361,14 @@
     display: grid;
     place-items: center;
   }
+  /* The picture of a file's first page, not a picture to save: it takes no
+     pointer, so a right click lands on the sheet and the menu offers no
+     "save image" for it. The file itself is saved by the button above. */
   .shell {
     display: block;
     max-width: 100%;
     border-radius: 9px;
+    pointer-events: none;
   }
   .pagesign { color: var(--text-still); }
   .prose {

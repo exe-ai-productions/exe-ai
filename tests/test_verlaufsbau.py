@@ -1066,6 +1066,91 @@ def test_the_picture_places_are_read_once_per_warm_up_and_per_build(
     assert sum(len(n.bild_urls or []) for n in history) == 3
 
 
+def _last_user_message(client, chat_id, config, **row):
+    """Store one user row and build the history for a model that sees; hand
+    back the message that row became."""
+    repositories = client.app.state.repositories
+    repositories.messages.speichern(chat_id=chat_id, role="user", **row)
+    chat = repositories.chats.holen(chat_id)
+    history = _verlauf_bauen(chat, repositories, "SYS", config=config)
+    return [n for n in history if n.role != "system"][-1]
+
+
+def test_a_missing_attachment_is_said_to_the_model(client, chat_id, config):
+    """Fails without the fix: the message went out with no image and no word,
+    and the model, asked about the picture, guessed."""
+    message = _last_user_message(
+        client, chat_id, config, content="What is this?", anhaenge=["gone.png"]
+    )
+    assert not message.bild_urls
+    assert message.content.endswith("\n[An image was attached here that cannot be read.]")
+    assert message.content.startswith("What is this?")
+
+
+def test_an_attachment_with_no_picture_bytes_is_counted_among_the_unreadable(
+    client, chat_id, config
+):
+    """Fails without the fix: two pictures travel, the third is dropped
+    without a sentence."""
+    _bild_ablegen(config, "one.png", _png(8, 8))
+    _bild_ablegen(config, "two.png", _png(8, 8))
+    _bild_ablegen(config, "text.png", b"plain text, not a picture")
+    message = _last_user_message(
+        client,
+        chat_id,
+        config,
+        content="Look",
+        anhaenge=["one.png", "text.png", "two.png"],
+    )
+    assert len(message.bild_urls) == 2
+    assert message.content.endswith("\n[An image was attached here that cannot be read.]")
+
+
+def test_several_unreadable_attachments_are_counted(client, chat_id, config):
+    _bild_ablegen(config, "one.png", _png(8, 8))
+    message = _last_user_message(
+        client,
+        chat_id,
+        config,
+        content="Look",
+        anhaenge=["gone.png", "one.png", "also-gone.png"],
+    )
+    assert len(message.bild_urls) == 1
+    assert message.content.endswith("\n[2 images were attached here that cannot be read.]")
+
+
+def test_an_attachment_without_words_still_carries_the_sentence(client, chat_id, config):
+    message = _last_user_message(client, chat_id, config, content="", anhaenge=["gone.png"])
+    assert "[An image was attached here that cannot be read.]" in message.content
+    assert not message.bild_urls
+
+
+def test_schweigeprobe_readable_attachments_get_no_sentence(client, chat_id, config):
+    """Every attachment can be read: images go along as before, no sentence."""
+    _bild_ablegen(config, "one.png", _png(8, 8))
+    _bild_ablegen(config, "two.png", _png(8, 8))
+    message = _last_user_message(
+        client, chat_id, config, content="Look", anhaenge=["one.png", "two.png"]
+    )
+    assert len(message.bild_urls) == 2
+    assert "cannot be read" not in message.content
+
+
+def test_schweigeprobe_a_message_without_attachment_is_unchanged(client, chat_id, config):
+    message = _last_user_message(client, chat_id, config, content="Just words.")
+    assert message.content == "Just words."
+    assert not message.bild_urls
+
+
+def test_schweigeprobe_a_model_that_cannot_see_gets_only_its_own_sentence(client, chat_id):
+    """No second sentence for the same attachment."""
+    message = _letzte_nachricht(
+        client, chat_id, role="user", content="Look", anhaenge=["gone.png"]
+    )
+    assert "cannot see" in message.content
+    assert "cannot be read" not in message.content
+
+
 def test_a_picture_under_the_edge_but_over_the_bytes_is_too_large(tmp_path, monkeypatch):
     """The byte branch of the threshold on its own: a picture well under
     1920 pixels that is still over 3 MB gets a copy. Every other test uses
@@ -1136,7 +1221,7 @@ def test_an_attached_picture_names_its_place(client, chat_id, vision):
 
     place = (bilder_verzeichnis(client.app.state.config) / "shot.png").resolve()
     assert message.content.startswith("What is this?")
-    assert f"kept in the image folder as {place}" in message.content
+    assert f"stored in the image folder as {place}" in message.content
 
 
 def test_a_row_without_a_picture_names_no_place(client, chat_id):
@@ -1154,3 +1239,125 @@ def test_a_picture_that_is_gone_names_no_place(client, chat_id):
     )
 
     assert "image folder" not in message.content
+
+
+# --- The sentence for a document the request leaves out -------------------
+
+
+def test_a_document_over_half_the_window_is_not_said_to_exceed_the_window(tmp_path):
+    """A document that fits the model's window and is left out because it is
+    over the half of it a request may give to documents is not "too large for
+    this model's context": the head names the request, not the window."""
+    from app import dokumentbudget, tokenmass
+    from app.db import Database, repositories_erstellen
+    from app.verlaufsbau import zeilentext
+
+    db = Database(tmp_path / "d.db")
+    db.schema_einrichten()
+    repos = repositories_erstellen(db)
+    chat = repos.chats.erstellen(user_id="u1", title="c")
+    text = "wort " * 5_000
+    dokument = repos.documents.speichern(
+        chat_id=chat.id, filename="bericht.pdf", mime_type="application/pdf",
+        size_bytes=len(text), extracted_text=text, pages=3, pfad=None,
+    )
+    repos.messages.speichern(
+        chat_id=chat.id, role="user", content="Fasse zusammen.", dokumente=[dokument.id]
+    )
+    zeile = repos.messages.auflisten(chat_id=chat.id)[-1]
+    window = 8_192
+    # It fits the window and is over half of it.
+    assert tokenmass.tokens(text) < window
+    assert tokenmass.tokens(text) > window // 2
+    plan = dokumentbudget.verteilen([dokument], dokumentbudget.budget_tokens(window, 1_000))
+    assert plan[dokument.id].ganz is False
+
+    kopf = zeilentext(zeile, repos, dokumentplan=plan)
+
+    assert 'contains 25000 characters, is too large to be sent with this request' in kopf
+    assert "context" not in kopf
+    assert "wort wort" not in kopf
+
+
+def test_silence_a_document_that_fits_goes_whole(tmp_path):
+    from app import dokumentbudget
+    from app.db import Database, repositories_erstellen
+    from app.verlaufsbau import zeilentext
+
+    db = Database(tmp_path / "d.db")
+    db.schema_einrichten()
+    repos = repositories_erstellen(db)
+    chat = repos.chats.erstellen(user_id="u1", title="c")
+    dokument = repos.documents.speichern(
+        chat_id=chat.id, filename="notiz.md", mime_type="text/markdown",
+        size_bytes=20, extracted_text="kurze Notiz", pages=1, pfad=None,
+    )
+    repos.messages.speichern(
+        chat_id=chat.id, role="user", content="Und?", dokumente=[dokument.id]
+    )
+    zeile = repos.messages.auflisten(chat_id=chat.id)[-1]
+    plan = dokumentbudget.verteilen([dokument], dokumentbudget.budget_tokens(8_192, 1_000))
+
+    kopf = zeilentext(zeile, repos, dokumentplan=plan)
+
+    assert '[Attached document "notiz.md"]\nkurze Notiz\n[End of document]' in kopf
+
+
+# --- A generated video is told as a video ------------------------------------
+
+
+def _run_row_words(client, chat_id, names):
+    """The words a run row of several generated files goes out with: every
+    file is stored into the one row of its run, then the history is built for
+    a model that cannot see."""
+    repositories = client.app.state.repositories
+    for name in names:
+        repositories.messages.lauf_bild_speichern(
+            chat_id=chat_id, lauf_kennung="lauf-1", nr=None, von=0, bild=name, seed=None
+        )
+    chat = repositories.chats.holen(chat_id)
+    history = _verlauf_bauen(chat, repositories, "SYS", vision=False)
+    return [n for n in history if n.role != "system"][-1].content
+
+
+def test_a_generated_video_row_says_video(client, chat_id):
+    """A video rides in the same field as a picture; the sentence for a row
+    that says nothing in words names what it was, and what the gallery plays
+    is a video."""
+    message = _letzte_nachricht(
+        client, chat_id, role="assistant", content="", bild="clip.webm"
+    )
+
+    assert message.content == "[A generated video was shown here.]"
+
+
+def test_two_generated_videos_say_the_number(client, chat_id):
+    words = _run_row_words(client, chat_id, ["eins.webm", "two.avi"])
+
+    assert words == "[2 generated videos were shown here.]"
+
+
+def test_a_video_suffix_in_capitals_is_a_video(client, chat_id):
+    message = _letzte_nachricht(
+        client, chat_id, role="assistant", content="", bild="CLIP.WEBM"
+    )
+
+    assert message.content == "[A generated video was shown here.]"
+
+
+def test_a_row_of_pictures_and_a_video_names_both(client, chat_id):
+    words = _run_row_words(client, chat_id, ["bild.png", "clip.webm"])
+
+    assert words == "[2 generated images and videos were shown here.]"
+
+
+def test_silence_a_picture_row_keeps_its_sentence(client, chat_id):
+    """A picture stays an image, one or several; an animated WebP is a
+    picture to the gallery and stays one here."""
+    one = _letzte_nachricht(
+        client, chat_id, role="assistant", content="", bild="bild.png"
+    )
+    assert one.content == "[A generated image was shown here.]"
+
+    two = _run_row_words(client, chat_id, ["eins.png", "two.webp"])
+    assert two == "[2 generated images were shown here.]"

@@ -13,7 +13,9 @@ Each field takes what the generator takes: ``--max-vram`` one number of GiB
 or one budget per device (``cuda0=6,vulkan0=4``); ``--split-mode`` one mode
 or one per module (``diffusion=row,te=layer``); ``--threads`` any count, a
 count of 0 or below being the generator's own choice, as if none was given.
-A value the generator would not read is not kept.
+The time limit is a whole number of seconds from 1 on, or nothing: a picture
+that takes longer is ended after it, and nothing means no limit — it is
+stopped by hand. A value the generator would not read is not kept.
 """
 
 from __future__ import annotations
@@ -52,6 +54,8 @@ class Geraete:
     split_mode: str = ""
     backend: str = ""
     switches: dict[str, Any] = field(default_factory=dict)
+    # Seconds a picture may take; None means no limit.
+    zeitgrenze: int | None = None
 
 
 def _text(wert: Any) -> str:
@@ -78,6 +82,18 @@ def threads_pruefen(wert: Any) -> int:
     except (OverflowError, ValueError):
         return -1
     return anzahl if anzahl > 0 else -1
+
+
+def zeitgrenze_pruefen(wert: Any) -> int | None:
+    """A whole number of seconds from 1 on, or None: no limit. A zero, a
+    negative number, a text or a fraction is not a limit."""
+    if isinstance(wert, bool) or not isinstance(wert, (int, float)):
+        return None
+    try:
+        sekunden = int(wert)
+    except (OverflowError, ValueError):
+        return None
+    return sekunden if sekunden > 0 and sekunden == wert else None
 
 
 def backend_pruefen(wert: Any) -> str:
@@ -121,6 +137,8 @@ def pruefen(wert: Any) -> dict[str, Any]:
         sauber["backend"] = backend_pruefen(wert["backend"])
     if "switches" in wert:
         sauber["switches"] = switches_pruefen(wert["switches"])
+    if "zeitgrenze" in wert:
+        sauber["zeitgrenze"] = zeitgrenze_pruefen(wert["zeitgrenze"])
     return sauber
 
 
@@ -135,6 +153,7 @@ def lesen(repositories) -> Geraete:
         split_mode=werte.get("split_mode", ""),
         backend=werte.get("backend", ""),
         switches=werte.get("switches", {}),
+        zeitgrenze=werte.get("zeitgrenze"),
     )
 
 

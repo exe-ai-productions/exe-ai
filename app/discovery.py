@@ -13,6 +13,8 @@ having to know about it.
 from __future__ import annotations
 
 import asyncio
+import copy
+import json
 import logging
 import os
 import re
@@ -28,6 +30,7 @@ from app.events import Ereignisse, EventBus
 from app.parameter import denklaenge_freigegeben, unterstuetzte
 from app.pfade import ist_pfad, pfad_zu_anzeigename
 from app.providers import Provider, provider_bauen
+from app.providers import openai_responses
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +41,11 @@ log = logging.getLogger(__name__)
 # between checks, a provider now has to stay quiet for the better part of a
 # minute before it drops out.
 STILLE_BIS_WEG = 3
+
+# The keys of an endpoint's capability table that the provider itself
+# supplies (``denkquellen``); every other key comes from the server's /props.
+# A silent /props may take away only the latter.
+PROVIDER_KEYS = ("familien", "anthropic", "templates")
 
 
 def denkschalter_im_template(template: str) -> bool:
@@ -115,10 +123,49 @@ def reasoning_effort_werte_im_template(template: str) -> list[str] | None:
     return werte or None
 
 
+def _folder_template(folder: Path) -> str | None:
+    """The chat template a model folder carries, or None.
+
+    A model carries it in one of two places. ``chat_template.jinja`` is the
+    file a converted model gets beside its weights; when it is there it wins,
+    read or not. Otherwise the ``chat_template`` field of
+    ``tokenizer_config.json`` is the template: a text, or a list of named
+    templates of which the one called ``default`` is the model's. A missing
+    or empty field, a list without ``default``, a file that is no JSON or no
+    object, and a file that cannot be read give nothing — the family row
+    stands. A byte order mark in front of the file does not count.
+    """
+    try:
+        return (folder / "chat_template.jinja").read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError):
+        return None
+    try:
+        config = json.loads((folder / "tokenizer_config.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, RecursionError):
+        return None
+    if not isinstance(config, dict):
+        return None
+    template = config.get("chat_template")
+    if isinstance(template, list):
+        template = next(
+            (
+                entry.get("template")
+                for entry in template
+                if isinstance(entry, dict) and entry.get("name") == "default"
+            ),
+            None,
+        )
+    if isinstance(template, str) and template.strip():
+        return template
+    return None
+
+
 def templates_read(paths: dict[str, str]) -> dict[str, dict[str, Any]]:
     """The thinking words of each model's own chat template, read from the
-    model's folder on this machine (``chat_template.jinja`` at the
-    ``model_path`` a server's status route names).
+    model's folder on this machine (the template of the ``model_path`` a
+    server's status route names; see ``_folder_template``).
 
     oMLX hands no template out over any route, so a model whose template
     names real depths (``reasoning_effort``: low, medium, xhigh) was offered
@@ -131,9 +178,8 @@ def templates_read(paths: dict[str, str]) -> dict[str, dict[str, Any]]:
     per_folder: dict[str, dict[str, Any] | None] = {}
     for model_id, folder in paths.items():
         if folder not in per_folder:
-            try:
-                text = (Path(folder) / "chat_template.jinja").read_text(encoding="utf-8")
-            except (OSError, ValueError):
+            text = _folder_template(Path(folder))
+            if text is None:
                 per_folder[folder] = None
             else:
                 per_folder[folder] = {
@@ -176,8 +222,9 @@ async def _faehigkeiten_erkennen(
 
     ``{}`` means the server ANSWERED and there is nothing here: it replied
     404, so this build has no such route at all (mlx_lm/mlx_vlm), or it
-    replied 200 with something unreadable. Settled — asking again every
-    pass would knock on a door that is not there.
+    replied 200 with something unreadable. Nothing is known from it — and it
+    is asked again on the next pass like every other answer, because the
+    route can appear later and the model behind it can change.
 
     ``None`` means no answer came: a timeout, a refused connection, or any
     other status. A 503 while a model file is still being read from disk is
@@ -200,8 +247,8 @@ async def _faehigkeiten_erkennen(
     except Exception:  # noqa: BLE001 - no answer at all, asked again later
         return None
     if antwort.status_code == 404:
-        # There is no such route on this build. That is an answer, and it
-        # does not change while this server runs.
+        # There is no such route on this build. That is an answer: nothing
+        # is known from it, and the next pass asks again.
         return {}
     if antwort.status_code != 200:
         # Busy, guarded, or broken — none of which is "can nothing", and all
@@ -215,8 +262,7 @@ async def _faehigkeiten_erkennen(
     if not isinstance(daten, dict):
         # Readable JSON, but not a table of what the server reveals — a list,
         # a number, a bare word. It answered and this is all it
-        # said; asking again would knock at the same door, and a shape nobody
-        # can read may not end the pass for it.
+        # said; a shape nobody can read may not end the pass for it.
         _melde_unlesbare_form("the whole body", daten, endpunkt_id, "nothing")
         return {}
     return _faehigkeiten_aus_props(daten, endpunkt_id)
@@ -306,6 +352,18 @@ def denklaenge_erlaubt(
     return denklaenge_freigegeben(zustand.endpunkt.parameter_dialect, faehigkeiten)
 
 
+def _modell_gewechselt_melden(endpunkt_id: str, von: str | None, nach: str | None) -> None:
+    """The one line that says a model was swapped on the server and everything
+    resolved for the old one is asked again."""
+    log.info(
+        "Endpoint %s: model changed from %s to %s, re-resolving",
+        endpunkt_id,
+        von,
+        nach,
+        extra={"ereignis": "modell_gewechselt", "endpoint_id": endpunkt_id},
+    )
+
+
 def _melde_unlesbare_form(
     feld: str, wert: Any, endpunkt_id: str, gelesen_als: str = "no vision"
 ) -> None:
@@ -391,6 +449,12 @@ class EndpunktZustand:
     # answered; an entry the mapping does not name shows ``context_tokens``
     # above.
     context_per_model: dict[str, int] | None = None
+    # Set only on the copy :meth:`Discovery.fuer_modell` hands to a request
+    # for another model of the catalogue: the model ``context_tokens`` was
+    # worked out for, which is also the key a refusal learns its window under
+    # (app/fenstergroesse.py, `modellschluessel`). Never set on the state
+    # discovery itself keeps.
+    fenster_modell: str | None = None
     # The other half of the same question: the longest answer this model is
     # allowed to write (app/antwortgrenze.py). Asked of the provider's model
     # list — a REGULAR model information, so it stays resolved for every
@@ -422,13 +486,6 @@ class EndpunktZustand:
     # an MLX server names natively, and `anthropic`, the capability block a
     # model list carries per model.
     faehigkeiten_erkannt: dict[str, Any] | None = None
-    # Whether /props has ANSWERED — which is not the same as whether it said
-    # anything. The field above carries what is known so far and may already
-    # hold the model families the provider named on its own; this one says
-    # whether the template half is still owed. Without it a server whose
-    # /props never answers either keeps everything at "nothing known", or
-    # settles a silence as the truth.
-    props_beantwortet: bool = False
     # How many /props questions in a row came back with no answer at all
     # (``_faehigkeiten_erkennen`` returning ``None``). The same tolerance
     # ``stille`` gives reachability itself: a brief silence during a dialect
@@ -557,9 +614,25 @@ class EndpunktZustand:
         return self.context_per_model.get(modell)
 
     def context_for(self, modell: str | None) -> int | None:
-        """The window one entry of the model list shows: the catalogue's own
-        number for this model, otherwise the endpoint's one window."""
+        """The window one entry of the model list shows: the number the
+        request for this model works with where this state was made for it
+        (:meth:`Discovery.fuer_modell`), otherwise the catalogue's own number
+        for the model, otherwise the endpoint's one window."""
+        if modell and modell == self.fenster_modell:
+            return self.context_tokens
         return self._catalogue_window(modell) or self.context_tokens
+
+    def _without_effect_at_openai(self) -> tuple[str, ...]:
+        """The parameters this endpoint's requests lose on OpenAI's second wire.
+
+        Only a model at OpenAI's own host has any: every request there that
+        carries tools or a thinking stage goes over the Responses API, which
+        drops these fields (`openai_responses.CHAT_ONLY_FIELDS`). The host is
+        asked the way the request itself asks it, so the display and the
+        route read one rule.
+        """
+        wirt = denkstufen.wirt_von(self.endpunkt.base_url)
+        return openai_responses.CHAT_ONLY_FIELDS if openai_responses.ist_openai(wirt) else ()
 
     def als_dict(
         self,
@@ -599,6 +672,11 @@ class EndpunktZustand:
                 if modell
                 else self.anzeigename
             ),
+            # Whether that name is the model's own — one its server reports,
+            # or a model of its catalogue — and not the name the
+            # configuration gives the server, or its id. The name a client
+            # keeps with its choice of a model follows only a name that is.
+            "name_gemeldet": bool(modell or self.gemeldeter_name),
             "quelle": self.quelle,
             "provider": self.endpunkt.provider,
             "dialekt": self.endpunkt.parameter_dialect,
@@ -618,7 +696,9 @@ class EndpunktZustand:
             # reads this; ``context_tokens`` alone is what every other part
             # of the program calculates against.
             "kontext_quelle": (
-                fenstergroesse.QUELLE_SERVER
+                self.kontext_quelle
+                if modell and modell == self.fenster_modell
+                else fenstergroesse.QUELLE_SERVER
                 if self._catalogue_window(modell)
                 else self.kontext_quelle
             ),
@@ -656,6 +736,7 @@ class EndpunktZustand:
                     self.endpunkt.parameter_dialect,
                     self.context_for(modell),
                     self._capabilities_aufloesen(modell, abgelehnt),
+                    self._without_effect_at_openai(),
                 )
             ],
         }
@@ -736,7 +817,31 @@ class Discovery:
         # another — the caller reports it as not reachable, which it is.
         if modell and zustand.modelle and modell not in zustand.modelle:
             return None
-        return zustand, modell or zustand.gemeldeter_name
+        return self.fuer_modell(zustand, modell), modell or zustand.gemeldeter_name
+
+    def fuer_modell(self, zustand: EndpunktZustand, modell: str | None) -> EndpunktZustand:
+        """The state a request for ``modell`` works with.
+
+        The state discovery keeps holds the window of the one model it asked
+        the server about. A request for another model of the catalogue gets
+        a copy of it with THAT model's window, resolved by the same order
+        (:func:`fenstergroesse.fuer_modell`), so the fold, the answer's
+        ceiling and the document budget are worked out against the window
+        the model list shows for it — and a refusal it earns lowers that
+        model's window and no other. For the model the state was resolved
+        for, and for an endpoint with a configured window, it is the state
+        itself, so everything written to it still lands where discovery reads.
+
+        The copy is shallow and only ``context_tokens``, ``kontext_quelle``
+        and ``fenster_modell`` are ever written to it; the rest is read.
+        """
+        gefunden = fenstergroesse.fuer_modell(zustand, modell, self.repositories)
+        if gefunden is None:
+            return zustand
+        ansicht = copy.copy(zustand)
+        ansicht.context_tokens, ansicht.kontext_quelle = gefunden
+        ansicht.fenster_modell = modell
+        return ansicht
 
     # --- Arriving and leaving while the service runs ----------------------
 
@@ -818,9 +923,6 @@ class Discovery:
             vorher = zustand.erreichbar
             zustand.zuletzt_geprueft = jetzt_iso()
 
-            # Set before the dialect probe, so it also has a value on the
-            # passes where that probe is not asked at all.
-            dialekt_frisch = False
             # An endpoint under the plain ``openai`` dialect may be an oMLX
             # server that only looks like one of the rest; then its thinking
             # switch has to be written in that server's words
@@ -849,19 +951,18 @@ class Discovery:
                 zustand.dialekt_geprueft = befund is not None
                 if befund:
                     zustand.endpunkt.parameter_dialect = dialekterkennung.ERKANNTER_DIALEKT
-                    # Whatever the capabilities probe already found, it found
+                    # Whatever the capabilities probe found so far, it found
                     # as a plain openai server — and under that dialect
-                    # ``denkquellen`` answers nothing at all. Asked again now
-                    # that the address has a name, or the model families of
-                    # this server never arrive for the rest of the session.
+                    # ``denkquellen`` answered nothing at all. The capability
+                    # block below asks again on this very pass, now that the
+                    # address has a name.
                     #
-                    # A local flag and not a blanked field: what is known now
-                    # stays readable across the network rounds between here
-                    # and the capability block, and is replaced in one step
-                    # once the new answer is in. Blanked here, every request
-                    # landing in that stretch read "no tools, no vision, no
-                    # thinking" off an endpoint that has all three.
-                    dialekt_frisch = True
+                    # The known state is not blanked here: it stays readable
+                    # across the network rounds between here and that block,
+                    # and is replaced in one step once the new answer is in.
+                    # Blanked here, every request landing in that stretch
+                    # read "no tools, no vision, no thinking" off an endpoint
+                    # that has all three.
                     # The hint says the switch does no good under the wrong
                     # dialect; once the right one is in force it would say
                     # something that is no longer true.
@@ -903,6 +1004,13 @@ class Discovery:
             # exactly the crash `assert context_tokens is not None` in
             # generierung.py/auftraege.py exists to catch.
             modell_gewechselt = False
+            # What the catalogue held when this pass began, the name the server
+            # reports now, and the model list if this pass has already asked
+            # for it: the list is read once per pass, and compared with what
+            # the pass began with.
+            vorherige_liste = list(zustand.modelle)
+            neuer_name: str | None = None
+            liste_diesmal: list[str] | None = None
             if erreichbar and zustand.endpunkt.modell:
                 zustand.gemeldeter_name = zustand.endpunkt.modell
             elif erreichbar:
@@ -913,7 +1021,6 @@ class Discovery:
                 # a fresh answer replaces it — a single empty or failed
                 # request must not blank a name that is still probably right.
                 voriger_name = zustand.gemeldeter_name
-                neuer_name = None
                 try:
                     neuer_name = await zustand.provider.modellname(
                         self.config.discovery.timeout_seconds
@@ -940,13 +1047,13 @@ class Discovery:
                     # request is the one that hangs every other time. The
                     # list says which, asked only now that it matters.
                     try:
-                        gefunden = await zustand.provider.modelle_auflisten(
+                        liste_diesmal = await zustand.provider.modelle_auflisten(
                             self.config.discovery.timeout_seconds
                         )
                     except Exception:  # noqa: BLE001 - purely supplementary information
-                        gefunden = []
-                    if len(gefunden) > 1:
-                        zustand.modelle = gefunden
+                        liste_diesmal = []
+                    if len(liste_diesmal) > 1:
+                        zustand.modelle = liste_diesmal
                         catalogue = True
                 if neuer_name is not None and not (catalogue and voriger_name is not None):
                     zustand.gemeldeter_name = neuer_name
@@ -957,13 +1064,54 @@ class Discovery:
                     and neuer_name != voriger_name
                 )
                 if modell_gewechselt:
-                    log.info(
-                        "Endpoint %s: model changed from %s to %s, re-resolving",
-                        zustand.endpunkt.id,
-                        voriger_name,
-                        zustand.gemeldeter_name,
-                        extra={"ereignis": "modell_gewechselt", "endpoint_id": zustand.endpunkt.id},
+                    _modell_gewechselt_melden(
+                        zustand.endpunkt.id, voriger_name, zustand.gemeldeter_name
                     )
+
+            # The catalogue, asked on every pass while the provider answers.
+            # What a provider offers changes under a running service — a model
+            # is retired, another one arrives — and a list read once would
+            # keep offering the retired one until the next start, to fail only
+            # when a request goes out. A different set of models replaces the
+            # old list in one step; the same models in another order change
+            # nothing (the order of a catalogue is not promised); an empty or
+            # failed answer leaves what is known. A list naming a single
+            # model is no catalogue and leaves the list alone, as before.
+            #
+            # A pinned model in the configuration says which one the BARE
+            # provider id means — it does not say the provider has only that
+            # one. Both are asked for separately: the pin answers "what does
+            # `openai` alone stand for", the catalogue answers "what else is
+            # there to pick".
+            liste_geaendert = False
+            if erreichbar:
+                if liste_diesmal is None:
+                    try:
+                        liste_diesmal = await zustand.provider.modelle_auflisten(
+                            self.config.discovery.timeout_seconds
+                        )
+                    except Exception:  # noqa: BLE001 - purely supplementary information
+                        liste_diesmal = []
+                if len(liste_diesmal) > 1 and set(liste_diesmal) != set(zustand.modelle):
+                    zustand.modelle = liste_diesmal
+                liste_geaendert = set(zustand.modelle) != set(vorherige_liste)
+                # The model the server reported is no longer offered: the name
+                # it reports now stands in its place, and everything resolved
+                # for the old one is resolved again below on this very pass.
+                # A name from the configuration is never replaced.
+                if (
+                    liste_geaendert
+                    and not zustand.endpunkt.modell
+                    and zustand.gemeldeter_name is not None
+                    and zustand.gemeldeter_name not in zustand.modelle
+                    and neuer_name is not None
+                    and neuer_name != zustand.gemeldeter_name
+                ):
+                    _modell_gewechselt_melden(
+                        zustand.endpunkt.id, zustand.gemeldeter_name, neuer_name
+                    )
+                    zustand.gemeldeter_name = neuer_name
+                    modell_gewechselt = True
 
             # The reported name travels with the question. A server holding
             # many models and no configured name cannot be found in its own
@@ -976,10 +1124,19 @@ class Discovery:
             # the answer's ceiling, the compaction request's cap, the
             # document budget — runs against a window the server never
             # reported (measured: 15-16 s after a start).
+            # A number the provider itself calls provisional — LM Studio
+            # names a model that is not loaded with the most it can take —
+            # is the server's answer for now only: asked again until the
+            # loaded model's own window arrives, whatever source it carries.
+            # A window entered by hand is never asked about at all.
             if erreichbar and (
                 zustand.kontext_quelle
                 not in (fenstergroesse.QUELLE_EINGETRAGEN, fenstergroesse.QUELLE_SERVER)
                 or modell_gewechselt
+                or (
+                    zustand.kontext_quelle != fenstergroesse.QUELLE_EINGETRAGEN
+                    and zustand.provider.kontext_vorlaeufig()
+                )
             ):
                 vorherige_quelle = zustand.kontext_quelle
                 zustand.context_tokens, zustand.kontext_quelle = (
@@ -1030,37 +1187,17 @@ class Discovery:
                         },
                     )
 
-            # The catalogue, same route: asked once, as soon as the provider
-            # answers. Only a provider that offers a choice gets fanned out —
-            # a local server with one model reports exactly that one, and
-            # naming it twice would help nobody.
-            #
-            # An empty answer does NOT clear what we already know. The model
-            # list is the very request that hangs every other time, and
-            # letting a single timeout empty the picker is the flicker this
-            # loop is otherwise built to avoid.
-            # A pinned model in the configuration says which one the BARE
-            # provider id means — it does not say the provider has only that
-            # one. Both are asked for separately: the pin answers "what does
-            # `openai` alone stand for", the catalogue answers "what else is
-            # there to pick".
-            if erreichbar and (not zustand.modelle or modell_gewechselt):
-                try:
-                    gefunden = await zustand.provider.modelle_auflisten(
-                        self.config.discovery.timeout_seconds
-                    )
-                except Exception:  # noqa: BLE001 - purely supplementary information
-                    gefunden = []
-                if len(gefunden) > 1:
-                    zustand.modelle = gefunden
             # A catalogue's models each carry their own window: asked once the
             # list is there, and again on the next pass for as long as the
-            # server did not answer (``None``). An answer without numbers
-            # (``{}``) is an answer and stays.
+            # server did not answer (``None``) — and whenever the list changed,
+            # so a model that arrived has its number on the pass that shows
+            # it. The old numbers are replaced in one step by the new answer,
+            # never cleared first, and stay where that answer fails. An answer
+            # without numbers (``{}``) is an answer and stays.
             if (
                 erreichbar
                 and len(zustand.modelle) > 1
-                and zustand.context_per_model is None
+                and (zustand.context_per_model is None or liste_geaendert)
             ):
                 per_model: dict[str, int] | None = None
                 try:
@@ -1084,7 +1221,7 @@ class Discovery:
             if (
                 erreichbar
                 and len(zustand.modelle) > 1
-                and zustand.answer_limit_per_model is None
+                and (zustand.answer_limit_per_model is None or liste_geaendert)
             ):
                 limits: dict[str, int] | None = None
                 try:
@@ -1103,10 +1240,11 @@ class Discovery:
                             model_id,
                             extra={"ereignis": "answer_limit_per_model", "endpoint_id": zustand.endpunkt.id},
                         )
-            # Sniff the capabilities once, as soon as the server answers —
+            # Sniff the capabilities on every pass while the server answers —
             # llama.cpp reveals the chat template (thinking switch, tools)
-            # and modalities (vision) via /props.
-            if erreichbar and (not zustand.props_beantwortet or dialekt_frisch or modell_gewechselt):
+            # and modalities (vision) via /props, and what it says follows the
+            # model it has loaded, so one answer does not hold for good.
+            if erreichbar:
                 try:
                     aus_props = await _faehigkeiten_erkennen(
                         zustand.endpunkt.base_url,
@@ -1137,29 +1275,30 @@ class Discovery:
                     )
                 except Exception:  # noqa: BLE001 - supplementary only
                     aus_anbieter = {}
+                # What the provider said last stays until it says something
+                # new: one failed request must not blank it, and a silent
+                # /props has no say over it.
+                known = zustand.faehigkeiten_erkannt or {}
+                erkannt = {
+                    name: known[name] for name in PROVIDER_KEYS if name in known
+                }
                 # ``None`` is the silence ``_faehigkeiten_erkennen`` documents
                 # as "no answer came" — a dialect switch's re-probe, or an
                 # endpoint still settling, can hit exactly that mid-flight.
-                # Starting fresh from it would blank what an earlier, settled
-                # answer established; ``{}`` is a settled "nothing here" and
-                # correctly does start fresh. But only up to the same
-                # tolerance ``stille`` gives reachability itself — this gate
-                # only re-asks while nothing has settled yet (below), so the
-                # cap bounds how long an endpoint that never quite answers may
-                # keep showing an earlier stretch's capabilities; it is not a
-                # periodic recheck of an endpoint that already settled once
-                # (that only bounds silence from one that never quite
-                # answers — rechecking an already-settled endpoint stays a
-                # separate, wider gap this does not close).
+                # Starting fresh from it would blank what an earlier answer
+                # established, so it stands — but only up to the same
+                # tolerance ``stille`` gives reachability itself: a /props
+                # that stays silent for good must not go on advertising its
+                # last answer forever. Past that, the keys that came from
+                # /props fall away. Any answer, ``{}`` included, is a settled
+                # "this is what the server says now" and starts fresh.
                 if aus_props is None:
                     zustand.props_stille += 1
                     if zustand.props_stille < STILLE_BIS_WEG:
-                        erkannt = dict(zustand.faehigkeiten_erkannt or {})
-                    else:
-                        erkannt = {}
+                        erkannt = dict(known)
                 else:
                     zustand.props_stille = 0
-                    erkannt = dict(aus_props)
+                    erkannt.update(aus_props)
                 erkannt.update(aus_anbieter)
                 paths = erkannt.pop("template_paths", None)
                 # Only for a server on this machine: a path another machine
@@ -1169,10 +1308,8 @@ class Discovery:
                 ):
                     erkannt["templates"] = await asyncio.to_thread(templates_read, paths)
                 # Written in one step, never blanked first — see the dialect
-                # probe above. The template half stays owed until /props
-                # really answers; the rest is already worth keeping.
+                # probe above.
                 zustand.faehigkeiten_erkannt = erkannt
-                zustand.props_beantwortet = aus_props is not None
 
             elif not erreichbar:
                 zustand.context_tokens = None
@@ -1183,9 +1320,6 @@ class Discovery:
                 zustand.context_per_model = None
                 zustand.answer_limit_per_model = None
                 zustand.faehigkeiten_erkannt = None
-                # Whatever answers at this address next may be another
-                # server, and is asked again.
-                zustand.props_beantwortet = False
                 zustand.props_stille = 0
                 zustand.dialekt_geprueft = False
 

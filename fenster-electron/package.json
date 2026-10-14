@@ -2,22 +2,26 @@
   "name": "exe-ai-terminal-fenster-electron",
   "productName": "Exe AI",
   "private": true,
-  "version": "0.6.11",
-  "description": "The Electron window around the Exe AI service.",
+  "version": "0.6.12",
+  "description": "The Electron window for the Exe AI service.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "bauen": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --dir",
     "packen": "electron-builder --mac --publish never",
     "pack:win": "electron-builder --win --publish never",
-    "pack:store": "electron-builder --win appx --publish never"
+    "pack:store": "electron-builder --win appx --publish never",
+    "rebuild": "electron-rebuild -f -w node-pty",
+    "postinstall": "electron-rebuild -f -w node-pty"
   },
   "dependencies": {
-    "electron-updater": "^6.8.9"
+    "electron-updater": "^6.8.9",
+    "node-pty": "1.1.0"
   },
   "devDependencies": {
     "electron": "^33.0.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "@electron/rebuild": "4.2.1"
   },
   "build": {
     "appId": "net.exe-hq.exe-ai-terminal",
@@ -28,11 +32,17 @@
     "files": [
       "main.js",
       "adressregel.js",
+      "linkclicks.js",
       "kontextmenue.js",
       "preload.js",
+      "terminal.js",
+      "dienstsuche.js",
       "thumbnail.js",
       "updater.js",
       "anzeige/**"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**"
     ],
     "extraResources": [
       {
@@ -53,7 +63,10 @@
       }
     ],
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "artifactName": "Exe-AI-${version}-${arch}.${ext}",
       "category": "public.app-category.developer-tools",
       "icon": "../deploy/icon.icns",
@@ -62,7 +75,21 @@
       "entitlements": "../deploy/entitlements-electron.plist",
       "entitlementsInherit": "../deploy/entitlements-electron.plist",
       "notarize": false,
-      "identity": "13CA82624F5FC964C0B0E079660D784029027173"
+      "identity": "13CA82624F5FC964C0B0E079660D784029027173",
+      "extraResources": [
+        {
+          "from": "../deploy/exe",
+          "to": "bin/exe"
+        },
+        {
+          "from": "node_modules/electron/dist/LICENSE",
+          "to": "LICENSE.electron.txt"
+        },
+        {
+          "from": "node_modules/electron/dist/LICENSES.chromium.html",
+          "to": "LICENSES.chromium.html"
+        }
+      ]
     },
     "dmg": {
       "artifactName": "Exe-AI-${version}-${arch}.dmg"
@@ -75,13 +102,19 @@
       "displayName": "Exe AI",
       "backgroundColor": "transparent",
       "artifactName": "Exe-AI-${version}-${arch}.appx",
-      "languages": ["en-US", "de-DE"]
+      "languages": [
+        "en-US",
+        "de-DE"
+      ],
+      "customExtensionsPath": "build/appx-extensions.xml"
     },
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "../deploy/icon.ico"

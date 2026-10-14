@@ -35,7 +35,7 @@ def test_missing_or_empty_is_no_pictures():
 
 
 def test_more_than_eight_is_refused():
-    with pytest.raises(task_images.TaskImagesInvalid, match="At most 8"):
+    with pytest.raises(task_images.TaskImagesInvalid, match="at most 8"):
         task_images.checked([URL] * 9)
     assert len(task_images.checked([URL] * 8)) == 8
 
@@ -219,7 +219,7 @@ def test_too_many_pictures_start_no_job(client, chat_id, config, tmp_path):
 
     assert client.get("/api/v1/jobs").json() == []
     tool = [n for n in provider.letzte_anfrage.nachrichten if n.role == "tool"][-1]
-    assert "At most 8" in tool.content
+    assert "at most 8" in tool.content
 
 
 def test_a_picture_the_permission_check_refuses_is_not_read(tmp_path, monkeypatch):
@@ -319,9 +319,9 @@ def test_a_picture_above_the_payload_ceiling_is_named_not_attached(tmp_path, mon
         urls, lines = task_images.for_model(images, vision)
         assert urls == []
         assert len(lines) == 2
-        assert lines[0].startswith("[Image number 2 of the images, given inline, was not attached")
-        assert f"at {(tmp_path / 'huge.png').resolve()} was not attached" in lines[1]
-        assert "larger than 20 MB" in lines[1]
+        assert lines[0].startswith("[Inline image number 2 was not attached")
+        assert f"The image at {(tmp_path / 'huge.png').resolve()} was not attached" in lines[1]
+        assert "limit of 20 MB" in lines[1]
 
 
 def test_an_inline_picture_is_not_said_to_have_been_made_smaller():
@@ -332,9 +332,9 @@ def test_an_inline_picture_is_not_said_to_have_been_made_smaller():
         task_images.prepare([huge], [], None, _yes), vision=True
     )
 
-    assert "made smaller" not in line
-    assert "larger than 20 MB" in line
-    assert line.startswith("[Image number 1 of the images, given inline, was not attached")
+    assert "after resizing" not in line
+    assert "limit of 20 MB" in line
+    assert line.startswith("[Inline image number 1 was not attached")
 
 
 def test_silent_a_picture_under_the_ceiling_gets_no_sentence(tmp_path):

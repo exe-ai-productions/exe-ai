@@ -66,7 +66,7 @@ def _check_remaining(file, needed: int, end: int) -> None:
     corrupt string length read the whole rest of a model file into memory.
     ``end`` is the file's size, taken once per header (``_file_end``)."""
     if needed > end - file.tell():
-        raise EOFError("the header asks for more bytes than the file holds")
+        raise EOFError("The header requests more bytes than the file contains.")
 
 
 def _file_end(file) -> int:
@@ -76,7 +76,7 @@ def _file_end(file) -> int:
 def genau(datei, anzahl: int) -> bytes:
     stueck = datei.read(anzahl)
     if len(stueck) != anzahl:
-        raise EOFError("the header ended before this value did")
+        raise EOFError("The header ended before this value was complete.")
     return stueck
 
 
@@ -187,7 +187,9 @@ _MAX_DIMS = 4
 Header = tuple[dict[bytes, int | float | bool | str], list[tuple[bytes, list[int]]]]
 
 
-def _walk_header(datei, types: dict[int, int] | None = None) -> Header | None:
+def _walk_header(
+    datei, types: dict[int, int] | None = None, end: int | None = None
+) -> Header | None:
     """The whole header: every metadata key and every tensor entry, never
     the tensor data behind it — the way llama.cpp itself reads one before it
     trusts it. A file that ends before its header does is not a header that
@@ -199,9 +201,11 @@ def _walk_header(datei, types: dict[int, int] | None = None) -> Header | None:
     stored. None when this is not a current, sane GGUF header — a key that
     appears twice included, which llama.cpp refuses as well; raises when the
     file ends early or a count cannot be true. ``types``, when given,
-    collects how many weights each ggml type holds.
+    collects how many weights each ggml type holds. ``end`` is the file's
+    size when ``datei`` holds only the front of a file that lives elsewhere
+    (``bildinhalt.header_from_bytes``); otherwise it is read from the file.
     """
-    end = _file_end(datei)
+    end = _file_end(datei) if end is None else end
     counts = _header_counts(datei)
     if counts is None:
         return None
@@ -228,7 +232,7 @@ def _walk_header(datei, types: dict[int, int] | None = None) -> Header | None:
         name = _raw_string(datei, end)
         dims = _u32(datei)
         if dims > _MAX_DIMS:
-            raise ValueError("a tensor with more dimensions than ggml holds")
+            raise ValueError("A tensor has more dimensions than ggml supports.")
         _check_remaining(datei, dims * 8 + 12, end)
         shape = [_u64(datei) for _ in range(dims)]
         if types is None:

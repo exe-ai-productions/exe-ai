@@ -348,11 +348,14 @@ class FinishingDownload:
         self.gestartet = 0
 
     def starten(self, repo, datei, ziel=None, gehoert_zu=None, rolle=None,
-                ordner=None, endungen=(".gguf",), manifest_ordner=None, nach=None):
+                ordner=None, endungen=(".gguf",), manifest_ordner=None, nach=None,
+                size=None):
         from app.modelldownload import Fortschritt
 
         self.gestartet += 1
         self.rolle = rolle
+        self.ziel = ziel
+        self.ordner = ordner
         if nach is not None:
             nach()
         return Fortschritt(datei=ziel or datei, geladen=1, gesamt=1, fertig=True)
@@ -406,6 +409,179 @@ def test_a_vae_already_there_is_only_tied(client, tmp_path):
     assert antwort.json()["fertig"] is True
     assert fang.gestartet == 0
     assert _model_vae(client, "z_image_turbo-Q4_K_M.gguf") == "ae.safetensors"
+
+
+def _sparse(pfad, groesse):
+    pfad.parent.mkdir(parents=True, exist_ok=True)
+    with pfad.open("wb") as handle:
+        handle.truncate(groesse)
+
+
+VAE_BYTES = 335_304_388
+
+
+def test_a_vae_of_another_size_under_the_name_is_not_tied(client, tmp_path):
+    """A file of the same name and another size in vae/ is not the kit's
+    VAE: it is never tied. The part comes as ``<repo>-<name>`` into the same
+    folder and is tied under that name; the old file stays."""
+    _sparse(tmp_path / "vae" / "ae.safetensors", 5)
+    fang = FinishingDownload()
+    client.app.state.modelldownload = fang
+    client.app.state.modellordner_je_art = {"bild": str(tmp_path)}
+    antwort = client.post("/api/v1/runner/download", json=_vae_request(size=VAE_BYTES))
+    assert antwort.status_code == 200
+    assert fang.gestartet == 1
+    assert fang.ziel == "z_image_turbo-ae.safetensors"
+    assert fang.ordner == str(tmp_path / "vae")
+    assert _model_vae(client, "z_image_turbo-Q4_K_M.gguf") == "z_image_turbo-ae.safetensors"
+    assert (tmp_path / "vae" / "ae.safetensors").stat().st_size == 5
+
+
+def test_a_vae_of_the_same_size_is_only_tied(client, tmp_path):
+    _sparse(tmp_path / "vae" / "ae.safetensors", VAE_BYTES)
+    fang = FinishingDownload()
+    client.app.state.modelldownload = fang
+    client.app.state.modellordner_je_art = {"bild": str(tmp_path)}
+    antwort = client.post("/api/v1/runner/download", json=_vae_request(size=VAE_BYTES))
+    assert antwort.status_code == 200 and antwort.json()["fertig"] is True
+    assert fang.gestartet == 0
+    assert _model_vae(client, "z_image_turbo-Q4_K_M.gguf") == "ae.safetensors"
+
+
+def test_a_vae_loose_in_the_model_folder_counts_by_name_and_size(client, tmp_path):
+    """Where its content names it, a part may lie loose in the model folder:
+    the same name and size is it, no sub-folder copy is made."""
+    _sparse(tmp_path / "ae.safetensors", VAE_BYTES)
+    fang = FinishingDownload()
+    client.app.state.modelldownload = fang
+    client.app.state.modellordner_je_art = {"bild": str(tmp_path)}
+    antwort = client.post("/api/v1/runner/download", json=_vae_request(size=VAE_BYTES))
+    assert antwort.status_code == 200 and fang.gestartet == 0
+
+
+def test_a_vae_with_both_names_held_by_other_files_comes_under_the_third(client, tmp_path):
+    """The name and ``<repo>-<name>`` are held by other files: the part is
+    fetched under ``<owner>-<repo>-<name>`` and tied under that name."""
+    _sparse(tmp_path / "vae" / "ae.safetensors", 5)
+    _sparse(tmp_path / "vae" / "z_image_turbo-ae.safetensors", 6)
+    fang = FinishingDownload()
+    client.app.state.modelldownload = fang
+    client.app.state.modellordner_je_art = {"bild": str(tmp_path)}
+    antwort = client.post("/api/v1/runner/download", json=_vae_request(size=VAE_BYTES))
+    assert antwort.status_code == 200
+    assert fang.gestartet == 1
+    assert fang.ziel == "Comfy-Org-z_image_turbo-ae.safetensors"
+    assert _model_vae(client, "z_image_turbo-Q4_K_M.gguf") == "Comfy-Org-z_image_turbo-ae.safetensors"
+    assert (tmp_path / "vae" / "ae.safetensors").stat().st_size == 5
+    assert (tmp_path / "vae" / "z_image_turbo-ae.safetensors").stat().st_size == 6
+
+
+def test_a_vae_with_all_three_names_held_by_other_files_is_refused(client, tmp_path):
+    _sparse(tmp_path / "vae" / "ae.safetensors", 5)
+    _sparse(tmp_path / "vae" / "z_image_turbo-ae.safetensors", 6)
+    _sparse(tmp_path / "vae" / "Comfy-Org-z_image_turbo-ae.safetensors", 7)
+    fang = FinishingDownload()
+    client.app.state.modelldownload = fang
+    client.app.state.modellordner_je_art = {"bild": str(tmp_path)}
+    antwort = client.post("/api/v1/runner/download", json=_vae_request(size=VAE_BYTES))
+    assert antwort.status_code == 409
+    assert fang.gestartet == 0
+    assert _model_vae(client, "z_image_turbo-Q4_K_M.gguf") is None
+
+
+def test_a_model_kept_under_the_second_name_gets_its_parts_at_that_name(client, tmp_path):
+    """The model's name in the folder is ``<repo>-<name>``: the parts that lie
+    there already are written at that name, which is the one it is kept as."""
+    from app import bildmodellwerte
+
+    _sparse(tmp_path / "z_image_turbo-Q4_K_M.gguf", 7)
+    _sparse(tmp_path / "vae" / "ae.safetensors", VAE_BYTES)
+    fang = FinishingDownload()
+    client.app.state.modelldownload = fang
+    client.app.state.modellordner_je_art = {"bild": str(tmp_path)}
+    antwort = client.post("/api/v1/runner/download", json={
+        "repo": "wer/z_image_turbo-GGUF", "datei": "z_image_turbo-Q4_K_M.gguf",
+        "art": "bild", "size": 4_500_000_000,
+    })
+    assert antwort.status_code == 200
+    assert fang.ziel == "z_image_turbo-GGUF-z_image_turbo-Q4_K_M.gguf"
+    eigene = bildmodellwerte.eigene(
+        client.app.state.repositories, "z_image_turbo-GGUF-z_image_turbo-Q4_K_M.gguf"
+    )
+    assert eigene.get("vae") == "ae.safetensors"
+
+
+def _krea_head(path):
+    """A file whose head is that of a Krea 2 model, under a name that says
+    nothing."""
+    import json
+    import struct
+
+    kopf = {"model.diffusion_model.txtfusion.projector.weight":
+            {"dtype": "F16", "shape": [4, 4], "data_offsets": [0, 0]}}
+    roh = json.dumps(kopf).encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(struct.pack("<Q", len(roh)) + roh)
+
+
+def test_a_model_of_a_neutral_name_finds_the_parts_its_head_family_names(client, tmp_path):
+    """``turbo.safetensors`` comes with a Krea 2 head: the parts of that
+    family that lie in the folder already are written at it."""
+    from app import bildmodellwerte
+
+    _krea_head(tmp_path / "turbo.safetensors")
+    _sparse(tmp_path / "vae" / "wan_2.1_vae.safetensors", 7)
+    _sparse(tmp_path / "text_encoders" / "Qwen3VL-4B-Instruct-Q4_K_M.gguf", 7)
+    client.app.state.modelldownload = FinishingDownload()
+    client.app.state.modellordner_je_art = {"bild": str(tmp_path)}
+    antwort = client.post("/api/v1/runner/download", json={
+        "repo": "krea/Krea-2-Turbo", "datei": "turbo.safetensors", "art": "bild",
+    })
+    assert antwort.status_code == 200
+    eigene = bildmodellwerte.eigene(client.app.state.repositories, "turbo.safetensors")
+    assert eigene.get("vae") == "wan_2.1_vae.safetensors"
+    assert eigene.get("llm") == "Qwen3VL-4B-Instruct-Q4_K_M.gguf"
+
+
+def test_a_part_fetched_for_one_model_of_the_family_reaches_the_other_by_its_head(client, tmp_path):
+    """The part belongs to every model whose kit names it — also one that
+    lies in the folder as ``turbo.safetensors``."""
+    from app import bildmodellwerte
+
+    _krea_head(tmp_path / "turbo.safetensors")
+    _krea_head(tmp_path / "krea-dev.safetensors")
+    client.app.state.modelldownload = FinishingDownload()
+    client.app.state.modellordner_je_art = {"bild": str(tmp_path)}
+    antwort = client.post("/api/v1/runner/download", json={
+        "repo": "Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+        "datei": "split_files/vae/wan_2.1_vae.safetensors", "art": "bild",
+        "unterordner": "vae", "ziel": "wan_2.1_vae.safetensors",
+        "gehoert_zu": "krea-dev.safetensors", "rolle": "vae",
+    })
+    assert antwort.status_code == 200
+    assert _model_vae(client, "krea-dev.safetensors") == "wan_2.1_vae.safetensors"
+    assert bildmodellwerte.eigene(
+        client.app.state.repositories, "turbo.safetensors"
+    ).get("vae") == "wan_2.1_vae.safetensors"
+
+
+def test_a_lora_in_the_folder_gets_no_part(client, tmp_path):
+    """Silence: a LoRA named like a model of the family gets nothing tied."""
+    import json
+    import struct
+
+    kopf = {"diffusion_model.double_blocks.0.img_attn.proj.lora_A.weight":
+            {"dtype": "F16", "shape": [4, 4], "data_offsets": [0, 0]}}
+    roh = json.dumps(kopf).encode("utf-8")
+    (tmp_path / "flux-style.safetensors").write_bytes(struct.pack("<Q", len(roh)) + roh)
+    _sparse(tmp_path / "vae" / "ae.safetensors", 7)
+    client.app.state.modelldownload = FinishingDownload()
+    client.app.state.modellordner_je_art = {"bild": str(tmp_path)}
+    antwort = client.post("/api/v1/runner/download", json={
+        "repo": "wer/flux-style", "datei": "flux-style.safetensors", "art": "bild",
+    })
+    assert antwort.status_code == 200
+    assert _model_vae(client, "flux-style.safetensors") is None
 
 
 def test_another_model_does_not_get_the_vae(client, tmp_path):
@@ -695,7 +871,9 @@ def test_the_check_reports_a_newer_build(client, tmp_path, monkeypatch):
     _newest(monkeypatch, NEWER)
     answer = client.get("/api/v1/runner/programm/aktualisierung")
     assert answer.status_code == 200
-    assert answer.json() == {"verfuegbar": True, "bau": NEWER, "aktuell": False}
+    assert answer.json() == {
+        "verfuegbar": True, "bau": NEWER, "aktuell": False, "unreadable": False,
+    }
 
 
 @pytest.mark.parametrize(("installed", "newest"), [(BUILD, BUILD), (NEWER, "b11500")])
@@ -707,17 +885,23 @@ def test_the_same_or_a_lower_build_is_up_to_date_and_nothing_is_fetched(
     download = _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, installed))
     _newest(monkeypatch, newest)
     answer = client.get("/api/v1/runner/programm/aktualisierung").json()
-    assert answer == {"verfuegbar": False, "bau": None, "aktuell": True}
+    assert answer == {
+        "verfuegbar": False, "bau": None, "aktuell": True, "unreadable": False,
+    }
     refused = client.post("/api/v1/runner/programm", json={"aktualisieren": True})
     assert refused.status_code == 409
     assert download.calls == []
 
 
 def test_an_unreadable_release_list_is_not_called_up_to_date(client, tmp_path, monkeypatch):
+    """Not up to date, nothing on offer — and the answer says why, so the
+    window tells the user the check found nothing to compare."""
     _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, BUILD))
     _newest(monkeypatch, None)
     answer = client.get("/api/v1/runner/programm/aktualisierung").json()
-    assert answer == {"verfuegbar": False, "bau": None, "aktuell": False}
+    assert answer == {
+        "verfuegbar": False, "bau": None, "aktuell": False, "unreadable": True,
+    }
 
 
 def test_updating_fetches_the_newest_build_read_at_that_moment(client, tmp_path, monkeypatch):
@@ -788,7 +972,9 @@ def test_a_program_named_in_the_settings_gets_no_offer(client, tmp_path, monkeyp
     assert status["version"] == "b10310"
     assert status["updatable"] is False and status["restorable"] is False
     answer = client.get("/api/v1/runner/programm/aktualisierung").json()
-    assert answer == {"verfuegbar": False, "bau": None, "aktuell": False}
+    assert answer == {
+        "verfuegbar": False, "bau": None, "aktuell": False, "unreadable": False,
+    }
     for body in ({"aktualisieren": True}, {"restore": True}):
         assert client.post("/api/v1/runner/programm", json=body).status_code == 409
     assert download.calls == []

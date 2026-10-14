@@ -21,11 +21,16 @@
      end of its watch. When the server
      has no counter (turbo path, model still loading), no grain settles and
      the dust just drifts — honest movement without an invented number. */
-  import { untrack } from 'svelte'
+  import { getContext, untrack } from 'svelte'
   import { pictureProgress, watchPictureProgress } from '../lib/pictureProgress.svelte.js'
   import { t } from '../lib/texte.svelte.js'
 
   let { breite = 1, hoehe = 1, kante = 220, fuellen = false } = $props()
+
+  /* What a screen reader hears while no share is known yet. The tile that
+     holds the filling may say what is being made (a video, not a picture);
+     standing alone, the filling says that a picture is being made. */
+  const tileWord = getContext('tileWord')
 
   let anteil = $state(0)
   let zahlDa = $state(false)
@@ -79,7 +84,7 @@
 
     const koerner = ziele.map((ziel, i) => {
       const el = document.createElement('i')
-      el.className = 'korn' + (i % 9 === 0 ? ' blau' : '')
+      el.className = 'korn' + (i % 9 === 0 ? ' hell' : '')
       const d = 2.4 + wuerfel(i * 11 + 6) * 1.8
       el.style.width = d + 'px'
       el.style.height = d + 'px'
@@ -162,7 +167,7 @@
 
 <div class="rahmen" class:fuellt={fuellen}
      style={fuellen ? undefined : `width:${kante}px;height:${hoch}px`}
-     role="img" aria-label={zahlDa ? t('bild.fortschritt_prozent', { zahl: prozent }) : t('nachricht.bild_laeuft')}>
+     role="img" aria-label={zahlDa ? t('bild.fortschritt_prozent', { zahl: prozent }) : (tileWord?.() ?? t('nachricht.bild_laeuft'))}>
   <div class="staub" bind:this={buehne}></div>
   <!-- Only for measuring the sketch: never shown, but it must be rendered
        (display:none would make the path lengths unreadable). -->
@@ -205,5 +210,5 @@
     background: var(--text-leise);
     box-shadow: 0 0 6px color-mix(in srgb, var(--blau) 35%, transparent);
   }
-  .staub :global(.korn.blau) { background: var(--blau); }
+  .staub :global(.korn.hell) { background: var(--text); }
 </style>

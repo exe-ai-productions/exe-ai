@@ -11,7 +11,7 @@ a number that was gone.
 
 from __future__ import annotations
 
-from app import antwortgrenze, round_end, verdichtung
+from app import antwortgrenze, round_end, verdichtung, werkzeugkuerzung
 from app.kontextverbrauch import Kontextstand
 from app.providers import ChatNachricht, ProviderFehler, mock_endpunkt
 from app.providers.base import Stueck, Werkzeugaufruf
@@ -205,3 +205,73 @@ async def test_silent_no_fold_no_second_reading(monkeypatch):
 
     assert len(outcomes) == 1
     assert outcomes[0].tokens == 1_000
+
+
+def _picture_request(count: int):
+    from app import werkzeugbild
+
+    request = type("Request", (), {})()
+    request.nachrichten = [ChatNachricht(role="user", content="q")] + [
+        werkzeugbild.nachricht(
+            [f"bild{n}.png"], [f"data:image/png;base64,AAA{n}"], [f"/ordner/bild{n}.png"]
+        )
+        for n in range(count)
+    ]
+    request.werkzeuge = []
+    return request
+
+
+async def test_old_tool_pictures_are_retired_on_every_round_not_only_at_the_threshold():
+    """Far below the threshold: one picture over the limit makes the oldest
+    batch leave, in the request alone, and the step says so."""
+    over = werkzeugkuerzung.OUTBOUND_IMAGE_LIMIT + 1
+    batch = werkzeugkuerzung.IMAGE_EVICTION_BATCH
+    request = _picture_request(over)
+    state = type("State", (), {"context_tokens": 1_000_000})()
+
+    outcomes = [
+        step
+        async for step in round_end.between_rounds(
+            state,
+            request,
+            last_reading=1_000,
+            appended_from=1,
+            threshold=50.0,
+            set_limit=None,
+            fold_allowed=True,
+            key="k",
+            settings=None,
+            endpoint_id="test",
+        )
+    ]
+
+    cleared = [o for o in outcomes if isinstance(o, round_end.Cleared)]
+    assert len(cleared) == 1 and cleared[0].count == batch
+    assert len(cleared[0].before) == len(cleared[0].after) == len(request.nachrichten)
+    assert len([n for n in request.nachrichten if n.alle_bild_urls()]) == over - batch
+    # The readings come before and after it, never in place of it.
+    assert isinstance(outcomes[0], Kontextstand)
+
+
+async def test_silent_three_pictures_below_the_threshold_clear_nothing():
+    request = _picture_request(3)
+    state = type("State", (), {"context_tokens": 1_000_000})()
+
+    outcomes = [
+        step
+        async for step in round_end.between_rounds(
+            state,
+            request,
+            last_reading=1_000,
+            appended_from=1,
+            threshold=50.0,
+            set_limit=None,
+            fold_allowed=True,
+            key="k",
+            settings=None,
+            endpoint_id="test",
+        )
+    ]
+
+    assert not [o for o in outcomes if isinstance(o, round_end.Cleared)]
+    assert len([n for n in request.nachrichten if n.alle_bild_urls()]) == 3

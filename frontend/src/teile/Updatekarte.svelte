@@ -196,6 +196,7 @@
   .choice:hover { opacity: 0.88; }
   .choice.quiet {
     background: var(--bg-hoch);
+    box-shadow: inset 0 0 0 1px var(--feldstrich);
     color: var(--text);
   }
   /* Fetching: running, so blue — quiet on the ground, never the full

@@ -25,17 +25,32 @@ Two questions are asked of a schedule, and both are answered here:
   forward-looking mirror.
 
 Both are inclusive of ``jetzt`` itself, which the daily form has always been
-and ``croniter`` is not — hence the one-second nudge in the cron branch.
+and ``croniter`` is not — hence the one-second nudge in the cron branch
+(``_nudged``).
 
 Everything is computed in the time zone of the ``jetzt`` handed in
 (``app.timezone``, see app/wecker.py), so daylight saving is decided by the
-zone database rather than by arithmetic here. On the spring-forward day a
-02:00 plan resolves to the 03:00 that actually exists and is caught up
-once. On the autumn day the repeated hour is two genuinely different
-moments an hour apart, and a 02:00 plan therefore comes due twice —
-measured, and exactly what the daily 'HH:MM' form has always done
-(tests/test_terminplan.py). Whether that should be collapsed to one is a
-question about firing, not about reading, and is left where it stands.
+zone database rather than by arithmetic here.
+
+A daily time and a cron expression are both read the same way: the cron
+expression names WALL-CLOCK times, one after the other, and each wall time is
+then turned into the moments it stands for in the zone (``_instants``).
+Three cases, all decided by the zone database:
+
+* an ordinary wall time is one moment;
+* on the autumn day a wall time of the repeated hour is two moments an hour
+  apart, and the schedule comes due twice — a schedule running every quarter
+  of an hour runs eight times in that hour, never more than fifteen minutes
+  apart;
+* on the spring day a wall time of the missing hour is one moment, an hour
+  later at the same minute: 02:30 comes due at 03:30. Wall times that land
+  on a moment another wall time already names (02:00 and 03:00, or every
+  quarter of the missing hour) come due once, not twice.
+
+Moments are compared on the absolute clock. Two datetimes that carry the
+same zone object compare by their wall-clock fields and ignore the offset,
+which is wrong on exactly the two days this module is about; ``absolute``
+is what a caller compares through.
 
 Only reading lives here. Whether a schedule may be stored at all, and what
 else has to be true around it, is the tool's business (app/tools/cronjob.py).
@@ -43,8 +58,10 @@ else has to be true around it, is the tool's business (app/tools/cronjob.py).
 
 from __future__ import annotations
 
+import heapq
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Iterator
 
 from croniter import CroniterBadDateError, croniter
 
@@ -59,13 +76,6 @@ SORTE_ZEITPUNKT = "zeitpunkt"
 # and a second spelling of "hourly" buys nothing but a second thing to
 # explain.
 FELDER_CRON = 5
-# The check loop's tick is 30 seconds, so a minute is the hard floor. Five
-# fields cannot express anything shorter — the guard below measures it
-# anyway rather than trusting that property to stay true.
-MINDESTABSTAND_SEKUNDEN = 60
-# How many consecutive due times the minimum-gap guard looks at. Enough to
-# catch a pattern whose short gap only shows up after the first step.
-ABSTAND_PROBEN = 4
 
 _TAEGLICH_MUSTER = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _ZEITPUNKT_MUSTER = re.compile(r"^(\d{4}-\d{2}-\d{2})T([01]\d|2[0-3]):([0-5]\d)$")
@@ -106,76 +116,204 @@ def sorte(zeitplan: str) -> str:
     if len(zeitplan.split()) == FELDER_CRON and croniter.is_valid(zeitplan):
         return SORTE_CRON
     raise TerminplanFehler(
-        "must be a daily 'HH:MM', a five-field cron expression, "
-        "or an instant 'YYYY-MM-DDTHH:MM'"
+        "Specify a daily time in 'HH:MM' format, a five-field cron expression, or a timestamp "
+        "in 'YYYY-MM-DDTHH:MM' format."
     )
 
 
-def abstand_pruefen(zeitplan: str) -> None:
-    """Refuses a schedule that would come due more often than the check
-    loop can notice. Measured, not assumed: the gaps between the next few
-    due times are compared against the tick's floor.
+def check_ever_due(zeitplan: str) -> None:
+    """Refuses a cron expression that never comes due.
 
-    Silent for the two shapes that cannot be too frequent — a daily time
-    recurs once a day, an instant does not recur at all.
+    ``sorte`` only checks the spelling of the five fields, so '0 0 30 2 *' —
+    the thirtieth of February — passes it and then finds no date at all when
+    looked for. Turned into this module's own refusal rather than left to
+    escape as a raw croniter error: the caller is asking whether a schedule
+    may be stored, and "never comes due" is an answer to that question, not
+    a crash.
 
-    As the module stands, the gap comparison can refuse nothing, and it is
-    kept on purpose. ``sorte`` lets a cron expression through with five
-    fields only, and five fields have no column finer than a minute, so
-    every gap they can produce is a whole number of minutes; measured
-    across the valid five-field expressions the smallest one is exactly
-    sixty seconds, which the comparison lets pass on purpose. The one
-    caller (app/tools/cronjob.py) is the single door every stored schedule
-    goes through, the mask included, and it hands over exactly what
-    ``sorte`` accepts — so nothing that arrives here today can be too
-    frequent.
+    How often a schedule comes due is not asked: five fields have no column
+    finer than a minute, so nothing a stored schedule can say is more
+    frequent than the check loop's thirty seconds can notice.
 
-    What holds that property up is a single number: ``FELDER_CRON``. Raise
-    it to six to admit croniter's seconds column — the sixth field named in
-    the comment beside it — and '*/10 * * * * *' becomes a storable
-    schedule that the 30-second loop would fire once a tick, at a third of
-    the rate it names, with nothing anywhere reporting an error. Nothing
-    else in this module would object. This comparison is what turns that
-    into a refusal at the moment the schedule is written, and it costs five
-    croniter steps on a path that runs when an entry is created or changed,
-    never when one comes due.
-
-    The ``CroniterBadDateError`` branch below is a different matter and
-    does refuse schedules today.
+    Silent for the two shapes that always come due — a daily time recurs
+    every day, an instant is one moment.
     """
     if sorte(zeitplan) != SORTE_CRON:
         return
-    # A fixed, arbitrary reference point: the gaps of a cron expression do
-    # not depend on when one starts looking, and a real "now" would make
-    # the check's outcome depend on the day it ran.
-    lauf = croniter(zeitplan, datetime(2000, 1, 1, 0, 0))
+    # A fixed, arbitrary reference point: whether a date exists does not
+    # depend on when one starts looking, and a real "now" would make the
+    # outcome depend on the day it ran.
     try:
-        vorheriger = lauf.get_next(datetime)
-        for _ in range(ABSTAND_PROBEN):
-            naechster = lauf.get_next(datetime)
-            if (naechster - vorheriger).total_seconds() < MINDESTABSTAND_SEKUNDEN:
-                raise TerminplanFehler(
-                    "fires more often than once a minute, which the check loop "
-                    "cannot notice"
-                )
-            vorheriger = naechster
+        croniter(zeitplan, datetime(2000, 1, 1, 0, 0)).get_next(datetime)
     except CroniterBadDateError as fehler:
-        # ``is_valid`` only checks the spelling of the five fields, so
-        # '0 0 30 2 *' — the thirtieth of February — passes ``sorte`` and
-        # then finds no date at all here. Turned into this module's own
-        # refusal rather than left to escape as a raw croniter error: the
-        # caller is asking whether a schedule may be stored, and "never
-        # comes due" is an answer to that question, not a crash.
         raise TerminplanFehler(
-            "names a day that never occurs, so it would never come due"
+            "The specified day never occurs, so the schedule would never run."
         ) from fehler
+
+
+def absolute(moment: datetime) -> datetime:
+    """``moment`` on the absolute clock, for comparing and subtracting.
+
+    Two aware datetimes of one zone compare by their wall-clock fields. That
+    answers "which is later" wrongly across the repeated hour of the autumn
+    day (02:30 +02:00 and 02:30 +01:00 compare equal) and across the missing
+    hour of the spring day. A naive datetime has no offset to ask for and is
+    returned as it is."""
+    if moment.tzinfo is None:
+        return moment
+    return moment.astimezone(timezone.utc)
+
+
+# How far apart two wall times can be and still change places on the absolute
+# clock: the shift of a clock change is an hour in most zones and two at the
+# most, so three leaves room. A moment is handed out once no wall time that
+# is still to come can name an earlier one.
+_REORDER_WINDOW = timedelta(hours=3)
+
+_EPOCH_UTC = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_EPOCH_NAIVE = datetime(1970, 1, 1)
+
+
+def _seconds(moment: datetime) -> float:
+    """A sortable number for a moment — absolute where it has a zone."""
+    if moment.tzinfo is None:
+        return (moment - _EPOCH_NAIVE).total_seconds()
+    return (moment - _EPOCH_UTC).total_seconds()
+
+
+def _cron_text(zeitplan: str) -> str:
+    """The cron expression behind a daily time or a cron expression: one way
+    of walking wall times for both."""
+    if sorte(zeitplan) == SORTE_CRON:
+        return zeitplan.strip()
+    stunde, minute = (int(teil) for teil in zeitplan.strip().split(":"))
+    return f"{minute} {stunde} * * *"
+
+
+def _instants(wall: datetime, zone) -> list[datetime]:
+    """The moments a wall time stands for in ``zone``, in UTC, earliest first.
+
+    A wall time of the repeated hour is read once with ``fold=0`` and once
+    with ``fold=1`` and gives two moments. A wall time of the missing hour is
+    read with ``fold=0``, which takes the offset from before the jump, and
+    gives the one moment an hour later at the same minute. Without a zone
+    the wall time is the moment."""
+    if zone is None:
+        return [wall]
+    first = wall.replace(tzinfo=zone, fold=0).astimezone(timezone.utc)
+    second = wall.replace(tzinfo=zone, fold=1).astimezone(timezone.utc)
+    # In the missing hour the later reading lands BEFORE the earlier one.
+    return [first] if second <= first else [first, second]
+
+
+def _wall_times(cron: str, start: datetime, *, forward: bool) -> Iterator[datetime]:
+    """The wall times of a cron expression from ``start`` on, as ``croniter``
+    walks them on a clock without a zone, until it has no further one."""
+    walk = croniter(cron, start)
+    step = walk.get_next if forward else walk.get_prev
+    while True:
+        try:
+            yield step(datetime)
+        except CroniterBadDateError:
+            return
+
+
+def _calm(wall: datetime, zone) -> bool:
+    """Whether no clock change lies within the reorder window on either side
+    of ``wall``. Where none does, the moments of the wall times around it
+    stand in the order of the wall times, each wall time names one moment,
+    and nothing has to be held back or looked for ahead of time."""
+    if zone is None:
+        return True
+    here = zone.utcoffset(wall)
+    return (
+        zone.utcoffset(wall - _REORDER_WINDOW) == here
+        and zone.utcoffset(wall + _REORDER_WINDOW) == here
+    )
+
+
+def _due_moments(zeitplan: str, jetzt: datetime, *, forward: bool) -> Iterator[datetime]:
+    """Due moments of a daily time or a cron expression, each once, going
+    away from ``jetzt`` on the absolute clock — later ones when ``forward``,
+    earlier ones otherwise, starting with the first one at or beyond it.
+
+    The wall times come from ``croniter`` on a clock without a zone, so no
+    clock change can make it skip or repeat one; the zone database turns
+    each into its moments (``_instants``). Near a clock change the walk
+    starts a window before ``jetzt`` (after it, going back), because a wall
+    time just before ``jetzt`` can still name a moment after it: the second
+    pass of the repeated hour. There, moments are held back until no wall
+    time still to come can name an earlier one, which is also what puts the
+    two passes of the repeated hour in order. Away from a clock change none
+    of that is needed, and a schedule every minute is not walked for three
+    hours to name its next moment."""
+    zone = jetzt.tzinfo
+    reach = absolute(jetzt)
+    wall = jetzt.replace(tzinfo=None, fold=0)
+    lead = timedelta(0) if _calm(wall, zone) else _REORDER_WINDOW
+    start = wall - lead if forward else wall + lead
+    # ``croniter`` leaves out its own starting point.
+    start += timedelta(seconds=-1 if forward else 1)
+    pending: list[tuple[float, datetime, datetime]] = []
+    previous: datetime | None = None
+
+    def released(limit: datetime | None) -> Iterator[datetime]:
+        """What may go out: all of it once the walk is over (``limit`` is
+        ``None``), else what no later wall time can still come before."""
+        nonlocal previous
+        while pending:
+            held_wall, moment = pending[0][1], pending[0][2]
+            if limit is not None and (held_wall > limit if forward else held_wall < limit):
+                return
+            heapq.heappop(pending)
+            if moment != previous:
+                previous = moment
+                yield moment if zone is None else moment.astimezone(zone)
+
+    for wall_time in _wall_times(_cron_text(zeitplan), start, forward=forward):
+        moments = [
+            moment
+            for moment in _instants(wall_time, zone)
+            if ((moment >= reach) if forward else (moment <= reach))
+        ]
+        if not pending and _calm(wall_time, zone):
+            # Nothing held back and no clock change ahead: this wall time's
+            # moment goes out as it is.
+            for moment in moments:
+                if moment != previous:
+                    previous = moment
+                    yield moment if zone is None else moment.astimezone(zone)
+            continue
+        for moment in moments:
+            key = _seconds(moment)
+            heapq.heappush(pending, (key if forward else -key, wall_time, moment))
+        yield from released(
+            wall_time - _REORDER_WINDOW if forward else wall_time + _REORDER_WINDOW
+        )
+    yield from released(None)
+
+
+def upcoming(zeitplan: str, jetzt: datetime) -> Iterator[datetime]:
+    """Every due moment at or after ``jetzt``, earliest first, each once — in
+    the zone of ``jetzt``. An instant has exactly one, even when it has gone
+    by; the other two shapes never end."""
+    art = sorte(zeitplan)
+    if art == SORTE_ZEITPUNKT:
+        yield _zeitpunkt(zeitplan.strip(), jetzt)
+        return
+    yield from _due_moments(zeitplan, jetzt, forward=True)
 
 
 def _zeitpunkt(zeitplan: str, jetzt: datetime) -> datetime:
     moment = _zeitpunkt_teile(zeitplan.strip())
     if moment is None:  # pragma: no cover - sorte() has already vouched
-        raise TerminplanFehler("not an instant")
-    return moment.replace(tzinfo=jetzt.tzinfo)
+        raise TerminplanFehler("Not a valid timestamp")
+    zone = jetzt.tzinfo
+    if zone is None:
+        return moment
+    # The same rule as every other wall time: one in the missing hour is the
+    # moment an hour later, one in the repeated hour is its first pass.
+    return _instants(moment, zone)[0].astimezone(zone)
 
 
 def letzter_termin(zeitplan: str, jetzt: datetime) -> datetime:
@@ -186,19 +324,11 @@ def letzter_termin(zeitplan: str, jetzt: datetime) -> datetime:
     themselves; the alternative would be an empty answer that every caller
     then has to unpack, for the one shape that has exactly one answer.
     """
-    art = sorte(zeitplan)
-    zeitplan = zeitplan.strip()
-    if art == SORTE_ZEITPUNKT:
+    if sorte(zeitplan) == SORTE_ZEITPUNKT:
         return _zeitpunkt(zeitplan, jetzt)
-    if art == SORTE_CRON:
-        # ``get_prev`` is exclusive of its starting point; a due moment that
-        # is exactly now is a due moment that has come.
-        return croniter(zeitplan, jetzt + timedelta(seconds=1)).get_prev(datetime)
-    stunde, minute = (int(teil) for teil in zeitplan.split(":"))
-    termin = jetzt.replace(hour=stunde, minute=minute, second=0, microsecond=0)
-    if termin > jetzt:
-        termin -= timedelta(days=1)
-    return termin
+    for moment in _due_moments(zeitplan, jetzt, forward=False):
+        return moment
+    raise TerminplanFehler("The schedule has no earlier due moment.")  # pragma: no cover
 
 
 def naechster_termin(zeitplan: str, jetzt: datetime) -> datetime:
@@ -208,14 +338,6 @@ def naechster_termin(zeitplan: str, jetzt: datetime) -> datetime:
 
     An instant has exactly one due moment, so both directions name it.
     """
-    art = sorte(zeitplan)
-    zeitplan = zeitplan.strip()
-    if art == SORTE_ZEITPUNKT:
-        return _zeitpunkt(zeitplan, jetzt)
-    if art == SORTE_CRON:
-        return croniter(zeitplan, jetzt - timedelta(seconds=1)).get_next(datetime)
-    stunde, minute = (int(teil) for teil in zeitplan.split(":"))
-    termin = jetzt.replace(hour=stunde, minute=minute, second=0, microsecond=0)
-    if termin < jetzt:
-        termin += timedelta(days=1)
-    return termin
+    for moment in upcoming(zeitplan, jetzt):
+        return moment
+    raise TerminplanFehler("The schedule has no later due moment.")  # pragma: no cover

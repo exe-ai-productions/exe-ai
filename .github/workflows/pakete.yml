@@ -15,7 +15,7 @@
 # Runs on a version tag (v0.6.9) or by hand from the Actions page.
 #
 # The two jobs start at once: the package does not wait for the tests,
-# and the tests use every core of the runner (pytest-xdist, one file per
+# and the tests run on four workers (pytest-xdist, one file per
 # worker). A red test job is there to be seen before the draft is
 # published by hand; it no longer holds the package back.
 

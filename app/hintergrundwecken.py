@@ -424,9 +424,9 @@ def _notiz_schreiben(
             chat_id=chat_id,
             role="assistant",
             content=(
-                f"[Finished background runs carried this chat on {stand} times "
-                f"without a word from you, and the limit is {grenze}. Stopping "
-                "here — send a message to pick it up again.]"
+                f"[Completed background runs have continued this chat {stand} times without a "
+                f"message from you. The limit is {grenze}. Work has stopped; send a message to "
+                "resume.]"
             ),
             art="werkzeugmeldung",
         )

@@ -24,13 +24,14 @@
   let schreibt = $state(false)
   let neuName = $state('')
   let neuInhalt = $state('')
-  const VORLAGE = `---
-description: What this skill does, in one line.
+  /* Built when the form opens, so its two sentences are in the language the
+     interface has at that moment. */
+  const vorlage = () => `---
+${t('skills.template_description')}
 auto: false
 ---
 
-Write the instruction here. When this skill is chosen, the model follows
-what stands below.
+${t('skills.template_instructions')}
 `
   /* Editing reuses the same form. `bearbeitet` carries the name of the
      skill whose file is open — null while writing a fresh one. The name
@@ -40,7 +41,7 @@ what stands below.
   function neuAnfangen() {
     bearbeitet = null
     neuName = ''
-    neuInhalt = VORLAGE
+    neuInhalt = vorlage()
     schreibt = true
   }
   async function bearbeiten(zeile) {
@@ -69,11 +70,6 @@ what stands below.
       melde(String(fehler.message || fehler), 'fehler')
     }
   }
-
-  /* Only the automatic ones cost anything, and only they are counted. The
-     number is here because the cost is invisible otherwise: it is paid on
-     every request, in a place nobody looks. */
-  const automatisch = $derived(zeilen.filter((z) => z.auto).length)
 
   /* Loaded here rather than by whoever shows the mask: the component does
      not exist yet at the moment the section is switched to, so a call from
@@ -166,21 +162,12 @@ what stands below.
     </div>
   </div>
 {:else}
-<div class="kopf">
-  <span>{t('skills.wieviele', { anzahl: automatisch })}</span>
-</div>
-
 <div class="schalterzeile">
   <div class="beschriftung">
     {t('skills.selbst')}
-    <span class="hinweis">{t('skills.selbst_hinweis')}</span>
   </div>
   <Schalter an={selbstWaehlen} beschriftung={t('skills.selbst')} onschalten={selbstSchalten} />
 </div>
-
-{#if !zeilen.length}
-  <p class="leer">{t('skills.keine')}</p>
-{/if}
 
 {#each zeilen as zeile (zeile.name)}
   <div class="zeile">
@@ -229,11 +216,6 @@ what stands below.
 {/if}
 
 <style>
-  .kopf {
-    font-size: 12.5px;
-    color: var(--text-still);
-    padding: 0 2px 12px;
-  }
   .schalterzeile {
     display: flex;
     align-items: center;
@@ -254,12 +236,6 @@ what stands below.
   .beschriftung {
     font-size: 13.5px;
     min-width: 0;
-  }
-  .hinweis {
-    display: block;
-    font-size: 12px;
-    color: var(--text-still);
-    margin-top: 2px;
   }
   .zeile {
     display: flex;
@@ -326,12 +302,6 @@ what stands below.
   }
   .zurueck:hover {
     background: var(--glass-hover);
-  }
-  .leer {
-    font-size: 13px;
-    color: var(--text-still);
-    padding: 4px 2px 0;
-    margin: 0;
   }
 
   /* The way to a skill of one's own: a dashed tile, plus and word, the same

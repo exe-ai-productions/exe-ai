@@ -73,24 +73,24 @@ WERKZEUGE = [
     {
         "name": "web_search",
         "description": (
-            "Searches the web and returns a list of results with title, snippet "
-            "and address. For current events, facts, and anything that happened "
-            "after the model's knowledge cutoff."
+            "Searches the web and returns results with a title, excerpt, and URL. Use it for "
+            "current events, factual research, and developments after the model's knowledge "
+            "cutoff."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "What to search for.",
+                    "description": "Search query.",
                 },
                 "language": {
                     "type": "string",
-                    "description": "Language code such as 'de' or 'en'. Default: all.",
+                    "description": "Language code, such as 'de' or 'en'. Default: all.",
                 },
                 "count": {
                     "type": "integer",
-                    "description": f"How many results, at most {MAX_TREFFER}.",
+                    "description": f"Number of results to return, up to {MAX_TREFFER}.",
                 },
             },
             "required": ["query"],
@@ -144,7 +144,7 @@ async def werkzeug_ausfuehren(name: str, argumente: dict[str, Any]) -> str:
         )
     if name == "read_webpage":
         return await webseite_lesen.lesen(argumente["url"])
-    raise ValueError(f"Unbekanntes Werkzeug: {name}")
+    raise ValueError(f"Unknown tool: {name}")
 
 
 if __name__ == "__main__":

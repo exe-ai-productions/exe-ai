@@ -247,25 +247,64 @@ def test_the_second_dock_is_gone_from_the_window():
     assert any("/agentendock" in text for text in sources.values())
 
 
-def test_a_folder_address_is_one_of_the_two_routes():
-    """What the input bar takes as a file of the folder: a file of the dock
-    or a document of a chat. Schweigeprobe: the old dock's address and the
-    listing beside the files are none."""
+def _folder_file_matches(addresses: list[str]) -> list[bool]:
+    """The window's own expression, run by node on the addresses."""
     bar = _source("Eingabeleiste.svelte")
     pattern = re.search(r"const FOLDER_FILE =\s*/(.+)/\n", bar)
     assert pattern, "FOLDER_FILE not found"
-    folder_file = re.compile(pattern.group(1))
-    assert folder_file.match("/agentendock/3f2a-1")
-    assert folder_file.match("/documents/3f2a-1/file")
-    assert not folder_file.match("/notizen/dock/3f2a-1")
-    assert not folder_file.match("/agentendock/alle")
+    script = (
+        f"const r = new RegExp({json.dumps(pattern.group(1))});"
+        f"console.log(JSON.stringify({json.dumps(addresses)}.map((a) => r.test(a))))"
+    )
+    run = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=60)
+    assert run.returncode == 0, run.stderr
+    return json.loads(run.stdout)
 
 
-def test_dropped_and_picked_files_take_the_same_way():
-    """Both hand their files to `add`, which puts them in one after the
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node on this machine")
+def test_a_folder_address_is_one_of_the_three_routes():
+    """What the input bar takes as a file of the folder: a file of the dock,
+    a document of a chat or a loose file of a chat's folder, at any depth.
+    Schweigeprobe: the old dock's address, the listing beside the files and
+    every address that climbs out of the chat's folder are none."""
+    taken = [
+        "/agentendock/3f2a-1",
+        "/documents/3f2a-1/file",
+        "/chat-files/3f2a-1/bericht.md",
+        "/chat-files/3f2a-1/unter/ordner/tabelle.csv",
+        "/chat-files/3f2a-1/Mein%20Bericht%20%C3%BC.md",
+        "/chat-files/3f2a-1/...",
+        # A backslash in a name is written %5C by the service: a legit name.
+        "/chat-files/3f2a-1/a%5Cb.md",
+        "/chat-files/3f2a-1/50%252Fprozent.md",
+    ]
+    refused = [
+        "/notizen/dock/3f2a-1",
+        "/agentendock/alle",
+        "/chat-files/3f2a-1/../geheim",
+        "/chat-files/3f2a-1/%2e%2e/geheim",
+        "/chat-files/3f2a-1/.%2E/geheim",
+        "/chat-files/3f2a-1/a/./b",
+        "/chat-files/3f2a-1/a%2F..%2Fb",
+        "/chat-files/3f2a-1/x/a%2fb.md",
+        "/chat-files/3f2a-1/",
+        "/chat-files//x",
+        "/chat-files/3f2a-1/a?b=1",
+        "/chat-files/3f2a-1/a#b",
+        "//fremd.example/chat-files/1/a",
+        "https://fremd.example/chat-files/1/a",
+    ]
+    got = _folder_file_matches(taken + refused)
+    assert got[: len(taken)] == [True] * len(taken)
+    assert got[len(taken) :] == [False] * len(refused)
+
+
+def test_dropped_files_take_the_one_way_in():
+    """A drop hands its files to `add`, which puts them in one after the
     other — the open chat named, so a file of a chat lies in that chat's
     folder — tells of a refused file and goes on, and asks for the wall
-    once at the end."""
+    once at the end. There is no second way in: the row has no button for
+    picking files."""
     source = _source()
     add = _body(source, "async function add(list) {")
     loop = add[add.index("for (const file of list) {") : add.index("await load()")]
@@ -274,7 +313,8 @@ def test_dropped_and_picked_files_take_the_same_way():
     assert add.index("const into = chat") < add.index("for (const file of list) {")
     assert "melde(error.message, 'fehler')" in loop and "return" not in add
     assert add.count("await load()") == 1
-    assert "await add(chosenFiles)" in _body(source, "async function picked(event) {")
+    assert "async function picked(" not in source and "filePicker" not in source
+    assert 'type="file"' not in source
     assert "await add([...(event.dataTransfer?.files ?? [])])" in _body(source, "async function dropped(event) {")
     # Removing knows one route too.
     remove = _body(source, "async function remove(file) {")
@@ -358,25 +398,50 @@ def test_the_folder_lights_up_only_for_a_drag_it_takes():
 # --- The head and the tiles --------------------------------------------------
 
 
-def test_eine_zeile_mit_auswahl_und_drei_knoepfen_ohne_etikett_pfad_und_zahl():
-    """The head is one row: the project chooser with the house arrow, then
-    open, move and add for the folder — no label, no path, no count — and
-    under it the heading over the files."""
+def test_the_doc_folder_wears_the_galleries_folder_row_without_a_plus():
+    """The defect: the gallery's folder row said its name and path and had
+    open and change; the doc folder's showed the buttons alone and a plus,
+    with a heading over the files. Both are the one row now — name, path,
+    open, change — and the doc folder has no plus and no heading; on the
+    start page the project chooser stands under the row."""
     quelle = (FRONTEND / "src/teile/DocFolder.svelte").read_text(encoding="utf-8")
-    zeile = quelle[quelle.index('<div class="ordnerzeile">') : quelle.index('<div class="abschnitt">')]
-    assert 'class="projektknopf"' in zeile
-    assert 'zeichen="pfeil_unten"' in zeile
+    zeile = quelle[quelle.index('<div class="ordnerzeile">') : quelle.index('<div class="rollen">')]
     assert "<Speicherortzeile" in zeile
-    assert "showPath={false}" in zeile
-    assert "onadd=" in zeile
-    assert "etikett=" not in quelle
+    assert "etikett={t('docfolder.ordner')}" in zeile
+    # In a chat the row never shows the dock's path, not even while the
+    # chat's own is still on its way.
+    assert "pathText={chat ? (chatPlace ?? '') : null}" in zeile
+    assert "onadd" not in quelle and "showPath" not in quelle
+    assert "dateien_hinzufuegen" not in quelle and "docfolder.dateien" not in quelle
+    # The chooser stands in its own row, on the start page only.
+    chooser = zeile[zeile.index('<div class="chooser-row">') :]
+    assert 'class="projektknopf"' in chooser and 'zeichen="pfeil_unten"' in chooser
+    assert zeile.index("{#if !chat}") < zeile.index('<div class="chooser-row">')
+    assert '<div class="abschnitt">' not in quelle
     # No count anywhere in the head or over the wall.
     assert "files.length}" not in quelle.replace("{#if files.length}", "")
-    assert "{t('docfolder.dateien')}</div>" in quelle
 
     reihe = (FRONTEND / "src/teile/Speicherortzeile.svelte").read_text(encoding="utf-8")
-    assert '{#if showPath}<span class="pfad"' in reihe
-    assert "showPath = true" in reihe
+    assert '<span class="pfad" title={shownPath}>{shownPath}</span>' in reihe
+    assert "const shownPath = $derived(pathText ?? pfad)" in reihe
+    assert "onadd" not in reihe and "showPath" not in reihe
+
+
+def test_the_gallery_row_is_unchanged_and_takes_no_files():
+    """Silence probe: the gallery names its folder and shows the path as it
+    did, and gives its row no way to hand files in."""
+    galerie = (FRONTEND / "src/teile/ModulBilder.svelte").read_text(encoding="utf-8")
+    assert "<Speicherortzeile name=\"images\" etikett={t('bilder.bildordner')} onaendern={laden} />" in galerie
+    assert "pathText" not in galerie
+
+
+def test_the_folder_name_is_one_text_in_both_languages():
+    for sprache, wort in (("de", "Dateiordner"), ("en", "File folder")):
+        katalog = json.loads((WURZEL / "app" / "locales" / f"{sprache}.json").read_text(encoding="utf-8"))
+        assert katalog["docfolder"]["ordner"] == wort, sprache
+        # The heading and the plus are gone with their texts.
+        assert "dateien" not in katalog["docfolder"], sprache
+        assert "dateien_hinzufuegen" not in katalog["speicherorte"], sprache
 
 
 def test_der_dateianfang_liest_nur_die_verlangten_bytes():
@@ -461,3 +526,79 @@ def test_the_wall_is_asked_again_while_the_open_chats_answer_runs():
     # beside it could leave the wall on the chat that was left.
     assert "const now = answering ? chat : ''" in source
     assert "if (answeredIn && answeredIn === chat && !now) untrack(() => load(true))" in source
+
+
+# --- A PDF opens in the reader's frame ---------------------------------------
+
+
+def _opened(files: list[dict]) -> list[list]:
+    """What ``open`` hands to the reader for each file: the component's own
+    text of ``isPicture``, ``isPdf`` and ``open`` run in Node, with the
+    reader's two doors recorded instead of drawn."""
+    source = _source()
+    lifted = "\n".join(
+        f"function {head}{{{_body(source, f'function {head}{{')}\n}}"
+        for head in ("isPicture(file) ", "isPdf(file) ", "open(file) ")
+    )
+    driver = f"""
+const calls = []
+const api = {{ docFolderAddress: (path) => '/file/' + path }}
+const originLine = () => 'origin'
+const folderOf = (file) => (file.source === 'agent' ? 'agent_dock' : '')
+const endingOf = (file) => (file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : '')
+const isText = (file) => ['md', 'txt'].includes(endingOf(file))
+const previewOf = () => ''
+const bigPreview = async () => ''
+const CARD_PREVIEW = {{}}
+const t = (key) => key
+const bildZeigen = (adresse, more) => calls.push(['picture', adresse, more.name])
+const showPage = (page) => calls.push(['page', page.adresse, page.framed === true, Boolean(page.loadText)])
+{lifted}
+for (const file of {json.dumps(files)}) open(file)
+console.log('---BERICHT---')
+console.log(JSON.stringify(calls))
+"""
+    return _run(driver)
+
+
+def test_a_pdf_of_the_wall_opens_in_the_frame_like_the_card_in_a_chat():
+    """A document of the chat and a file on the dock both reach the reader
+    with their address and ``framed``: its pages one under the other, not
+    the shell's small picture of the first page. Silence probes: a picture
+    still opens in the picture reader, a text file as text, and a PDF with
+    no address to fetch from is not framed."""
+    chat_pdf = {"name": "plan.pdf", "type": "application/pdf", "path": "p1", "source": "document"}
+    dock_pdf = {"name": "scan.pdf", "type": "application/pdf", "path": "p2", "source": "agent"}
+    picture = {"name": "dog.jpg", "type": "image/jpeg", "path": "p3", "source": "document"}
+    note = {"name": "notes.md", "type": "text/markdown", "path": "p4", "source": "document"}
+    page = {"name": "sheet.xlsx", "type": "application/vnd.ms-excel", "path": "p5", "source": "document"}
+    no_address = {"name": "lost.pdf", "type": "application/pdf", "path": "", "source": "document"}
+
+    calls = _opened([chat_pdf, dock_pdf, picture, note, page, no_address])
+
+    assert calls == [
+        ["page", "/file/p1", True, False],
+        ["page", "/file/p2", True, False],
+        ["picture", "/file/p3", "dog.jpg"],
+        ["page", "/file/p4", False, True],
+        ["page", "/file/p5", False, False],
+        ["page", "", False, False],
+    ]
+
+
+# --- The picture of a page is no picture to save -----------------------------
+
+
+def test_the_shells_picture_of_a_page_takes_no_pointer_and_a_picture_tile_keeps_its_image():
+    """A right click on the face of a PDF's tile landed on an image and the
+    menu offered "save image" — what is saved is a picture of page one, not
+    the file. The face takes no pointer, so the click lands on the tile.
+    Silence probe: the tile of a real picture keeps its image as it was."""
+    markup = _source().split("</script>", 1)[1].split("<style>", 1)[0]
+    images = re.findall(r"<img [^>]*>", markup)
+    face = [tag for tag in images if "previewOf(file, CARD_PREVIEW)" in tag]
+    picture = [tag for tag in images if "api.docFolderAddress(file.path)" in tag]
+
+    assert len(face) == 1 and 'class="shell"' in face[0]
+    assert len(picture) == 1 and "class=" not in picture[0]
+    assert "pointer-events: none;" in _declarations(".shell")

@@ -3,12 +3,15 @@
 
 Packaged into a single file there is no interpreter left to start a helper
 with — so the program is its own helper. Called plainly it serves the
-terminal and opens the interface; called with ``--mcp <name>`` it becomes the
-tool server it would otherwise have started as a separate script.
+terminal and opens the interface; called with ``--serve`` it serves without
+opening anything, for the terminal client that started it and for machines
+without a window; called with ``--mcp <name>`` it becomes the tool server it
+would otherwise have started as a separate script; called with ``--cli`` it
+is the terminal client itself — the command ``exe`` on the path.
 
 That is why this file exists at all and why it stays this short: it is the
-only place that decides which of the two the program is going to be, and it
-must decide before anything heavy is imported.
+only place that decides which of the four the program is going to be, and
+it must decide before anything heavy is imported.
 """
 
 from __future__ import annotations
@@ -49,7 +52,7 @@ MCP_SERVER = {
 def _mcp_bedienen(name: str) -> int:
     modul_name = MCP_SERVER.get(name)
     if modul_name is None:
-        print(f"Unbekannter Werkzeugserver: {name}", file=sys.stderr)
+        print(f"Unknown tool server: {name}", file=sys.stderr)
         return 2
 
     import importlib
@@ -63,6 +66,25 @@ def _mcp_bedienen(name: str) -> int:
     return 0
 
 
+def _cli_bedienen(argumente: list[str]) -> int:
+    """The terminal client, in this process: the command ``exe`` hands its
+    arguments here, and the client takes them as its own command line."""
+    from cli.main import main as cli_main
+
+    return cli_main(argumente)
+
+
+def _ist_cli_programm() -> bool:
+    """Packaged for Windows, the client is a program of its own name beside
+    the service's: ``exe.exe``, a console program, started by the command on
+    the path and by the Store's alias — which starts it by name and cannot
+    add a switch. So there the name decides; everywhere else ``--cli`` does,
+    and a program called anything else is never the client by name."""
+    if not getattr(sys, "frozen", False):
+        return False
+    return Path(sys.executable).stem.lower() == "exe"
+
+
 def _orte_zeigen() -> int:
     """Where this program keeps things — asked more often than one expects.
 
@@ -71,23 +93,31 @@ def _orte_zeigen() -> int:
     """
     from app import paketierung
 
-    print(f"eingefroren: {paketierung.ist_eingefroren()}")
-    print(f"programm:    {paketierung.programmpfad()}")
+    print(f"frozen: {paketierung.ist_eingefroren()}")
+    print(f"program:    {paketierung.programmpfad()}")
     print(f"mitgeliefert:{paketierung.ressourcen()}")
-    print(f"eigene Daten:{paketierung.daten()}")
+    print(f"own data:    {paketierung.daten()}")
     return 0
 
 
-def _antwortet(port: int) -> bool:
-    """Is something already serving on that port?"""
+def _antwortet(port: int, host: str = "127.0.0.1") -> bool:
+    """Is something already serving on that port, on the address the service
+    binds to (a wildcard is reached on loopback)?"""
     import socket
 
-    with socket.socket() as verbindung:
+    from app.tools.aufbau import dial_host
+
+    erreicht = dial_host(host)
+    familie = socket.AF_INET6 if ":" in erreicht else socket.AF_INET
+    with socket.socket(familie) as verbindung:
         verbindung.settimeout(0.4)
-        return verbindung.connect_ex(("127.0.0.1", port)) == 0
+        try:
+            return verbindung.connect_ex((erreicht, port)) == 0
+        except OSError:
+            return False
 
 
-def _browser_oeffnen(port: int) -> None:
+def _browser_oeffnen(port: int, host: str = "127.0.0.1") -> None:
     """Opens the interface once the service answers.
 
     Started by a double click, the program has to show something — a window
@@ -103,6 +133,7 @@ def _browser_oeffnen(port: int) -> None:
     import webbrowser
 
     from app.appfenster import oeffnen
+    from app.tools.aufbau import service_url
 
     # The native shell sets this when it starts the service as its sidecar:
     # the shell already is the window, a second one would greet every user
@@ -112,15 +143,18 @@ def _browser_oeffnen(port: int) -> None:
 
     ende = time.time() + 30
     while time.time() < ende:
-        if _antwortet(port):
-            adresse = f"http://127.0.0.1:{port}/app/"
+        if _antwortet(port, host):
+            adresse = f"{service_url(host, port)}/app/"
             if not oeffnen(adresse):
                 webbrowser.open(adresse)
             return
         time.sleep(0.3)
 
 
-def _terminal_bedienen() -> int:
+def _terminal_bedienen(*, with_window: bool = True) -> int:
+    """Serves. With the window: opens the interface once the service
+    answers. Without it (``--serve``): the service alone, on this terminal,
+    for whoever started it that way — a terminal client, a service file."""
     import threading
 
     import uvicorn
@@ -129,15 +163,21 @@ def _terminal_bedienen() -> int:
 
     konfiguration = get_config()
     port = konfiguration.app.port
+    host = konfiguration.app.host
 
     # A second double click should not start a second service and fail on the
     # port. It brings the window forward instead — which is what somebody
-    # clicking again actually wants.
-    if _antwortet(port):
-        _browser_oeffnen(port)
+    # clicking again actually wants. Asked to serve alone, there is nothing
+    # to bring forward: a service is there already, and this one ends.
+    if _antwortet(port, host):
+        if not with_window:
+            print(f"A service is already listening on port {port}.", file=sys.stderr)
+            return 1
+        _browser_oeffnen(port, host)
         return 0
 
-    threading.Thread(target=_browser_oeffnen, args=(port,), daemon=True).start()
+    if with_window:
+        threading.Thread(target=_browser_oeffnen, args=(port, host), daemon=True).start()
     uvicorn.run(
         "app.main:app",
         host=konfiguration.app.host,
@@ -162,6 +202,15 @@ def main(argumente: list[str] | None = None) -> int:
             print("--mcp braucht einen Namen", file=sys.stderr)
             return 2
         return _mcp_bedienen(argv[1])
+    if argv and argv[0] == "--serve":
+        return _terminal_bedienen(with_window=False)
+    # After the service's own switches: the client program starts the
+    # service with ``--serve`` from its own file, and that start must not
+    # be taken for a client by its name.
+    if argv and argv[0] == "--cli":
+        return _cli_bedienen(argv[1:])
+    if _ist_cli_programm():
+        return _cli_bedienen(argv)
     return _terminal_bedienen()
 
 

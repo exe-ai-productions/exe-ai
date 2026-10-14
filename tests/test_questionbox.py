@@ -167,7 +167,7 @@ def test_a_permission_asks_whether_to_allow_the_run():
     """The heading of every permission, in both languages."""
     assert "t('werkzeug.permission_question')" in _markup()
     assert _catalogue("de")["werkzeug"]["permission_question"] == "Ausführen erlauben?"
-    assert _catalogue("en")["werkzeug"]["permission_question"] == "Allow this?"
+    assert _catalogue("en")["werkzeug"]["permission_question"] == "Allow execution?"
 
 
 def test_a_permission_offers_this_time_always_and_no():
@@ -178,7 +178,7 @@ def test_a_permission_offers_this_time_always_and_no():
     assert "{ label: t('app.nein'), pick: () => answerTool(false) }," in rows
     words = {
         "de": ("Dieses Mal erlauben", "Immer erlauben", "Nein"),
-        "en": ("Allow this time", "Always allow", "No"),
+        "en": ("Allow once", "Always allow", "No"),
     }
     for language, (once, always, no) in words.items():
         catalogue = _catalogue(language)
@@ -287,10 +287,10 @@ def test_nothing_stands_while_the_question_is_pushed_away():
     """Silence probe: after "later" neither card nor veil is written — the
     bar keeps the chip that brings them back."""
     bar = BAR.read_text(encoding="utf-8")
-    assert re.search(r"\{#if standing && !questionDeferred\}\s*<QuestionBox\b", bar)
+    assert re.search(r"\{#if cardStands\}\s*<QuestionBox\b", bar)
     assert bar.count("<QuestionBox") == 1
-    chip = bar[bar.index("{#if questionDeferred}"):]
-    assert 'class="later-chip"' in chip[:200] and "onclick={resume}" in chip[:300]
+    chip = bar[bar.index("{#each pushedAway as item"):]
+    assert 'class="later-chip"' in chip[:200] and "onclick={() => resume(item)}" in chip[:300]
     # The veil is part of the card's own markup, so it goes with it.
     assert _markup().lstrip().startswith("<!-- svelte-ignore a11y_no_static_element_interactions -->\n<div class=\"veil\"")
 

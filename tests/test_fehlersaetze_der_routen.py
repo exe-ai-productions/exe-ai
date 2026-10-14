@@ -152,7 +152,7 @@ SAETZE = [
         {},
         404,
         "No skill named 'nichts-davon'",
-        "Keine Skill namens 'nichts-davon'",
+        "Kein Skill namens 'nichts-davon'",
     ),
     (
         "der unbekannte Skill beim Bearbeiten",
@@ -161,7 +161,7 @@ SAETZE = [
         {"json": {"inhalt": "x"}},
         404,
         "No skill named 'nichts-davon'",
-        "Keine Skill namens 'nichts-davon'",
+        "Kein Skill namens 'nichts-davon'",
     ),
     (
         "der unbekannte Skill beim Umschalten",
@@ -170,7 +170,7 @@ SAETZE = [
         {"json": {"auto": True}},
         404,
         "No skill named 'nichts-davon'",
-        "Keine Skill namens 'nichts-davon'",
+        "Kein Skill namens 'nichts-davon'",
     ),
     (
         "die fehlende eigene Fassung",
@@ -178,8 +178,8 @@ SAETZE = [
         "/api/v1/skills/handoff",
         {},
         404,
-        "No own copy of 'handoff'",
-        "Keine eigene Fassung von 'handoff'",
+        "No user-defined copy of 'handoff'",
+        "Keine benutzereigene Fassung von 'handoff'",
     ),
     (
         "die fehlende Berechtigung",
@@ -233,7 +233,7 @@ SAETZE = [
         {"json": {}},
         400,
         "generation_id or chat_id is required",
-        "generation_id oder chat_id wird gebraucht",
+        "generation_id oder chat_id ist erforderlich",
     ),
 ]
 
@@ -359,7 +359,7 @@ def test_a_valid_body_passes_unchanged(client):
 
 
 def test_a_picture_beyond_the_run_names_the_catalogue_sentence(client):
-    """A picture number beyond the run's last one is refused by the model's
+    """A Image number is outside the range of this run.'s last one is refused by the model's
     own check (`BildWunsch._lauf_stimmig`, app/api/v1/bild.py). What that
     check carries is a catalogue KEY — no sentence of its own, and above all
     no key for the window to show: the sentence is taken under it, in the

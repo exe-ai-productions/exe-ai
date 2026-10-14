@@ -28,6 +28,7 @@ WURZEL = Path(__file__).resolve().parents[1]
 FRONTEND = WURZEL / "frontend"
 MODUL = FRONTEND / "src" / "lib" / "auftragsmelder.js"
 LAUFSTAND = FRONTEND / "src" / "lib" / "laufstand.js"
+MARKE = FRONTEND / "src" / "lib" / "agentmarke.js"
 KATALOG = WURZEL / "app" / "locales" / "en.json"
 
 pytestmark = pytest.mark.skipif(
@@ -69,10 +70,17 @@ def _melden(*ticks: list[dict]) -> list[dict]:
             encoding="utf-8",
         )
         quelle = MODUL.read_text(encoding="utf-8")
+        # The agent's display name: the shipped file, with only the
+        # catalogue behind it replaced like the module's own.
+        (ordner / "agentmarke.mjs").write_text(
+            MARKE.read_text(encoding="utf-8").replace("./texte.svelte.js", "./texte.mjs"),
+            encoding="utf-8",
+        )
         (ordner / "melder.mjs").write_text(
             # An import wants a URL, not a path: a Windows path is read as a
             # protocol ('c:') and refused.
             quelle.replace("./laufstand.js", LAUFSTAND.as_uri())
+            .replace("./agentmarke.js", "./agentmarke.mjs")
             .replace("./meldewesen.svelte.js", "./meldewesen.mjs")
             .replace("./texte.svelte.js", "./texte.mjs"),
             encoding="utf-8",
@@ -134,6 +142,29 @@ def test_der_satz_des_agenten_steht_im_toast():
     assert meldungen[0]["text"] == "Rechercheur · Drei Quellen geprüft."
     assert meldungen[0]["was"] == "fertig"
     assert meldungen[0]["auftragId"] == "a"
+
+
+def test_a_run_without_agent_is_named_by_the_word_never_by_the_marker():
+    """The marker an entry with no agent carries is bookkeeping: the notice
+    reads "No agent", not "(none)" — for an ending and for a question."""
+    meldungen = _melden(
+        [],
+        [
+            _job("a", "fertig", grund="fertig", ergebnis="Erledigt.", agent="(none)"),
+            {
+                **_job("b", "wartet", agent="(none)"),
+                "question": {"aufruf_id": "q1", "frage": "Welche Datei?"},
+            },
+        ],
+    )
+    assert sorted(m["text"] for m in meldungen) == [
+        "No agent · Erledigt.",
+        "No agent · Welche Datei?",
+    ]
+    assert not any("(none)" in m["text"] for m in meldungen)
+    # Silence probe: a run with an agent keeps its own name.
+    (eigener,) = _melden([], [_job("c", "fertig", grund="fertig", ergebnis="Gut.")])
+    assert eigener["text"] == "Rechercheur · Gut."
 
 
 def test_ohne_ergebnis_steht_der_grund_in_worten():

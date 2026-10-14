@@ -115,7 +115,7 @@ async def test_ein_untippbarer_name_wird_abgelehnt(orte):
 
 async def test_eine_zu_lange_anleitung_wird_abgelehnt(orte):
     _, mein = orte
-    with pytest.raises(skill.SkillVerboten, match="Too long"):
+    with pytest.raises(skill.SkillVerboten, match="too long"):
         await skill.schreiben(
             {"name": "lang", "description": "Da", "instruction": "x" * (skill.MAX_ANLEITUNG + 1)},
             mein,

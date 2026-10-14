@@ -129,9 +129,24 @@ export const WERKZEUG_FERTIG_MS = 1500
    is not the only notice that does not go through `melden()`; it is the one
    whose duration used to be writable nowhere. */
 export function werkzeugFertigDauer() {
-  return meldewesen.popupSekunden > 0
-    ? meldewesen.popupSekunden * 1000
-    : WERKZEUG_FERTIG_MS
+  const dauer = popupDauer()
+  return dauer > 0 ? dauer : WERKZEUG_FERTIG_MS
+}
+
+/* The notice-duration field in milliseconds, and 0 while it stands on
+   "Auto": the one place the seconds of the field are turned into the time a
+   notice stands. Every reader keeps its own answer for "Auto". */
+function popupDauer() {
+  return meldewesen.popupSekunden * 1000
+}
+
+/* The longest the field may hold, in seconds — the service's own limit. */
+const POPUP_MAX_SEKUNDEN = 60
+
+/* A value for the field, from the hand or from what was stored: whole
+   seconds, between 0 ("Auto") and the limit. */
+function popupSekundenKlemmen(wert) {
+  return Math.max(0, Math.min(POPUP_MAX_SEKUNDEN, Math.round(wert)))
 }
 
 /* How long the notice of a FAILED tool call stands — always, whatever the
@@ -156,6 +171,12 @@ export function melde(
   text, art = 'hinweis',
   {
     dauerhaft = false, werkzeug = '', dauer = 0, auftragId = '', stumm = false,
+    /* Which server the tool belongs to, when it is a server's. The catalogue
+       picks the mark by the server first — the name alone finds none for a
+       tool of a server it has only the server's word for. Empty for a tool
+       of the house and for a call still being written, when no server is
+       known yet. */
+    server = '',
     /* Which agent this notice is about, when it is about one. The name is
        already IN the text — this says which part of it is the name, so the
        notice can write it in that agent's own colour instead of leaving
@@ -185,7 +206,7 @@ export function melde(
   /* `auftragId` is what lets a notice about a run be closed when that run
      is looked at, rather than by a clock. Empty for everything that is
      about no run in particular. */
-  meldungen.liste.push({ id, text, art, werkzeug, auftragId, agent, schluessel, werte })
+  meldungen.liste.push({ id, text, art, werkzeug, server, auftragId, agent, schluessel, werte })
   if (meldungen.liste.length > 3) schliesseMeldung(meldungen.liste[0].id)
   if (!dauerhaft) _uhrStellen(id, dauer || DAUER[art] || 3200)
   return id
@@ -202,7 +223,7 @@ export function meldungenZuAuftragSchliessen(auftragId) {
 
 /* Rewrite a running notification instead of putting a second one next to it. */
 export function aktualisiereMeldung(
-  id, { text, art, dauerhaft = false, dauer = 0, schluessel, werte, werkzeug } = {},
+  id, { text, art, dauerhaft = false, dauer = 0, schluessel, werte, werkzeug, server } = {},
 ) {
   const meldung = meldungen.liste.find((m) => m.id === id)
   /* Says whether it found one. A notice can be gone — three is the most
@@ -225,6 +246,11 @@ export function aktualisiereMeldung(
   /* Which tool's mark it shows. A notice that follows a whole answer moves
      from one tool to the next, and the mark has to move with it. */
   if (werkzeug !== undefined) meldung.werkzeug = werkzeug
+  /* And the server it comes from, moving with it: the mark of one server's
+     tool must not stay behind on the next tool's notice. Left alone when
+     the caller names none, so a rewrite that only changes the words keeps
+     the server of the call it is about. */
+  if (server !== undefined) meldung.server = server
   /* Rewritten together with the text, never left behind: a notice carrying
      the seams of the sentence it USED to hold would set the wrong words
      apart in the new one. Cleared when a rewrite names no key. */
@@ -285,8 +311,8 @@ export function melden({
        be looked at — it is closed from the outside, by whoever marks the
        job seen (agentenampel.svelte.js). Without a job there is nothing to
        wait for, so the kind's own duration applies. */
-    dauerhaft: meldewesen.popupSekunden === 0 && Boolean(auftragId),
-    dauer: meldewesen.popupSekunden > 0 ? meldewesen.popupSekunden * 1000 : 0,
+    dauerhaft: popupDauer() === 0 && Boolean(auftragId),
+    dauer: popupDauer(),
     auftragId,
     agent,
     werkzeug: von === 'werkzeug' ? text : '',
@@ -372,7 +398,9 @@ export async function meldewesenLaden() {
   const stand = await api.einstellungAufgeloest(SCHLUESSEL).catch(() => null)
   const wert = stand?.wert
   if (wert && typeof wert === 'object') {
-    if (typeof wert.popup_sekunden === 'number') meldewesen.popupSekunden = wert.popup_sekunden
+    if (typeof wert.popup_sekunden === 'number') {
+      meldewesen.popupSekunden = popupSekundenKlemmen(wert.popup_sekunden)
+    }
     for (const [name, schluessel] of Object.entries(FELDER)) {
       if (typeof wert[schluessel] === 'boolean') meldewesen.punkte[name] = wert[schluessel]
     }
@@ -417,7 +445,7 @@ const SPEICHER_RUHE_MS = 300
 let speicherUhr = 0
 
 export function popupSekundenSetzen(wert) {
-  meldewesen.popupSekunden = Math.max(0, Math.min(60, Math.round(wert)))
+  meldewesen.popupSekunden = popupSekundenKlemmen(wert)
   clearTimeout(speicherUhr)
   speicherUhr = setTimeout(sichern, SPEICHER_RUHE_MS)
 }

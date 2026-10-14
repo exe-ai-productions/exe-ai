@@ -108,16 +108,16 @@ def test_die_route_speichert_und_schreibt_die_regeldatei(client, config):
 
 
 def test_ein_gescopter_bereich_schreibt_die_datei_nicht(client, config):
-    """There is one shared rule file, not one per chat — a scoped write must
-    not silently lock down the file for everyone."""
+    """There is one shared rule file, not one per chat — a scoped write is
+    refused, so it neither locks down the file for everyone nor leaves a
+    value behind that applies nowhere."""
     vorher = laden(config.pfad(config.app.berechtigungen_datei))
 
     antwort = client.put(
         "/api/v1/settings/chat:irgendein-chat/berechtigungsmodus_chat",
         json={"wert": "restricted"},
     )
-    assert antwort.status_code == 200, antwort.text
-    assert antwort.json()["wert"] == "restricted"
+    assert antwort.status_code == 400, antwort.text
 
     nachher = laden(config.pfad(config.app.berechtigungen_datei))
     assert nachher.innerhalb_der_ordner == vorher.innerhalb_der_ordner

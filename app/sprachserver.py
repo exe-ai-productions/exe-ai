@@ -34,6 +34,7 @@ import logging
 
 import httpx
 
+from app import runnerzustand
 from app.modellrunner import Modellrunner
 
 log = logging.getLogger(__name__)
@@ -117,6 +118,7 @@ def runner_bauen(modellordner, programm: str | None, port: int) -> Modellrunner:
         schluessel_variable=SCHLUESSEL_VARIABLE,
         zusatzflags=FLAGS,
         sampling_flags=True,
+        zustand_callback=runnerzustand.melder(runnerzustand.SPEECH),
     )
 
 
@@ -139,6 +141,7 @@ def putzrunner_bauen(modellordner, programm: str | None, port: int) -> Modellrun
         schluessel_variable=PUTZ_SCHLUESSEL_VARIABLE,
         zusatzflags=(),
         sampling_flags=True,
+        zustand_callback=runnerzustand.melder(runnerzustand.CLEANUP),
     )
 
 

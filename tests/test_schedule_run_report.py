@@ -70,8 +70,12 @@ def test_time_and_ending_of_a_row_stay_as_they_were():
         "{grund(lauf) ? ` · ${grund(lauf)}` : ''}</span>" in button
     )
     assert "<span>{t('jobs.zustand.fertig')}</span>" in button
-    # Five rows as before, and the count beside the heading.
-    assert "<span class=\"zahl\">{Math.min(LETZTE, eigene.length)}/{eigene.length}</span>" in PAGE
+    # Five rows as before, and beside the heading the shown rows over the
+    # total the service counted for this schedule.
+    assert (
+        "<span class=\"zahl\">{Math.min(LETZTE, eigene.length)}"
+        "/{eigene[0]?.total || eigene.length}</span>" in PAGE
+    )
 
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")

@@ -86,7 +86,7 @@ def test_relativer_pfad_wird_abgewiesen(client, chat_id):
         f"/api/v1/chats/{chat_id}", json={"working_dirs": ["irgendwo/relativ"]}
     )
     assert antwort.status_code == 400
-    assert "absoluten Pfad" in antwort.json()["detail"]
+    assert "absoluter Pfad" in antwort.json()["detail"]
 
 
 def test_fehlender_ordner_wird_abgewiesen(client, chat_id, tmp_path):

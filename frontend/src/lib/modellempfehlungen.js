@@ -382,7 +382,13 @@ const _zub = (id, name, von, logo, sorte, repo, datei, groesse, ziel, klasse) =>
   // again without noticing (house rule after exactly that mishap).
   ...(klasse ? { klasse } : {}),
   satz: `katalog.satz_zub_${sorte}`,
-  fassungen: [{ id: repo, name: 'Datei', datei, ...(ziel ? { ziel } : {}), groesse }],
+  // The version is named after the format of its file, as the image models
+  // above are: `safetensors`, `gguf`. The format is an identifier, never
+  // translated.
+  fassungen: [{
+    id: repo, name: datei.slice(datei.lastIndexOf('.') + 1), datei,
+    ...(ziel ? { ziel } : {}), groesse,
+  }],
 })
 
 export const KATALOG_ZUBEHOER = [
@@ -414,12 +420,17 @@ export const KATALOG_ZUBEHOER = [
   // the catalogue hands out the same weights repackaged as safetensors from
   // the house repository, so every card downloads a file that actually loads.
   // (The person segmentation model stays out: never converted, never tested.)
-  _zub('ad-face-n', 'Gesichter v8n', 'Bingsu', 'B', 'adetailer',
+  // A detector is named after what it finds, a word of the interface's
+  // language: `nameKey` is the catalogue key the card reads instead of `name`.
+  { ..._zub('ad-face-n', 'Faces v8n', 'Bingsu', 'B', 'adetailer',
     'exeterminal/adetailer-yolov8-safetensors', 'face_yolov8n.safetensors', 0.01),
-  _zub('ad-face-s', 'Gesichter v8s', 'Bingsu', 'B', 'adetailer',
+    nameKey: 'katalog.name_ad_face_n' },
+  { ..._zub('ad-face-s', 'Faces v8s', 'Bingsu', 'B', 'adetailer',
     'exeterminal/adetailer-yolov8-safetensors', 'face_yolov8s.safetensors', 0.02),
-  _zub('ad-hand-n', 'Hände v8n', 'Bingsu', 'B', 'adetailer',
+    nameKey: 'katalog.name_ad_face_s' },
+  { ..._zub('ad-hand-n', 'Hands v8n', 'Bingsu', 'B', 'adetailer',
     'exeterminal/adetailer-yolov8-safetensors', 'hand_yolov8n.safetensors', 0.01),
+    nameKey: 'katalog.name_ad_hand_n' },
 ]
 
 /* The speech catalogue — models the speech server can load. Nothing ships

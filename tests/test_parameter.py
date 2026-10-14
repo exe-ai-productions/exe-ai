@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import json
+import re
+from pathlib import Path
+
 import pytest
 
+from app import parameter as parameter_modul
 from app.config import EndpointConfig
-from app.parameter import DIALEKTE, NACH_NAME, PARAMETER, pruefen, uebersetzen, unterstuetzte
+from app.i18n import LOCALES_VERZEICHNIS, _nachschlagen
+from app.parameter import (
+    DIALEKTE, GRUND_ALLGEMEIN, GRUENDE, MODELL_OHNE_REASONING, NACH_NAME, NO_EFFECT_AT_OPENAI,
+    PARAMETER, pruefen, uebersetzen, unterstuetzte,
+)
+from app.providers.openai_responses import CHAT_ONLY_FIELDS
 from app.providers.openai_kompatibel import OpenAIKompatiblerProvider
 from app.providers.base import ChatNachricht, Generierungsanfrage
 
@@ -82,10 +92,212 @@ def test_mlx_hat_kein_typical_p():
     assert "typical_p" in [p.name for p in unterstuetzte("llama_cpp")]
 
 
-def test_jeder_parameter_hat_beide_sprachen():
+def test_jeder_parameter_hat_einen_sinnvollen_bereich():
     for p in PARAMETER:
-        assert p.label and p.label_en and p.hinweis and p.hinweis_en
         assert p.minimum < p.maximum
+
+
+# --- The texts live in the catalogues, the rows say the same as before -----
+
+# What the rows said, word for word, before their texts moved out of this
+# module into the catalogues: every row of the list per dialect and per
+# situation, in both languages, as the window and the CLI receive them.
+_VORHER = json.loads('''
+{
+  "frei_llama_cpp": {
+    "de": [
+      {"name": "temperature", "label": "Temperatur", "hinweis": "Wie frei das Modell seine Antworten formuliert", "minimum": 0, "maximum": 2, "schritt": 0.05, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "top_p", "label": "Top-P", "hinweis": "Umfang der zugelassenen Wortauswahl", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "max_tokens", "label": "Antwortlänge", "hinweis": "Höchstzahl an Token", "minimum": 256, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "reasoning_budget", "label": "Denklänge", "hinweis": "Wie lange das Modell vor der Antwort nachdenken darf", "minimum": -1, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "top_k", "label": "Top-K", "hinweis": "Nur die K wahrscheinlichsten Wörter; 0 deaktiviert diese Begrenzung.", "minimum": 0, "maximum": 200, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "min_p", "label": "Min-P", "hinweis": "Schließt unwahrscheinliche Wörter aus", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "repeat_penalty", "label": "Wiederholungsbremse", "hinweis": "1,0 deaktiviert die Wiederholungsbremse.", "minimum": 1, "maximum": 2, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "repeat_last_n", "label": "Bremse wirkt auf", "hinweis": "Anzahl der vorhergehenden Token, die berücksichtigt werden", "minimum": 0, "maximum": 2048, "schritt": 16, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "presence_penalty", "label": "Themenwechsel", "hinweis": "Höhere Werte begünstigen neue Themen.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "frequency_penalty", "label": "Wortwiederholung", "hinweis": "Höhere Werte verringern Wortwiederholungen.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "typical_p", "label": "Typical-P", "hinweis": "Bevorzugt erwartbare Formulierungen", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "seed", "label": "Startwert", "hinweis": "Derselbe Wert erzeugt dieselbe Antwort. -1 wählt einen zufälligen Wert.", "minimum": -1, "maximum": 2147483647, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null}
+    ],
+    "en": [
+      {"name": "temperature", "label": "Temperature", "hinweis": "How freely the model phrases its responses", "minimum": 0, "maximum": 2, "schritt": 0.05, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "top_p", "label": "Top-P", "hinweis": "Range of permitted word choices", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "max_tokens", "label": "Response length", "hinweis": "Maximum number of tokens", "minimum": 256, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "reasoning_budget", "label": "Thinking length", "hinweis": "How long the model may reason before responding", "minimum": -1, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "top_k", "label": "Top-K", "hinweis": "Only the top K words; 0 disables this limit.", "minimum": 0, "maximum": 200, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "min_p", "label": "Min-P", "hinweis": "Excludes unlikely words", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "repeat_penalty", "label": "Repetition penalty", "hinweis": "1.0 disables the penalty.", "minimum": 1, "maximum": 2, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "repeat_last_n", "label": "Penalty window", "hinweis": "Number of preceding tokens considered", "minimum": 0, "maximum": 2048, "schritt": 16, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "presence_penalty", "label": "Presence penalty", "hinweis": "Higher values encourage new topics.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "frequency_penalty", "label": "Frequency penalty", "hinweis": "Higher values reduce word repetition.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "typical_p", "label": "Typical-P", "hinweis": "Prefers expected phrasing", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "seed", "label": "Seed", "hinweis": "The same value produces the same response. -1 selects a random value.", "minimum": -1, "maximum": 2147483647, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null}
+    ]
+  },
+  "mlx": {
+    "de": [
+      {"name": "temperature", "label": "Temperatur", "hinweis": "Wie frei das Modell seine Antworten formuliert", "minimum": 0, "maximum": 2, "schritt": 0.05, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "top_p", "label": "Top-P", "hinweis": "Umfang der zugelassenen Wortauswahl", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "max_tokens", "label": "Antwortlänge", "hinweis": "Höchstzahl an Token", "minimum": 256, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "reasoning_budget", "label": "Denklänge", "hinweis": "Wie lange das Modell vor der Antwort nachdenken darf", "minimum": -1, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": false, "grund": "Dieser Server unterstützt keine einstellbare Denklänge."},
+      {"name": "top_k", "label": "Top-K", "hinweis": "Nur die K wahrscheinlichsten Wörter; 0 deaktiviert diese Begrenzung.", "minimum": 0, "maximum": 200, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "min_p", "label": "Min-P", "hinweis": "Schließt unwahrscheinliche Wörter aus", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "repeat_penalty", "label": "Wiederholungsbremse", "hinweis": "1,0 deaktiviert die Wiederholungsbremse.", "minimum": 1, "maximum": 2, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "repeat_last_n", "label": "Bremse wirkt auf", "hinweis": "Anzahl der vorhergehenden Token, die berücksichtigt werden", "minimum": 0, "maximum": 2048, "schritt": 16, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "presence_penalty", "label": "Themenwechsel", "hinweis": "Höhere Werte begünstigen neue Themen.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "frequency_penalty", "label": "Wortwiederholung", "hinweis": "Höhere Werte verringern Wortwiederholungen.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "seed", "label": "Startwert", "hinweis": "Derselbe Wert erzeugt dieselbe Antwort. -1 wählt einen zufälligen Wert.", "minimum": -1, "maximum": 2147483647, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null}
+    ],
+    "en": [
+      {"name": "temperature", "label": "Temperature", "hinweis": "How freely the model phrases its responses", "minimum": 0, "maximum": 2, "schritt": 0.05, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "top_p", "label": "Top-P", "hinweis": "Range of permitted word choices", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "max_tokens", "label": "Response length", "hinweis": "Maximum number of tokens", "minimum": 256, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "reasoning_budget", "label": "Thinking length", "hinweis": "How long the model may reason before responding", "minimum": -1, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": false, "grund": "This server does not support a configurable thinking length."},
+      {"name": "top_k", "label": "Top-K", "hinweis": "Only the top K words; 0 disables this limit.", "minimum": 0, "maximum": 200, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "min_p", "label": "Min-P", "hinweis": "Excludes unlikely words", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "repeat_penalty", "label": "Repetition penalty", "hinweis": "1.0 disables the penalty.", "minimum": 1, "maximum": 2, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "repeat_last_n", "label": "Penalty window", "hinweis": "Number of preceding tokens considered", "minimum": 0, "maximum": 2048, "schritt": 16, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "presence_penalty", "label": "Presence penalty", "hinweis": "Higher values encourage new topics.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "frequency_penalty", "label": "Frequency penalty", "hinweis": "Higher values reduce word repetition.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "seed", "label": "Seed", "hinweis": "The same value produces the same response. -1 selects a random value.", "minimum": -1, "maximum": 2147483647, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null}
+    ]
+  },
+  "openai": {
+    "de": [
+      {"name": "temperature", "label": "Temperatur", "hinweis": "Wie frei das Modell seine Antworten formuliert", "minimum": 0, "maximum": 2, "schritt": 0.05, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "top_p", "label": "Top-P", "hinweis": "Umfang der zugelassenen Wortauswahl", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "max_tokens", "label": "Antwortlänge", "hinweis": "Höchstzahl an Token", "minimum": 256, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "reasoning_budget", "label": "Denklänge", "hinweis": "Wie lange das Modell vor der Antwort nachdenken darf", "minimum": -1, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": false, "grund": "Dieser Server unterstützt keine einstellbare Denklänge."},
+      {"name": "presence_penalty", "label": "Themenwechsel", "hinweis": "Höhere Werte begünstigen neue Themen.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "frequency_penalty", "label": "Wortwiederholung", "hinweis": "Höhere Werte verringern Wortwiederholungen.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "seed", "label": "Startwert", "hinweis": "Derselbe Wert erzeugt dieselbe Antwort. -1 wählt einen zufälligen Wert.", "minimum": -1, "maximum": 2147483647, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null}
+    ],
+    "en": [
+      {"name": "temperature", "label": "Temperature", "hinweis": "How freely the model phrases its responses", "minimum": 0, "maximum": 2, "schritt": 0.05, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "top_p", "label": "Top-P", "hinweis": "Range of permitted word choices", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "max_tokens", "label": "Response length", "hinweis": "Maximum number of tokens", "minimum": 256, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "reasoning_budget", "label": "Thinking length", "hinweis": "How long the model may reason before responding", "minimum": -1, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": false, "grund": "This server does not support a configurable thinking length."},
+      {"name": "presence_penalty", "label": "Presence penalty", "hinweis": "Higher values encourage new topics.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "frequency_penalty", "label": "Frequency penalty", "hinweis": "Higher values reduce word repetition.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "seed", "label": "Seed", "hinweis": "The same value produces the same response. -1 selects a random value.", "minimum": -1, "maximum": 2147483647, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null}
+    ]
+  },
+  "anthropic": {
+    "de": [
+      {"name": "temperature", "label": "Temperatur", "hinweis": "Wie frei das Modell seine Antworten formuliert", "minimum": 0, "maximum": 1, "schritt": 0.05, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "top_p", "label": "Top-P", "hinweis": "Umfang der zugelassenen Wortauswahl", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "max_tokens", "label": "Antwortlänge", "hinweis": "Höchstzahl an Token", "minimum": 256, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "reasoning_budget", "label": "Denklänge", "hinweis": "Wie lange das Modell vor der Antwort nachdenken darf", "minimum": -1, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": false, "grund": "Dieser Server unterstützt keine einstellbare Denklänge."},
+      {"name": "top_k", "label": "Top-K", "hinweis": "Nur die K wahrscheinlichsten Wörter; 0 deaktiviert diese Begrenzung.", "minimum": 0, "maximum": 200, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null}
+    ],
+    "en": [
+      {"name": "temperature", "label": "Temperature", "hinweis": "How freely the model phrases its responses", "minimum": 0, "maximum": 1, "schritt": 0.05, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "top_p", "label": "Top-P", "hinweis": "Range of permitted word choices", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "max_tokens", "label": "Response length", "hinweis": "Maximum number of tokens", "minimum": 256, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "reasoning_budget", "label": "Thinking length", "hinweis": "How long the model may reason before responding", "minimum": -1, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": false, "grund": "This server does not support a configurable thinking length."},
+      {"name": "top_k", "label": "Top-K", "hinweis": "Only the top K words; 0 disables this limit.", "minimum": 0, "maximum": 200, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null}
+    ]
+  },
+  "modell_ohne_reasoning": {
+    "de": [
+      {"name": "temperature", "label": "Temperatur", "hinweis": "Wie frei das Modell seine Antworten formuliert", "minimum": 0, "maximum": 2, "schritt": 0.05, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "top_p", "label": "Top-P", "hinweis": "Umfang der zugelassenen Wortauswahl", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "max_tokens", "label": "Antwortlänge", "hinweis": "Höchstzahl an Token", "minimum": 256, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "reasoning_budget", "label": "Denklänge", "hinweis": "Wie lange das Modell vor der Antwort nachdenken darf", "minimum": -1, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": false, "grund": "Dieses Modell unterstützt kein Reasoning. Daher lässt sich keine Denklänge einstellen."},
+      {"name": "top_k", "label": "Top-K", "hinweis": "Nur die K wahrscheinlichsten Wörter; 0 deaktiviert diese Begrenzung.", "minimum": 0, "maximum": 200, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "min_p", "label": "Min-P", "hinweis": "Schließt unwahrscheinliche Wörter aus", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "repeat_penalty", "label": "Wiederholungsbremse", "hinweis": "1,0 deaktiviert die Wiederholungsbremse.", "minimum": 1, "maximum": 2, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "repeat_last_n", "label": "Bremse wirkt auf", "hinweis": "Anzahl der vorhergehenden Token, die berücksichtigt werden", "minimum": 0, "maximum": 2048, "schritt": 16, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "presence_penalty", "label": "Themenwechsel", "hinweis": "Höhere Werte begünstigen neue Themen.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "frequency_penalty", "label": "Wortwiederholung", "hinweis": "Höhere Werte verringern Wortwiederholungen.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "typical_p", "label": "Typical-P", "hinweis": "Bevorzugt erwartbare Formulierungen", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "seed", "label": "Startwert", "hinweis": "Derselbe Wert erzeugt dieselbe Antwort. -1 wählt einen zufälligen Wert.", "minimum": -1, "maximum": 2147483647, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null}
+    ],
+    "en": [
+      {"name": "temperature", "label": "Temperature", "hinweis": "How freely the model phrases its responses", "minimum": 0, "maximum": 2, "schritt": 0.05, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "top_p", "label": "Top-P", "hinweis": "Range of permitted word choices", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "max_tokens", "label": "Response length", "hinweis": "Maximum number of tokens", "minimum": 256, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "reasoning_budget", "label": "Thinking length", "hinweis": "How long the model may reason before responding", "minimum": -1, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": false, "grund": "This model does not support reasoning, so its thinking length cannot be configured."},
+      {"name": "top_k", "label": "Top-K", "hinweis": "Only the top K words; 0 disables this limit.", "minimum": 0, "maximum": 200, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "min_p", "label": "Min-P", "hinweis": "Excludes unlikely words", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "repeat_penalty", "label": "Repetition penalty", "hinweis": "1.0 disables the penalty.", "minimum": 1, "maximum": 2, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "repeat_last_n", "label": "Penalty window", "hinweis": "Number of preceding tokens considered", "minimum": 0, "maximum": 2048, "schritt": 16, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "presence_penalty", "label": "Presence penalty", "hinweis": "Higher values encourage new topics.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "frequency_penalty", "label": "Frequency penalty", "hinweis": "Higher values reduce word repetition.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "typical_p", "label": "Typical-P", "hinweis": "Prefers expected phrasing", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "mehr", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "seed", "label": "Seed", "hinweis": "The same value produces the same response. -1 selects a random value.", "minimum": -1, "maximum": 2147483647, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": true, "grund": null}
+    ]
+  },
+  "openai_ohne_wirkung": {
+    "de": [
+      {"name": "temperature", "label": "Temperatur", "hinweis": "Wie frei das Modell seine Antworten formuliert", "minimum": 0, "maximum": 2, "schritt": 0.05, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "top_p", "label": "Top-P", "hinweis": "Umfang der zugelassenen Wortauswahl", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "max_tokens", "label": "Antwortlänge", "hinweis": "Höchstzahl an Token", "minimum": 256, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "reasoning_budget", "label": "Denklänge", "hinweis": "Wie lange das Modell vor der Antwort nachdenken darf", "minimum": -1, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": false, "grund": "Dieser Server unterstützt keine einstellbare Denklänge."},
+      {"name": "presence_penalty", "label": "Themenwechsel", "hinweis": "Höhere Werte begünstigen neue Themen.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": false, "grund": "Wirkt bei OpenAI nicht, wenn Werkzeuge oder Denken an sind."},
+      {"name": "frequency_penalty", "label": "Wortwiederholung", "hinweis": "Höhere Werte verringern Wortwiederholungen.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": false, "grund": "Wirkt bei OpenAI nicht, wenn Werkzeuge oder Denken an sind."},
+      {"name": "seed", "label": "Startwert", "hinweis": "Derselbe Wert erzeugt dieselbe Antwort. -1 wählt einen zufälligen Wert.", "minimum": -1, "maximum": 2147483647, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": false, "grund": "Wirkt bei OpenAI nicht, wenn Werkzeuge oder Denken an sind."}
+    ],
+    "en": [
+      {"name": "temperature", "label": "Temperature", "hinweis": "How freely the model phrases its responses", "minimum": 0, "maximum": 2, "schritt": 0.05, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "top_p", "label": "Top-P", "hinweis": "Range of permitted word choices", "minimum": 0, "maximum": 1, "schritt": 0.01, "gruppe": "sichtbar", "ganzzahl": false, "aktiv": true, "grund": null},
+      {"name": "max_tokens", "label": "Response length", "hinweis": "Maximum number of tokens", "minimum": 256, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": true, "grund": null},
+      {"name": "reasoning_budget", "label": "Thinking length", "hinweis": "How long the model may reason before responding", "minimum": -1, "maximum": 1000000, "schritt": 256, "gruppe": "sichtbar", "ganzzahl": true, "aktiv": false, "grund": "This server does not support a configurable thinking length."},
+      {"name": "presence_penalty", "label": "Presence penalty", "hinweis": "Higher values encourage new topics.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": false, "grund": "Has no effect with OpenAI when tools or thinking are on."},
+      {"name": "frequency_penalty", "label": "Frequency penalty", "hinweis": "Higher values reduce word repetition.", "minimum": -2, "maximum": 2, "schritt": 0.05, "gruppe": "mehr", "ganzzahl": false, "aktiv": false, "grund": "Has no effect with OpenAI when tools or thinking are on."},
+      {"name": "seed", "label": "Seed", "hinweis": "The same value produces the same response. -1 selects a random value.", "minimum": -1, "maximum": 2147483647, "schritt": 1, "gruppe": "mehr", "ganzzahl": true, "aktiv": false, "grund": "Has no effect with OpenAI when tools or thinking are on."}
+    ]
+  }
+}
+''')
+
+
+def _lagen() -> dict:
+    return {
+        "frei_llama_cpp": lambda: unterstuetzte("llama_cpp"),
+        "mlx": lambda: unterstuetzte("mlx"),
+        "openai": lambda: unterstuetzte("openai"),
+        "anthropic": lambda: unterstuetzte("anthropic"),
+        # The wire would carry the number, the model cannot think.
+        "modell_ohne_reasoning": lambda: unterstuetzte("llama_cpp", None, {"reasoning": False}),
+        # At OpenAI's own host the three that the Responses wire drops.
+        "openai_ohne_wirkung": lambda: unterstuetzte("openai", None, None, CHAT_ONLY_FIELDS),
+    }
+
+
+@pytest.mark.parametrize("lage", sorted(_VORHER))
+@pytest.mark.parametrize("sprache", ["de", "en"])
+def test_die_reihen_sagen_wortgleich_dasselbe_wie_vor_dem_umzug(lage, sprache, caplog):
+    with caplog.at_level("WARNING", logger="app.i18n"):
+        reihen = [p.als_dict(sprache) for p in _lagen()[lage]()]
+    assert reihen == _VORHER[lage][sprache]
+    assert "Translation missing" not in caplog.text
+
+
+def test_jeder_regler_und_jeder_sperrgrund_ist_ein_schluessel_in_beiden_katalogen():
+    """Looked up per catalogue, not through t(), which would hand back the
+    other language or the key itself and hide a hole."""
+    schluessel = [PARAMETER_TEXT for p in PARAMETER for PARAMETER_TEXT in (p.label, p.hinweis)]
+    schluessel += [NO_EFFECT_AT_OPENAI, MODELL_OHNE_REASONING, GRUND_ALLGEMEIN]
+    for gruende in GRUENDE.values():
+        schluessel += gruende.values()
+    for sprache in ("de", "en"):
+        katalog = json.loads((LOCALES_VERZEICHNIS / f"{sprache}.json").read_text("utf-8"))
+        for eintrag in schluessel:
+            text = _nachschlagen(katalog, eintrag)
+            assert text, (sprache, eintrag)
+            assert eintrag.startswith("parameter."), eintrag
+
+
+def test_ein_freier_regler_hat_keinen_grund():
+    for p in unterstuetzte("llama_cpp"):
+        assert p.grund == ""
+        assert p.als_dict("de")["grund"] is None
+
+
+def test_nach_dem_umzug_steht_kein_deutscher_text_mehr_im_quelltext():
+    quelltext = Path(parameter_modul.__file__).read_text("utf-8")
+    assert not [z for z in quelltext.splitlines() if re.search("[äöüßÄÖÜ]", z)]
 
 
 # --- In the request body --------------------------------------------------

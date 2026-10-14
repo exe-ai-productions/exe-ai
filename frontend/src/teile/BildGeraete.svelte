@@ -6,7 +6,8 @@
      Each field takes what the generator takes: the VRAM budget as GiB or
      per device ("cuda0=6"), the threads as a count or "all", the split as
      one mode or one per module ("diffusion=row,te=layer"), the backend
-     assignment as the generator writes it. Each change is kept a moment
+     assignment as the generator writes it, the time limit as whole seconds
+     (empty: no limit). Each change is kept a moment
      after the last keystroke, without a save button, like the model values
      above. The generator's further memory switches stand folded at the
      foot, with their count. */
@@ -30,9 +31,12 @@
   let devices = $state([])
   let schalterOffen = $state(false)
   let vramFokus = $state(false)
+  let zeitFokus = $state(false)
   // The budget as the service keeps it: one it would not read is not kept,
   // and the field goes back to this once it is left.
   let vramGespeichert = ''
+  // The time limit as the service keeps it, put back when its field is left.
+  let zeitGespeichert = null
   let ausstehend = false
   // The split as chosen in the picker; an assignment per module keeps its
   // text in `splitText`.
@@ -53,9 +57,11 @@
         split_mode: v.split_mode ?? '',
         backend: v.backend ?? '',
         switches: v.switches ?? {},
+        zeitgrenze: Number.isInteger(v.zeitgrenze) && v.zeitgrenze > 0 ? v.zeitgrenze : null,
       }
       showSplit(w.split_mode)
       vramGespeichert = w.vram_limit
+      zeitGespeichert = w.zeitgrenze
       gesendet = $state.snapshot(w)
     } catch (fehler) {
       melde(String(fehler.message || fehler), 'fehler')
@@ -82,7 +88,7 @@
           else delete back[key]
         }
         w.switches = back
-      } else if (!(name === 'vram_limit' && vramFokus)) {
+      } else if (!(name === 'vram_limit' && vramFokus) && !(name === 'zeitgrenze' && zeitFokus)) {
         w[name] = gesendet[name]
         if (name === 'split_mode') showSplit(gesendet.split_mode)
       }
@@ -155,12 +161,18 @@
         gesendet.vram_limit = vramGespeichert
         if (!vramFokus) w.vram_limit = vramGespeichert
       }
+      if ('zeitgrenze' in geaendert) {
+        zeitGespeichert = Number.isInteger(antwort?.wert?.zeitgrenze) ? antwort.wert.zeitgrenze : null
+        gesendet.zeitgrenze = zeitGespeichert
+        if (!zeitFokus) w.zeitgrenze = zeitGespeichert
+      }
       /* A field of this write set back while it was under way asked for no
          write of its own — nothing differed from what was held then. It
          goes out now, so the service holds what the page shows. The limit
          is put right by its own field instead. */
       const undone = Object.keys(geaendert).some(
-        (name) => name !== 'vram_limit' && JSON.stringify(w[name]) !== JSON.stringify(jetzt[name]))
+        (name) => name !== 'vram_limit' && name !== 'zeitgrenze'
+          && JSON.stringify(w[name]) !== JSON.stringify(jetzt[name]))
       if (undone && write === writes) await store(write)
     } catch (fehler) {
       melde(String(fehler.message || fehler), 'fehler')
@@ -200,6 +212,22 @@
       <div class="zahlplatz">
         <Zahlenfeld bind:wert={w.threads} min={1} schritt={1} ganzzahlig nullwort={t('parameter.auto')} />
       </div>
+    </div>
+    <div class="zeile">
+      <span class="name">{t('mcp.zeitgrenze')}</span>
+      <input class="eingabe kurz" inputmode="numeric" aria-label={t('mcp.zeitgrenze')}
+             autocomplete="off" spellcheck="false" value={w.zeitgrenze ?? ''}
+             onfocus={() => (zeitFokus = true)}
+             onblur={() => {
+               zeitFokus = false
+               if (!ausstehend) w.zeitgrenze = zeitGespeichert
+             }}
+             oninput={(e) => {
+               const ziffern = e.currentTarget.value.replace(/\D/g, '')
+               if (ziffern !== e.currentTarget.value) e.currentTarget.value = ziffern
+               w.zeitgrenze = ziffern ? Number(ziffern) : null
+             }} />
+      <span class="still">{t('mcp.zeitgrenze_einheit')}</span>
     </div>
     <div class="zeile">
       <span class="name mitmarke">{t('bild.split_mode')}<InfoMark text={t('bild.info_split_mode')} /></span>
@@ -271,6 +299,7 @@
     border: none;
     border-radius: 9px;
     background: var(--bg-hoch);
+    box-shadow: inset 0 0 0 1px var(--feldstrich);
     color: var(--text);
     font: 400 13px/18px var(--schrift);
     padding: 0 12px;

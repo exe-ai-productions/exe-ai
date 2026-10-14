@@ -545,3 +545,106 @@ def test_a_checkpoint_with_its_encoders_and_a_kit_part_are_not_one(tmp_path: Pat
     assert bildinhalt.checkpoint_without_text_encoders(part) is False
     assert bildinhalt.checkpoint_without_text_encoders(_datei(tmp_path, "note.txt", b"x")) is False
 
+
+
+# --- The family a catalogue or a kit is built for ---------------------------
+
+# The weights of the four LoRA forms measured (peft/ComfyUI, kohya, diffusers
+# and the up/down pair), each named after the model it was made for.
+_LORA_FORMS = {
+    "peft": ["diffusion_model.double_blocks.0.img_attn.proj.lora_A.weight",
+             "diffusion_model.double_blocks.0.img_attn.proj.lora_B.weight"],
+    "kohya": ["lora_unet_double_blocks_0_img_attn_proj.lora_up.weight",
+              "lora_unet_double_blocks_0_img_attn_proj.lora_down.weight"],
+    "up_down": ["transformer.double_blocks.0.attn.to_q.lora_up.weight",
+                "transformer.double_blocks.0.attn.to_q.lora_down.weight"],
+    "ab_in_blocks": ["model.diffusion_model.double_blocks.0.img_attn.qkv.lora_A.weight",
+                     "model.diffusion_model.single_blocks.0.linear1.lora_B.weight"],
+}
+
+
+def test_the_head_of_krea_2_names_krea_2():
+    names = {"model.diffusion_model.txtfusion.projector.weight": [4, 4]}
+    assert bildinhalt.header_family(names, None, is_gguf=False) == ("krea2", False)
+
+
+@pytest.mark.parametrize("form", sorted(_LORA_FORMS))
+def test_a_lora_head_is_a_companion_and_names_no_family(form):
+    names = {name: [4, 4] for name in _LORA_FORMS[form]}
+    assert bildinhalt.header_family(names, None, is_gguf=False) == (None, True)
+
+
+def test_a_controlnet_head_is_a_companion():
+    names = {"controlnet_blocks.0.weight": [4, 4], "double_blocks.0.img_attn.qkv.weight": [4, 4]}
+    assert bildinhalt.header_family(names, None, is_gguf=False) == (None, True)
+
+
+def test_a_head_that_names_nothing_names_no_family():
+    assert bildinhalt.header_family({"x.weight": [1]}, None, is_gguf=False) == (None, False)
+
+
+def test_a_gguf_architecture_names_its_family_without_names():
+    assert bildinhalt.header_family(None, "flux", is_gguf=True) == ("flux", False)
+
+
+def test_the_front_of_a_safetensors_file_is_read_from_bytes():
+    data = _safetensors_bytes(["model.diffusion_model.txtfusion.projector.weight"]) + b"\0" * 64
+    is_gguf, architecture, names = bildinhalt.header_from_bytes(data, len(data))
+    assert (is_gguf, architecture) == (False, None)
+    assert list(names) == ["model.diffusion_model.txtfusion.projector.weight"]
+
+
+def test_a_safetensors_head_longer_than_what_is_held_says_how_much_it_takes():
+    data = _safetensors_bytes(["a.weight", "b.weight"])
+    with pytest.raises(bildinhalt.HeaderIncomplete) as more:
+        bildinhalt.header_from_bytes(data[:20], 10_000_000)
+    assert more.value.needed == len(data)
+
+
+def test_a_gguf_head_cut_in_the_middle_asks_for_more():
+    data = _gguf_bytes([("general.architecture", _ZEICHENKETTE, "flux")])
+    with pytest.raises(bildinhalt.HeaderIncomplete):
+        bildinhalt.header_from_bytes(data[:30], 10_000_000)
+
+
+def test_the_front_of_a_gguf_file_is_read_from_bytes():
+    data = _gguf_bytes([("general.architecture", _ZEICHENKETTE, "flux")])
+    is_gguf, architecture, _ = bildinhalt.header_from_bytes(data, 10_000_000)
+    assert (is_gguf, architecture) == (True, "flux")
+
+
+def test_bytes_that_are_no_head_answer_nothing():
+    junk = b"\xff" * 64
+    assert bildinhalt.header_from_bytes(junk, 10_000) is None
+
+
+def test_a_file_in_the_folder_names_its_family_by_its_head(tmp_path):
+    path = _datei(tmp_path, "turbo.safetensors",
+                  _safetensors_bytes(["model.diffusion_model.txtfusion.projector.weight"]))
+    assert bildinhalt.file_family(path) == ("krea2", False)
+
+
+def test_a_lora_in_the_folder_is_a_companion_by_its_head(tmp_path):
+    path = _datei(tmp_path, "flux-style.safetensors", _safetensors_bytes(_LORA_FORMS["peft"]))
+    assert bildinhalt.file_family(path) == (None, True)
+
+
+def test_a_header_reads_as_family_kind_and_companion():
+    krea = bildinhalt.read_header(
+        {"model.diffusion_model.txtfusion.projector.weight": [4, 4]}, None, is_gguf=False
+    )
+    assert krea == ("krea2", bildinhalt.BILDMODELL, False)
+    vae = bildinhalt.read_header({"encoder.conv_in.weight": [1], "decoder.conv_in.weight": [1]}, None, is_gguf=False)
+    assert vae == (None, bildinhalt.VAE, False)
+    t5 = bildinhalt.read_header({"encoder.block.0.layer.0.SelfAttention.q.weight": [1]}, None, is_gguf=False)
+    assert t5.kind == bildinhalt.TEXTVERSTEHER
+    encoder = bildinhalt.read_header({}, "qwen3vl", is_gguf=True)
+    assert encoder.kind == bildinhalt.TEXTVERSTEHER
+
+
+def test_a_lora_has_no_kind_even_with_a_diffusion_prefix():
+    """Silence probe: the prefix alone would make it a model."""
+    lora = bildinhalt.read_header(
+        {"model.diffusion_model.double_blocks.0.img_attn.proj.lora_A.weight": [4, 4]}, None, is_gguf=False
+    )
+    assert lora == (None, bildinhalt.UNBEKANNT, True)

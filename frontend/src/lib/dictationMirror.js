@@ -163,13 +163,20 @@ function position(value) {
   away; scrolling only starts there, so before that there is no bar in the
   middle of the text. No mirror at all measures as nothing.
 
-  Named arguments and not three numbers in a row: the heights of the field
+  `floorHeight` is the height the field already had in this dictation, passed
+  by the caller only while a mirror stands. The unsettled end of a reading
+  changes its length with every pass, and a field that follows it down as
+  well as up makes the history above it jump with each one: during a
+  dictation the field only grows. The cap still wins — a window that became
+  smaller takes the field with it.
+
+  Named arguments and not four numbers in a row: the heights of the field
   and of the window are both pixels, and swapping them would not fail —
   it would just measure the wrong thing.
 */
-export function fieldSize({ fieldHeight, mirrorHeight = 0, windowHeight }) {
+export function fieldSize({ fieldHeight, mirrorHeight = 0, windowHeight, floorHeight = 0 }) {
   const cap = Math.round(windowHeight * 0.4)
-  const wanted = Math.max(fieldHeight, mirrorHeight)
+  const wanted = Math.max(fieldHeight, mirrorHeight, floorHeight)
   return {
     height: Math.min(wanted, cap) + 'px',
     overflowY: wanted > cap ? 'auto' : 'hidden',

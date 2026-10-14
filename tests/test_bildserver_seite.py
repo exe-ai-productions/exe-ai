@@ -334,7 +334,9 @@ def test_a_change_the_service_did_not_take_is_not_shown_as_stored():
     assert scheduled.startswith("    const write = ++writes\n    zeit = setTimeout(() => {")
     back = source.split("function showStored(changed) {", 1)[1].split("\n  }\n", 1)[0]
     # Each field of the change, each switch by its key; a limit being typed waits for its field to be left.
-    assert "} else if (!(name === 'vram_limit' && vramFokus)) {" in back
+    assert (
+        "} else if (!(name === 'vram_limit' && vramFokus) && !(name === 'zeitgrenze' && zeitFokus)) {"
+    ) in back
     assert "w[name] = gesendet[name]" in back
     assert "if (key in stored) back[key] = stored[key]\n          else delete back[key]" in back
     assert "if (name === 'split_mode') showSplit(gesendet.split_mode)" in back
@@ -366,7 +368,8 @@ def test_the_page_s_writes_go_out_one_after_another():
     # A field set back while its write was under way goes out next, unless a
     # later write was asked for anyway.
     undone = write.split("const undone = Object.keys(geaendert).some(", 1)[1].split("} catch (fehler) {", 1)[0]
-    assert "name !== 'vram_limit' && JSON.stringify(w[name]) !== JSON.stringify(jetzt[name]))" in undone
+    assert "name !== 'vram_limit' && name !== 'zeitgrenze'" in undone
+    assert "JSON.stringify(w[name]) !== JSON.stringify(jetzt[name]))" in undone
     assert "if (undone && write === writes) await store(write)" in undone
     assert sent < write.index("const undone = ")
     # The silence check: a single write stores and shows as before — what
@@ -375,6 +378,39 @@ def test_the_page_s_writes_go_out_one_after_another():
     effect = source.split("  $effect(() => {\n    const jetzt = w ? $state.snapshot(w) : null", 1)[1].split(
         "return () => clearTimeout(zeit)", 1)[0]
     assert "if (!Object.keys(changedSince(jetzt)).length) return" in effect
+
+
+def test_the_time_limit_is_one_field_that_may_stay_empty_and_goes_out_as_null():
+    """Under "Threads" stands the time limit, in seconds, empty from the
+    factory. It is a plain input, not a number field: a number field makes
+    an empty one its minimum, and empty means no limit. Whatever is typed
+    is only digits; empty goes out as null; a value the service did not keep
+    shows as empty again once the field is left."""
+    source = (Path(__file__).resolve().parent.parent / "frontend/src/teile/BildGeraete.svelte").read_text(
+        encoding="utf-8")
+    markup = source.split("</script>", 1)[1].split("<style>", 1)[0]
+    row = markup.split("<span class=\"name\">{t('mcp.zeitgrenze')}</span>", 1)[1].split("</div>", 1)[0]
+
+    assert markup.index("{t('bild.threads')}") < markup.index("{t('mcp.zeitgrenze')}") < markup.index(
+        "{t('bild.split_mode')}")
+    assert "aria-label={t('mcp.zeitgrenze')}" in row and "value={w.zeitgrenze ?? ''}" in row
+    assert "<span class=\"still\">{t('mcp.zeitgrenze_einheit')}</span>" in row
+    assert "Zahlenfeld" not in row
+    assert "e.currentTarget.value.replace(/\\D/g, '')" in row
+    assert "w.zeitgrenze = ziffern ? Number(ziffern) : null" in row
+    assert "if (!ausstehend) w.zeitgrenze = zeitGespeichert" in row
+    # Loaded as a number or empty; stored as the service answers it.
+    assert "zeitgrenze: Number.isInteger(v.zeitgrenze) && v.zeitgrenze > 0 ? v.zeitgrenze : null," in source
+    stored = source.split("if ('zeitgrenze' in geaendert) {", 1)[1].split("\n      }\n", 1)[0]
+    assert "Number.isInteger(antwort?.wert?.zeitgrenze) ? antwort.wert.zeitgrenze : null" in stored
+    assert "if (!zeitFokus) w.zeitgrenze = zeitGespeichert" in stored
+    # Both labels already stand in the catalogue, in both languages.
+    import json
+
+    for sprache in ("de", "en"):
+        katalog = json.loads(
+            (Path(__file__).resolve().parent.parent / "app/locales" / f"{sprache}.json").read_text(encoding="utf-8"))
+        assert katalog["mcp"]["zeitgrenze"] and katalog["mcp"]["zeitgrenze_einheit"]
 
 
 # --- Width and height of a model ----------------------------------------------

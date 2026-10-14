@@ -212,7 +212,7 @@ def row_check(old: Any, new: Any) -> None:
     """
     count = _module_count(new)
     if count > MODULE_HOECHSTZAHL and count > _module_count(old):
-        raise WriteRefused("more remembered module pairs than a row may hold")
+        raise WriteRefused("More module pairs are stored than a row can hold.")
 
 
 def wahl(repositories) -> dict[str, Any]:

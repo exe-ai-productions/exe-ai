@@ -183,3 +183,35 @@ def test_ein_eingetragener_schluessel_schaltet_den_server_ein():
     assert ergebnis["ohne"] is False
     assert ergebnis["an"] is True
     assert ergebnis["neu"] is True
+
+
+def test_a_card_without_an_address_writes_neither_kind_nor_address():
+    """A server that starts a program here has no address. Written as `http`
+    it became an address-less server the file check refuses ("requires a
+    'url'"); without the two fields it keeps the kind it has — the shipped
+    entry's, or the stdio entry whose key is missing."""
+    ergebnis = _lauf(
+        """
+        const felder = grundfelder({ name: 'websuche', url: null, vorauswahl: null }, null)
+        const stdio = grundfelder({ name: 'eigener', command: 'x' }, { enabled: false },
+                                  { mitSchluessel: true })
+        console.log(JSON.stringify({ felder, stdio }))
+        """
+    )
+    assert ergebnis["felder"] == {"enabled": True}
+    assert ergebnis["stdio"] == {"enabled": True}
+
+
+def test_silence_a_card_with_an_address_writes_kind_and_address_as_before():
+    ergebnis = _lauf(
+        """
+        const quelle = { url: 'https://x.invalid/mcp', vorauswahl: ['a', 'b'] }
+        console.log(JSON.stringify(grundfelder(quelle, null)))
+        """
+    )
+    assert ergebnis == {
+        "enabled": True,
+        "type": "http",
+        "url": "https://x.invalid/mcp",
+        "allowed_tools": ["a", "b"],
+    }

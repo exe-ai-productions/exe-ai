@@ -56,7 +56,10 @@ def test_das_fenster_haengt_sich_an_und_nimmt_ein_409_zurueck():
     # of those: `inhalt === null` never went through the bar, so the bar has
     # nothing of its own to hand back.
     assert "if (zielChat === zustand.aktiverChat) {" in app
-    assert "if (inhalt != null) eingabe?.zurueckgeben(inhalt, zielChat, nachrichtId)" in app
+    # What came out of the queue goes back in line (the other tests of the
+    # queue pin that); what was typed goes back to the field.
+    assert "eingabe?.zurueckgeben(inhalt, zielChat, nachrichtId)" in app
+    assert "if (ausReihe && !gleichWiederAbgewiesen) {" in app
     assert "void chatOeffnen(zielChat)" in app
     # The end-of-run reconcile attaches synchronously — it has just fetched
     # the list itself and must claim the chat before the queue wakes.

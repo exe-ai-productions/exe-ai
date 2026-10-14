@@ -1,10 +1,6 @@
 <script module>
-  /* The folded column's bar of signs, on either side. */
-  const SIGN_BAR = 52
-  /* The chat's own air: 8px to either column. */
-  const CHAT_AIR = 16
-  /* What the chat keeps while a column is dragged wider. */
-  const CHAT_MIN = 420
+  import { CHAT_AIR, CHAT_MIN, SIGN_BAR } from '../lib/columnRoom.js'
+
   /* This close to the other open column's width, a column takes exactly
      that width: both sides equal, the chat in the middle of the window. */
   const SNAP = 16

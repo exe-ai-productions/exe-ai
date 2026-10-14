@@ -64,7 +64,8 @@ def eigene_wurzel() -> Path | None:
         return None
     wurzel = Path(eigener).expanduser()
     if not wurzel.is_absolute():
-        raise RuntimeError(f"{DATEN_VARIABLE} must name an absolute folder, not {eigener!r}")
+        raise RuntimeError(f"{DATEN_VARIABLE} must specify an absolute directory path, not "
+                           f"{eigener!r}.")
     return wurzel
 
 

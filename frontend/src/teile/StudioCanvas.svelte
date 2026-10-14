@@ -97,7 +97,16 @@
   $effect(() => {
     if (!bildUrl) menueOffen = false
   })
-  let natur = $state({ w: 0, h: 0 })
+  /* What the loaded picture measured, and the address it was measured for.
+     The size counts only while the area shows exactly that picture: a load
+     that finishes after the area went empty, or on to another picture,
+     must not leave a size behind that the area does not have — the rail's
+     buttons would stand live and the surface would catch the click that
+     opens the file dialog. */
+  let gemessen = $state({ url: '', w: 0, h: 0 })
+  const natur = $derived(
+    bildUrl && gemessen.url === bildUrl ? { w: gemessen.w, h: gemessen.h } : { w: 0, h: 0 },
+  )
   let lage = $state({ x: 0, y: 0, zoom: 1 })
   const bildStil = $derived(
     `width:${natur.w}px;height:${natur.h}px;transform:translate(${bereich.x + lage.x * bereich.s}px,`
@@ -303,10 +312,12 @@
   })
   function bildGeladen(ereignis) {
     const knoten = ereignis.currentTarget
-    const replaced = natur
-    natur = { w: knoten.naturalWidth, h: knoten.naturalHeight }
     // Told by what was loaded, not by what the chat names by now.
     const loaded = knoten.getAttribute('src')
+    // A picture that finishes loading after the area left it measures nothing.
+    if (!bildUrl || loaded !== bildUrl) return
+    const replaced = { w: gemessen.w, h: gemessen.h }
+    gemessen = { url: loaded, w: knoten.naturalWidth, h: knoten.naturalHeight }
     if (fittedPicture !== loaded) {
       const finished = Boolean(leinwand.keepView) && loaded === api.bildAdresse(leinwand.keepView)
       if (finished) leinwand.keepView = ''
@@ -348,7 +359,7 @@
   $effect(() => {
     if (!bildUrl) {
       maske = null
-      natur = { w: 0, h: 0 }
+      gemessen = { url: '', w: 0, h: 0 }
     }
   })
 
@@ -400,27 +411,32 @@
      never one of the picture folder. */
   async function hochladen(knoten, name) {
     const blob = await new Promise((fertig) => knoten.toBlob(fertig, 'image/png'))
-    if (!blob) throw new Error('picture could not be encoded')
+    if (!blob) throw new Error(t('studio.encode_failed'))
     return (await api.bildHochladen(new File([blob], name, { type: 'image/png' }), true)).bild
   }
 
   /* The last hand-over, kept while nothing it was made of changed: drawing
      again takes the same files instead of laying them down anew. */
   let zuletzt = null
-  async function ausgeben(name, mitMaske) {
+  async function ausgeben(name, mitMaske, bearbeiten = false) {
     if (!bildKnoten || !natur.w || name !== werte.startbild) return null
-    const schluessel = JSON.stringify([name, mitMaske, lage, gw, gh, natur, chatanzeige.chatId, stand])
+    const schluessel = JSON.stringify([
+      name, mitMaske, bearbeiten, lage, gw, gh, natur, chatanzeige.chatId, stand,
+    ])
     if (zuletzt?.schluessel === schluessel) return zuletzt.ergebnis
-    const ergebnis = await ausgebenNeu(name, mitMaske)
+    const ergebnis = await ausgebenNeu(name, mitMaske, bearbeiten)
     zuletzt = { schluessel, ergebnis }
     return ergebnis
   }
 
-  async function ausgebenNeu(name, mitMaske) {
+  /* `bearbeiten`: the picture is an edit's reference. It takes a mask along
+     where one is painted, and is never cut to a part of the picture to be
+     set back into it: picture and mask are the area as it shows. */
+  async function ausgebenNeu(name, mitMaske, bearbeiten) {
     const wieEs = eingepasst && Math.abs(natur.w * gh - natur.h * gw) < natur.w
     // Only a picture drawn from the picture — the one that takes a mask —
     // is set back into it.
-    const place = wieEs || !mitMaske ? null : placeInPicture()
+    const place = wieEs || !mitMaske || bearbeiten ? null : placeInPicture()
     /* Picture and mask are both cut before either is laid down: the view
        may move while a file is on its way, and the two must show the same
        place. */

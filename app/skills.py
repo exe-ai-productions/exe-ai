@@ -40,16 +40,16 @@ Read fresh on every use: an edited file takes effect at once, no restart.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
+import shutil
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
-from app import i18n
+from app import frontmatter, i18n
 
 log = logging.getLogger(__name__)
 
@@ -84,28 +84,36 @@ MAX_BESCHREIBUNG = 1024
 def _kopf_zeilenweise(roh: str) -> dict[str, str]:
     """Reads a header that is not valid YAML, one line at a time.
 
-    `Name: Wert` opens a field; a line WITHOUT a colon continues the field
-    above it, joined with a single space — that is the shape a description
-    takes when it is written over two lines, and the reason this reader
-    exists at all. A line without a colon and without a field above it is
-    skipped: it carries nothing a field could be given.
+    Only a line of the shape `Name: Wert` counts, split at its first colon.
+    A line without a colon is dropped: it is not attached to the field above
+    it, so a note, a stray word or the second line of a description cannot
+    leak into a value it was never part of. A line with a colon that was
+    meant as a continuation (`12:30`, a URL with a port) opens a field of its
+    own, which the caller passes over as an unknown one and says so.
 
     Deliberately not YAML: no quotes are stripped, no comment is cut off, no
     word is turned into a boolean. What stands there is what the field
     carries, and the checks above decide whether that is usable.
     """
     felder: dict[str, str] = {}
-    letzter: str | None = None
     for zeile in roh.splitlines():
-        if not zeile.strip():
-            continue
         name, trenner, wert = zeile.partition(":")
-        if trenner:
-            letzter = name.strip()
-            felder[letzter] = wert.strip()
-        elif letzter is not None:
-            felder[letzter] = f"{felder[letzter]} {zeile.strip()}".strip()
+        if trenner and name.strip():
+            felder[name.strip()] = wert.strip()
     return felder
+
+
+def _yaml_fault(error: Exception) -> str:
+    """The parser's own sentence for a broken header, with line and column.
+
+    A YAML syntax error carries its problem and the mark it was found at;
+    anything else (a value YAML refuses to build) is described by its text.
+    """
+    problem = getattr(error, "problem", None)
+    mark = getattr(error, "problem_mark", None)
+    if problem and mark is not None:
+        return f"{problem} (line {mark.line + 1}, column {mark.column + 1})"
+    return " ".join(str(error).split()) or type(error).__name__
 
 
 class SkillKaputt(ValueError):
@@ -172,28 +180,35 @@ def skill_aus_text(name: str, text: str, *, ordner: Path, eigen: bool = False) -
     if not NAME_MUSTER.match(name):
         raise SkillKaputt("name", name=name)
 
-    if not text.startswith("---"):
-        raise SkillKaputt("kopfteil", anzeige=anzeige)
-    teile = text.split("---", 2)
-    if len(teile) < 3:
-        raise SkillKaputt("abschluss", anzeige=anzeige)
-    _, kopf_roh, anleitung = teile
+    try:
+        kopf_roh, anleitung = frontmatter.split(text)
+    except frontmatter.NoFrontMatter as error:
+        raise SkillKaputt("kopfteil", anzeige=anzeige) from error
+    except frontmatter.NoClosingLine as error:
+        raise SkillKaputt("abschluss", anzeige=anzeige) from error
 
     try:
         kopf = yaml.safe_load(kopf_roh) or {}
         aus_fallback = False
-    except Exception:  # noqa: BLE001 - every way a header fails to build is one broken header
+    except Exception as error:  # noqa: BLE001 - every way a header fails to build is one broken header
         # A header that is not valid YAML is read line by line instead of
-        # being thrown away: a description written over two lines is the
-        # ordinary case (a `:` inside the sentence, an unquoted `and`), and
-        # a skill nobody can store is worse than one whose header is read a
-        # little more simply. From here on the values are TEXT, not YAML —
-        # `true` is the word, quotes and a trailing comment stay where they
-        # are written. A header
-        # nested deeper than the parser's stack goes the same way, and so does
-        # a value YAML refuses to build: a date like `2026-13-45` or an
-        # `!!int abc` raise ValueError, `!!bool maybe` KeyError,
-        # `!!timestamp x` AttributeError — none of them a YAMLError.
+        # being thrown away: a skill nobody can store is worse than one whose
+        # header is read a little more simply. Only `name: value` lines
+        # count; a line without a colon falls away. From here on the values
+        # are TEXT, not YAML — `true` is the word, quotes and a trailing
+        # comment stay where they are written. A header nested deeper than
+        # the parser's stack goes the same way, and so does a value YAML
+        # refuses to build: a date like `2026-13-45` or an `!!int abc` raise
+        # ValueError, `!!bool maybe` KeyError, `!!timestamp x`
+        # AttributeError — none of them a YAMLError. The log line names the
+        # fault (the parser's own sentence carries the line and the column),
+        # so a typo does not pass in silence.
+        log.warning(
+            "Skill '%s': the header is not valid YAML and is read line by "
+            "line: %s",
+            name,
+            _yaml_fault(error),
+        )
         kopf = _kopf_zeilenweise(kopf_roh)
         aus_fallback = True
     if not isinstance(kopf, dict):
@@ -260,35 +275,88 @@ def skill_aus_text(name: str, text: str, *, ordner: Path, eigen: bool = False) -
     )
 
 
-# What a double-quoted YAML scalar has to carry as an escape although JSON
-# writes it raw: the characters YAML does not accept in a file at all (DEL,
-# the C1 controls except NEL, the two non-characters), and a run of three
-# hyphens, which the readers here take for the end of the header wherever it
-# stands (`text.split("---", 2)`). A lone surrogate is deliberately NOT
-# escaped: read back, it would be a description no response can encode as
-# UTF-8, and writing it raw fails the way it always has.
-_YAML_ESCAPE = re.compile(r"[\x7f-\x84\x86-\x9f\ufffe\uffff]|-{3,}")
-
-
-def _yaml_escape(match: re.Match[str]) -> str:
-    return "".join(f"\\u{ord(char):04x}" for char in match.group())
-
-
 def skill_file_text(description: str, auto: bool, instruction: str) -> str:
     """``SKILL.md`` as the house writes it, for every writer.
 
     The description goes in as a JSON string, the way agent files carry
-    their text fields (``app/agentenfelder.py``): a JSON string is a valid
-    double-quoted YAML scalar, so a colon, a ``#`` or a word like ``yes``
-    reads back exactly as it was written instead of breaking the header or
-    turning into another type. What JSON leaves raw and YAML or the header
-    split cannot take goes in as an escape (``_YAML_ESCAPE``). ``auto`` is
-    written as ``true``/``false``.
+    their text fields (``app/agentenfelder.py``): a colon, a ``#`` or a word
+    like ``yes`` reads back exactly as it was written instead of breaking the
+    header or turning into another type (``app/frontmatter.py``,
+    ``yaml_quoted``). ``auto`` is written as ``true``/``false``.
     """
-    quoted = _YAML_ESCAPE.sub(_yaml_escape, json.dumps(description, ensure_ascii=False))
+    quoted = frontmatter.yaml_quoted(description)
     return (
         f"---\ndescription: {quoted}\n"
         f"auto: {'true' if auto else 'false'}\n---\n\n{instruction}\n"
+    )
+
+
+# The `auto` field as a header line: the key at the start of the line (a
+# nested key or a continuation line is indented), its value, and whatever
+# comment follows the value.
+_AUTO_ZEILE = re.compile(r"^(auto[ \t]*:[ \t]*)([^#\r\n]*?)([ \t]*(?:#[^\r\n]*)?)$")
+
+
+def with_auto(text: str, auto: bool) -> str:
+    """``text`` with the one field ``auto`` set, every other byte as it lay.
+
+    The switch in the settings changes this field and nothing else: a field
+    a newer program version wrote, a comment in the header, the description
+    exactly as it was written and the instruction all stay. A header with no
+    ``auto`` line gets one at its end. Raises what ``frontmatter.split``
+    raises for a text with no header.
+    """
+    word = "true" if auto else "false"
+    bom = "\ufeff" if text.startswith("\ufeff") else ""
+    kopf, rest = frontmatter.split(text)
+    zeilen = kopf.splitlines(keepends=True)
+    gefunden = False
+    for index, zeile in enumerate(zeilen):
+        inhalt = zeile.rstrip("\r\n")
+        treffer = _AUTO_ZEILE.match(inhalt)
+        if treffer:
+            gefunden = True
+            # `auto:` with nothing behind it: the value needs its space, or
+            # the line reads back as one plain word.
+            vorne = treffer.group(1)
+            if not vorne.endswith((" ", "\t")):
+                vorne += " "
+            zeilen[index] = vorne + word + treffer.group(3) + zeile[len(inhalt):]
+    if not gefunden:
+        ende = "\r\n" if kopf.endswith("\r\n") else "\n"
+        zeilen.append(f"auto: {word}{ende}")
+    return bom + frontmatter.MARKER + "".join(zeilen) + frontmatter.MARKER + rest
+
+
+def switched_text(skill: Skill, text: str, auto: bool) -> str:
+    """``text`` with ``auto`` set, as ``with_auto`` writes it — or, where a
+    header shape defeats that (one flow mapping on a single line), the file
+    as the house writes it. A switch must never leave a skill that no longer
+    loads or no longer reads as asked.
+    """
+    neu = with_auto(text, auto)
+    try:
+        gelesen = skill_aus_text(skill.name, neu, ordner=skill.ordner, eigen=True)
+    except SkillKaputt:
+        gelesen = None
+    if gelesen is not None and gelesen.auto is auto:
+        return neu
+    return skill_file_text(skill.beschreibung, auto, skill.anleitung)
+
+
+def copy_without_overwriting(quelle: Path, ziel: Path) -> None:
+    """Copies a shipped skill folder into the user's folder for it.
+
+    The user's folder may already exist without a ``SKILL.md`` (a skill
+    folder somebody started, or a companion file of their own): what lies
+    there stays untouched and only what is missing arrives.
+    """
+    ziel.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(
+        quelle,
+        ziel,
+        dirs_exist_ok=True,
+        copy_function=lambda src, dst: None if Path(dst).exists() else shutil.copy2(src, dst),
     )
 
 
@@ -343,15 +411,15 @@ def skills_laden(mitgeliefert: Path, eigen: Path) -> dict[str, Skill]:
 # and not in the system message: picking one leaves the front of the
 # request alone, so the server does not read the whole chat again for it.
 INVOCATION_NOTE = (
-    '[IMPORTANT: The user has invoked the "{name}" skill, indicating they want '
-    "you to follow its instructions. The full skill content is loaded below.]"
+    '[IMPORTANT: The user invoked the "{name}" skill and wants you to follow its '
+    'instructions. The full skill content appears below.]'
 )
 INVOCATION_HANDOVER = (
     "The user has provided the following instruction alongside the skill invocation:"
 )
 
 
-_INVOKED = re.compile(r'^\[IMPORTANT: The user has invoked the "([^"]+)" skill')
+_INVOKED = re.compile(r'^\[IMPORTANT: The user invoked the "([^"]+)" skill')
 
 
 def invoked_name(text: str) -> str | None:

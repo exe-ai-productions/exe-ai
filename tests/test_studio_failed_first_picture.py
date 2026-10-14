@@ -1,11 +1,11 @@
-"""A chat the studio opened for a picture goes again when the picture fails.
+"""A chat the studio opened for a picture stays when the picture fails.
 
-Drawing in the studio without an open chat opens one. When none of the
-pictures of that press is drawn, the chat is taken back: it would stand in
-the list holding nothing but the prompt. The window then looks as it did
-before the press — the prompt and every value set in the studio stand, the
-failed run stays in the terminal with what it said until another chat is
-opened. A chat that was there before the press always stays.
+Drawing in the studio without an open chat opens one. When the picture fails
+or is stopped, nothing is deleted: the chat stays in the list and stays open,
+the prompt stands in the prompt bar, the pictures, the mask and the values
+stand in the studio, and the failed run stands in the terminal with what it
+said. The next press draws with them, into the same chat. Only the person
+deletes a chat.
 
 Run rather than read: the studio's drawing module, its values, the chat's
 store and the terminal are compiled with the Svelte compiler (they use
@@ -41,7 +41,7 @@ needs_node = pytest.mark.skipif(
 STUBS = """
 import { proxy } from 'svelte/internal/client'
 export const calls = []
-export const service = { chats: [], rows: {}, runs: {}, stores: {}, silent: false, keepsChats: false }
+export const service = { chats: [], rows: {}, runs: {}, stores: {} }
 export const zustand = proxy({
   aktiverChat: null, nachrichten: [], chats: [], modellId: 'text-model', seitenblatt: 'projekte',
   bildLaeuftChat: {}, laeuft: {}, sendet: {}, features: {},
@@ -61,14 +61,11 @@ export const loadImageFamilies = async () => {}
 export const familyOf = () => null
 export const leiste = { offen: false }
 export const zeitweiseOeffnen = () => {}
+export const columnsForStudio = () => {}
+export const columnsBack = () => {}
 export const anbieten = () => {}
 export const videoFrames = async () => []
 export const api = {
-  nachrichten: async (id) => {
-    calls.push(['rows', id])
-    if (service.silent) throw new Error('the service does not answer')
-    return { nachrichten: service.rows[id] ?? [] }
-  },
   laeufe: async (id) => {
     calls.push(['runs', id])
     return { laeufe: structuredClone(service.runs[id] ?? []), ab: 0 }
@@ -81,7 +78,6 @@ export const api = {
   bildVorgaben: async () => null,
   chatLoeschen: async (id) => {
     calls.push(['delete', id])
-    if (service.keepsChats) throw new Error('the chat cannot be deleted')
     service.chats = service.chats.filter((c) => c !== id)
     delete service.rows[id]
     delete service.runs[id]
@@ -141,25 +137,30 @@ DRIVER = """
 import { compileModule } from 'svelte/compiler'
 import { readFileSync, writeFileSync } from 'fs'
 const STAND_INS = ['api.js', 'zustand.svelte.js', 'texte.svelte.js', 'bildseed.svelte.js', 'imageSwitches.svelte.js',
-  'imageFamilies.svelte.js', 'arbeitsleiste.svelte.js', 'videoFrames.js']
+  'imageFamilies.svelte.js', 'arbeitsleiste.svelte.js', 'studioColumns.svelte.js', 'videoFrames.js']
 const REAL = %(modules)s
 for (const name of REAL) {
   let code = compileModule(readFileSync(%(lib)r + '/' + name, 'utf-8'), { filename: name, generate: 'client' }).js.code
   for (const other of STAND_INS) code = code.replaceAll(`from './${other}'`, "from './taken-back.stubs.mjs'")
   for (const other of REAL) code = code.replaceAll(`from './${other}'`, `from './taken-back.${other}.mjs'`)
   code = code.replaceAll("from './werkzeughistorie.js'", "from './src/lib/werkzeughistorie.js'")
+  code = code.replaceAll("from './chatName.js'", "from './src/lib/chatName.js'")
   writeFileSync(`taken-back.${name}.mjs`, code)
 }
-// The run streams the window opens, so a scenario can say what the service
-// reports on them and count who is listening.
+// The run stream the terminal opens for the open chat: what the service
+// reports for a run reaches the terminal over it.
 const streams = []
 globalThis.EventSource = class {
   constructor(url) { this.url = url; this.open = true; streams.push(this) }
   close() { this.open = false }
 }
-const listening = (chat) => streams.filter((s) => s.open && s.url.startsWith(`laeufe/${chat}?`))
+let reported = 0
 const reports = (chat, event) => {
-  for (const stream of listening(chat)) stream.onmessage?.({ data: JSON.stringify(event) })
+  for (const stream of streams) {
+    if (stream.open && stream.url.startsWith(`laeufe/${chat}?`)) {
+      stream.onmessage?.({ data: JSON.stringify({ ...event, n: 1000 + reported++ }) })
+    }
+  }
 }
 const stubs = await import('./taken-back.stubs.mjs')
 const chatanzeige = await import('./taken-back.chatanzeige.svelte.js.mjs')
@@ -174,31 +175,27 @@ const { zustand, service, calls } = stubs
 studio.studio.offen = true
 const wishes = []
 draw.zeichnung.losZeichnen = (wish) => {
-  let settle
-  const outcome = new Promise((resolve) => { settle = resolve })
   // The service opens the picture's run under its chat as it begins.
   const runs = (service.runs[wish.chat_id] ??= [])
   const run = { lauf: runs.length + 1, befehl: wish.prompt, art: 'bild', zustand: 'laeuft', ausgabe: '' }
   runs.push(run)
-  wishes.push({ wish, settle, run })
-  return outcome
+  wishes.push({ wish, run })
+  reports(wish.chat_id, { typ: 'lauf_start', lauf: run.lauf, befehl: wish.prompt, art: 'bild' })
 }
-const fails = (n, text = 'no tokenizer found') => {
-  Object.assign(wishes[n].run, { zustand: 'fehler', ausgabe: text })
-  wishes[n].settle(false)
+// The service ends a picture's run and says so on the chat's stream.
+const ends = (n, state, text = '') => {
+  const { wish, run } = wishes[n]
+  Object.assign(run, { zustand: state, ausgabe: text })
+  if (text) reports(wish.chat_id, { typ: 'lauf_zeile', lauf: run.lauf, text, strom: 'stderr' })
+  reports(wish.chat_id, { typ: 'lauf_ende', lauf: run.lauf, zustand: state, code: null })
 }
+const fails = (n, text = 'no tokenizer found') => ends(n, 'fehler', text)
+const stops = (n) => ends(n, 'abgebrochen')
 const draws = (n) => {
-  wishes[n].run.zustand = 'fertig'
   service.rows[wishes[n].wish.chat_id] = [{ id: 1, role: 'assistant', bild: 'p.png' }]
-  wishes[n].settle(true)
+  ends(n, 'fertig')
 }
 const settled = async () => { for (let i = 0; i < 40; i += 1) await new Promise((r) => setTimeout(r, 0)) }
-// The service ends a run and says so on the chat's stream, in that order.
-let reported = 0
-const ends = (n, state, text = '') => {
-  Object.assign(wishes[n].run, { zustand: state, ausgabe: text })
-  reports(wishes[n].wish.chat_id, { typ: 'lauf_ende', lauf: wishes[n].run.lauf, zustand: state, code: null, n: reported++ })
-}
 const asked = (kind) => calls.filter((c) => c[0] === kind).length
 // What the window shows, as one reading.
 const reading = () => ({
@@ -247,10 +244,11 @@ def _run(scenario: str) -> dict:
 
 
 @needs_node
-def test_a_chat_opened_for_a_picture_that_fails_is_taken_back():
-    """No chat open, one picture, it fails: the chat list is as long as
-    before, the studio's values stand as they stood, and the failed run is
-    still in the terminal — until another chat is opened."""
+def test_a_chat_opened_for_a_picture_that_fails_stays_open_with_everything_in_it():
+    """No chat open, one picture, it fails: the chat is in the list and open,
+    the studio's values stand, the mask stands with the chat, the failed run
+    is in the terminal with what it said, and nothing was deleted. The next
+    press draws with the same values into the same chat."""
     report = _run("""
     await setUp()
     const mask = studio.maskeDesChats(null, 'area.png')
@@ -260,32 +258,81 @@ def test_a_chat_opened_for_a_picture_that_fails_is_taken_back():
     fails(0)
     await settled()
     const after = reading()
-    const maskStays = studio.maskeDesChats(null, 'area.png') === mask
-    service.chats.push('B')
-    await stubs.openChat('B')
-    return { before, drawing, after, maskStays, other: reading(), sent: wishes[0].wish.prompt }
+    const maskStays = studio.maskeDesChats('new-1', 'area.png') === mask
+    await draw.studioZeichnen()
+    await settled()
+    return { before, drawing, after, maskStays, again: reading(), stored: service.stores['new-1'],
+             wishes: wishes.map((w) => [w.wish.chat_id, w.wish.prompt, w.wish.breite]), created: asked('create') }
     """)
     assert report["drawing"]["chats"] == ["new-1"] and report["drawing"]["open"] == "new-1"
-    assert report["sent"] == "a cat on a roof"
 
     after = report["after"]
-    assert after["deleted"] == ["new-1"]
-    assert after["chats"] == [] and after["open"] is None and after["storeOf"] is None
+    assert after["deleted"] == []
+    assert after["chats"] == ["new-1"] and after["open"] == "new-1" and after["storeOf"] == "new-1"
     # The values as before the press: what was set is set, what was shown is shown.
-    for name in ("prompt", "width", "steps", "model", "set", "sheet"):
+    for name in ("prompt", "width", "steps", "model"):
         assert after[name] == report["before"][name], (name, after[name])
     assert after["prompt"] == "a cat on a roof" and after["width"] == 768 and after["steps"] == 8
-    assert after["set"] == ["breite", "prompt"]
+    # What was set belongs to the chat now: its store holds it.
+    assert report["before"]["set"] == ["breite", "prompt"] and after["set"] == []
+    assert report["stored"] == {"breite": 768, "prompt": "a cat on a roof"}
     assert report["maskStays"]
-    # The failed run with what it said, though its chat is gone.
+    # The failed run with what it said.
     assert after["runs"] == [[1, "fehler", "no tokenizer found"]]
-    # Another chat opened: the terminal is that chat's.
-    assert report["other"]["open"] == "B" and report["other"]["runs"] == []
+    # The next press: the same chat, the same values, no second chat.
+    assert report["created"] == 1
+    assert report["wishes"] == [["new-1", "a cat on a roof", 768], ["new-1", "a cat on a roof", 768]]
+    assert report["again"]["deleted"] == []
+
+
+@needs_node
+def test_the_chat_a_picture_opens_is_named_at_a_word_end_like_every_new_chat():
+    """No chat open, a prompt of sixty-two characters in words: the new chat
+    is named by the one rule — at most 48 characters, cut where a word ends,
+    then the mark. Silence probe: a prompt of exactly 48 stays whole, an
+    empty one is refused before any chat is opened (a finished picture made
+    larger, which has no prompt of its own, keeps the studio's word for a
+    name), and a chat that is open stays the chat: none is made."""
+    report = _run("""
+    const named = async (prompt) => {
+      await setUp()
+      studio.werte.prompt = prompt
+      const before = asked('create')
+      await draw.studioZeichnen()
+      draws(wishes.length - 1)
+      await settled()
+      return calls.filter((c) => c[0] === 'create').slice(before).map((c) => c[2])
+    }
+    const long = await named('Which seeds will still bloom well in a north facing garden bed')
+    const exact = await named('Which seeds will still bloom well in a north bed')
+    const empty = await named('')
+    // A finished picture made larger has no prompt of its own: no chat is
+    // open, so one is made, and it keeps the studio's word for a name.
+    await setUp()
+    studio.werte.prompt = ''
+    const beforeUpscale = asked('create')
+    await draw.studioZeichnen({ mode: 'upscale', prompt: 'a bloom' })
+    await settled()
+    const upscaled = calls.filter((c) => c[0] === 'create').slice(beforeUpscale).map((c) => c[2])
+    service.chats.push('A')
+    await stubs.openChat('A')
+    studio.werte.prompt = 'a long prompt that would have named a chat of its own here'
+    const before = asked('create')
+    await draw.studioZeichnen()
+    draws(wishes.length - 1)
+    await settled()
+    return { long, exact, empty, upscaled, openedWhileOpen: asked('create') - before }
+    """)
+    assert report["long"] == ["Which seeds will still bloom well in a north…"]
+    assert report["exact"] == ["Which seeds will still bloom well in a north bed"]
+    assert report["empty"] == []
+    assert report["upscaled"] == ["eingabe.bild_titel"]
+    assert report["openedWhileOpen"] == 0
 
 
 @needs_node
 def test_a_chat_that_was_open_before_stays_after_a_failed_picture():
-    """Silence probe: only a chat this press opened is ever taken back."""
+    """Silence probe: a chat that was open before the press is left as it is."""
     report = _run("""
     service.chats.push('A')
     service.stores.A = { prompt: 'a dog' }
@@ -302,8 +349,8 @@ def test_a_chat_that_was_open_before_stays_after_a_failed_picture():
 
 @needs_node
 def test_a_chat_opened_for_a_picture_that_is_drawn_stays():
-    """Silence probe: one drawn picture keeps the chat — the only one, or
-    one of several of the same press."""
+    """Silence probe: a drawn picture is in the chat — the only one, or one
+    of several of the same press — and nothing is deleted."""
     report = _run("""
     await setUp()
     await draw.studioZeichnen()
@@ -325,7 +372,7 @@ def test_a_chat_opened_for_a_picture_that_is_drawn_stays():
 
 
 @needs_node
-def test_every_picture_of_the_press_failing_takes_the_chat_back():
+def test_every_picture_of_the_press_failing_leaves_the_chat_standing():
     report = _run("""
     await setUp()
     studio.werte.bilder_je_lauf = 3
@@ -340,74 +387,16 @@ def test_every_picture_of_the_press_failing_takes_the_chat_back():
     """)
     assert report["meanwhile"]["open"] == "new-1" and report["meanwhile"]["deleted"] == []
     after = report["after"]
-    assert after["deleted"] == ["new-1"] and after["chats"] == []
+    assert after["deleted"] == [] and after["chats"] == ["new-1"] and after["open"] == "new-1"
     assert after["prompt"] == "a cat on a roof"
     assert [run[1] for run in after["runs"]] == ["fehler", "fehler", "fehler"]
 
 
 @needs_node
-@pytest.mark.parametrize("holds", ["a row", "a picture in the line", "an answer on its way", "nobody can say"])
-def test_a_chat_that_holds_something_is_not_taken_back(holds):
-    """Silence probe: the chat goes only while it holds nothing. A row the
-    service keeps for it, a picture still waiting for it, an answer being
-    written into it — or a service that cannot say — leaves it standing."""
-    prepare = {
-        "a row": "service.rows['new-1'] = [{ id: 7, role: 'user', content: 'and a text question' }]",
-        "a picture in the line": "zustand.bildLaeuftChat = { 'new-1': true }",
-        "an answer on its way": "zustand.laeuft = { 'new-1': true }",
-        "nobody can say": "service.silent = true",
-    }[holds]
-    report = _run(f"""
-    await setUp()
-    await draw.studioZeichnen()
-    {prepare}
-    fails(0)
-    await settled()
-    return reading()
-    """)
-    assert report["deleted"] == [] and report["open"] == "new-1" and report["chats"] == ["new-1"]
-    assert report["prompt"] == "a cat on a roof"
-
-
-@needs_node
-def test_a_second_press_into_the_opened_chat_asks_again_once_it_has_ended():
-    """A second press while the first picture still draws goes into the chat
-    the first one opened. The first failing leaves the chat, a picture is
-    still in the line for it; the second failing takes it back. A picture
-    drawn by either keeps it for good."""
-    report = _run("""
-    await setUp()
-    await draw.studioZeichnen()
-    await draw.studioZeichnen()
-    zustand.bildLaeuftChat = { 'new-1': true }
-    fails(0)
-    await settled()
-    const first = reading()
-    zustand.bildLaeuftChat = {}
-    fails(1)
-    await settled()
-    const second = reading()
-    await setUp()
-    await draw.studioZeichnen()
-    await draw.studioZeichnen()
-    draws(2)
-    await settled()
-    service.rows['new-2'] = []
-    fails(3)
-    await settled()
-    return { first, second, kept: reading(), created: calls.filter((c) => c[0] === 'create').length }
-    """)
-    assert report["created"] == 2
-    assert report["first"]["open"] == "new-1" and report["first"]["deleted"] == []
-    assert report["second"]["deleted"] == ["new-1"] and report["second"]["open"] is None
-    assert report["second"]["prompt"] == "a cat on a roof"
-    assert report["kept"]["open"] == "new-2" and report["kept"]["deleted"] == ["new-1"]
-
-
-@needs_node
-def test_a_chat_left_meanwhile_goes_without_touching_what_the_window_shows():
-    """The picture fails while another chat is open: the empty chat goes,
-    the open chat, its values and its runs stay as they are."""
+def test_a_picture_that_fails_while_another_chat_is_open_touches_nothing_of_it():
+    """The picture fails while another chat is open: the chat that was opened
+    for it stays in the list, the open chat, its values and its runs stay as
+    they are, and nothing is deleted."""
     report = _run("""
     await setUp()
     await draw.studioZeichnen()
@@ -417,32 +406,17 @@ def test_a_chat_left_meanwhile_goes_without_touching_what_the_window_shows():
     await stubs.openChat('B')
     fails(0)
     await settled()
-    return reading()
+    return { ...reading(), held: service.chats }
     """)
-    assert report["deleted"] == ["new-1"] and report["chats"] == ["B"] and report["open"] == "B"
+    assert report["deleted"] == [] and report["held"] == ["new-1", "B"] and report["open"] == "B"
     assert report["prompt"] == "a ship"
     assert report["runs"] == [[1, "fertig", "x"]]
 
 
 @needs_node
-def test_a_chat_that_cannot_be_deleted_stays_in_the_list_and_nothing_fails():
-    report = _run("""
-    await setUp()
-    await draw.studioZeichnen()
-    service.keepsChats = true
-    fails(0)
-    await settled()
-    return { ...reading(), said: stubs.said }
-    """)
-    assert report["deleted"] == ["new-1"] and report["chats"] == ["new-1"]
-    assert report["open"] is None and report["prompt"] == "a cat on a roof"
-    assert report["said"] == []
-
-
-@needs_node
 def test_a_chat_deleted_by_hand_takes_its_runs_with_it():
-    """Silence probe: only the studio's own taking back leaves runs
-    standing. Any other way out of a chat empties the terminal as before."""
+    """Silence probe: the person's own deleting a chat empties the terminal
+    as before; the chat's runs go with it."""
     report = _run("""
     service.chats.push('A')
     service.runs.A = [{ lauf: 1, befehl: 'a picture', art: 'bild', zustand: 'fehler', ausgabe: 'failed' }]
@@ -455,225 +429,44 @@ def test_a_chat_deleted_by_hand_takes_its_runs_with_it():
     assert report["gone"]["open"] is None and report["gone"]["runs"] == []
 
 
-def test_the_picture_line_says_how_each_picture_ended():
-    """The line in the window answers every wish once: after its own
-    bookkeeping when the picture was worked off, and at once when the wish
-    leaves the line undrawn — taken out, or stopped with the rest. What it
-    answers with never travels to the service."""
-    source = (FRONTEND / "src/App.svelte").read_text(encoding="utf-8")
-    enqueue = re.search(r"\n  function bildLokalZeichnen\(wunsch\) \{.*?\n  \}\n", source, re.S)
-    assert enqueue, "the way into the picture line was not found"
-    assert "new Promise((resolve) => { settle = resolve })" in enqueue.group(0)
-    assert "return outcome" in enqueue.group(0)
-    line = re.search(r"\n  async function workPictureLine\(\) \{.*?\n  \}\n", source, re.S)
-    assert line, "the loop of the picture line was not found"
-    worked = line.group(0)
-    assert worked.index("await bildEinesZeichnen(naechste)") < worked.index("bildChatsAktualisieren()\n        //") \
-        < worked.index("naechste.settle(Boolean(naechste.drawn))")
-    taken_out = re.search(r"\n  function removeWaitingPicture\(id\) \{.*?\n  \}\n", source, re.S).group(0)
-    assert "gone.settle(false)" in taken_out
-    stopped = re.search(r"\n  function bildStoppen\(\) \{.*?\n  \}\n", source, re.S).group(0)
-    assert stopped.index("waiting.settle(false)") < stopped.index("bildQueue = []")
-    assert "const { queue_id: _, settle: _settle, ...request } = wunsch" in source
-
-
-# --- The chat only goes once the service has reported the end of its runs ---
-
-
 @needs_node
-def test_a_chat_whose_run_still_goes_is_only_taken_back_when_its_end_is_reported():
-    """The picture line says "not drawn" while the service still holds the
-    run as going: the chat stays, and the window listens on the chat's run
-    stream instead of asking again. The moment the end is reported the chat
-    goes — with the run as it ended in the terminal."""
-    report = _run("""
-    await setUp()
-    await draw.studioZeichnen()
-    const listeners = listening('new-1').length
-    wishes[0].settle(false)
-    await settled()
-    const waiting = { ...reading(), listeners: listening('new-1').length, runsAsked: asked('runs') }
-    await settled()
-    const stillWaiting = { deleted: reading().deleted, runsAsked: asked('runs') }
-    ends(0, 'fehler', 'no tokenizer found')
-    await settled()
-    return { listeners, waiting, stillWaiting, after: reading(), left: listening('new-1').length }
-    """)
-    waiting = report["waiting"]
-    assert waiting["deleted"] == [] and waiting["chats"] == ["new-1"] and waiting["open"] == "new-1"
-    # One listener more than the terminal's own, and no asking again while it waits.
-    assert waiting["listeners"] == report["listeners"] + 1
-    assert report["stillWaiting"] == {"deleted": [], "runsAsked": waiting["runsAsked"]}
-    after = report["after"]
-    assert after["deleted"] == ["new-1"] and after["chats"] == [] and after["open"] is None
-    assert after["prompt"] == "a cat on a roof" and after["width"] == 768
-    assert after["runs"] == [[1, "fehler", "no tokenizer found"]]
-    # Nobody listens on a chat that is gone.
-    assert report["left"] == 0
-    # Waiting is listening: the module keeps no clock to ask again by.
-    source = (LIB / "studiozeichnen.svelte.js").read_text(encoding="utf-8")
-    assert "setTimeout" not in source and "setInterval" not in source
-
-
-@needs_node
-@pytest.mark.parametrize("state", ["fehler", "abgebrochen"])
-def test_a_run_that_has_ended_when_looked_at_takes_the_chat_back_without_waiting(state):
-    """Silence probe: the ordinary way — the service ends the run before it
-    answers. Nobody listens for an end that has been reported already."""
-    report = _run("""
-    await setUp()
-    await draw.studioZeichnen()
-    const listeners = listening('new-1').length
-    let most = listeners
-    const watch = setInterval(() => { most = Math.max(most, listening('new-1').length) }, 0)
-    Object.assign(wishes[0].run, { zustand: '%s', ausgabe: '' })
-    wishes[0].settle(false)
-    await settled()
-    clearInterval(watch)
-    return { listeners, most, after: reading() }
-    """ % state)
-    assert report["most"] == report["listeners"]
-    assert report["after"]["deleted"] == ["new-1"]
-    assert report["after"]["runs"] == [[1, state, ""]]
-
-
-@needs_node
-def test_a_first_picture_the_user_stops_takes_the_chat_back_once_its_end_is_reported():
-    """Stopping is no drawing: the line tells every waiting picture "not
-    drawn", and the chat goes — after the service has said that the stopped
-    run has ended, not while the painter is still letting go."""
+def test_a_first_picture_the_user_stops_leaves_the_chat_standing():
+    """Stopping is no drawing, and no reason to delete: the chat stays, open,
+    with the prompt, and the stopped runs stand in the terminal."""
     report = _run("""
     await setUp()
     studio.werte.bilder_je_lauf = 2
     await draw.studioZeichnen()
-    // Stop: the waiting picture is told at once, the drawing one when its request comes back.
-    wishes[1].run.zustand = 'abgebrochen'
-    wishes[1].settle(false)
-    wishes[0].settle(false)
+    stops(1)
+    stops(0)
     await settled()
-    const stopping = reading()
-    ends(0, 'abgebrochen')
-    await settled()
-    return { pictures: wishes.length, stopping, after: reading() }
+    return { pictures: wishes.length, after: reading() }
     """)
     assert report["pictures"] == 2
-    assert report["stopping"]["deleted"] == [] and report["stopping"]["open"] == "new-1"
     after = report["after"]
-    assert after["deleted"] == ["new-1"] and after["chats"] == [] and after["open"] is None
+    assert after["deleted"] == [] and after["chats"] == ["new-1"] and after["open"] == "new-1"
     assert after["prompt"] == "a cat on a roof"
     assert after["runs"] == [[1, "abgebrochen", ""], [2, "abgebrochen", ""]]
 
 
-@needs_node
-def test_a_run_that_ends_with_a_picture_after_all_leaves_the_chat_standing():
-    """Everything is looked at afresh once the end is reported: a stopped
-    picture the painter finished anyway is a row the chat holds."""
-    report = _run("""
-    await setUp()
-    await draw.studioZeichnen()
-    wishes[0].settle(false)
-    await settled()
-    service.rows['new-1'] = [{ id: 1, role: 'assistant', bild: 'p.png' }]
-    ends(0, 'fertig')
-    await settled()
-    return { after: reading(), left: listening('new-1').length }
-    """)
-    assert report["after"]["deleted"] == [] and report["after"]["chats"] == ["new-1"]
-    # Only the terminal still reads the open chat's stream.
-    assert report["left"] == 1
+def test_the_studio_deletes_no_chat():
+    """Nothing in the drawing module asks the service to delete a chat, and
+    it keeps no wait for a run's end to do it by."""
+    source = (LIB / "studiozeichnen.svelte.js").read_text(encoding="utf-8")
+    for word in ("chatLoeschen", "takeBackUnlessDrawn", "openedUndrawn", "EventSource", "laeufeStrom"):
+        assert word not in source, word
 
 
 @needs_node
-def test_a_run_that_starts_while_the_window_waits_is_waited_for_as_well():
-    """The chat goes when every run of it has ended, not when the first one
-    it waited for has."""
+def test_an_enlarging_without_a_prompt_writes_no_question_into_the_chat():
+    """The wish goes out with `frage_erstellen` false when it has no prompt
+    (the picture then stands in the chat without a message of the person),
+    and true when it has one."""
     report = _run("""
     await setUp()
-    await draw.studioZeichnen()
-    wishes[0].settle(false)
-    await settled()
-    service.runs['new-1'].push({ lauf: 2, befehl: 'later', art: 'bild', zustand: 'laeuft', ausgabe: '' })
-    reports('new-1', { typ: 'lauf_start', lauf: 2, befehl: 'later', art: 'bild', n: 90 })
-    ends(0, 'fehler')
-    await settled()
-    const one = reading().deleted
-    service.runs['new-1'][1].zustand = 'fehler'
-    reports('new-1', { typ: 'lauf_ende', lauf: 2, zustand: 'fehler', code: null, n: 91 })
-    await settled()
-    return { one, both: reading().deleted }
+    const wish = (prompt) => ({ mode: 'upscale', startbild: 'p.png', maske: null, upscale_model: 'x.pth', prompt })
+    await draw.studioZeichnen(wish(''))
+    await draw.studioZeichnen(wish('a bloom'))
+    return wishes.map((w) => [w.wish.prompt, w.wish.frage_erstellen, w.wish.mode])
     """)
-    assert report["one"] == []
-    assert report["both"] == ["new-1"]
-
-
-@needs_node
-def test_a_picture_drawn_while_the_window_waits_keeps_the_chat_for_good():
-    """A second press into the chat draws while the first run's end is
-    still awaited: the chat is no longer one to take back, and the end
-    reported later deletes nothing."""
-    report = _run("""
-    await setUp()
-    await draw.studioZeichnen()
-    wishes[0].settle(false)
-    await settled()
-    await draw.studioZeichnen()
-    draws(1)
-    await settled()
-    ends(0, 'abgebrochen')
-    await settled()
-    return { after: reading() }
-    """)
-    assert report["after"]["deleted"] == [] and report["after"]["chats"] == ["new-1"]
-
-
-@needs_node
-def test_every_press_into_the_chat_shares_the_one_wait():
-    """Pressed and stopped again and again while the first stopped picture
-    is still being let go of: the window listens once, not once per press —
-    a browser gives one address only a handful of connections."""
-    report = _run("""
-    await setUp()
-    await draw.studioZeichnen()
-    const terminalOnly = listening('new-1').length
-    wishes[0].settle(false)
-    await settled()
-    for (const n of [1, 2, 3]) {
-      await draw.studioZeichnen()
-      wishes[n].settle(false)
-      await settled()
-    }
-    const waiting = { listeners: listening('new-1').length, deleted: reading().deleted }
-    for (const n of [0, 1, 2, 3]) ends(n, 'abgebrochen')
-    await settled()
-    return { terminalOnly, waiting, after: reading(), left: listening('new-1').length }
-    """)
-    assert report["waiting"] == {"listeners": report["terminalOnly"] + 1, "deleted": []}
-    assert report["after"]["deleted"] == ["new-1"]
-    assert report["left"] == 0
-
-
-@needs_node
-def test_a_wait_for_a_chat_that_is_no_longer_the_one_is_given_up():
-    """The opened chat was deleted by hand while its run's end was awaited,
-    and the next press opens another: the first wait's stream is closed —
-    its end will never be reported — and only the new chat is listened for."""
-    report = _run("""
-    await setUp()
-    await draw.studioZeichnen()
-    wishes[0].settle(false)
-    await settled()
-    await stubs.chatLoeschen('new-1')
-    // Deleting by hand empties the studio for no chat; the prompt is typed again.
-    studio.werte.prompt = 'a dog in a boat'
-    await draw.studioZeichnen()
-    wishes[1].settle(false)
-    await settled()
-    const waiting = { first: listening('new-1').length, second: listening('new-2').length }
-    ends(1, 'fehler')
-    await settled()
-    return { waiting, after: reading(), left: listening('new-2').length }
-    """)
-    # The second chat: the terminal's stream and the one wait.
-    assert report["waiting"] == {"first": 0, "second": 2}
-    assert report["after"]["deleted"] == ["new-1", "new-2"]
-    assert report["left"] == 0
+    assert report == [["", False, "upscale"], ["a bloom", True, "upscale"]]

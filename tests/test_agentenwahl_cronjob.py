@@ -75,8 +75,8 @@ def test_das_schema_traegt_die_namen_und_sagt_wer_nichts_kann(tmp_path):
     assert feld["enum"] == ["erinnerung", "exe-agent", "nacht-review", "recherche"]
     # Leaving it out runs with no agent, and the field says so, with what
     # such a run may and may not do.
-    assert "with no agent" in feld["description"]
-    assert "except asking the user" in feld["description"]
+    assert "without an agent" in feld["description"]
+    assert "except those for asking the user" in feld["description"]
     # And the one that can only answer says so before it is picked.
     assert "erinnerung (answers only, no tools)" in feld["description"]
     # Silence test: an agent with tools carries no such remark.

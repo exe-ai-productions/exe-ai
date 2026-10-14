@@ -492,8 +492,8 @@ async def test_api_reason_on_the_page_is_said_in_the_language_too(
         headers={"Accept-Language": language},
     )
     words = {
-        "de": "Der Anmeldevorgang ist unbekannt oder abgelaufen — bitte erneut versuchen.",
-        "en": "This sign-in has expired — please try again.",
+        "de": "Dieser Anmeldevorgang ist unbekannt oder abgelaufen. Bitte versuche es erneut.",
+        "en": "This sign-in request is unknown or has expired. Please try again.",
     }
     assert words[language] in unknown.text
     assert words[OTHER[language]] not in unknown.text
@@ -554,8 +554,8 @@ async def test_api_start_says_why_it_failed_in_the_language_of_the_app(
     )
     assert antwort.status_code == 400
     reason = {
-        "de": "Der Anbieter kann keine automatische Registrierung — Kennung (client_id) von Hand eintragen",
-        "en": "The provider has no automatic registration — enter the client ID yourself.",
+        "de": "Der Anbieter unterstützt keine automatische Registrierung. Trage die Kennung (client_id) manuell ein.",
+        "en": "The provider does not support automatic registration. Enter client_id manually.",
     }
     assert antwort.json()["detail"] == reason[language]
 

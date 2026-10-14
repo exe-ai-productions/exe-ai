@@ -409,7 +409,7 @@ def test_the_splash_and_the_frame_agree_on_ink_and_threshold():
 def _teller() -> str:
     return "\n".join([
         _piece(STATE, r"\nlet frameLookTold = ''\n", "frameLookTold"),
-        _piece(STATE, r"\nfunction frameColourToShell\(look\) \{\n.*?\n\}\n", "frameColourToShell"),
+        _piece(STATE, r"\nfunction frameColourToShell\(look, drawn = null\) \{\n.*?\n\}\n", "frameColourToShell"),
     ])
 
 
@@ -494,7 +494,7 @@ const farbtonDrehen = (colour) => colour
 const luma = () => 0.1
 function setzeFallsAnders() {{}}
 function nimmFallsDa() {{}}
-function frameColourToShell(told) {{ steps.push('told ' + told) }}
+function frameColourToShell(told, drawn = null) {{ steps.push('told ' + told + (drawn ? ' drawn ' + drawn : '')) }}
 const DARK_LOOKS = []
 function frameSchemeToShell() {{}}
 const document = {{ documentElement: {{
@@ -517,7 +517,90 @@ def test_every_look_tells_its_colour_once_its_attributes_stand():
     look and for the own gradient alike. The own gradient names which of its
     two sets of values it stands on."""
     assert _painted("moune") == ["removed data-eigen", "told moune"]
-    assert _painted("eigen") == ["set data-eigen", "told eigen:dunkel"]
+    assert _painted("eigen") == [
+        "set data-eigen", "told eigen:dunkel:#101010 drawn #101010"
+    ]
+
+
+def _own_gradient(states: list[dict | None], shell: str = SHELL_THAT_LISTENS) -> Any:
+    """The painter and the real teller together: the own gradient is painted
+    once per state (the user's choice stored under `eigen`, or none) and the
+    result is what the shell heard and how often the sheet was asked."""
+    painter = _piece(STATE, r"\nexport function rahmenNeuZeichnen\(modus\) \{\n.*?\n\}\n", "rahmenNeuZeichnen")
+    script = f"""
+const told = []
+let asked = 0
+const window = {{ exeHuelle: {shell} }}
+const RAHMEN_FELDER_MAX = 8
+const EIGENER_VERLAUF = 'eigen'
+const zustand = {{ verlauf: {{}} }}
+const lookFuer = (modus) => modus
+const tonVorgabeFuer = () => 0
+const vorgabenFuer = () => ['#101010', '#202020']
+const farbtonDrehen = (colour, tone) => (tone ? '#' + colour.slice(1).split('').reverse().join('') : colour)
+const luma = () => 0.1
+function setzeFallsAnders() {{}}
+function nimmFallsDa() {{}}
+const DARK_LOOKS = []
+function frameSchemeToShell() {{}}
+const document = {{ documentElement: {{
+  style: {{}},
+  getAttribute: () => null,
+  hasAttribute: () => true,
+  setAttribute: () => {{}},
+  removeAttribute: () => {{}},
+}} }}
+const getComputedStyle = () => {{
+  asked += 1
+  return {{ getPropertyValue: () => '#abcdef' }}
+}}
+{_teller()}
+{painter.replace("export function", "function")}
+for (const state of {json.dumps(states)}) {{
+  zustand.verlauf = state ? {{ eigen: state }} : {{}}
+  rahmenNeuZeichnen('eigen')
+}}
+console.log(JSON.stringify({{ told, asked }}))
+"""
+    return _run(script)
+
+
+def test_the_own_gradient_tells_the_first_colour_of_its_gradient():
+    """The shell opens on one colour; for the own gradient that is the first
+    colour of the gradient as it is drawn, not the sheet's plain tone."""
+    out = _own_gradient([{"farben": ["#ff2d95", "#2d95ff"]}])
+    assert out == {"told": ["#ff2d95"], "asked": 0}
+
+
+def test_the_own_gradient_tells_the_turned_first_colour():
+    out = _own_gradient([{"farben": ["#102030", "#2d95ff"], "ton": 40}])
+    assert out["told"] == ["#030201"]
+
+
+def test_a_new_first_colour_is_told_again_and_an_unchanged_one_is_not():
+    states = [
+        {"farben": ["#ff2d95", "#2d95ff"]},
+        {"farben": ["#ff2d95", "#00aa00"]},  # a later stop changes: same first colour
+        {"farben": ["#ff2d95", "#00aa00"]},
+        {"farben": ["#12ab34", "#00aa00"]},
+    ]
+    assert _own_gradient(states) == {"told": ["#ff2d95", "#12ab34"], "asked": 0}
+
+
+def test_a_first_colour_that_is_no_hex_colour_is_not_told():
+    """Silence probe: nothing is told for it, and the sheet's tone does not
+    stand in for it — as before, the shell keeps what it had."""
+    out = _own_gradient([{"farben": ["rebeccapurple", "#2d95ff"]}])
+    assert out == {"told": [], "asked": 0}
+
+
+def test_the_own_gradient_without_a_choice_tells_the_default_gradients_start():
+    assert _own_gradient([None]) == {"told": ["#101010"], "asked": 0}
+
+
+@pytest.mark.parametrize("shell", ["undefined", "{}"])
+def test_the_own_gradient_without_a_shell_tells_nothing(shell):
+    assert _own_gradient([{"farben": ["#ff2d95", "#2d95ff"]}], shell) == {"told": [], "asked": 0}
 
 
 def test_every_look_gives_its_frame_a_colour_the_shell_takes():

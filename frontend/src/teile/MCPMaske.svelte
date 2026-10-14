@@ -18,10 +18,12 @@
   import Hauszeichen from './Hauszeichen.svelte'
   import {
     apiKeyUmgebungsname, grundfelder as grundfelderAus, listenAusZustaenden,
-    naechsterZustand, serverKennung, zustandAusEintrag,
+    naechsterZustand, serverKennung, timeLimitFromField, zustandAusEintrag,
   } from '../lib/mcpWerkzeuge.js'
 
-  let { modus, kachel = null, fertig, name = $bindable('') } = $props()
+  /* `entfernen`: takes a server's entry out of the file. Given by the page
+     only for a card that has an entry; it asks first and closes the sheet. */
+  let { modus, kachel = null, fertig, entfernen = null, name = $bindable('') } = $props()
 
   const istNeu = modus === 'neu'
   /* Where an existing tile's own data comes from: the shipped catalogue for
@@ -40,6 +42,11 @@
   )
 
   let adresse = $state(istNeu ? '' : (quelle.url || ''))
+  /* A tile whose program wants the address of one's own instance (SearXNG:
+     nothing of ours to put in): the sheet asks for it, empty, and the entry
+     is written only with it. */
+  const fragtAdresse = !istNeu && !kachel.eintrag && !!quelle.address_env
+  let eigeneAdresse = $state('')
   let apiKey = $state('')
   // oauth_kennung only: a client id created by hand at the provider
   // (Verbindungen.svelte's own small menu used to ask for this the same
@@ -50,6 +57,10 @@
   let fehler = $state('')
   let verbunden = $state(false)
   let werkzeuge = $state([]) // [{ name, zustand }]
+  /* How many seconds one call to this server may take; empty means the
+     default (app/tools/mcp_client.py). Read back from the entry once the
+     server answers, written with the two lists below. */
+  let timeLimit = $state('')
   let gespeicherterName = $state(istNeu ? '' : quelle.name)
 
   /* What the connect step needs: `undefined` while a new address has not
@@ -65,6 +76,7 @@
     verlangt === 'schluessel' ? apiKey.trim().length > 0
     : verlangt === 'anmeldung' || verlangt === 'oauth_kennung' ? false
     : istNeu ? adresse.trim().length > 0
+    : fragtAdresse ? eigeneAdresse.trim().length > 0
     : true,
   )
 
@@ -74,7 +86,10 @@
      tile: the browser sign-in gets the same one door the plain key already
      had. */
   function grundfelder() {
-    return grundfelderAus(quelle, kachel.eintrag, { mitSchluessel: apiKey.trim().length > 0 })
+    return grundfelderAus(quelle, kachel.eintrag, {
+      mitSchluessel: apiKey.trim().length > 0,
+      adresse: eigeneAdresse.trim(),
+    })
   }
 
   /* The server needs a moment to start after the entry is written — the
@@ -92,17 +107,37 @@
           name: w.name,
           zustand: zustandAusEintrag(w.name, eintrag),
         }))
+        timeLimit = eintrag.timeout ?? ''
         return true
       }
     }
     return false
   }
 
+  /* A tile of a server the program starts itself has no address to write.
+     Not on file — its entry was removed — the entry the program ships comes
+     back and the fields go on top of it (app/api/v1/werkzeuge.py). One that
+     names its own program ships no entry: it is written from the tile. */
+  const shippedServer = !istNeu && !kachel.eintrag && !quelle.url && !quelle.command
+
+  /* A tile the file holds no matching entry for. Its first write goes as a
+     new entry: the file may hold a server of one's own under the same name
+     (another address), and merged into that one, the tile would overwrite
+     it. The service refuses a name that is taken, with its own sentence.
+     Once this sheet has written the entry, it is its own. */
+  const ohneEintrag = !istNeu && !kachel.eintrag
+  let eintragGeschrieben = $state(false)
+  const erstesSchreiben = () => ohneEintrag && !eintragGeschrieben
+
   async function anlegenUndVerbinden(serverName, felder, versuche = 8) {
     // New unless it is the entry this sheet itself wrote a moment ago: a
     // second try at connecting is the same server, not a clash with another
     // one — but a different id is checked again.
-    await api.serverSchreiben(serverName, felder, { neu: istNeu && serverName !== gespeicherterName })
+    await api.serverSchreiben(serverName, felder, {
+      neu: (istNeu && serverName !== gespeicherterName) || erstesSchreiben(),
+      shipped: shippedServer,
+    })
+    eintragGeschrieben = true
     gespeicherterName = serverName
     apiKey = ''
     if (await werkzeugeLesen(serverName, versuche)) {
@@ -213,7 +248,8 @@
           { neu: serverName !== gespeicherterName },
         )
       } else {
-        await api.serverSchreiben(serverName, grundfelder())
+        await api.serverSchreiben(serverName, grundfelder(), { neu: erstesSchreiben() })
+        eintragGeschrieben = true
       }
       gespeicherterName = serverName
       const daten = { server: serverName }
@@ -242,7 +278,9 @@
     fehler = ''
     try {
       const { allowed_tools, needs_confirmation } = listenAusZustaenden(werkzeuge)
-      await api.serverSchreiben(gespeicherterName, { allowed_tools, needs_confirmation })
+      await api.serverSchreiben(gespeicherterName, {
+        allowed_tools, needs_confirmation, timeout: timeLimitFromField(timeLimit),
+      })
       fertig?.()
     } catch (e) {
       fehler = e.message || t('fehler.allgemein')
@@ -266,6 +304,14 @@
                  spellcheck="false" autocapitalize="off" />
         </label>
       {/if}
+      {#if fragtAdresse}
+        <label class="feldblock">
+          <span class="tafelkopf"><Hauszeichen zeichen="wolke" groesse="klein" />{t('modell.eigener_adresse')}</span>
+          <input class="eingabe" bind:value={eigeneAdresse}
+                 spellcheck="false" autocapitalize="off"
+                 onkeydown={(e) => { if (e.key === 'Enter' && bereit && !arbeitet) verbinden() }} />
+        </label>
+      {/if}
       {#if verlangt === 'schluessel'}
         <label class="feldblock">
           <span class="tafelkopf"><Hauszeichen zeichen="schluessel" groesse="klein" />{t('mcp.api_key')}</span>
@@ -277,10 +323,15 @@
           <!-- The manual path: a self-created client id (Google issues no
                dynamic registration) — the same two fields the small menu
                used to ask for. -->
-          <input class="eingabe" bind:value={kennung} placeholder={t('verbindungen.kennung')}
-                 spellcheck="false" autocapitalize="off" />
-          <input class="eingabe" bind:value={geheimnis} placeholder={t('verbindungen.geheimnis')}
-                 spellcheck="false" autocapitalize="off" />
+          <label class="feldblock">
+            <span class="tafelkopf"><Hauszeichen zeichen="schluessel" groesse="klein" />{t('verbindungen.kennung')}</span>
+            <input class="eingabe" bind:value={kennung}
+                   spellcheck="false" autocapitalize="off" />
+          </label>
+          <label class="feldblock">
+            <span class="tafelkopf"><Hauszeichen zeichen="schluessel" groesse="klein" />{t('verbindungen.geheimnis')}</span>
+            <input class="eingabe" type="password" bind:value={geheimnis} autocomplete="off" />
+          </label>
         {/if}
         <div class="feldblock">
           <span class="tafelkopf"><Hauszeichen zeichen="person" groesse="klein" />{t('mcp.anmeldung')}</span>
@@ -291,6 +342,16 @@
             </button>
           </div>
         </div>
+      {/if}
+      {#if verbunden}
+        <label class="feldblock">
+          <span class="tafelkopf"><Hauszeichen zeichen="stoppuhr" groesse="klein" />{t('mcp.zeitgrenze')}</span>
+          <span class="limit-row">
+            <input class="eingabe limit" type="number" min="1" step="1" inputmode="numeric"
+                   placeholder="300" bind:value={timeLimit} />
+            <span class="unit">{t('mcp.zeitgrenze_einheit')}</span>
+          </span>
+        </label>
       {/if}
       <div class="fuellung"></div>
       {#if fehler}<p class="fehlertext">{fehler}</p>{/if}
@@ -307,6 +368,11 @@
         <button class="button" disabled={arbeitet} onclick={() => fertig?.()}>
           {t('app.abbrechen')}
         </button>
+        {#if !istNeu && kachel.eintrag && entfernen}
+          <button class="button" disabled={arbeitet} onclick={() => entfernen()}>
+            {t('verbindungen.entfernen')}
+          </button>
+        {/if}
       </div>
     </div>
     <div class="trenner"></div>
@@ -388,6 +454,12 @@
   .eingabe:disabled { opacity: 0.6; }
 
   .anmeldezeile { display: flex; align-items: center; gap: 9px; margin-top: 7px; }
+
+  /* The number and its unit on one line; the field is as wide as a few
+     digits need, not the column. */
+  .limit-row { display: flex; align-items: center; gap: 9px; }
+  .eingabe.limit { width: 96px; font-variant-numeric: tabular-nums; }
+  .unit { margin-top: 8px; font-size: 12px; color: var(--text-still); }
 
   .fuellung { flex: 1; min-height: 8px; }
   .fehlertext { font-size: 11.5px; color: var(--rot); margin: 0 0 8px; line-height: 1.4; }

@@ -11,11 +11,11 @@
   again.
 */
 
-import { zustand, eineSeiteOffen, seitenSchliessen, istSeitenleisteSchmal, melde } from './zustand.svelte.js'
+import { zustand, eineSeiteOffen, seitenSchliessen, melde } from './zustand.svelte.js'
 import { api } from './api.js'
 import { familyOf, imageFamilies, loadImageFamilies } from './imageFamilies.svelte.js'
 import { loadImageSwitches } from './imageSwitches.svelte.js'
-import { leiste, zeitweiseOeffnen } from './arbeitsleiste.svelte.js'
+import { columnsForStudio, columnsBack } from './studioColumns.svelte.js'
 import { chatanzeige, bildfensterAusDemStudio } from './chatanzeige.svelte.js'
 
 /* `rechts`: what the right column shows while the studio is open — its
@@ -56,10 +56,6 @@ export const refVideo = reference.video
 export const refVideoSet = reference.set
 export const refVideoRelease = reference.release
 
-/* What the two columns looked like before the studio pulled them open, so
-   closing it puts them back the way the user had them. */
-let vorher = null
-
 /* Whether the studio is what the window shows right now: open, and no menu
    page lying over it. */
 export function studioSichtbar() {
@@ -70,16 +66,7 @@ export function studioOeffnen() {
   // The studio takes the main area: a menu page lying there gives way.
   seitenSchliessen()
   if (studio.offen) return
-  /* Both columns carry the studio's settings: a folded one unfolds, and
-     neither choice is written down — it is the studio's, not the user's.
-     On a narrow window the right column is a sheet over the whole window
-     and would hide the surface, so it is left as it is there. */
-  vorher = {
-    seitenleisteEingeklappt: zustand.seitenleisteEingeklappt,
-    leisteOffen: istSeitenleisteSchmal() ? leiste.offen : zeitweiseOeffnen(),
-    modul: leiste.modul,
-  }
-  zustand.seitenleisteEingeklappt = false
+  columnsForStudio()
   studio.rechts = 'feinheiten'
   studio.offen = true
 }
@@ -87,14 +74,7 @@ export function studioOeffnen() {
 export function studioSchliessen() {
   if (!studio.offen) return
   studio.offen = false
-  /* Only what the studio itself unfolded folds again: a column the user
-     folded in the meantime stays folded, and one whose tool the user picked
-     in the meantime stays open on it. */
-  if (vorher) {
-    if (!zustand.seitenleisteEingeklappt) zustand.seitenleisteEingeklappt = vorher.seitenleisteEingeklappt
-    if (!vorher.leisteOffen && leiste.modul === vorher.modul) leiste.offen = false
-    vorher = null
-  }
+  columnsBack()
 }
 
 /* The studio opened on a picture of the chat: it stands in the generation
@@ -231,6 +211,8 @@ export const ANFANG = {
   hires_steps: '',
   hires_denoise: '',
   hires_upscaler: '',
+  // The model "Upscale" enlarges a finished picture with: a file of the upscaler folder.
+  upscale_model: '',
   hires_breite: '',
   hires_hoehe: '',
   slg_scale: '',
@@ -543,11 +525,27 @@ const filledFor = $state({ chat: null, read: false })
    A store that arrives after its chat was opened fills only what is
    untouched since: what was typed or set meanwhile stays, is no measure to
    start at the model's value, and is the chat's own from here on — written
-   like any value set by hand. Opening another chat starts the count anew. */
+   like any value set by hand. Opening another chat starts the count anew.
+
+   A chat opened while none was open takes the picture and the model that
+   were laid in or chosen there along, whichever chat it is: they stay in
+   the studio and count as set in that chat, like what is set after it
+   opened — also when its store only arrives later. Nothing else is taken
+   along: the other values are the chat's, and between two chats each one
+   keeps its own. */
+const CARRIED = ['startbild', 'modell']
 export function werteFuellen() {
   const stand = chatanzeige.geladen ? chatanzeige.bildfenster : {}
   const late = chatanzeige.geladen && !filledFor.read && filledFor.chat === chatanzeige.chatId
-  const touched = late ? setValues() : {}
+  const fromWindow = filledFor.chat === null && chatanzeige.chatId !== null
+  const carried = {}
+  if (fromWindow) {
+    const set = setValues()
+    for (const name of CARRIED) if (set[name]) carried[name] = set[name]
+    /* The mask painted on that picture goes with it, under the chat. */
+    if (carried.startbild && masken.get(null)?.bild === carried.startbild) maskIntoChat(chatanzeige.chatId)
+  }
+  const touched = late ? setValues() : carried
   const fehlen = []
   const read = {}
   for (const [name, start] of Object.entries(ANFANG)) {
@@ -582,7 +580,9 @@ export function werteFuellen() {
     }
   }
   newestWhereNone()
-  if (Object.keys(touched).length) werteSchreiben()
+  /* Written once the store is read: before that nothing can be written, and
+     what is set stays set until the store arrives and finds it. */
+  if (Object.keys(touched).length && chatanzeige.geladen) werteSchreiben()
   return fehlen
 }
 
@@ -809,16 +809,6 @@ export function maskIntoChat(chatId) {
   if (!held) return
   masken.delete(null)
   masken.set(chatId, held)
-}
-
-/* And the way back, for a chat created from the window that is taken away
-   again: what was painted stays with the window, under no chat, where the
-   surface finds it as before that chat. */
-export function maskOutOfChat(chatId) {
-  const held = masken.get(chatId)
-  if (!held) return
-  masken.delete(chatId)
-  masken.set(null, held)
 }
 
 /* Sets values without writing them: what the model starts with, shown for

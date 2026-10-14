@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Oberfläche des Exe AI Terminals. Baut nach ../static/app/, von wo FastAPI sie ausliefert.",
+  "description": "The interface of the Exe AI service. Builds into ../static/app/, from where FastAPI serves it.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -17,6 +17,9 @@
     "vite": "^6.0.7"
   },
   "dependencies": {
-    "highlight.js": "^11.12.0"
+    "highlight.js": "^11.12.0",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-webgl": "0.19.0",
+    "@xterm/xterm": "6.0.0"
   }
 }

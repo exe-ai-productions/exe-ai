@@ -487,6 +487,30 @@ def test_a_folder_holding_only_viewer_files_counts_as_empty(config):
     assert (data / "scripts" / "backup.sh").is_file()
 
 
+def test_viewer_files_count_in_any_capitals(config):
+    """A folder holding only ``thumbs.db`` and ``Desktop.ini`` counts as
+    empty like one holding ``Thumbs.db`` and ``desktop.ini``. Silence probe:
+    a name that only contains one of them is another file, and the folder
+    holding it is not empty."""
+    data = config.datenverzeichnis
+    (data / "skripte").mkdir(parents=True)
+    (data / "skripte" / "backup.sh").write_text("x")
+    (data / "scripts").mkdir()
+    (data / "scripts" / "thumbs.db").write_bytes(b"d")
+    (data / "scripts" / "Desktop.ini").write_bytes(b"d")
+    folder_names.carry_over(config)
+    assert (data / "scripts" / "backup.sh").is_file()
+    assert not (data / "skripte").exists()
+
+    (data / "bilder").mkdir()
+    (data / "bilder" / "a.png").write_bytes(b"d")
+    (data / "images").mkdir()
+    (data / "images" / "Thumbs.db.txt").write_text("mine")
+    folder_names.carry_over(config)
+    assert (data / "images" / "Thumbs.db.txt").read_text() == "mine"
+    assert (data / "bilder" / "a.png").is_file()
+
+
 def test_a_broken_stored_share_does_not_stop_the_start(config):
     with _start(config) as client:
         client.app.state.repositories.db.verbindung.execute(

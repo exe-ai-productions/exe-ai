@@ -197,6 +197,7 @@
     border: none;
     border-radius: 9px;
     background: var(--bg-hoch);
+    box-shadow: inset 0 0 0 1px var(--feldstrich);
     color: var(--text);
     font: 400 12px var(--schrift);
     cursor: pointer;

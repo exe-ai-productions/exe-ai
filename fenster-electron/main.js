@@ -1,30 +1,26 @@
 // The window around the service.
 //
-// Order of events: start the packaged service as a child process (unless one
-// is already answering — a second window must not become a second service),
-// wait for the port, then send the window to the interface. On exit the child
-// goes with the window: whoever closes the program means all of it.
+// Order of events: start the packaged service as a process of its own
+// (unless one is already answering — a second window must not become a
+// second service), wait for the port, then send the window to the interface.
 //
-// Closing the main window ends the whole program, and ending the program
-// stops the service GENTLY (SIGTERM), so the service runs its own shutdown
-// and takes its model, embedding, guardian and image-turbo servers down with
-// it. A hard SIGKILL would skip that shutdown and leave those servers
-// running — orphans that the next launch cannot talk to (a fresh session key,
-// an old server: "Invalid API-Key"). SIGTERM first, a few seconds to bow out,
-// then the hard kill only as a backstop.
-//
-// Windows has no gentle signal: process.kill() there ends the process
-// "forcefully and abruptly" (Node's child_process documentation), the
-// service runs no shutdown, and what it started keeps running — measured in
-// a Windows VM: the model server with 2.5 GB and its port still open. So on
-// Windows the whole process tree goes at once (taskkill /T /F, the same call
-// the service makes for its own children in app/prozessstopp.py), and the
-// shell waits for the service's end before it ends itself.
+// Closing the main window ends the whole program — but not the service. The
+// service outlives the window, whether this window started it or only found
+// it running: the terminal client talks to the same service, and a client
+// in the middle of an answer must not lose it because the window went; the
+// next window, and the next client, attach to the service that is still
+// there, with its model server and its running chats. So the service is
+// started cut loose from the shell (a session of its own, no shared
+// streams), on every platform, and before-quit ends only what belongs to
+// the window: the terminals inside it. The service ends through `exe service stop`,
+// or through its own shutdown — and, the one time this shell ends it, before
+// an update is installed (endServiceForUpdate).
 
 const {
-  app, BrowserWindow, Menu, clipboard, globalShortcut, ipcMain, nativeImage, nativeTheme, screen, shell,
+  app, BrowserWindow, Menu, clipboard, globalShortcut, ipcMain, nativeImage, nativeTheme, screen, session,
+  shell,
 } = require('electron')
-const { execFile, spawn } = require('child_process')
+const { spawn } = require('child_process')
 const fs = require('fs')
 const net = require('net')
 const path = require('path')
@@ -73,18 +69,138 @@ function antwortet() {
 
 // Packaged, electron-builder puts the service beside the interface in the
 // resources folder (Contents/Resources on macOS, resources\ on Windows); from
-// source it is the PyInstaller output in dist/. On macOS the service is ONE
-// FILE, and that file is what sits there under the name exe-ai-terminal. On
-// Windows it is a FOLDER — the exe with its files beside it
-// (deploy/exe-ai-terminal.spec: a one-file build there unpacks itself into
-// %TEMP% on every start) — so the path goes one level further, to the exe
-// inside.
+// source it is the PyInstaller output in dist/. The service is a FOLDER on
+// every system — the program with its files beside it
+// (deploy/exe-ai-terminal.spec: a one-file build unpacks itself into the
+// system's temporary folder on every start) — so the path goes one level
+// further, to the program inside.
 function dienstpfad() {
   if (process.env.EXE_AI_DIENST) return process.env.EXE_AI_DIENST
   const service = app.isPackaged
     ? path.join(process.resourcesPath, 'exe-ai-terminal')
     : path.join(__dirname, '..', 'dist', 'Exe AI')
-  return process.platform === 'win32' ? path.join(service, 'Exe AI.exe') : service
+  return path.join(service, process.platform === 'win32' ? 'Exe AI.exe' : 'Exe AI')
+}
+
+// ---------------------------------------------------------------------------
+// The command on the path
+//
+// After the first start of the app there is a command exe in every terminal
+// of the machine: a link in /usr/local/bin to the command inside this app
+// (Contents/Resources/bin/exe). Placed without asking where the folder is
+// ours to write; where it is not — on most Macs it belongs to the system —
+// the system's own password window asks once. Declined, it asks once more
+// on the next start, and then never again: the count lives beside the
+// window's geometry. A link that already points here is left alone; one
+// that points elsewhere (an older copy of the app, a move) is replaced; a
+// file that is no link is somebody else's and stays. `exe install` in a
+// terminal does the same by hand (cli/install.py). Windows needs nothing
+// here: its installer and the Store place the command.
+//
+// One case places nothing at all. An app started from a disk image, or
+// from the read-only copy the system runs a freshly downloaded app from,
+// sits where nothing stays: a link into it would point nowhere as soon as
+// the app ends.
+
+const CLI_LINK = '/usr/local/bin/exe'
+// How often the password window may be declined before the app stops asking.
+const CLI_LINK_DECLINES = 2
+// What the password window says it is for.
+const CLI_LINK_PROMPT = 'Exe AI places the command exe at /usr/local/bin.'
+
+function cliLinkTarget() {
+  return path.join(process.resourcesPath, 'bin', 'exe')
+}
+
+const cliLinkMemoryFile = () => path.join(app.getPath('userData'), 'cli-link.json')
+
+// Where a link points, or null where there is none.
+function cliLinkRead(link) {
+  try {
+    return fs.readlinkSync(link)
+  } catch {
+    return null
+  }
+}
+
+// Does the command stay where it is? Not on a read-only volume — a disk
+// image, the system's copy of a downloaded app. A folder that merely is not
+// this user's to write is a different answer, and an installed app's.
+function cliLinkTargetStays(target) {
+  try {
+    fs.accessSync(path.dirname(target), fs.constants.W_OK)
+  } catch (error) {
+    return error.code !== 'EROFS'
+  }
+  return true
+}
+
+function cliLinkDeclinesRead(file) {
+  try {
+    const { declined } = JSON.parse(fs.readFileSync(file, 'utf8'))
+    return Number.isInteger(declined) && declined > 0 ? declined : 0
+  } catch {
+    return 0 // no file yet, or unreadable
+  }
+}
+
+function cliLinkDeclineKeep(file, declined) {
+  try {
+    fs.writeFileSync(file, JSON.stringify({ declined }))
+  } catch {
+    /* asked again next time, which is the smaller of two faults */
+  }
+}
+
+// A word for the shell, in single quotes; and a word for AppleScript, in
+// double quotes — each escaping what its reader would otherwise read.
+const shellWord = (text) => `'${text.replace(/'/g, "'\\''")}'`
+const appleScriptWord = (text) => `"${text.replace(/[\\"]/g, '\\$&')}"`
+
+// What the password window runs: the folder, then the link — replacing a
+// link that is there (-n: a link to a folder is replaced, not entered).
+function cliLinkScript(link, target) {
+  const commands = `mkdir -p ${shellWord(path.dirname(link))} && ln -sfn ${shellWord(target)} ${shellWord(link)}`
+  return `do shell script ${appleScriptWord(commands)} with prompt ${appleScriptWord(CLI_LINK_PROMPT)} with administrator privileges`
+}
+
+// The system's password window, once: the same two steps, run with the
+// right the folder needs. Resolves to whether they went through.
+function cliLinkElevate(link, target) {
+  return new Promise((resolve) => {
+    const ask = spawn('osascript', ['-e', cliLinkScript(link, target)], { stdio: 'ignore' })
+    ask.on('error', () => resolve(false))
+    ask.on('exit', (code) => resolve(code === 0))
+  })
+}
+
+async function cliLinkPlace({
+  link = CLI_LINK, target = cliLinkTarget(), memoryFile = cliLinkMemoryFile(), elevate = cliLinkElevate,
+} = {}) {
+  if (!cliLinkTargetStays(target)) return 'skipped'
+  const pointsAt = cliLinkRead(link)
+  if (pointsAt === target) return 'kept'
+  try {
+    fs.mkdirSync(path.dirname(link), { recursive: true })
+    if (pointsAt !== null) fs.unlinkSync(link)
+    fs.symlinkSync(target, link)
+    console.log(`CLI: link placed at ${link}`)
+    return 'placed'
+  } catch (error) {
+    if (error.code !== 'EACCES' && error.code !== 'EPERM') {
+      console.error(`CLI: link not placed at ${link}:`, error.message)
+      return 'failed'
+    }
+  }
+  const declined = cliLinkDeclinesRead(memoryFile)
+  if (declined >= CLI_LINK_DECLINES) return 'declined'
+  if (await elevate(link, target)) {
+    console.log(`CLI: link placed at ${link} with administrator rights`)
+    return 'placed'
+  }
+  cliLinkDeclineKeep(memoryFile, declined + 1)
+  console.log(`CLI: password window declined (${declined + 1} of ${CLI_LINK_DECLINES})`)
+  return 'declined'
 }
 
 // ---------------------------------------------------------------------------
@@ -445,6 +561,8 @@ function ohneGeheimnis(adresse) {
 const regel = require('./adressregel')
 const kontextmenue = require('./kontextmenue')
 const { thumbnail } = require('./thumbnail')
+const dienstsuche = require('./dienstsuche')
+const terminal = require('./terminal')
 const { istHandbuch } = regel
 
 function istEigeneSeite(adresse) {
@@ -453,6 +571,11 @@ function istEigeneSeite(adresse) {
 
 function nachDraussen(adresse) {
   if (regel.darfNachDraussen(adresse)) shell.openExternal(adresse)
+}
+
+// Whether this content is the main window's page.
+function istHauptfenster(inhalt) {
+  return Boolean(inhalt && fenster && !fenster.isDestroyed() && fenster.webContents === inhalt)
 }
 
 // The rule itself, kept in one place because it is set on every window the
@@ -466,9 +589,18 @@ function nachDraussen(adresse) {
 // window instead of opening the file. Clicking a document opened the manual,
 // and the file could not be saved at all, because the open was denied before
 // the download could begin.
-function fensterweiche({ url }) {
+function fensterweiche({ url }, inhalt) {
   if (!istEigeneSeite(url)) {
-    nachDraussen(url)
+    // A page may hand a foreign address to the browser by itself only from
+    // the main window, whose page is the program's own code (the buttons to
+    // a model's page and to an MCP server's page). Any other content — a
+    // document, the manual, the developer tools — has no person's click
+    // behind this call: a script in a loop would open one tab after another.
+    // What a person clicks there goes out through the click catcher
+    // (linkclicks.js), with or without `target="_blank"`.
+    const haupt = istHauptfenster(inhalt)
+    console.log(`Window open ${haupt ? 'outside' : 'block'}: ${regel.addressForLog(url)}`)
+    if (haupt) nachDraussen(url)
     return { action: 'deny' }
   }
   if (!istHandbuch(url)) {
@@ -558,6 +690,18 @@ ipcMain.on('vorlesen-beschriftung', (ereignis, wort) => {
   vorlesenWorte.set(inhalt.id, wort.trim())
 })
 
+/* The words of the entries this program names by itself, in the language of
+   the interface: the main window's page sends them from its catalogue
+   (preload.js). Until it has, and for every word it left out, the English
+   ones stand (kontextmenue.js). Every window's menu reads them — the
+   language is the interface's, not one window's. */
+let menuWords = kontextmenue.wordsFrom(null)
+
+ipcMain.on('menu-words', (event, sent) => {
+  if (!fenster || fenster.isDestroyed() || event.sender !== fenster.webContents) return
+  menuWords = kontextmenue.wordsFrom(sent)
+})
+
 /* The list of entries comes from kontextmenue.js (plain JavaScript, checked
    by tests/test_kontextmenue.py); this is the half that needs a window: each
    description is turned into a menu item, and the ones that act on a window,
@@ -574,20 +718,20 @@ function kontextmenueBauen(inhalt, params) {
       // without the key, so a picture address without it opens nothing,
       // here or anywhere else. The label names that consequence rather than
       // its cause: "without key" said why the key was dropped and left the
-      // user to work out that the address is dead, "not available" says it
+      // user to work out that the address is dead, "unavailable" says it
       // outright. He has to be able to read that off the menu before he
       // copies, not find it out afterwards. And leaving the entry out
       // entirely would be just as mute: a right click that offers nothing
       // looks like the broken right click this menu was built for.
       //
-      // "not available" only says something true about OUR OWN addresses,
+      // "unavailable" only says something true about OUR OWN addresses,
       // where the missing part really is what makes the link dead — a
       // foreign link that happened to carry a `token=` or a `user:pass@`
       // still works perfectly well without it, it is simply a link this
       // program will not hand over whole.
       linkLabel: link && link.entfernt && istEigeneSeite(params.linkURL)
-        ? 'Copy Link Address — not available'
-        : 'Copy Link Address',
+        ? menuWords.copyLinkUnavailable
+        : menuWords.copyLink,
       linkAdresse: link ? link.adresse : '',
     })
     .map((eintrag) => {
@@ -611,7 +755,7 @@ function kontextmenueBauen(inhalt, params) {
       if (eintrag.art === 'bild_speichern') {
         // downloadURL runs the normal download path, which asks where to put
         // the file — the same dialog the interface's own download button gets.
-        return { label: 'Save Image As…', click: () => inhalt.downloadURL(params.srcURL) }
+        return { label: menuWords.saveImage, click: () => inhalt.downloadURL(params.srcURL) }
       }
       if (eintrag.art === 'bild_kopieren') {
         // The picture's own address, not the spot it was clicked at — see
@@ -619,9 +763,16 @@ function kontextmenueBauen(inhalt, params) {
         // Caught here: the menu takes no promise back, so a rejection on the
         // way (a window closed mid-copy, a dead address) would be an
         // unhandled one in the main process, where nothing is watching for it.
+        //
+        // A picture without an address has none to name: it is copied from
+        // the spot it was clicked at, the only handle it has.
         return {
-          label: 'Copy Image',
+          label: menuWords.copyImage,
           click: () => {
+            if (!params.srcURL) {
+              inhalt.copyImageAt(params.x, params.y)
+              return
+            }
             bildKopieren(params.srcURL).catch((fehler) => {
               console.error('Copy Image failed:', fehler)
             })
@@ -643,12 +794,50 @@ function kontextmenueSetzen(inhalt) {
   })
 }
 
+// The manual is noted as the manual whichever window of the program opened
+// it. `did-create-window` comes to the page that called `window.open`, so a
+// listener on the main window alone never heard of a manual that a second
+// window opened: that one stood there unnoticed, and the next call opened
+// another beside it. Only the manual is remembered; a document or a script
+// in its own window is not (see fensterweiche).
+function rememberManual(inhalt) {
+  inhalt.on('did-create-window', (neues, angaben) => {
+    if (!istHandbuch(angaben && angaben.url)) return
+    hilfefenster = neues
+    // /hilfe/ carries its own <title> and would overwrite "Exe AI — Help"
+    // as soon as it loads.
+    neues.on('page-title-updated', (ereignis) => ereignis.preventDefault())
+    neues.on('closed', () => {
+      if (hilfefenster === neues) hilfefenster = null
+    })
+  })
+}
+
+// Escape pressed while the focus is inside Chromium's PDF viewer. The viewer
+// is a content of its own (the type `remote`, an address under the
+// extension's); the key arrives there and not at the page, so the reader the
+// page shows over the window would stay open under a key that closes it
+// everywhere else. The shell hears the key at the viewer and says so to the
+// page (preload.js, `aufBetrachterEscape`); the page closes the reader if it
+// has one open. Only Escape, only a key going down, only while the window
+// that shows the reader is the one with the focus — a PDF in a window of its
+// own does not close a reader in this one. The key itself goes on into the
+// viewer, untouched.
+function betrachterTaste(inhalt, eingabe) {
+  if (!eingabe || eingabe.type !== 'keyDown' || eingabe.key !== 'Escape') return
+  if (!regel.isPdfViewer(inhalt.getURL())) return
+  if (!fenster || fenster.isDestroyed() || !fenster.isFocused()) return
+  fenster.webContents.send('betrachter-escape')
+}
+
 app.on('web-contents-created', (ereignis, inhalt) => {
   kontextmenueSetzen(inhalt)
   // Both rules for every page the program creates, at any depth: which
   // addresses may open a window, and where a page may navigate — for the
   // developer tools (View menu) in their own form, see navigationVerdict.
-  inhalt.setWindowOpenHandler(fensterweiche)
+  inhalt.setWindowOpenHandler((angaben) => fensterweiche(angaben, inhalt))
+  inhalt.on('before-input-event', (ereignis, eingabe) => betrachterTaste(inhalt, eingabe))
+  rememberManual(inhalt)
   navigationSperren(inhalt)
   inhalt.on('devtools-opened', () => {
     if (inhalt.devToolsWebContents) toolsPages.add(inhalt.devToolsWebContents)
@@ -661,8 +850,6 @@ let kind = null
 let fenster = null
 let hilfefenster = null
 let beendet = false
-// The service is being stopped: every further quit pass waits for that.
-let stopping = false
 
 // Shown the moment the service is known to be unreachable, whether that
 // verdict comes early (spawn itself failed, or the service died before it
@@ -696,6 +883,51 @@ let dienstFehlgeschlagen = false
 // Set once the service has answered: an exit after that is a service that
 // stopped, not one that never started.
 let dienstAntwortete = false
+// The service of ours that was already running when this window started —
+// its process id and port — and that this window uses instead of one of
+// its own. It is not `kind`: nobody here started it, nobody here stops it.
+let dienstVorgefunden = null
+// Said once on the way out; before-quit runs more than once.
+let bleibenGesagt = false
+
+// Before a service is started: one of ours may already be running on this
+// folder and port — started by the terminal client without a window, or
+// left running on purpose. Its note in the data folder names it, and its
+// page answering says it is alive (dienstsuche.js); then this window uses
+// it and starts nothing. Found nothing, the start below probes the port the
+// way it always did.
+//
+// One exception: a service that says it is another version than this
+// program. It is what an installation by hand leaves behind, or what a
+// terminal client started in the gap of an update; this window would attach
+// to it and show an interface that is not there. It is ended the way an
+// update ends it (endRunningService) and this window starts its own. A
+// version that cannot be read, or a service that does not end, leaves it as
+// it has always been: the service found is used, and the log says why.
+async function dienstAnbinden() {
+  const root = dienstsuche.dataRoot({
+    packaged: app.isPackaged, repoRoot: path.join(__dirname, '..'),
+  })
+  const gefunden = await dienstsuche.runningService({ port: PORT, root })
+  if (!gefunden) return false
+  const ownVersion = app.getVersion()
+  const foundVersion = await dienstsuche.serviceVersion(gefunden.port)
+  if (!foundVersion) {
+    console.log(`Service: the version of the running service on port ${gefunden.port} could not be read; it is used as it is`)
+  } else if (foundVersion !== ownVersion) {
+    console.log(`Service: the running service on port ${gefunden.port} is version ${foundVersion}, this program is ${ownVersion}; ending it`)
+    try {
+      const words = await endRunningService(gefunden)
+      console.log(`Service: ended (pid ${gefunden.pid}; ${words}); this program starts its own`)
+      return false
+    } catch (failure) {
+      console.error(`Service: the service of version ${foundVersion} did not end, it is used as it is: ${failure.message}`)
+    }
+  }
+  dienstVorgefunden = gefunden
+  console.log(`Service: using the running service on port ${gefunden.port} (pid ${gefunden.pid}); none started`)
+  return true
+}
 
 function fehlstartMelden(grund) {
   if (dienstFehlgeschlagen) return
@@ -717,12 +949,26 @@ async function dienstStarten() {
     // fallback's fix for that exact value.
     env: { ...process.env, EXE_AI_TERMINAL_HEADLESS: '1', EXE_AI_PORT: String(PORT) },
     stdio: 'ignore',
+    // Cut loose from the shell, so that the service outlives the window
+    // (the header of this file): a session of its own on macOS, its own
+    // process group without a console on Windows — the same way the
+    // terminal client starts it. No shared streams either: the service
+    // writes its own log file.
+    detached: true,
   })
+  // The two listeners below speak for this one process, and only while it
+  // is the shell's service. One that was ended before an update fires its
+  // 'exit' when its shutdown is through, and by then `kind` is nothing, or
+  // the service started after it.
+  const started = kind
+  // The shell does not wait for the service to end before it ends itself.
+  kind.unref()
   // A service that starts and dies a second later — a missing library, a
   // port already taken, a broken database — fires 'exit', not 'error'.
   // Before it ever answered, that is a failed start just the same, and the
   // wait below stops at once instead of polling for two minutes.
   kind.on('exit', (code, signal) => {
+    if (kind !== started) return
     kind = null
     if (!dienstAntwortete && !beendet) {
       fehlstartMelden(`exited before it answered (code ${code}, signal ${signal})`)
@@ -736,6 +982,7 @@ async function dienstStarten() {
   // silently spending the next two minutes waiting on a port nothing will
   // ever answer.
   kind.on('error', (fehler) => {
+    if (kind !== started) return
     kind = null
     fehlstartMelden(fehler)
   })
@@ -772,11 +1019,37 @@ function navigationSperren(inhalt) {
 // 'web-contents-created' hook) and stays noted until it is gone.
 const toolsPages = new WeakSet()
 
+// Who started a navigation. A page's own navigation names the frame that
+// started it (`initiator`); one nobody started — the person's click on a link
+// inside a PDF, which Chromium's viewer turns into a navigation of the
+// window — has none. A frame that is already gone answers with an error
+// instead of an address: that is "unknown", and unknown goes nowhere.
+function starterOf(details) {
+  try {
+    const frame = details.initiator
+    if (!frame) return { initiator: '', byBrowser: true }
+    return { initiator: String(frame.url || ''), byBrowser: false }
+  } catch (e) {
+    return { initiator: '', byBrowser: false }
+  }
+}
+
+// A link a person clicked in one of the program's pages: linkclicks.js
+// reports it, the same rule as for a navigation decides, and only a foreign
+// http(s) address opens the browser. The developer tools ask in vain.
+ipcMain.on('open-link', (event, address) => {
+  if (typeof address !== 'string') return
+  const verdict = regel.linkVerdict(address, PORT, { tools: toolsPages.has(event.sender) })
+  console.log(`Link click ${verdict}: ${regel.addressForLog(address)}`)
+  if (verdict === 'outside') nachDraussen(address)
+})
+
 // One decision for both events. The log names the place, never the whole
 // address (adressregel.js, addressForLog).
 function navigationDecide(contents, details, redirect) {
   const verdict = regel.navigationVerdict(details.url, PORT, {
     mainFrame: details.isMainFrame, redirect, tools: toolsPages.has(contents),
+    ...starterOf(details),
   })
   if (verdict === 'allow') return
   details.preventDefault()
@@ -851,18 +1124,8 @@ function fensterBauen() {
   // only: it used to swallow every second address whatever it was, so a
   // sign-in page opened while the manual stood open simply never appeared.
   // The handler itself is set for every page in the 'web-contents-created'
-  // hook; here only the manual is picked out of the windows it lets open.
-  fenster.webContents.on('did-create-window', (neues, angaben) => {
-    // Only the manual is remembered as the manual. This line used to greet
-    // every window the program made, so a file opened from the agents' shelf
-    // became "the help window" — and the next click on anything raised it.
-    if (!istHandbuch(angaben && angaben.url)) return
-    hilfefenster = neues
-    // /hilfe/ carries its own <title> and would overwrite "Exe AI — Help"
-    // as soon as it loads.
-    neues.on('page-title-updated', (ereignis) => ereignis.preventDefault())
-    neues.on('closed', () => { hilfefenster = null })
-  })
+  // hook, and so is the noting of the manual (rememberManual): the manual
+  // may be opened from any window, not only from this one.
 
   // Size and position are kept as they were when the program was closed.
   // Closing the window this way is only one of two exits — Cmd+Q never gets
@@ -875,9 +1138,11 @@ function fensterBauen() {
 }
 
 // The splash page is showing; switch over as soon as the service answers.
-// Two minutes, not thirty seconds: a first start has the PyInstaller bundle
-// to unpack before it even begins setting up its database, and that alone was
-// measured at around 55 seconds.
+// Two minutes, not thirty seconds: the limit comes from the one-file build,
+// whose first start was measured at around 55 seconds — it had to unpack
+// before it even began setting up its database. The folder build unpacks
+// nothing and answers within about a second; the limit stays generous, since
+// the wait ends the moment the service answers or fails.
 async function warten() {
   const ende = Date.now() + 120000
   while (Date.now() < ende) {
@@ -927,13 +1192,135 @@ function kuerzelSetzen() {
 }
 
 // ---------------------------------------------------------------------------
+// The terminal in the window
+//
+// The way to it is terminal.js: the page asks for it over the bridge and
+// gets the terminal client against this shell's own service, in a
+// pseudoterminal this shell owns. node-pty is the one native piece, built
+// for this Electron; where it cannot be loaded the page is told so when it
+// asks, and nothing else of the program is affected.
+let pty = null
+try {
+  pty = require('node-pty')
+} catch (fehler) {
+  console.error('node-pty could not be loaded; the terminal in the window is unavailable:', fehler && fehler.message)
+}
+// The one spelling of the own address, without the page's path.
+const ADDRESS = new URL(ZIEL).origin
+// The terminal client of this installation: the terminals in the window run
+// it, and an update ends the service with it.
+const clientProgram = terminal.clientCommand({
+  packaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  repoRoot: path.join(__dirname, '..'),
+})
+const terminals = terminal.createTerminals({
+  ipcMain,
+  pty,
+  address: ADDRESS,
+  command: clientProgram,
+})
+
+// ---------------------------------------------------------------------------
 // A newer version
 //
 // The way to it is updater.js. It answers the page of the main window and
 // nobody else, and the one look it takes by itself comes after the service's
 // start, below.
+//
+// Installing one is the single case in which this shell ends the service.
+// The release replaces the service's own files; a service left running
+// would carry on as the old program on top of them, and the new window
+// would attach to it after the restart. So the service of this installation
+// goes before the package takes over, and the new version starts it afresh.
+// An answer that is being written ends with it.
+
+// Ends the service on the one way there is: the terminal client's
+// `service stop`, the command a user types as `exe service stop`
+// (cli/service.py). It reads the
+// service's note, asks the process that wrote it to end and waits until the
+// port is free; the service's own shutdown takes its model server along.
+// Asked for this shell's own address, so it is the service of this
+// installation whoever started it — this window, an earlier one, the
+// terminal client. In English, like every other reason an update gives.
+//
+// Resolves with the client's words once it reports that no service is left;
+// rejects with them where the service did not end, and with the system's
+// where the client could not be run at all.
+function clientStop() {
+  return new Promise((done, failed) => {
+    const said = []
+    const client = spawn(
+      clientProgram.file,
+      [...clientProgram.args, 'service', 'stop', '--url', ADDRESS, '--lang', 'en'],
+      { cwd: clientProgram.cwd, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true },
+    )
+    client.stdout.on('data', (piece) => said.push(piece))
+    client.stderr.on('data', (piece) => said.push(piece))
+    client.on('error', failed)
+    client.on('close', (code) => {
+      const words = Buffer.concat(said).toString('utf8').trim()
+      if (code === 0) done(words)
+      else failed(new Error(words || `exe service stop: ${code}`))
+    })
+  })
+}
+
+// The pause between two looks at a process that is ending — the one the
+// wait for the service's start takes between two looks at its port.
+const LOOK_PAUSE_MS = 300
+
+// The end of a service of ours that is running (`running`: its note's
+// `{ pid, port }`, or null where none is known): the client's stop, and then
+// the end of the process itself, waited for with no time of its own. One way
+// for both users of it — before an update, and at the start, where the
+// service found is of another version than this program.
+async function endRunningService(running) {
+  const words = await clientStop()
+  while (running && dienstsuche.processAlive(running.pid)) {
+    await new Promise((next) => setTimeout(next, LOOK_PAUSE_MS))
+  }
+  return words
+}
+
+// The service's end before an update: the client's stop, and then the end
+// of the process itself. The stop is through when the port is free, and the
+// service closes its port before it shuts down — its model server and
+// whatever else it runs end after that. The program is handed over only
+// once that process is gone. Which process: the service of ours that is
+// running here before the stop, found the way the start finds it — a note
+// alone would not do, a crashed service leaves its note behind and the
+// system may have handed its number to a stranger since. Waited for as long
+// as it lives, with no time of its own, the way the client waits for a
+// service it started.
+async function endServiceForUpdate() {
+  const root = dienstsuche.dataRoot({
+    packaged: app.isPackaged, repoRoot: path.join(__dirname, '..'),
+  })
+  const running = await dienstsuche.runningService({ port: PORT, root })
+  const words = await endRunningService(running)
+  const whose = running ? `pid ${running.pid}; ` : ''
+  console.log(`Service: ended before the update is installed (${whose}${words})`)
+  // Gone, whoever started it: the way out has no service left to speak of.
+  dienstVorgefunden = null
+  kind = null
+}
+
+// An installation that failed after the service had ended for it. The
+// program runs on, so its service comes back; and the window loads the
+// interface anew, because the page it shows belonged to the service that is
+// gone. A service that does not come up is a failed start like any other.
+function restartServiceAfterUpdate() {
+  console.log('Service: starting again, the update was not installed')
+  dienstAntwortete = false
+  dienstStarten().then(warten)
+}
+
 const updater = require('./updater')
-updater.start(() => fenster)
+updater.start(() => fenster, {
+  endService: endServiceForUpdate,
+  restartService: restartServiceAfterUpdate,
+})
 
 // ---------------------------------------------------------------------------
 // One program at a time
@@ -964,13 +1351,20 @@ if (app.requestSingleInstanceLock()) {
     bringWindowForward()
   })
   app.whenReady().then(async () => {
+    // The click catcher goes into every page of the session, before any
+    // window loads one.
+    session.defaultSession.setPreloads([path.join(__dirname, 'linkclicks.js')])
     menueSetzen()
     fensterBauen()
     kuerzelSetzen()
-    await dienstStarten()
+    if (!(await dienstAnbinden())) await dienstStarten()
     // One quiet look for a newer version, once the service is on its way.
     // Whatever it finds is the page's to show; the shell shows nothing.
     updater.check()
+    // The command on the path — only the installed app has one to point at.
+    if (process.platform === 'darwin' && app.isPackaged) cliLinkPlace().catch((error) => {
+      console.error('CLI: link not placed:', error.message)
+    })
     warten()
   })
 } else {
@@ -983,69 +1377,32 @@ app.on('will-quit', () => globalShortcut.unregisterAll())
 
 app.on('window-all-closed', () => app.quit())
 
-// How long the shell waits for the service to end before it ends itself —
-// the ten-second ceiling before-quit below explains.
-const STOP_DEADLINE_MS = 10000
-
-// Ending the service: the gentle way where there is one. macOS: SIGTERM, and
-// the service runs its own shutdown (the header of this file). Windows: there
-// is no gentle signal, process.kill() ends the process at once and leaves its
-// children running — so the WHOLE TREE goes, the service and every server it
-// started, with the same call the service makes for its own children
-// (app/prozessstopp.py). The wait in before-quit ends on the service's own
-// 'exit', not on taskkill's answer.
-function stopService(service) {
-  if (process.platform === 'win32') {
-    execFile('taskkill', ['/PID', String(service.pid), '/T', '/F'], (failure) => {
-      // taskkill could not run (not on the path, denied) or found nothing
-      // left to end. In the first case the service is still there: end it
-      // alone, hard — the one way left. In the second there is nothing to
-      // end, and kill() on a process that is gone does nothing.
-      if (failure) service.kill()
-    })
-    return
-  }
-  try { process.kill(service.pid, 'SIGTERM') } catch { /* already gone */ }
-}
-
-// The backstop after the deadline. On Windows taskkill /F has already killed;
-// there is no harder step to take.
-function killService(service) {
-  if (process.platform === 'win32') return
-  try { process.kill(service.pid, 'SIGKILL') } catch { /* already gone */ }
-}
-
-app.on('before-quit', async (ereignis) => {
-  // Cmd+Q ends the program without ever closing the window, and app.exit()
-  // below is a hard stop — so the geometry has to be written here too, before
-  // anything else, or a quit by keystroke forgets where the window stood.
+// The way out. The service is not ended here, on no platform: it was started
+// cut loose from the shell (dienstStarten) and runs on for the terminal
+// client and the next window (the header of this file). Nothing is waited
+// for, so the quit goes through as it came — closing the window calls
+// app.quit() twice (the window's 'closed' and 'window-all-closed'), and
+// every pass simply runs through.
+app.on('before-quit', () => {
+  // Cmd+Q ends the program without ever closing the window — so the
+  // geometry has to be written here too, before anything else, or a quit by
+  // keystroke forgets where the window stood.
   if (fenster && !fenster.isDestroyed()) geometrieSchreiben(fenster)
   // Remembered on every pass, with or without a service: a start still on
   // its way (dienstStarten) must not spawn one after this.
   beendet = true
-  // A shutdown is already under way: closing the window calls app.quit()
-  // twice (the window's 'closed' and 'window-all-closed'), and a second pass
-  // that simply returned let the program end in the middle of the wait
-  // below — the service was never stopped hard. Every further pass is held
-  // until that wait is over; app.exit() is the only way out. Without a
-  // service there is no wait, and a further pass simply goes through.
-  if (stopping) {
-    ereignis.preventDefault()
-    return
+  // The terminal client in the window ends with its window: a client
+  // outliving its page would hang on a closed pipe. The service it talked
+  // to stays.
+  terminals.stopAll()
+  // Said once, whoever started the service: the one this window found was
+  // meant to run on by whoever started it — the terminal client, an earlier
+  // window; the one this window started runs on for the same reason.
+  if (bleibenGesagt) return
+  bleibenGesagt = true
+  if (dienstVorgefunden) {
+    console.log(`Service: the running service on port ${dienstVorgefunden.port} stays; this window did not start it`)
+  } else if (kind) {
+    console.log(`Service: the service on port ${PORT} started by this window stays, for the terminal client and the next window`)
   }
-  if (!kind) return
-  ereignis.preventDefault()
-  stopping = true
-  const dienst = kind
-  // Waited for is the END OF THE PROCESS, not a silent port: the service
-  // closes its port first and then still tidies up, and a hard kill the
-  // moment the port went quiet cut that short. The ten-second ceiling stays.
-  const zuEnde = new Promise((r) => dienst.once('exit', r))
-  stopService(dienst)
-  const vorbei = await Promise.race([
-    zuEnde.then(() => true),
-    new Promise((r) => setTimeout(() => r(false), STOP_DEADLINE_MS)),
-  ])
-  if (!vorbei) killService(dienst)
-  app.exit(0)
 })

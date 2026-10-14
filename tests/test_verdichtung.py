@@ -261,10 +261,10 @@ async def test_die_faltung_bleibt_unter_dem_herstellerwert():
 async def test_die_faltung_rechnet_nicht_mit_einer_fremden_ablehnung():
     """A number a refusal named belongs to the request it happened to.
     A fold is its own request and must not inherit a ceiling
-    left over from whatever the run asked before it — this is what
-    ``test_die_faltung_auf_dem_anthropic_draht_rechnet_wie_eine_antwort``
-    already measures for the silent case (no prior refusal, nothing
-    changes); here one is standing when the fold starts.
+    left over from whatever the run asked before it — this is what the
+    test of the fold on the Anthropic wire above already measures for the
+    silent case (no prior refusal, nothing changes); here one is standing
+    when the fold starts.
 
     And the other way round: the fold does not take that number away from
     the request it belongs to — that request still reads it for its retry."""
@@ -1357,6 +1357,11 @@ async def test_ein_werkzeugpaar_an_der_grenze_bleibt_ganz():
 # --- die neueste Nachricht bleibt, egal wie gross ---
 
 
+def _tail_start_of_texts(inhalte):
+    """The boundary over texts: each one weighs its length."""
+    return verdichtung.tail_start_from_weights([len(t) for t in inhalte])
+
+
 def test_eine_riesige_letzte_nachricht_leert_den_schwanz_nicht():
     """Attaching a large file has to stay possible.
 
@@ -1370,12 +1375,12 @@ def test_eine_riesige_letzte_nachricht_leert_den_schwanz_nicht():
     riesig = "x" * (verdichtung.LETZTE_ZEICHEN + 10)
     inhalte = ["eins", "zwei", "drei", "vier", riesig]
 
-    assert verdichtung.schwanz_anfang(inhalte) == len(inhalte) - 1
+    assert _tail_start_of_texts(inhalte) == len(inhalte) - 1
 
 
 def test_eine_einzige_riesige_nachricht_ist_ganz_schwanz():
     riesig = "x" * (verdichtung.LETZTE_ZEICHEN + 10)
-    assert verdichtung.schwanz_anfang([riesig]) == 0
+    assert _tail_start_of_texts([riesig]) == 0
 
 
 def test_eine_riesige_nachricht_in_der_mitte_pinnt_sich_nicht_selbst():
@@ -1384,11 +1389,11 @@ def test_eine_riesige_nachricht_in_der_mitte_pinnt_sich_nicht_selbst():
     riesig = "x" * (verdichtung.LETZTE_ZEICHEN + 10)
     inhalte = ["eins", riesig, "drei", "vier", "fuenf"]
 
-    assert verdichtung.schwanz_anfang(inhalte) == 2
+    assert _tail_start_of_texts(inhalte) == 2
 
 
 def test_ohne_inhalte_faengt_der_schwanz_bei_null_an():
-    assert verdichtung.schwanz_anfang([]) == 0
+    assert _tail_start_of_texts([]) == 0
 
 
 def test_chat_und_auftrag_ziehen_dieselbe_budgetgrenze():
@@ -1419,7 +1424,7 @@ def test_chat_und_auftrag_ziehen_dieselbe_budgetgrenze():
         ["a", riesig, "c", "d", "e"],
         [f"z{i}" + "y" * (verdichtung.LETZTE_ZEICHEN // 5) for i in range(20)],
     ):
-        grenze = verdichtung.schwanz_anfang(inhalte)
+        grenze = _tail_start_of_texts(inhalte)
         mitte = _mitte_suchen([_Zeile(t) for t in inhalte])
         erwartet = inhalte[verdichtung.ERSTE_FEST : grenze]
         assert [z.content for z in mitte] == erwartet, inhalte[:2]

@@ -182,7 +182,7 @@ def laden(pfad: Path | None = None) -> Regeldatei:
     try:
         rohdaten = json.loads(pfad.read_text(encoding="utf-8"))
         if not isinstance(rohdaten, dict):
-            raise ValueError("die oberste Ebene muss ein Objekt sein")
+            raise ValueError("The top level must be an object.")
         # Reading a shape _regeldatei_aus does not expect (a list where a
         # section should be, say) belongs to the same "broken file" case as
         # bad JSON — it must fall back, not take Tor 3 down with it.

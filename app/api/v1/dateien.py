@@ -17,15 +17,16 @@ so nothing else can be read or overwritten with this.
 from __future__ import annotations
 
 import logging
-import shutil
 from pathlib import Path
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.api.abhaengigkeiten import hole_config
+from app.api.abhaengigkeiten import hole_config, hole_sprache
 from app.config import Config
+from app.i18n import t
+from app.previous_version import set_beside
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/dateien", tags=["dateien"])
@@ -49,37 +50,44 @@ class DateiSchreiben(BaseModel):
     inhalt: str
 
 
-def _pfad(config: Config, kennung: str) -> tuple[Path, bool, bool]:
+def _pfad(config: Config, kennung: str, sprache: str) -> tuple[Path, bool, bool]:
     if kennung not in DATEIEN:
-        raise HTTPException(404, f"Unbekannte Datei: {kennung}")
+        raise HTTPException(404, t("dateien.unbekannt", sprache, kennung=kennung))
     name, prueft_yaml, neustart = DATEIEN[kennung]
     return config.pfad(f"./{name}"), prueft_yaml, neustart
 
 
-def _pruefen(inhalt: str) -> str | None:
+def _pruefen(inhalt: str, sprache: str) -> str | None:
     try:
         daten = yaml.safe_load(inhalt)
     except yaml.YAMLError as fehler:
-        return f"kein gültiges YAML: {fehler}"
+        return t("dateien.kein_yaml", sprache, fehler=fehler)
     if not isinstance(daten, dict):
-        return "die oberste Ebene muss ein Objekt sein"
+        return t("dateien.oberste_ebene", sprache)
     return None
 
 
 @router.get("/{kennung}", response_model=DateiAntwort, summary="Read a file")
-def lesen(kennung: str, config: Config = Depends(hole_config)) -> DateiAntwort:
-    pfad, prueft, neustart = _pfad(config, kennung)
+def lesen(
+    kennung: str,
+    config: Config = Depends(hole_config),
+    sprache: str = Depends(hole_sprache),
+) -> DateiAntwort:
+    pfad, prueft, neustart = _pfad(config, kennung, sprache)
     inhalt = pfad.read_text(encoding="utf-8") if pfad.exists() else ""
     return DateiAntwort(
         kennung=kennung, datei=pfad.name, inhalt=inhalt,
-        kaputt=_pruefen(inhalt) if (prueft and inhalt.strip()) else None,
+        kaputt=_pruefen(inhalt, sprache) if (prueft and inhalt.strip()) else None,
         neustart_noetig=neustart,
     )
 
 
 @router.put("/{kennung}", response_model=DateiAntwort, summary="Save a file")
 def sichern(
-    kennung: str, daten: DateiSchreiben, config: Config = Depends(hole_config)
+    kennung: str,
+    daten: DateiSchreiben,
+    config: Config = Depends(hole_config),
+    sprache: str = Depends(hole_sprache),
 ) -> DateiAntwort:
     """Always saves — it is the user's file.
 
@@ -89,17 +97,18 @@ def sichern(
     prevents startup, and then you could no longer reach the file through
     the UI.
     """
-    pfad, prueft, neustart = _pfad(config, kennung)
+    pfad, prueft, neustart = _pfad(config, kennung, sprache)
     try:
-        if pfad.exists():
-            shutil.copy2(pfad, pfad.with_suffix(pfad.suffix + ".vorher"))
+        set_beside(pfad)
         pfad.write_text(daten.inhalt, encoding="utf-8")
     except OSError as fehler:
         log.error("%s could not be written: %s", pfad.name, fehler)
-        raise HTTPException(500, f"{pfad.name} ließ sich nicht schreiben") from fehler
+        raise HTTPException(
+            500, t("dateien.nicht_geschrieben", sprache, name=pfad.name)
+        ) from fehler
 
     return DateiAntwort(
         kennung=kennung, datei=pfad.name, inhalt=daten.inhalt,
-        kaputt=_pruefen(daten.inhalt) if (prueft and daten.inhalt.strip()) else None,
+        kaputt=_pruefen(daten.inhalt, sprache) if (prueft and daten.inhalt.strip()) else None,
         neustart_noetig=neustart,
     )

@@ -65,7 +65,7 @@ _UNSICHTBARE_KATEGORIEN = {"Cf", "Cc", "Co", "Cs"}
 # What the model is told once the report is out. It says "you can stop here"
 # on purpose: without it a model that has just reported keeps working on a
 # task it has itself declared finished.
-GEMELDET = "Goal reported — you can stop here."
+GEMELDET = "Goal completion reported. You can stop here."
 
 # And what it is told when it calls a second time in the same run.
 #One run announces once: a report is a sound and a
@@ -74,9 +74,9 @@ GEMELDET = "Goal reported — you can stop here."
 # is what happens when it is not followed, and it is a refusal rather than a
 # silent swallow so the model can see that nothing went out.
 SCHON_GEMELDET = (
-    "A goal was already reported in this run, and the user has already been "
-    "told. Nothing was announced for this call — one run reports once. If "
-    "there is more to say, it belonged in that first report."
+    "Goal completion has already been reported in this run, and the user has been notified. "
+    "This call sent no notification; each run reports only once. Any additional information "
+    "should have been included in the first report."
 )
 
 
@@ -106,9 +106,8 @@ def werkzeug_beschreibung() -> MCPWerkzeug:
                 "report": {
                     "type": "string",
                     "description": (
-                        "What was reached, in the user's language, with the "
-                        "evidence in it — at most "
-                        f"{MAX_LAENGE} characters."
+                        "Describe what was achieved in the user's language, including "
+                        f"evidence, in no more than {MAX_LAENGE} characters."
                     ),
                 },
             },
@@ -143,13 +142,13 @@ def bericht(argumente: dict[str, Any]) -> str:
     text = _bereinigt(str(argumente.get("report") or ""))
     if not text:
         raise ZielVerboten(
-            "No report given. Say what was reached and how it is "
-            "recognisable — that text is what the user sees."
+            "No report provided. State what was achieved and how it can be verified. This "
+            "text is shown to the user."
         )
     if len(text) > MAX_LAENGE:
         raise ZielVerboten(
-            f"Too long ({len(text)} characters, at most {MAX_LAENGE}). "
-            "A report is a sentence naming its evidence, not a document."
+            f"The report is too long ({len(text)} characters; maximum: {MAX_LAENGE}). Provide "
+            "a single sentence stating the result and its evidence, not a document."
         )
     return text
 

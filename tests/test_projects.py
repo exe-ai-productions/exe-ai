@@ -195,6 +195,30 @@ def test_deleting_in_the_archive_removes_the_project_and_its_chats(client):
     assert _listed_ids(client) == [kept["id"]]
 
 
+def test_a_run_that_does_not_end_leaves_the_project_whole(client, monkeypatch):
+    """The project goes only when every chat's run has ended: a delete that
+    stopped half-way would leave some chats gone and the window unaware."""
+    from app import generationen
+
+    monkeypatch.setattr(generationen, "RUN_END_TIMEOUT_SECONDS", 0.3)
+    project = _project(client)
+    chats = [_chat(client, "One"), _chat(client, "Two")]
+    for chat in chats:
+        _patch_chat(client, chat["id"], project_id=project["id"])
+    client.patch(f"/api/v1/projects/{project['id']}", json={"archived": True})
+    registry = client.app.state.generierungen
+    stuck = registry.anmelden(chat_id=chats[1]["id"], endpoint_id="test")
+
+    answer = client.delete(f"/api/v1/projects/{project['id']}")
+
+    assert answer.status_code == 409
+    for chat in chats:
+        assert client.get(f"/api/v1/chats/{chat['id']}").status_code == 200
+    assert stuck.soll_abbrechen
+    registry.abmelden(stuck.id)
+    assert client.delete(f"/api/v1/projects/{project['id']}").status_code == 200
+
+
 def test_a_project_in_the_list_is_not_deleted(client):
     """Deleting goes only through the archive."""
     project = _project(client)

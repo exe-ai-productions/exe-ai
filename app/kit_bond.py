@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app import bildmodellwerte, bildrunner, bildwahlen, image_families
+from app import bildinhalt, bildmodellwerte, bildrunner, bildwahlen, image_families
 
 # The fields of a model's kit a download can fill: every part the family
 # table names a source for.
@@ -45,18 +45,42 @@ _COMPANION_WORDS = tuple(
 ) + ("t5xxl", "clip_l", "clip_g", "upscale", "upsampler")
 
 
-def kit_parts(path: str) -> tuple[image_families.KitPart, ...]:
-    """The parts a model file comes with, by its path — in a repository or in
-    the folder. Empty for a name that shows no family, a model its family
-    names no complete kit for, and a file that is a companion itself."""
-    lower = path.lower()
-    if any(word in lower for word in _COMPANION_WORDS):
+def kit_parts(path: str, family: str | None = None) -> tuple[image_families.KitPart, ...]:
+    """The parts a model file comes with — in a repository or in the folder.
+    ``family`` is the family its own header names (``bildinhalt.file_family``,
+    ``header_family``); given, it decides, and the name only picks among the
+    parts some models of the family take. Without it the name decides, as it
+    always did. Empty for a family or a name that shows none, a model its
+    family names no complete kit for, and a file that is a companion itself
+    by its path."""
+    if is_companion_path(path):
         return ()
+    if family is not None:
+        known = image_families.get(family)
+        if known is not None:
+            return image_families.kit_of_family(known, path)
     return image_families.kit_of_file(path)
 
 
-def _in_kit(model: str, field: str, name: str) -> bool:
-    return any(part.part == field and part.name == name for part in kit_parts(model))
+def is_companion_path(path: str) -> bool:
+    """Whether the path itself says the file is a companion — a LoRA, a VAE,
+    a ControlNet, a text encoder of its own."""
+    lower = path.lower()
+    return any(word in lower for word in _COMPANION_WORDS)
+
+
+def parts_in_folder(folder: Path, model: str) -> tuple[image_families.KitPart, ...]:
+    """The parts of a model that lies in the folder: its family from its own
+    header, its name where the header says none. A LoRA or a ControlNet,
+    told by its header, has none."""
+    family, companion = bildinhalt.file_family(folder / model)
+    if companion:
+        return ()
+    return kit_parts(model, family)
+
+
+def _in_kit(folder: Path, model: str, field: str, name: str) -> bool:
+    return any(part.part == field and part.name == name for part in parts_in_folder(folder, model))
 
 
 def offered(folder: Path, field: str) -> list[str]:
@@ -72,10 +96,10 @@ def tie(
     ``keep_own`` leaves a part the named model already carries; the other
     models always keep theirs."""
     bildmodellwerte.set_part(repositories, model, field, name, keep_own=keep_own)
-    if not _in_kit(model, field, name):
+    if not _in_kit(folder, model, field, name):
         return
     for other in bildrunner.modelle(folder):
-        if other != model and _in_kit(other, field, name):
+        if other != model and _in_kit(folder, other, field, name):
             bildmodellwerte.set_part(repositories, other, field, name, keep_own=True)
 
 
@@ -83,6 +107,6 @@ def tie_offered(repositories, folder: Path, model: str) -> None:
     """Writes at a model every part of its kit that the picture side offers
     already — what a model that has just arrived finds lying there. A part
     the model carries by then stays."""
-    for part in kit_parts(model):
+    for part in parts_in_folder(folder, model):
         if part.name in offered(folder, part.part):
             bildmodellwerte.set_part(repositories, model, part.part, part.name, keep_own=True)

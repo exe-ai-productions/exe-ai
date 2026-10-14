@@ -67,8 +67,8 @@ def _share_only(client, chat_id: str, tmp_path: Path) -> tuple[Path, Path]:
 
 def _sentence(old: Path, new: Path) -> str:
     return (
-        f"The shared folder '{old}' now lives at '{new}' — read paths under "
-        "the old location at the new one."
+        f"The shared folder '{old}' has moved to '{new}'. Resolve paths under "
+        "the old location against the new location."
     )
 
 

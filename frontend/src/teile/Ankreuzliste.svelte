@@ -87,6 +87,7 @@
     margin-bottom: 10px;
     height: 32px;
     background: var(--bg-hoch);
+    box-shadow: inset 0 0 0 1px var(--feldstrich);
   }
   .suche input {
     flex: 1;

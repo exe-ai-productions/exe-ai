@@ -163,9 +163,9 @@ def test_silence_server_body_unchanged_without_switches():
 
 
 def test_a_size_that_is_no_size_goes_to_sd_cli():
-    assert image_switches.cli_only_reason({"vae_tile_size": "big"})
-    assert image_switches.cli_only_reason({"hires_sigmas": "a,b"})
-    assert image_switches.cli_only_reason({"vae_tile_size": "256x128"}) is None
+    assert image_switches.cli_only({"vae_tile_size": "big"})
+    assert image_switches.cli_only({"hires_sigmas": "a,b"})
+    assert image_switches.cli_only({"vae_tile_size": "256x128"}) is None
 
 
 def test_the_sound_of_a_reference_video_is_a_sound_file_for_sd_cli_only():
@@ -175,7 +175,7 @@ def test_the_sound_of_a_reference_video_is_a_sound_file_for_sd_cli_only():
     )
     # The server's body has no field for it: sd-cli draws what carries one.
     assert not switch.body
-    assert image_switches.cli_only_reason({"ref_video_audio": "voice.wav"})
+    assert image_switches.cli_only({"ref_video_audio": "voice.wav"})
     # It acts on a video only, and only beside a reference video.
     values = {"ref_video_audio": "voice.wav"}
     assert image_switches.active(values, {"video": True, "ref_video": True}) == values

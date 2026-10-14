@@ -105,7 +105,7 @@ def _system_nachricht(provider: MockProvider) -> str:
 
 
 def test_das_gedaechtnis_erreicht_das_modell(client, chat_id):
-    client.app.state.config.memory_schreiben("## Facts\n- Heißt der Prüfstein.")
+    client.app.state.config.memory_schreiben("## Facts\n- The touchstone is called Prüfstein.")
     client.app.state.config.system_prompt_schreiben("Sei knapp.")
     # One of the two servers this program runs itself — the half the memory
     # travels to unasked (app/config.py LOKALE_ENDPUNKTE).
@@ -123,7 +123,7 @@ def test_das_gedaechtnis_erreicht_das_modell(client, chat_id):
 
     system = _system_nachricht(provider)
     assert "Sei knapp." in system
-    assert "Heißt der Prüfstein." in system
+    assert "The touchstone is called Prüfstein." in system
 
 
 def test_abgeschaltet_bleibt_es_zuhause(client, chat_id):

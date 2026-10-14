@@ -7,8 +7,8 @@ extension is the agent's name. The front matter holds its rules:
     ---
     description: Researches a topic on the web and writes a summary.
     tools:                 # allowlist — whatever is listed here runs without asking back.
-      - web_search         # Left out entirely: every approved tool runs. Set to an
-      - read_webpage       # empty list: none do — the two are different on purpose.
+      - mcp__websuche__web_search    # Left out entirely: every approved tool runs. Set to
+      - mcp__websuche__read_webpage  # an empty list: none do — different on purpose.
     folders:               # complete paths the file tools may reach, like a chat's shares
       - /Users/you/code
     max_rounds: 30         # tool rounds before we stop
@@ -92,7 +92,7 @@ from pathlib import Path
 
 import yaml
 
-from app import __version__, i18n
+from app import __version__, frontmatter, i18n
 from app.auftragdenklaengewahl import AUTO as DENKLAENGE_AUTO
 from app.auftragdenklaengewahl import OBERGRENZE as DENKLAENGE_OBERGRENZE
 from app.auftragtokenwahl import OBERGRENZE as MAX_TOKENS_OBERGRENZE
@@ -176,6 +176,13 @@ class AgentDateiKaputt(ValueError):
             self.file, i18n.t(f"agent_file.{self.key}", language, **self.values)
         )
 
+    @property
+    def line(self) -> int | None:
+        """The line of the file the reader names, where it names one — a
+        broken header says where, a missing field does not."""
+        zeile = self.values.get("line")
+        return zeile if isinstance(zeile, int) else None
+
     def __reduce__(self):
         # Copied or pickled, it is rebuilt from what it carries, not from
         # the finished sentence ValueError keeps as its argument.
@@ -247,17 +254,27 @@ def agent_aus_text(name: str, text: str) -> Agent:
     if name.strip().casefold() == HELPER_NAME:
         raise AgentDateiKaputt(anzeige, "helper_name")
 
-    if not text.startswith("---"):
-        raise AgentDateiKaputt(anzeige, "front_missing")
-    teile = text.split("---", 2)
-    if len(teile) < 3:
-        raise AgentDateiKaputt(anzeige, "closing_missing")
-    _, kopf_roh, prompt = teile
+    try:
+        kopf_roh, prompt = frontmatter.split(text)
+    except frontmatter.NoFrontMatter as error:
+        raise AgentDateiKaputt(anzeige, "front_missing") from error
+    except frontmatter.NoClosingLine as error:
+        raise AgentDateiKaputt(anzeige, "closing_missing") from error
 
     try:
         kopf = yaml.safe_load(kopf_roh) or {}
     except yaml.YAMLError as fehler:
-        raise AgentDateiKaputt(anzeige, "not_yaml", error=str(fehler)) from fehler
+        # The first place the reader's own message names: where the thing
+        # that was left open began, or where it tripped when nothing was
+        # open — an unclosed bracket trips only at the end of the header,
+        # which is the wrong place to send somebody. The reader counts lines
+        # from zero inside the header, whose first line is the opening
+        # marker's own, so its count plus one is the line of the file.
+        marke = getattr(fehler, "context_mark", None) or getattr(fehler, "problem_mark", None)
+        zeile = marke.line + 1 if marke is not None else None
+        raise AgentDateiKaputt(
+            anzeige, "not_yaml", error=str(fehler), line=zeile
+        ) from fehler
     if not isinstance(kopf, dict):
         raise AgentDateiKaputt(anzeige, "not_fields")
 
@@ -563,6 +580,39 @@ class Agentenverzeichnis(dict):
     def get(self, name, vorgabe=None):
         echt = self.echter_name(name)
         return super().__getitem__(echt) if echt is not None else vorgabe
+
+
+def agent_lookup(
+    name: str, *folders: Path
+) -> tuple[Agent | None, AgentDateiKaputt | None]:
+    """What the folders hold under ONE name, read by the same rules as
+    ``agenten_laden`` but touching only the files of that name: the agent,
+    or — when no readable file stands under it — why the file that does is
+    unusable. Both ``None``: nothing of that name is there at all.
+
+    For the question "can this one entry start", asked on every change of an
+    entry — reading every agent file for a yes or no is what this is for
+    not doing. The name is folded like a lookup in the directory is."""
+    wanted = str(name or "").strip().casefold()
+    deleted = geloeschte_agenten(folders[-1]) if folders else set()
+    found: Agent | None = None
+    broken: AgentDateiKaputt | None = None
+    for position, folder in enumerate(folders):
+        is_last = position == len(folders) - 1
+        if not folder.is_dir():
+            continue
+        for file in sorted(folder.glob("*.md")):
+            if file.stem.casefold() != wanted:
+                continue
+            if not is_last and file.stem in deleted:
+                continue
+            try:
+                found = agent_lesen(file)
+            except AgentDateiKaputt as problem:
+                broken = problem
+            except OSError:
+                continue
+    return found, (broken if found is None else None)
 
 
 def agenten_laden(*verzeichnisse: Path) -> "Agentenverzeichnis":

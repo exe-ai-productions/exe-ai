@@ -19,6 +19,7 @@ command string for anything path-shaped, which is a heuristic and stays in
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -27,8 +28,8 @@ from app import dokumentablage
 # What a tool says when nobody shared a folder with the chat. One wording for
 # all of them: the user reads it once and knows what to do.
 OHNE_ORDNER = (
-    "No working folder is shared with this chat. Ask the user to share one via "
-    "the folder icon in the input bar — until then this tool cannot run."
+    "No working folder is shared with this chat. Ask the user to share one using the folder "
+    "icon in the input bar. This tool remains unavailable until then."
 )
 
 
@@ -37,12 +38,30 @@ OHNE_ORDNER = (
 # private one in the program's data (app/dokumentablage.py), where a bare
 # name lands — and a refusal that only named the path sent the model trying
 # the same name again or searching the whole disk. One wording for every
-# tool, so the model meets the same way out wherever it ran into the wall.
+# tool: it says where a relative path points, and nothing else — that folder
+# is the chat's place to work, not a state to be put right.
 NO_FOLDER_SHARED = (
-    "The user has not shared a folder with this chat, so a name without a full "
-    "path points into this chat's private folder in the program's own data. "
-    "Ask the user which folder to work in, or ask them to share one via the "
-    "folder icon in the input bar."
+    "No folder is shared with this chat, so a relative path resolves to the chat's private "
+    "folder within the program's data directory."
+)
+
+
+# The files that sit beside the permission rules and hold keys, rules or
+# server logins. They are named, because that folder also holds things that
+# are no secret.
+PRIVATE_FILES = (
+    "config.yaml", "config.yaml.sicherung", ".env", "berechtigungen.json", "mcp_servers.json",
+)
+
+# What of the data folder stays open to a run besides its own folders: the
+# scripts a schedule may start.
+OPEN_IN_DATA = ("scripts",)
+
+# What a tool says when a call reaches into a private place of the program.
+# One wording for the file tools and the shell.
+PRIVATE_PLACE = (
+    "'{path}' is a private place of the program (its chats, settings, keys and notes) and is "
+    "closed to tools in every mode. Work in the folders shared with this run."
 )
 
 
@@ -136,7 +155,7 @@ def ordner_pruefen(ordner: list[str], data_dir: Path | str | None = None) -> str
     basis = Path(ordner[0]).resolve()
     if basis.is_dir() or _is_own_chat_folder(basis, data_dir):
         return None
-    return f"The shared folder '{basis}' no longer exists. Ask the user to set it again."
+    return f"The shared folder '{basis}' no longer exists. Ask the user to select it again."
 
 
 def prepare_folders(ordner: list[str], data_dir: Path | str | None = None) -> str | None:
@@ -176,7 +195,7 @@ def ziel(pfad: str, ordner: list[str], data_dir: Path | str | None = None) -> Pa
     try:
         return aufgeloest(pfad, basis)
     except (OSError, RuntimeError) as fehler:
-        raise GrenzeVerletzt(f"'{pfad}' is not a usable path ({fehler}).") from fehler
+        raise GrenzeVerletzt(f"'{pfad}' is not a valid path ({fehler}).") from fehler
 
 
 def aussenpfad(
@@ -198,3 +217,71 @@ def aussenpfad(
     except (OSError, RuntimeError):
         return None
     return None if liegt_innerhalb(gemeint, freigaben) else str(gemeint)
+
+
+def private_check(
+    ordner: list[str],
+    data_dir: Path | str | None,
+    settings_dir: Path | str | None = None,
+) -> Callable[[Path], bool] | None:
+    """The test "is this path a private place of the program?", or None
+    where the run knows neither the data folder nor the settings folder.
+
+    Private is everything in the data folder — the database with the chats,
+    the notes, the folders of other chats — and the files beside the
+    permission rules that hold keys (``PRIVATE_FILES``). Open stay the
+    folders this run was given that lie in the data folder (its own chat
+    folder, the dock, the pictures) and the scripts folder. A share that is
+    the data folder or lies above it opens nothing of it: a chat that shares
+    the user's home folder does not share the program's chats with it.
+    """
+    if data_dir is None and settings_dir is None:
+        return None
+    data = Path(data_dir).resolve() if data_dir is not None else None
+    settings = Path(settings_dir).resolve() if settings_dir is not None else None
+    given: list[Path] = []
+    if data is not None:
+        for entry in ordner:
+            try:
+                folder = Path(entry).resolve()
+            except (OSError, RuntimeError):
+                continue
+            # Strictly below the data folder: a folder above it, or it
+            # itself, would hand over everything in it.
+            if inside(folder, data) and not inside(data, folder):
+                given.append(folder)
+        given.extend(data / name for name in OPEN_IN_DATA)
+
+    def private(path: Path) -> bool:
+        if data is not None and inside(path, data):
+            return not any(inside(path, folder) for folder in given)
+        if settings is not None:
+            folded = str(path.resolve()).casefold()
+            return any(
+                folded == str(settings / name).casefold() for name in PRIVATE_FILES
+            )
+        return False
+
+    return private
+
+
+def private_target(
+    argumente: dict[str, Any],
+    ordner: list[str],
+    private: Callable[[Path], bool],
+    schluessel: str = "path",
+) -> str | None:
+    """The path this call names when it is a private place, or None.
+
+    A call without a path works in the first shared folder, so that one is
+    judged then — a share that is the data folder itself is refused too.
+    """
+    if not ordner:
+        return None
+    base = wurzeln(ordner)[0]
+    roh = str(argumente.get(schluessel) or "").strip()
+    try:
+        gemeint = aufgeloest(roh, base) if roh else base
+    except (OSError, RuntimeError):
+        return None
+    return str(gemeint) if private(gemeint) else None

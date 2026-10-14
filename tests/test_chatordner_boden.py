@@ -363,7 +363,7 @@ def test_ein_chatordner_der_nicht_angelegt_werden_kann_nennt_den_grund(tmp_path)
     assert grund is not None
     assert grund.startswith(f"Cannot access directory {ordner.resolve()}: ")
     assert "Permission denied" in grund
-    assert "set it again" not in grund
+    assert "select it again" not in grund
 
 
 @_ALS_ROOT
@@ -380,7 +380,7 @@ async def test_der_befehl_nennt_denselben_grund(tmp_path):
     finally:
         ordner.parent.parent.chmod(0o700)
     assert str(fehler.value).startswith("Cannot access directory ")
-    assert "set it again" not in str(fehler.value)
+    assert "select it again" not in str(fehler.value)
 
 
 def test_a_missing_chat_folder_is_made_when_a_call_runs(tmp_path):
@@ -427,7 +427,7 @@ def test_a_folder_of_the_users_named_like_a_chat_folder_is_not_made(tmp_path):
     foreign = tmp_path / "exporte" / dokumentablage.CHATDATEIEN / "abc123"
     expected = (
         f"The shared folder '{foreign.resolve()}' no longer exists. "
-        "Ask the user to set it again."
+        "Ask the user to select it again."
     )
     assert grenzen.ordner_pruefen([str(foreign)], data) == expected
     assert grenzen.prepare_folders([str(foreign)], data) == expected
@@ -453,6 +453,6 @@ def test_ein_geloeschter_freigegebener_ordner_bekommt_den_bisherigen_satz(tmp_pa
     grund = grenzen.ordner_pruefen([str(ordner)], tmp_path / "daten")
     assert grund == (
         f"The shared folder '{ordner.resolve()}' no longer exists. "
-        "Ask the user to set it again."
+        "Ask the user to select it again."
     )
     assert not ordner.exists()

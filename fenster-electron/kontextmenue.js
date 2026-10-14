@@ -16,7 +16,8 @@
       { art: 'wort', label: 'Haus' }           a spelling suggestion
       { art: 'trenner' }                       a separator
       { art: 'bild_speichern' }                save the picture under the cursor
-      { art: 'bild_kopieren' }                 copy that picture
+      { art: 'bild_kopieren' }                 copy that picture (by its address, or
+                                               from the spot it stands at)
       { art: 'link', label: '…', adresse: … }  copy the address under the cursor
       { art: 'vorlesen', label: '…', text: … } read the marked text aloud
 
@@ -25,9 +26,34 @@
   descriptions into menu items and hangs the actions on them. So the ORDER
   and the rules live here, where they are checked, and the two things that
   need electron stay there.
+
+  The words of the entries the program names by itself stand here as well
+  (WORDS), beside the list they label.
 */
 
 'use strict'
+
+/* The words of the entries this program names by itself. English until the
+   page has said them in the interface's language — the shell has no
+   translations of its own — and for every word the page left out. */
+const WORDS = Object.freeze({
+  copyLink: 'Copy Link Address',
+  copyLinkUnavailable: 'Copy Link Address — unavailable',
+  saveImage: 'Save Image As…',
+  copyImage: 'Copy Image',
+})
+
+/* What a page sent, reduced to the words above: only the known ones, only
+   text, trimmed, none empty. Anything else leaves the English word. */
+function wordsFrom(sent) {
+  const words = { ...WORDS }
+  if (!sent || typeof sent !== 'object') return words
+  for (const name of Object.keys(WORDS)) {
+    const word = typeof sent[name] === 'string' ? sent[name].trim() : ''
+    if (word) words[name] = word
+  }
+  return words
+}
 
 /* The one place the "and what if nothing is selected" rule is written down.
    A right click next to marked text clears the selection — that is
@@ -70,16 +96,20 @@ function baue(params, kann = {}, zusatz = {}) {
     eintraege.push({ art: 'rolle', role: 'selectAll' })
   }
 
-  if (params.mediaType === 'image' && params.srcURL) {
+  if (params.mediaType === 'image') {
     trenner()
-    eintraege.push({ art: 'bild_speichern' }, { art: 'bild_kopieren' })
+    // Saving needs an address to download. A picture without one (drawn on a
+    // canvas, an inline element) can still be copied from the spot it stands
+    // at, so the menu is not left empty.
+    if (params.srcURL) eintraege.push({ art: 'bild_speichern' })
+    eintraege.push({ art: 'bild_kopieren' })
   }
 
   if (params.linkURL) {
     trenner()
     eintraege.push({
       art: 'link',
-      label: zusatz.linkLabel || 'Copy Link Address',
+      label: zusatz.linkLabel || WORDS.copyLink,
       adresse: zusatz.linkAdresse,
     })
   }
@@ -96,4 +126,4 @@ function baue(params, kann = {}, zusatz = {}) {
   return eintraege
 }
 
-module.exports = { baue }
+module.exports = { baue, WORDS, wordsFrom }

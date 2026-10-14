@@ -16,8 +16,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ValidationError
 
 from app import dokumentablage
-from app.agentendock import AgentenDock, dock_fuer
+from app.agentendock import AgentenDock, dock_fuer, type_from_name
 from app.api.abhaengigkeiten import hole_sprache
+from app.api.v1.dokumente import _disposition
 from app.i18n import t
 
 log = logging.getLogger(__name__)
@@ -34,6 +35,22 @@ class AblageEintrag(BaseModel):
     abgelegt: str = ""
 
 
+def _typ_der_ablage(kopf: str, name: str) -> str:
+    """The type a dropped file is stored under.
+
+    The browser leaves the type empty where it does not know the ending, and
+    the page then sends ``application/octet-stream`` (frontend/src/lib/api.js)
+    — a type that says nothing. A picture dropped that way would stand in the
+    wall as a plain file and open the document view. So where no useful type
+    comes with it, the name decides, the way it does for every delivery
+    (``type_from_name``); a type that was sent stays as it was sent.
+    """
+    gegeben = kopf.split(";", 1)[0].strip().lower()
+    if gegeben and gegeben != "application/octet-stream":
+        return kopf
+    return type_from_name(name)
+
+
 def _dock(request: Request) -> AgentenDock:
     # Per request, never held: the folder is a storage location the user can
     # move from the panel this very list feeds, so a shelf kept from startup
@@ -41,7 +58,7 @@ def _dock(request: Request) -> AgentenDock:
     return dock_fuer(request.app.state.config)
 
 
-@router.get("/alle", response_model=list[AblageEintrag], summary="What is in the agent dock")
+@router.get("/alle", response_model=list[AblageEintrag], summary="Agent dock contents")
 def liste(request: Request) -> list[AblageEintrag]:
     # Entry by entry, and a damaged one is dropped rather than raised. The
     # soft read behind ``alle`` promises an empty wall and a loud line for a
@@ -74,8 +91,8 @@ async def ablegen(
     dock. No size ceiling: the person's own file, like a picture upload."""
     daten = await request.body()
     if not daten:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Die Datei ist leer")
-    typ = request.headers.get("content-type", "")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, t("fehler.datei_leer", sprache))
+    typ = _typ_der_ablage(request.headers.get("content-type", ""), name)
     if chat:
         try:
             dokument = dokumentablage.keep_in_chat(
@@ -112,22 +129,30 @@ async def ablegen(
 
 
 @router.get("/{kennung}", summary="Fetch a file from the agent dock")
-def datei(kennung: str, request: Request) -> FileResponse:
+def datei(
+    kennung: str, request: Request, sprache: str = Depends(hole_sprache)
+) -> FileResponse:
     gefunden = _dock(request).holen(kennung)
     if gefunden is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Diese Datei gibt es nicht")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, t("fehler.datei_nicht_vorhanden", sprache))
     eintrag, pfad = gefunden
+    typ = eintrag.get("typ") or "application/octet-stream"
+    # Handed out the way a document's file is: only a PDF is shown in place,
+    # which the reader's frame needs; anything else a dock holds is saved.
     return FileResponse(
         pfad,
-        media_type=eintrag.get("typ") or "application/octet-stream",
-        filename=eintrag.get("name") or "Datei",
+        media_type=typ,
+        filename=eintrag.get("name") or "File",
+        content_disposition_type=_disposition(typ),
     )
 
 
 @router.delete(
     "/{kennung}", status_code=204, response_class=Response, summary="Remove a file"
 )
-def entfernen(kennung: str, request: Request) -> Response:
+def entfernen(
+    kennung: str, request: Request, sprache: str = Depends(hole_sprache)
+) -> Response:
     if not _dock(request).entfernen(kennung):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Diese Datei gibt es nicht")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, t("fehler.datei_nicht_vorhanden", sprache))
     return Response(status_code=204)

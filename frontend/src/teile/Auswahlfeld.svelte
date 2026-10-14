@@ -49,6 +49,14 @@
   let dran = $state(-1)
   let feld = $state(null)
   let liste = $state(null)
+  let klapp = $state(null)
+
+  /* The list's own measure and its distance from the field and from the
+     window's edge. */
+  const LIST_HEIGHT = 260
+  const LIST_GAP = 4
+  const LIST_EDGE = 12
+  const LIST_MIN = 120
 
   /* Every field stops the click that opens it, so the window handler that
      closes the others never hears it — two lists could stand open at once,
@@ -92,16 +100,46 @@
     dran = visible.length ? 0 : -1
   }
 
-  /* The keys inside the search field: the arrows walk the narrowed list,
-     Enter takes the walked-to entry, Escape closes — every other key
-     types. */
+  // Takes the walked-to entry, if the walk stands on one.
+  function take() {
+    if (dran >= 0 && visible[dran]) waehlen(visible[dran].wert)
+  }
+
+  /* What the open list does with a key, wherever the cursor is — on the
+     field or in the search field: the arrows walk the shown entries, Enter
+     takes the walked-to one. Written once, so a change to the walk reaches
+     both. Says whether the key was one of these; every other key is the
+     caller's own. Home and End are left out on purpose: on the field they
+     jump to the ends of the list, in the search field they move through
+     the typed text, as in any text field. */
+  function listKey(event) {
+    const { key } = event
+    if (key === 'ArrowDown' || key === 'ArrowUp') {
+      event.preventDefault()
+      const direction = key === 'ArrowDown' ? 1 : -1
+      dran = Math.min(visible.length - 1, Math.max(0, dran + direction))
+      return true
+    }
+    if (key === 'Enter') {
+      event.preventDefault()
+      take()
+      return true
+    }
+    return false
+  }
+
+  /* The keys inside the search field: Escape closes, Tab leaves, the list's
+     own keys walk and take (`listKey`) — every other key types. */
   function searchKeys(event) {
     // Enter that ends a composition belongs to the input method (Safari
     // says so only through the key code).
     if (event.isComposing || event.keyCode === 229) return
     const { key } = event
     if (key === 'Escape') {
+      // The key is the list's: nothing around it (a pop-up that holds the
+      // field) may take it as its own close request.
       event.stopPropagation()
+      event.preventDefault()
       zumachen()
       feld?.focus()
       return
@@ -116,16 +154,7 @@
       zumachen()
       return
     }
-    if (key === 'ArrowDown' || key === 'ArrowUp') {
-      event.preventDefault()
-      const direction = key === 'ArrowDown' ? 1 : -1
-      dran = Math.min(visible.length - 1, Math.max(0, dran + direction))
-      return
-    }
-    if (key === 'Enter') {
-      event.preventDefault()
-      if (dran >= 0 && visible[dran]) waehlen(visible[dran].wert)
-    }
+    listKey(event)
   }
 
   /* A window that only grows or shrinks in height while a search is typed
@@ -161,6 +190,59 @@
     wert = neu
     onGewaehlt?.(neu)
   }
+
+  /* The open list stands in the top layer — a popover of its own — so no
+     container the field sits in (a pop-up that scrolls, a card that clips)
+     can cut it off. It is placed by hand beneath the field, as wide as the
+     field, and as tall as the room below allows; where the room beneath is
+     short and the room above is longer, it opens upward instead. */
+  function place() {
+    if (!klapp || !feld) return
+    const rect = feld.getBoundingClientRect()
+    const spaceBelow = window.innerHeight - rect.bottom - LIST_GAP - LIST_EDGE
+    const spaceAbove = rect.top - LIST_GAP - LIST_EDGE
+    const below = spaceBelow >= Math.min(LIST_HEIGHT, LIST_MIN) || spaceBelow >= spaceAbove
+    const room = Math.max(below ? spaceBelow : spaceAbove, 0)
+    klapp.style.left = `${rect.left}px`
+    klapp.style.width = `${rect.width}px`
+    klapp.style.maxHeight = `${Math.min(room, LIST_HEIGHT + 60)}px`
+    if (below) {
+      klapp.style.top = `${rect.bottom + LIST_GAP}px`
+      klapp.style.bottom = 'auto'
+    } else {
+      klapp.style.top = 'auto'
+      klapp.style.bottom = `${window.innerHeight - rect.top + LIST_GAP}px`
+    }
+  }
+
+  /* Whether the scroll of ``source`` moves the field: the page itself or a
+     box that holds the field. A box elsewhere that scrolls by itself (an
+     answer being written, a log running along) does not, and the list
+     beneath the field stays where it belongs. The list's own scrolling is
+     not the field's either. */
+  function scrollMovesField(source) {
+    if (!(source instanceof Node)) return true
+    if (klapp?.contains(source)) return false
+    return Boolean(feld && source.contains(feld))
+  }
+
+  $effect(() => {
+    if (!offen || !klapp) return
+    if (!klapp.matches(':popover-open')) klapp.showPopover()
+    place()
+    /* The field moving away from under it, or a window that changes size,
+       takes the list away: it would otherwise hang where the field was. */
+    const dismiss = (event) => {
+      if (event.type === 'scroll' && !scrollMovesField(event.target)) return
+      zumachen()
+    }
+    window.addEventListener('scroll', dismiss, true)
+    window.addEventListener('resize', dismiss)
+    return () => {
+      window.removeEventListener('scroll', dismiss, true)
+      window.removeEventListener('resize', dismiss)
+    }
+  })
 
   /* The walked-to entry is scrolled into view. Without this the list moves
      the highlight below its own edge from about the eighth entry on, and
@@ -207,19 +289,19 @@
     }
     if (key === 'Escape' && offen) {
       ereignis.stopPropagation()
+      ereignis.preventDefault()
       zumachen()
       return
     }
+    // Open, the arrows and Enter are the list's own keys.
+    if (offen && listKey(ereignis)) return
+    // Shut, an arrow steps the chosen value itself.
     if (key === 'ArrowDown' || key === 'ArrowUp') {
       ereignis.preventDefault()
       const richtung = key === 'ArrowDown' ? 1 : -1
-      if (!offen) {
-        const jetzt = eintraege.findIndex((e) => e.wert === wert)
-        const naechster = Math.min(eintraege.length - 1, Math.max(0, jetzt + richtung))
-        waehlen(eintraege[naechster].wert)
-        return
-      }
-      dran = Math.min(visible.length - 1, Math.max(0, dran + richtung))
+      const jetzt = eintraege.findIndex((e) => e.wert === wert)
+      const naechster = Math.min(eintraege.length - 1, Math.max(0, jetzt + richtung))
+      waehlen(eintraege[naechster].wert)
       return
     }
     if (key === 'Home' || key === 'End') {
@@ -229,9 +311,11 @@
       else waehlen(eintraege[ziel].wert)
       return
     }
-    if ((key === 'Enter' || key === ' ') && offen) {
+    // Space takes like Enter on the field; in the search field it is a
+    // letter, so it is not one of the list's shared keys.
+    if (key === ' ' && offen) {
       ereignis.preventDefault()
-      if (dran >= 0 && visible[dran]) waehlen(visible[dran].wert)
+      take()
       return
     }
     /* Enter or Space on a shut field opens it — the native control does the
@@ -281,7 +365,9 @@
   {#if offen}
     <div
       class="klapp"
+      popover="manual"
       role="presentation"
+      bind:this={klapp}
       onclick={(e) => e.stopPropagation()}
     >
       {#if search}
@@ -382,13 +468,14 @@
     transform: rotate(180deg);
   }
 
-  /* Always beneath the field, never over it. */
+  /* Beneath the field, never over it, in the top layer: placed by hand
+     (`place`), the browser's own centring of a popover undone. */
   .klapp {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    right: 0;
-    z-index: 40;
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    padding: 0;
+    color: inherit;
     /* The dense glass of a floating layer, blurred, with the glass edge. */
     background: var(--glass-dropdown);
     -webkit-backdrop-filter: blur(16px);
@@ -398,7 +485,16 @@
     box-shadow: 0 18px 40px -8px rgba(0, 0, 0, 0.55);
     overflow: hidden;
   }
+  /* Laid out as a column only while it stands open: a display set on the
+     list itself would show it before the browser has put it in the top
+     layer. */
+  .klapp:popover-open {
+    display: flex;
+    flex-direction: column;
+  }
   .liste {
+    flex: 1 1 auto;
+    min-height: 0;
     max-height: 260px;
     overflow-y: auto;
     padding: 4px;

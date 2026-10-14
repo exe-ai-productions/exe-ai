@@ -41,7 +41,7 @@ def _json_laden(text: str) -> dict[str, Any]:
     try:
         return json.loads(text)
     except json.JSONDecodeError as fehler:
-        raise MCPFehler(f"Der Server antwortet nicht mit JSON: {fehler}") from fehler
+        raise MCPFehler(f"The server did not return valid JSON: {fehler}") from fehler
 
 
 def _antwort_lesen(text: str, content_type: str) -> dict[str, Any]:
@@ -59,7 +59,7 @@ def _antwort_lesen(text: str, content_type: str) -> dict[str, Any]:
             daten = _json_laden("\n".join(zeilen))
             if daten.get("id") == _ANFRAGE_ID and ("result" in daten or "error" in daten):
                 return daten
-        raise MCPFehler("Der Server hat auf initialize nicht geantwortet")
+        raise MCPFehler("The server did not respond to initialize.")
     return _json_laden(text)
 
 
@@ -101,7 +101,7 @@ async def sondieren(
         # mask in the window, and it shows it in the language of the page.
         # No model ever sees this text — the probe is a person typing an
         # address, not a tool result.
-        raise MCPFehler(f"Der Server ist nicht erreichbar: {fehler}") from fehler
+        raise MCPFehler(f"The server is unreachable: {fehler}") from fehler
 
     if antwort.status_code in (401, 403):
         verlangt = "anmeldung" if antwort.headers.get("www-authenticate") else "schluessel"

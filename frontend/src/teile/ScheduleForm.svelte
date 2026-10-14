@@ -30,7 +30,9 @@
     task: entry && entry.kind !== 'script' ? entry.task : '',
     agent: entry && entry.kind === 'agent' && entry.agent !== OHNE_AGENT ? entry.agent : '',
     script: entry ? entry.skript || '' : script,
-    ...(entry ? formFromEntry(entry, day) : { ...formFromEntry(null, day), repeat: 'daily' }),
+    /* A new schedule is a one-off on the day it was made from; "daily" is
+       the user's own choice. */
+    ...(entry ? formFromEntry(entry, day) : { ...formFromEntry(null, day), repeat: 'once' }),
   }))
   let kind = $state(initial.kind)
   let task = $state(initial.task)
@@ -64,11 +66,16 @@
   $effect(() => {
     api.agenten().then((list) => (agents = list)).catch(() => {})
   })
-  /* "No agent" for a new schedule and for one that has none: the tool's
-     `update` knows no way back from a named agent to none. */
+  /* "No agent" for every schedule, an old one whose agent is gone among
+     them: it is the way to make that one run again. The agent a schedule
+     names that no file stands behind any more is listed as it is, so the
+     field shows what is stored. */
   const agentChoice = $derived([
-    ...(entry && initial.agent ? [] : [{ wert: '', text: t('cronjobs.ohne_agent') }]),
+    { wert: '', text: t('cronjobs.ohne_agent') },
     ...agents.map((a) => ({ wert: a.name, text: a.name })),
+    ...(initial.agent && agents.length && !agents.some((a) => a.name === initial.agent)
+      ? [{ wert: initial.agent, text: initial.agent }]
+      : []),
   ])
 
   /* Weekday chips, Monday first, named by the interface language. */
@@ -140,7 +147,7 @@
   async function change() {
     const fields = changedSchedule(entry, form(), day)
     if (kind !== 'script' && task.trim() !== initial.task) fields.task = task.trim()
-    if (kind === 'agent' && agent && agent !== initial.agent) fields.agent = agent
+    if (kind === 'agent' && agent !== initial.agent) fields.agent = agent
     if (kind === 'script' && scriptName.trim() !== initial.script) fields.skript = scriptName.trim()
     if (!Object.keys(fields).length) return entry
     return api.cronjobChange(entry.id, fields)
@@ -163,74 +170,76 @@
 </script>
 
 <div class="form">
-  <div class="head">{t(entry ? 'cronjobs.form_change' : 'cronjobs.neuer_cronjob')}</div>
+  <div class="fields">
+    <div class="head">{t(entry ? 'cronjobs.form_change' : 'cronjobs.neuer_cronjob')}</div>
 
-  <div class="field">
-    <span>{t('cronjobs.field_kind')}</span>
-    <Auswahlfeld bind:wert={kind} eintraege={kindChoice} gesperrt={Boolean(entry)} />
-  </div>
-
-  {#if kind === 'agent'}
-    <label class="field">
-      <span>{t('cronjobs.aufgabe')}</span>
-      <textarea bind:value={task} rows="2"></textarea>
-    </label>
     <div class="field">
-      <span>{t('cronjobs.kind_agent')}</span>
-      <Auswahlfeld bind:wert={agent} eintraege={agentChoice} />
+      <span>{t('cronjobs.field_kind')}</span>
+      <Auswahlfeld bind:wert={kind} eintraege={kindChoice} gesperrt={Boolean(entry)} />
     </div>
-  {:else if kind === 'script'}
-    <label class="field">
-      <span>{t('cronjobs.field_script')}</span>
-      <input class="fixed" bind:value={scriptName} />
-    </label>
-  {:else}
-    <label class="field">
-      <span>{t('cronjobs.field_text')}</span>
-      <textarea bind:value={task} rows="2"></textarea>
-    </label>
-  {/if}
 
-  <div class="field">
-    <span>{t('cronjobs.field_repeat')}</span>
-    <Auswahlfeld bind:wert={repeat} eintraege={repeatChoice} />
-    {#if repeat === 'weekly'}
-      <div class="chips">
-        {#each chipNames as name, chip (chip)}
-          <button class:on={weekdays.includes(chip)} aria-pressed={weekdays.includes(chip)}
-                  onclick={() => toggleWeekday(chip)}>{name}</button>
-        {/each}
+    {#if kind === 'agent'}
+      <label class="field">
+        <span>{t('cronjobs.aufgabe')}</span>
+        <textarea bind:value={task} rows="2"></textarea>
+      </label>
+      <div class="field">
+        <span>{t('cronjobs.kind_agent')}</span>
+        <Auswahlfeld bind:wert={agent} eintraege={agentChoice} />
+      </div>
+    {:else if kind === 'script'}
+      <label class="field">
+        <span>{t('cronjobs.field_script')}</span>
+        <input class="fixed" bind:value={scriptName} />
+      </label>
+    {:else}
+      <label class="field">
+        <span>{t('cronjobs.field_text')}</span>
+        <textarea bind:value={task} rows="2"></textarea>
+      </label>
+    {/if}
+
+    <div class="field">
+      <span>{t('cronjobs.field_repeat')}</span>
+      <Auswahlfeld bind:wert={repeat} eintraege={repeatChoice} />
+      {#if repeat === 'weekly'}
+        <div class="chips">
+          {#each chipNames as name, chip (chip)}
+            <button class:on={weekdays.includes(chip)} aria-pressed={weekdays.includes(chip)}
+                    onclick={() => toggleWeekday(chip)}>{name}</button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
+    {#if repeat === 'custom'}
+      <label class="field">
+        <span>{t('cronjobs.cron_phrase')}</span>
+        <input class="fixed" bind:value={cron} />
+        {#if customLine}
+          <span class="explain" class:fault={customFault}>{customLine}</span>
+        {/if}
+      </label>
+    {:else}
+      <div class="pair">
+        {#if repeat === 'once'}
+          <label class="field">
+            <span>{t('cronjobs.day')}</span>
+            <input type="date" bind:value={chosenDay} />
+          </label>
+        {:else if repeat === 'monthly'}
+          <label class="field">
+            <span>{t('cronjobs.day_of_month')}</span>
+            <input type="number" min="1" max="31" bind:value={monthDay} />
+          </label>
+        {/if}
+        <label class="field">
+          <span>{t('cronjobs.field_time')}</span>
+          <input type="time" bind:value={time} />
+        </label>
       </div>
     {/if}
   </div>
-
-  {#if repeat === 'custom'}
-    <label class="field">
-      <span>{t('cronjobs.cron_phrase')}</span>
-      <input class="fixed" bind:value={cron} />
-      {#if customLine}
-        <span class="explain" class:fault={customFault}>{customLine}</span>
-      {/if}
-    </label>
-  {:else}
-    <div class="pair">
-      {#if repeat === 'once'}
-        <label class="field">
-          <span>{t('cronjobs.day')}</span>
-          <input type="date" bind:value={chosenDay} />
-        </label>
-      {:else if repeat === 'monthly'}
-        <label class="field">
-          <span>{t('cronjobs.day_of_month')}</span>
-          <input type="number" min="1" max="31" bind:value={monthDay} />
-        </label>
-      {/if}
-      <label class="field">
-        <span>{t('cronjobs.field_time')}</span>
-        <input type="time" bind:value={time} />
-      </label>
-    </div>
-  {/if}
 
   <div class="foot">
     <button onclick={() => onclose(null)}>{t('app.abbrechen')}</button>
@@ -244,6 +253,18 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+    min-height: 0;
+  }
+  /* The part that scrolls where the pop-up is shorter than the form; the
+     foot below it never does. The small side room keeps a focus ring whole. */
+  .fields {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 2px;
+    margin: 0 -2px;
   }
   .head {
     font-size: 14px;
@@ -273,7 +294,10 @@
     padding: 6px 10px;
     min-height: 32px;
     resize: vertical;
-    color-scheme: inherit;
+    /* The calendar and clock of the browser follow the look
+       (`--feld-farbschema`, global.css); a page that names no scheme gives
+       them the light one. */
+    color-scheme: var(--feld-farbschema, normal);
   }
   .field input:focus,
   .field textarea:focus {
@@ -325,6 +349,7 @@
   }
   /* Side by side, one size: both buttons take half the row. */
   .foot {
+    flex: none;
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 6px;

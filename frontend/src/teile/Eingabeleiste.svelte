@@ -1,5 +1,5 @@
 <script>
-  import { flushSync, untrack } from 'svelte'
+  import { flushSync, tick, untrack } from 'svelte'
   import QuestionBox from './QuestionBox.svelte'
   import Mikrofonknopf from './Mikrofonknopf.svelte'
   import Arbeitsordner from './Arbeitsordner.svelte'
@@ -14,9 +14,12 @@
   import {
     berechtigungsmodus, berechtigungsmodusLaden, berechtigungsmodusSetzen, modusOptionen,
   } from '../lib/berechtigungsmodus.svelte.js'
-  import { gefiltert, skillAmAnfang, skills, skillsLaden } from '../lib/skills.svelte.js'
   import {
-    deferQuestion, isDeferred, resumeQuestion, standingQuestion,
+    gefiltert, compactTopic, skillAmAnfang, skills, skillsLaden,
+  } from '../lib/skills.svelte.js'
+  import {
+    deferQuestion, isDeferred, questionCardStands, questionKey, resumeQuestion, standingWith,
+    waitingQuestions,
   } from '../lib/questionbox.svelte.js'
   import { einreihen } from '../lib/warteschlange.svelte.js'
   import { chosenModelOff } from '../lib/modelle.svelte.js'
@@ -51,7 +54,9 @@
   import { meldeText } from '../lib/meldewesen.svelte.js'
   import { diktat, standLaden as diktatStandLaden } from '../lib/diktat.svelte.js'
 
-  let { senden, abbrechen, bildStoppen, bildLokalLaeuft = false, gruss = null, vektoren = false } = $props()
+  let {
+    senden, abbrechen, bildStoppen, compactChat, bildLokalLaeuft = false, gruss = null, vektoren = false,
+  } = $props()
 
   /* The permission mode for chat calls — Tor 3 (app/berechtigungen.py).
      Loaded once, lazily, the same way the tool switches load on first use. */
@@ -295,9 +300,8 @@
      travels under. Reported by the service (app/denkstufen.py) and shown as
      reported — the window keeps no list of its own and works nothing out
      from a boolean. */
-  const denkprofil = $derived(
-    zustand.modelle.find((m) => m.id === zustand.modellId)?.denkprofil ?? null,
-  )
+  const modellEintrag = $derived(zustand.modelle.find((m) => m.id === zustand.modellId))
+  const denkprofil = $derived(modellEintrag?.denkprofil ?? null)
   const denkFaehig = $derived(
     denkprofil?.art === 'stufen' || denkprofil?.art === 'schalter',
   )
@@ -349,14 +353,16 @@
       .catch(() => {})
   })
   /* The stage in force: the one stored or set for THIS model, as far as it
-     still offers it — otherwise the model's own default, which also stands
-     until the stored stage has been read. The switch shows it; a request
-     carries it only once it was set by hand (see the send below), and
-     otherwise leaves the stored stage to the service. */
+     still offers it — otherwise the stage the service sends for it
+     (`thinking_sent`: the nearest weaker one for a stage the model dropped,
+     the model's own default where nothing usable is stored), which also
+     stands until the stored stage has been read. The switch shows it; a
+     request carries it only once it was set by hand (see the send below),
+     and otherwise leaves the stored stage to the service. */
   const denkStufe = $derived(
     denken.modell === zustand.modellId && denkprofil?.stufen?.includes(denken.stufe)
       ? denken.stufe
-      : denkprofil?.standard ?? null,
+      : modellEintrag?.thinking_sent ?? denkprofil?.standard ?? null,
   )
   function denkenSetzen(stufe) {
     if (!denkFaehig) return
@@ -379,6 +385,15 @@
      while a picture draws. */
   const bildHier = $derived(bildLokalLaeuft && Boolean(zustand.bildLaeuftChat[zustand.aktiverChat]))
   const stoppt = $derived((bildHier || laeuftGerade) && leer)
+  /* The arrow is locked because the chat's model is switched off in the
+     quick choice. It then says so, in the sentence the model choice beside
+     it already carries: a locked button that still read "send" named its
+     job and not its reason. As the stop button it stays open, and so it
+     does where the words in the field answer a question a run is waiting
+     on — Enter sends those too, the run was begun before the switch. */
+  const gesperrtDurchModell = $derived(
+    !stoppt && chosenModelOff() && !antwortetOffeneFrage(text.trim()),
+  )
   const BILD_TYPEN = ['image/png', 'image/jpeg', 'image/webp']
 
   /* Document attachments (4.1), a list like the images. No vision
@@ -687,22 +702,31 @@
     const ask = zustand.benutzerfrage[chatId]
     return Boolean(ask) && isDeferred(chatId, { kind: 'ask', question: ask })
   }
-  const standing = $derived(standingQuestion(zustand.aktiverChat))
+  const waiting = $derived(waitingQuestions(zustand.aktiverChat))
+  const standing = $derived(standingWith(zustand.aktiverChat, waiting))
   const questionDeferred = $derived(isDeferred(zustand.aktiverChat, standing))
+  const cardStands = $derived(questionCardStands(zustand.aktiverChat))
+  /* Every question of the chat that "later" pushed away, one chip each —
+     also while another question stands in the card. */
+  const pushedAway = $derived(waiting.filter((item) => isDeferred(zustand.aktiverChat, item)))
   const modelName = $derived(aktuellesModell()?.name ?? '')
   /* The card takes the focus along when it goes: after an answer or
      "later" it comes back to the field, so the next keys are typing
-     rather than falling to the window. */
+     rather than falling to the window. The bar is out of reach while the
+     card stands, so the focus waits for the render that gives it back. */
+  function focusFieldAfterRender() {
+    tick().then(() => feld?.focus())
+  }
   function answerTool(allowed, always = false, words = null) {
     werkzeugfrageBeantworten(allowed, always, zustand.aktiverChat, words)
-    feld?.focus()
+    focusFieldAfterRender()
   }
   function answerAsk(text) {
     if (standing?.kind === 'agent') {
       answerAgentQuestion(standing.question.jobId, standing.question.aufrufId, text)
     }
     else benutzerfrageBeantworten(text)
-    feld?.focus()
+    focusFieldAfterRender()
   }
   /* An agent's question brings its transcript along in the agents view,
      and the transcript follows when the card moves on to the next agent's.
@@ -713,13 +737,18 @@
   })
   function later() {
     deferQuestion(zustand.aktiverChat, standing)
-    feld?.focus()
+    focusFieldAfterRender()
   }
-  /* The chip goes when it brings the card back; the focus it held goes to
-     the field, and from there the card takes it as it appears. */
-  function resume() {
-    resumeQuestion(zustand.aktiverChat, standing)
-    feld?.focus()
+  /* The chip goes when it brings its card back; the focus it held goes to
+     the field, and from there the card takes it as it appears. The card
+     that stood until now takes the chip's place, so the question brought
+     back is the one that shows. */
+  function resume(item) {
+    if (standing && !questionDeferred && questionKey(standing) !== questionKey(item)) {
+      deferQuestion(zustand.aktiverChat, standing)
+    }
+    resumeQuestion(zustand.aktiverChat, item)
+    focusFieldAfterRender()
   }
 
   /* Files for the plus menu's one entry: pictures where the model sees them,
@@ -751,10 +780,14 @@
     for (const eintrag of eintraege) anhangSetzen(eintrag.getAsFile())
   }
 
-  /* The two routes a doc folder file is fetched from (app/docfolder.py);
-     "alle" is the listing beside them, not a file. */
+  /* The three routes a doc folder file is fetched from (app/docfolder.py);
+     "alle" is the listing beside them, not a file. A loose file of a chat's
+     folder carries its path as the service writes it with `quote`: parts of
+     letters, digits and `_.-~%`, and no part is `.` or `..`, written plain
+     or as `%2e`, nor holds an encoded slash — the service refuses those
+     too, and so does the window. */
   const FOLDER_FILE =
-    /^\/(?:agentendock\/(?!alle$)[\w-]+|documents\/[\w-]+\/file)$/
+    /^\/(?:agentendock\/(?!alle$)[\w-]+|documents\/[\w-]+\/file|chat-files\/[\w-]+\/(?:(?!(?:\.|%2[eE]){1,2}(?:\/|$))(?![\w.~%-]*%2[fF])[\w.~%-]+\/)*(?!(?:\.|%2[eE]){1,2}$)(?![\w.~%-]*%2[fF])[\w.~%-]+)$/
 
   async function fallenlassen(ereignis) {
     ereignis.preventDefault()
@@ -821,9 +854,21 @@
      scrollHeight only knows the previous state and the field never
      shrinks again on deletion. How tall it may grow for its own text and
      for the mirror comes from lib/dictationMirror.js. */
+  /* The tallest the field has been in this dictation, in pixels; zero while
+     no mirror stands. While one does, the field only grows (`floorHeight`
+     in fieldSize): the grey end of a reading changes its length with every
+     pass, and a field that shrinks and grows with it makes the history
+     above jump up and down. */
+  let diktatHoehe = 0
+
   function hoeheAnpassen() {
     if (!feld) return
     feld.style.height = 'auto'
+    /* An empty field is one line, whatever its width: a placeholder that
+       wraps in a narrow field counts towards `scrollHeight` and would make
+       the empty field as tall as its wrapped words. Measured without it. */
+    const platzhalter = feld.placeholder
+    if (!feld.value) feld.placeholder = ''
     /* While dictating, the words on screen are the mirror's, not the
        field's own — the field is as tall as whichever of the two needs.
        The mirror takes the field's width and lettering first, or its height
@@ -834,11 +879,31 @@
       fieldHeight: feld.scrollHeight,
       mirrorHeight: spiegel?.scrollHeight,
       windowHeight: window.innerHeight,
+      floorHeight: spiegel ? diktatHoehe : 0,
     })
+    feld.placeholder = platzhalter
+    diktatHoehe = spiegel ? parseInt(groesse.height, 10) : 0
     feld.style.height = groesse.height
     feld.style.overflowY = groesse.overflowY
     spiegelAusrichten()
   }
+
+  /* The width of the field changes without the window changing: a column
+     gives way, the sidebar folds. The height is measured again then — left
+     as measured in a moment the field was narrow, an empty field would stay
+     tall, and a text taller than it needs to be. Only a change of width
+     counts: the field's own height changing is no reason to measure. */
+  $effect(() => {
+    if (!feld || typeof ResizeObserver === 'undefined') return
+    let breite = feld.clientWidth
+    const beobachter = new ResizeObserver(() => {
+      if (feld.clientWidth === breite) return
+      breite = feld.clientWidth
+      hoeheAnpassen()
+    })
+    beobachter.observe(feld)
+    return () => beobachter.disconnect()
+  })
 
   $effect(() => {
     text
@@ -908,6 +973,15 @@
      cannot stand in for it. Window memory only; nothing of it is stored. */
   const zurueckbehalten = new Map()
 
+  /* Whether these words answer a question a running answer waits on: only
+     words do, and only a question that stands in this window and is not
+     hidden. ONE rule for Enter (`absenden`) and for the arrow: the arrow is
+     locked exactly where Enter sends nothing. */
+  function antwortetOffeneFrage(inhalt) {
+    return Boolean(inhalt && zustand.benutzerfrage[zustand.aktiverChat])
+      && !questionHidden(zustand.aktiverChat)
+  }
+
   async function absenden() {
     const inhalt = text.trim()
     if (!inhalt && !anhaenge.length && !dokumentAnhaenge.length) return
@@ -920,8 +994,7 @@
        nothing but attachments is a new send, which `senden` turns down
        while the model is off — and the bar, already cleared, would have
        lost them without a word. */
-    const answersQuestion = Boolean(inhalt && zustand.benutzerfrage[zustand.aktiverChat])
-      && !questionHidden(zustand.aktiverChat)
+    const answersQuestion = antwortetOffeneFrage(inhalt)
     if (chosenModelOff() && !answersQuestion) return
     /* No model can be reached: nothing can go out, so the words and what is
        attached stay in the bar and the notice says why. A first message
@@ -944,6 +1017,21 @@
     if (sendetGerade.has(chatBeimStart)) return
     sendetGerade.add(chatBeimStart)
     try {
+      /* `/compact` is the window's own command: the line is not a message and
+         never goes to the model. Where an answer is running the line stays in
+         the field, for the same hint every busy send gets — the fold would
+         rewrite the history the answer is being written from. What was
+         attached stays in the bar. */
+      const topic = compactTopic(inhalt)
+      if (topic !== null) {
+        if (laeuftGerade) {
+          melde(t('fehler.antwort_laeuft_schon'))
+          return
+        }
+        text = ''
+        compactChat(topic)
+        return
+      }
       const bilder = anhaenge.map((a) => a.datei)
       // Snapshot now: `dokumentAnhaenge` (and `text`/`anhaenge`, read again
       // below) is swapped out from under this function the moment the chat
@@ -1003,7 +1091,7 @@
          ANOTHER chat does not turn this chat's typing into its answer. */
       const frageHier = Boolean(zustand.benutzerfrage[chatBeimStart]) && !questionHidden(chatBeimStart)
       if (laeuftGerade && !frageHier) {
-        einreihen(chatBeimStart, auftrag)
+        einreihen(chatBeimStart, { ...auftrag, kept })
         /* A question pushed away with "later" is not the one being answered:
            what was typed is a message of its own and lines up like any
            other while the run goes on. The hidden question closes with an
@@ -1015,9 +1103,9 @@
       }
       // The same shape as the id `senden` would make itself.
       const messageId = Math.random().toString(36).slice(2, 9)
-      zurueckbehalten.set(messageId, kept)
+      const release = keep(messageId, kept)
       senden(auftrag.inhalt, bilder, dokumente, auftrag.denken, skill, false, messageId)
-        .finally(() => zurueckbehalten.delete(messageId))
+        .finally(release)
     } finally {
       sendetGerade.delete(chatBeimStart)
     }
@@ -1027,11 +1115,21 @@
     feld?.focus()
   }
 
-  /* A send the service refused because its chat was taken — an answer it
-     started by itself was going (App.svelte, `belegt`): the words AND what
-     was attached to them come back, so nothing typed and nothing picked is
-     lost and nothing stands twice. The words only into an empty field;
-     whatever was typed since stays. */
+  /* What a send took out of the bar, kept under the send's id until the send
+     is over — whoever sends (the bar itself, or the queue handing on a
+     message it held) hands the entries in, and `zurueckgeben` finds them by
+     that id. Returns the way to let go of them again. */
+  export function keep(messageId, kept) {
+    zurueckbehalten.set(messageId, kept)
+    return () => zurueckbehalten.delete(messageId)
+  }
+
+  /* A send that did not reach the service — its chat was taken, an answer
+     the service started by itself was going (App.svelte, `belegt`), or it
+     ended before the request (no model, a picture that would not upload):
+     the words AND what was attached to them come back, so nothing typed and
+     nothing picked is lost and nothing stands twice. The words only into an
+     empty field; whatever was typed since stays. */
   export function zurueckgeben(inhalt, chat = entwurfChat, messageId = null) {
     /* The refused message's own attachments, found by its id — the id alone
        proves they belong to this refusal, so no chat is compared (a send
@@ -1879,10 +1977,12 @@
        its answers leave from, and hangs itself over the whole chat column.
        Only in the chat it belongs to: a question travelling into a foreign
        conversation reads as that conversation asking. -->
-  {#if standing && !questionDeferred}
+  {#if cardStands}
     <QuestionBox
       kind={standing.kind}
       question={standing.question}
+      position={standing.position}
+      total={standing.total}
       {modelName}
       {answerTool}
       {answerAsk}
@@ -2042,11 +2142,15 @@
 
         <!-- A question pushed away with "later" waits here: the dot and who
              is asking, and a click brings the card back. -->
-        {#if questionDeferred}
-          <button class="later-chip" title={t('chat.wartet_auf_dich')}
-                  onclick={resume}>
-            <span class="waiting-dot" aria-hidden="true"></span>{modelName}
-          </button>
+        {#if pushedAway.length}
+          <div class="later-chips">
+            {#each pushedAway as item (questionKey(item))}
+              <button class="later-chip" title={t('chat.wartet_auf_dich')}
+                      onclick={() => resume(item)}>
+                <span class="waiting-dot" aria-hidden="true"></span>{item.kind === 'agent' ? item.question.agentName : modelName}
+              </button>
+            {/each}
+          </div>
         {/if}
       </div>
 
@@ -2089,9 +2193,13 @@
           class:stoppt={stoppt}
           class:leer={!laeuftGerade && leer}
           onclick={() => (stoppt ? (bildHier ? bildStoppen() : abbrechen()) : absenden())}
-          disabled={!stoppt && chosenModelOff()}
-          title={stoppt ? t('eingabe.abbrechen_tipp') : t('eingabe.senden')}
-          aria-label={stoppt ? t('eingabe.abbrechen') : t('eingabe.senden')}
+          disabled={gesperrtDurchModell}
+          title={stoppt
+            ? t('eingabe.abbrechen_tipp')
+            : gesperrtDurchModell ? t('fehler.modell_deaktiviert') : t('eingabe.senden')}
+          aria-label={stoppt
+            ? t('eingabe.abbrechen')
+            : gesperrtDurchModell ? t('fehler.modell_deaktiviert') : t('eingabe.senden')}
         >
           <span class="ring"></span>
           <svg class="pfeil" width="15" height="15" viewBox="0 0 24 24" fill="none"
@@ -2315,12 +2423,22 @@
     display: none;
   }
 
+  /* The chips of the questions pushed away with "later" share the room one
+     chip had: with several, each is shortened, the bar does not grow. */
+  .later-chips {
+    display: flex;
+    gap: 4px;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 160px;
+  }
   /* A question pushed away with "later": the dot keeps waiting in yellow. */
   .later-chip {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
     max-width: 160px;
     padding: 4px 9px 4px 7px;
     border: none;

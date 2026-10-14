@@ -46,6 +46,12 @@ ARBEITSORDNER = "faces_prepared"
 
 _MARKENDATEI = ".quelle-fingerabdruck"
 
+# How the copies are made. Part of the marker, so a folder prepared by an
+# earlier way (see-through areas on black) is rebuilt instead of being taken
+# for current because its photos have not changed. Raise it when the way the
+# copies are made changes.
+_AUFBEREITUNG = "weiss-1"
+
 
 def verfuegbar() -> bool:
     """Whether this system can prepare a photo. The library travels with
@@ -82,7 +88,7 @@ def aufbereiten(
     if not verfuegbar():
         return gesichter_ordner
 
-    quelle_stand = fingerabdruck(gesichter_ordner)
+    quelle_stand = f"{fingerabdruck(gesichter_ordner)}:{_AUFBEREITUNG}"
     marke = arbeitsordner / _MARKENDATEI
     bereits_aktuell = (
         arbeitsordner.is_dir() and marke.is_file()
@@ -119,7 +125,10 @@ def _ein_foto_aufbereiten(quelle: Path, ziel: Path, kante: int) -> None:
     instead of a half-processed file that would look like a real, safe
     one."""
     try:
-        bild = model_image.geoeffnet(quelle)
+        # See-through areas lie on white (the rule the model's picture copy
+        # has, app/model_image.py): ``convert("RGB")`` alone turns them black,
+        # and a face painted from a black ground is not the face of the photo.
+        bild = model_image.on_white(model_image.geoeffnet(quelle))
         if bild.mode != "RGB":
             # Before the resample, not after: a palette picture resampled
             # as a palette is picked pixel by pixel, not blended.

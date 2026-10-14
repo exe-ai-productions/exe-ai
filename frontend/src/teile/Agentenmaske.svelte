@@ -15,7 +15,7 @@
   import { meldeText } from '../lib/meldewesen.svelte.js'
   import { rollfade } from '../lib/rollfade.js'
 
-  let { agent = null, onfertig, onabbrechen, geaendert = $bindable(false) } = $props()
+  let { agent = null, onfertig, onabbrechen, onunlesbar, geaendert = $bindable(false) } = $props()
 
   let neuName = $state('')
   let neuPrompt = $state('')
@@ -123,6 +123,15 @@
     api.agentDatei(name)
       .then((datei) => {
         if (verworfen) return
+        /* A file whose head cannot be read comes back as a 200 with the
+           sentence in `kaputt` and no prompt — the same case as a file that
+           cannot be opened: the sentence is reported and the mask gives way
+           to the list, with no fields opened over the stale list values. */
+        if (datei.kaputt) {
+          melde(datei.kaputt, 'fehler')
+          onunlesbar ? onunlesbar() : onabbrechen?.()
+          return
+        }
         felderSetzen(agent, datei.prompt ?? '')
         stand = { agent, prompt: datei.prompt ?? '' }
       })
@@ -138,7 +147,7 @@
            would be a half-truth on top, so the mask gives way to the list. */
         if (fehler?.status && fehler.message) melde(fehler.message, 'fehler')
         else meldeText('agenten.nicht_geladen', {}, 'fehler')
-        onabbrechen?.()
+        onunlesbar ? onunlesbar() : onabbrechen?.()
       })
       .finally(() => {
         if (!verworfen) laedt = false
@@ -296,7 +305,7 @@
             checked={gewaehlteWerkzeuge.includes(werkzeug.name)}
             onchange={() => werkzeugSchalten(werkzeug.name)}
           />
-          <span class="wzname werkzeugname">{werkzeug.name}</span>
+          <span class="wzname werkzeugname">{werkzeug.anzeige ?? werkzeug.name}</span>
         </label>
       {:else}
         <span class="wzleer">{t('agenten.keine_werkzeuge')}</span>

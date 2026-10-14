@@ -112,7 +112,9 @@ NOT_A_STAGE = ("display", "budget_tokens", "summary")
 
 _SEGMENT = re.compile(r"[^a-z0-9_]+")
 # A field name as it appears in prose: a word, dotted on as far as it goes.
-_FIELD_IN_TEXT = re.compile(r"[a-z_][a-z0-9_]*(?:\.[a-z0-9_]+)*")
+# One that hangs on a hyphen or a slash is a piece of a model id
+# ("kimi-k2-thinking", "qwen/qwen3-thinking"), not a field of the request.
+_FIELD_IN_TEXT = re.compile(r"(?<![\w/-])[a-z_][a-z0-9_]*(?:\.[a-z0-9_]+)*(?![\w/-])")
 
 
 def _segments(path: str) -> list[str]:

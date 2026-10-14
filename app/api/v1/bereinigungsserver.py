@@ -37,6 +37,9 @@ class Auskunft(BaseModel):
     modell: str | None = None
     port: int | None = None
     kerne: int | None = None
+    # The architecture the last start failed on because the server's build
+    # does not know it.
+    unknown_architecture: str | None = None
     # The works answers for the tidy-up numbers and the five generation
     # values — sent rather than written into the page, the same way the
     # speech panel is told its own field defaults.
@@ -68,6 +71,7 @@ def _auskunft(request: Request, repositories: Repositories) -> Auskunft:
         modell=lauf.modell if lauf else (diktatsprachewahl.putzmodell(repositories) or None),
         port=lauf.port if lauf else runner.port_vorgabe,
         kerne=os.cpu_count(),
+        unknown_architecture=runner.unknown_architecture(),
         diktat_vorgaben=diktatsprachewahl.vorgaben(),
     )
 
@@ -80,7 +84,7 @@ def auskunft(
     return _auskunft(request, repositories)
 
 
-@router.get("/log", response_model=list[str], summary="What the server says")
+@router.get("/log", response_model=list[str], summary="Server messages")
 def protokoll(request: Request) -> list[str]:
     return _runner(request).protokoll()
 

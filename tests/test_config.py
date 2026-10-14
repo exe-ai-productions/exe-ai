@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
 import pytest
 import yaml
 from pydantic import BaseModel, ValidationError
@@ -97,6 +98,73 @@ def test_basis_url_ohne_schraegstrich_am_ende():
         {"endpoints": [{"id": "a", "name": "A", "base_url": "http://host:8080/v1/"}]}
     )
     assert config.endpoints[0].base_url == "http://host:8080/v1"
+
+
+def test_an_address_without_a_scheme_is_read_with_http_in_front():
+    config = Config.model_validate(
+        {"endpoints": [{"id": "a", "name": "A", "base_url": "localhost:8080/v1"}]}
+    )
+    assert config.endpoints[0].base_url == "http://localhost:8080/v1"
+
+
+def test_an_address_without_a_scheme_and_with_a_slash_at_the_end():
+    config = Config.model_validate(
+        {"endpoints": [{"id": "a", "name": "A", "base_url": "localhost:8080/v1/"}]}
+    )
+    assert config.endpoints[0].base_url == "http://localhost:8080/v1"
+
+
+async def test_the_model_list_of_an_address_without_a_scheme_is_fetched(monkeypatch):
+    """httpx refuses a URL without a scheme, so before the address was
+    completed the fetch never left the machine and the list came back empty."""
+    from app.providers.openai_kompatibel import OpenAIKompatiblerProvider
+
+    asked: list[str] = []
+
+    def handler(request):
+        asked.append(str(request.url))
+        return httpx.Response(200, json={"data": [{"id": "stub-model"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: real_client(transport=transport, **kw)
+    )
+    config = Config.model_validate(
+        {"endpoints": [{"id": "a", "name": "A", "base_url": "localhost:8080/v1"}]}
+    )
+
+    models = await OpenAIKompatiblerProvider(config.endpoints[0]).modelle_auflisten(1.0)
+
+    assert asked == ["http://localhost:8080/v1/models"]
+    assert models == ["stub-model"]
+
+
+@pytest.mark.parametrize(
+    ("written", "read"),
+    [
+        ("https://api.openai.com/v1/", "https://api.openai.com/v1"),
+        ("http://127.0.0.1:8080/v1", "http://127.0.0.1:8080/v1"),
+    ],
+)
+def test_schweigeprobe_an_address_with_a_scheme_stays_as_written(written, read):
+    config = Config.model_validate(
+        {"endpoints": [{"id": "a", "name": "A", "base_url": written}]}
+    )
+    assert config.endpoints[0].base_url == read
+
+
+def test_schweigeprobe_the_window_still_rejects_an_address_without_a_scheme(client):
+    answer = client.post(
+        "/api/v1/providers",
+        json={
+            "art": "eigen",
+            "kennung": "eigene",
+            "url": "localhost:8080/v1",
+            "schluessel": "sk-test-1234",
+        },
+    )
+    assert answer.status_code == 400
 
 
 def test_relative_pfade_werden_absolut(config: Config):

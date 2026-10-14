@@ -127,7 +127,8 @@ class Family:
     # tell it apart (``vae_by_itself``). 16 for the families whose docs
     # decode with Flux's own ``ae.sft`` (measured on ae.safetensors). None
     # where the checkpoint carries its own VAE, or where no file at hand
-    # shows the number: then the VAE stays the user's choice.
+    # shows the number: then the VAE stays the user's choice — and a family
+    # whose kit names a VAE needs one all the same (``needs_vae``).
     vae_channels: int | None
     # What a picture of this family can be asked for, and whether the
     # picture server can draw it (sd-cli draws every one). ``edit`` draws
@@ -164,6 +165,12 @@ class Family:
     # A video model: sd.cpp draws it in video mode only, a single frame
     # included (docs/wan.md:3, "Wan models require -M vid_gen").
     video: bool = False
+    # True when sd.cpp computes a ControlNet for this family: the guide
+    # images reach the model only where it is a UNet (SD 1.x, SD 2.x, SDXL
+    # and their variants; ``sd_version_is_unet`` in src/stable-diffusion.cpp).
+    # For every other family the program ignores the option without a word,
+    # so the window does not offer it and a draw does not send it.
+    control_net: bool = False
     # The companion kind (app/bildinhalt.py ``companion``) its ``t5xxl``
     # field is filled with by itself: Flux's T5-XXL for most, UMT5-XXL for
     # the Wan models (docs/wan.md "Download umt5_xxl"), none for
@@ -350,6 +357,7 @@ FAMILIES: tuple[Family, ...] = (
     # ---- One file ----
     Family(
         name="sd15", label="SD 1.5", kit=False, encoders=(), vae_channels=None,
+        control_net=True,
         # A video with AnimateDiff's motion module beside the checkpoint
         # (docs/animatediff.md), from text or from a first frame.
         tasks=("txt2img", "img2img", "t2v", "i2v"), on_server=True,
@@ -366,6 +374,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="sd2", label="SD 2.x", kit=False, encoders=(), vae_channels=None,
+        control_net=True,
         tasks=("txt2img", "img2img"), on_server=True,
         start=_start(_CLI, cfg=7.5, sampler="dpm++2m",
                      others={
@@ -378,6 +387,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="sdxl", label="SDXL", kit=False, encoders=(), vae_channels=None,
+        control_net=True,
         tasks=("txt2img", "img2img"), on_server=True,
         start=_start("sd.cpp docs/sd.md:14 (-W 1024 -H 1024)",
                      width=1024, height=1024, cfg=5.0, sampler="euler",
@@ -403,6 +413,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="sdxs", label="SDXS", kit=False, encoders=(), vae_channels=None,
+        control_net=True,
         tasks=("txt2img",), on_server=True,
         start=_start("sd.cpp docs/distilled_sd.md:107,118 (--cfg-scale 1 --steps 1)",
                      steps=1, cfg=1.0, named=("steps", "cfg")),
@@ -410,6 +421,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="sd15_pix2pix", label="instruct-pix2pix", kit=False, encoders=(),
+        control_net=True,
         vae_channels=None, tasks=("edit",), on_server=True,
         start=_start(_CLI, cfg=7.5,
                      others={
@@ -422,6 +434,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="sdxl_pix2pix", label="CosXL Edit", kit=False, encoders=(),
+        control_net=True,
         vae_channels=None, tasks=("edit",), on_server=True,
         start=_start("sd.cpp docs/sd.md:14 (-W 1024 -H 1024)",
                      width=1024, height=1024, cfg=5.0, sampler="euler",
@@ -648,8 +661,16 @@ FAMILIES: tuple[Family, ...] = (
         kit_parts=(_qwen_vl_7b("docs/qwen_image.md"), _QWEN_IMAGE_VAE),
     ),
     Family(
+        # Qwen3-VL 8B (docs/qwen_image_2.1.md), whose GGUF names the qwen3vl
+        # architecture at a width of 4096 (measured on
+        # Qwen3VL-8B-Instruct-Q8_0.gguf; the 4B of Krea 2 is 2560 wide).
         name="qwen_image_2_1", label="Qwen-Image 2.1", kit=True, encoders=("llm",),
-        vae_channels=None, tasks=("txt2img", "edit"), on_server=True,
+        llms=(("qwen3vl", 4096),),
+        # sd-cli draws from a start picture and through a mask with it
+        # (measured: the layout of the start picture stays, and the part
+        # outside the mask stays as it was), as it does from text and from
+        # references.
+        vae_channels=None, tasks=("txt2img", "img2img", "edit"), on_server=True,
         start=_start("sd.cpp docs/qwen_image_2.1.md:26 (--sampling-method euler)",
                      width=2048, height=2048, cfg=1.0, sampler="euler", named=("sampler",),
                      dit=True,
@@ -849,7 +870,10 @@ FAMILIES: tuple[Family, ...] = (
         ),
     ),
     Family(
-        name="sefi", label="SeFi-Image", kit=True, encoders=("llm",), vae_channels=None,
+        # The standard Flux.2 VAE, passed in every example (sd.cpp
+        # docs/sefi_image.md:3,11,35): 32 channels, which the kit cannot
+        # start without.
+        name="sefi", label="SeFi-Image", kit=True, encoders=("llm",), vae_channels=32,
         tasks=("txt2img",), on_server=True,
         start=_start("sd.cpp docs/sefi_image.md:41 (-W 1024 -H 1024)",
                      width=1024, height=1024, steps=4, cfg=1.0, named=("width", "height"), dit=True,
@@ -930,7 +954,11 @@ FAMILIES: tuple[Family, ...] = (
         ),
     ),
     Family(
-        name="pixart", label="PixArt Sigma", kit=True, encoders=("t5xxl",), vae_channels=None,
+        # A 4-channel VAE beside the T5-XXL, SDXL-style for PixArt-Sigma and
+        # SD1.x-style for PixArt-Alpha (sd.cpp docs/pixart.md:5-6,15-19,25):
+        # the kit cannot start without one, and no header tells which style a
+        # 4-channel file is (``_SHARED_VAES``).
+        name="pixart", label="PixArt Sigma", kit=True, encoders=("t5xxl",), vae_channels=4,
         tasks=("txt2img",), on_server=True,
         start=_start("sd.cpp docs/pixart.md:25 (--cfg-scale 4.5 -W 1024 -H 1024 --steps 20)",
                      width=1024, height=1024, cfg=4.5, sampler="dpm++2m",
@@ -1177,10 +1205,20 @@ _BY_NAME = {family.name: family for family in FAMILIES}
 
 # The VAEs a header cannot tell apart, by (video VAE, latent channels): Flux's
 # VAE and SD3's carry the same names, shapes and types at 16 channels, and so
-# do the video VAEs of Wan 2.1 and Qwen-Image (measured on both pairs). Which
-# of them belongs to a model is not in any file, so a family decoding with
-# one of them takes its VAE from the model's own setting.
-_SHARED_VAES = {(False, 16), (True, 16)}
+# do the video VAEs of Wan 2.1 and Qwen-Image (measured on both pairs). A
+# 4-channel VAE comes in an SDXL style and an SD1.x style, and one family
+# reads either (sd.cpp docs/pixart.md:5-6). Which of them belongs to a model
+# is not in any file, so a family decoding with one of them takes its VAE from
+# the model's own setting.
+_SHARED_VAES = {(False, 16), (True, 16), (False, 4)}
+
+
+def needs_vae(family: Family) -> bool:
+    """Whether a kit of this family cannot start without a VAE: the family
+    decodes with one of its own (``vae_channels`` set), or its kit names a
+    VAE among its parts. The one place this is decided — the start, the
+    drawing and the window all read it."""
+    return family.vae_channels is not None or any(part.part == "vae" for part in family.kit_parts)
 
 
 def vae_by_itself(family: Family) -> bool:
@@ -1250,7 +1288,13 @@ def kit_of_file(file_name: str) -> tuple[KitPart, ...]:
     family names a source for. Empty for a name that shows no family, and for
     one whose family names a field's files only for other models
     (``KitPart.when``) — half a kit is none."""
-    family = family_of_file(file_name)
+    return kit_of_family(family_of_file(file_name), file_name)
+
+
+def kit_of_family(family: Family | None, file_name: str) -> tuple[KitPart, ...]:
+    """The parts a model file of this family is drawn with — the family
+    given, not read from the name: one told by the file's own header. The
+    name still picks among the parts only some models of the family take."""
     if family is None:
         return ()
     base = file_name.rsplit("/", 1)[-1].lower()
@@ -1300,6 +1344,7 @@ def as_json() -> list[dict]:
             "kit": family.kit,
             "encoders": list(family.encoders),
             "vae_channels": family.vae_channels,
+            "needs_vae": needs_vae(family),
             "tasks": list(family.tasks),
             "on_server": family.on_server,
             "parts": list(family.parts),
@@ -1308,6 +1353,7 @@ def as_json() -> list[dict]:
             "edit_needs_lora": family.edit_needs_lora,
             "clip_layers": family.clip_layers,
             "video": family.video,
+            "control_net": family.control_net,
             "start": {
                 "width": family.start.width,
                 "height": family.start.height,

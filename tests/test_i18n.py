@@ -107,6 +107,10 @@ def test_kein_text_steht_unuebersetzt_in_beiden_katalogen():
         "katalog.sorte_mmproj",
         # A port is a port in both languages.
         "kopf.port",
+        # The three words of the server behind a model — active, idle,
+        # offline — are English in both languages: they are the wire itself
+        # (app/server_state.py).
+        "kopf.server_active", "kopf.bereit", "kopf.server_aus",
         # The words printed on two keys, the same on a German keyboard as on
         # an English one. The other two modifier keys ARE named differently.
         "shortcuts.key_alt", "shortcuts.key_win",
@@ -279,6 +283,8 @@ def test_kein_text_steht_unuebersetzt_in_beiden_katalogen():
         # CLI is the name of the panel in both languages, and "Chat" is the
         # same word — the status line names both.
         "cli.titel", "cli.status_chat",
+        # A command is typed the same way in both languages.
+        "cli.platzhalter",
         # "Auto" is the same word in both languages (see einstellungen.auto
         # above). "Manual" and "Restricted" are translated ("Manuell",
         # "Eingeschränkt"), so neither is listed here.
@@ -318,6 +324,14 @@ def test_kein_text_steht_unuebersetzt_in_beiden_katalogen():
         "modell.von_zahl",
         # The label over an agent's name: "Name" is the German word too.
         "agenten.name",
+        # The studio's row for the model "Upscale" enlarges with: "Upscaler"
+        # is the word of the model kind in both languages, as the heading
+        # "Upscaling" above it is.
+        "bild.upscaler",
+        # The names of four sampling knobs: Top-P, Top-K, Min-P and Typical-P
+        # are the terms of the field itself and stay as they are.
+        "parameter.label.top_p", "parameter.label.top_k", "parameter.label.min_p",
+        "parameter.label.typical_p",
     }
 
     def flach(knoten, praefix=""):
@@ -425,11 +439,11 @@ def test_die_wartewoerter_stehen_im_katalog_und_sind_uebersetzt():
     for nummer, (links, rechts) in enumerate(paare, start=1):
         assert links != rechts, nummer
     # The English list is the one that was already there, word for word.
-    assert englisch[0] == "Turning it over"
+    assert englisch[0] == "Thinking it through"
     assert englisch[-1] == "Getting there"
     # And the three spellings that were corrected on the way in.
-    assert "Legt sich Zahlen zurecht" in deutsch
-    assert "Sortiert die Dateien" in deutsch
+    assert "Ordnet die Einzelteile" in deutsch
+    assert "Bringt Ordnung hinein" in deutsch
     assert "Ist gleich so weit" in deutsch
     # All ten start with a capital, like the English ones.
     assert all(wort[:1] == wort[:1].upper() for wort in deutsch)
@@ -648,24 +662,25 @@ def test_jedes_eingebaute_werkzeug_hat_einen_satz():
         fehlend = [name for name in namen if not saetze.get(name)]
         assert not fehlend, f"{sprache}: {fehlend}"
 
-    # The silence check: the sixteen sentences that were there, word for word
+    # The silence check: the sixteen sentences that were there (the one of
+    # deliver_file in the wording of the approved text page), word for word
     # in German (the language the wording is written in) and complete in
     # English. A dictionary and not a checksum: a failure has to name the
     # sentence that moved.
     bestand = {
-        "run_command": "Führt Shell-Befehle auf diesem Rechner aus — Programme, Skripte, Dateien verschieben und umbenennen.",
-        "ask_user": "Fragt dich, wenn eine Entscheidung wirklich deine ist.",
-        "memory_save": "Merkt sich etwas über dich oder dein Projekt, über Gespräche hinweg.",
+        "run_command": "Führt Shell-Befehle auf diesem Rechner aus, um Programme und Skripte zu starten oder Dateien zu verschieben und umzubenennen.",
+        "ask_user": "Fragt dich, wenn eine Entscheidung deine Eingabe erfordert.",
+        "memory_save": "Merkt sich über Gespräche hinweg Informationen über dich oder dein Projekt.",
         "read_file": "Liest den Inhalt einer Textdatei.",
-        "write_file": "Schreibt Text in eine Datei, legt sie bei Bedarf neu an.",
-        "edit_file": "Ersetzt eine genau passende Stelle in einer Textdatei.",
-        "list_dir": "Listet auf, was in einem Ordner liegt.",
-        "skill_load": "Lädt eine festgehaltene Anleitung für eine Art von Arbeit.",
-        "skill_save": "Schreibt eine Arbeitsweise auf, damit sie später wieder geladen werden kann.",
+        "write_file": "Schreibt Text in eine Datei und legt sie bei Bedarf an.",
+        "edit_file": "Ersetzt eine exakt übereinstimmende Textstelle in einer Datei.",
+        "list_dir": "Listet den Inhalt eines Ordners auf.",
+        "skill_load": "Lädt eine gespeicherte Anleitung für eine bestimmte Aufgabenart.",
+        "skill_save": "Speichert einen Arbeitsablauf, damit er später erneut geladen werden kann.",
         "cronjob": "Richtet einmalige oder wiederkehrende Erinnerungen ein, die eine Aufgabe zu fester Zeit auslösen.",
-        "draw_image": "Zeichnet ein Bild mit dem lokalen Bildmodell.",
-        "deliver_file": "Legt eine fertige Datei im Dock ab, wo du sie abholst.",
-        "start_job": "Übergibt Arbeit an einen Agenten, der sie im Hintergrund erledigt und einen Bericht hinterlässt.",
+        "draw_image": "Erzeugt ein Bild mit dem lokalen Bildmodell.",
+        "deliver_file": "Übergibt dir eine fertige Datei: im Chat erscheint sie in der Antwort, aus einer Aufgabe landet sie im Doc-Ordner.",
+        "start_job": "Delegiert Arbeit an einen Agenten, der sie im Hintergrund erledigt und einen Bericht erstellt.",
         "search_files": "Durchsucht die freigegebenen Ordner nach Text und nennt jede Zeile, in der er vorkommt.",
         "create_folder": "Legt einen Ordner an und gibt ihn als Arbeitsordner für diesen Chat frei.",
         "get_current_time": "Liest die aktuelle Uhrzeit, den Wochentag und die Zeitzone.",
@@ -681,3 +696,12 @@ def test_jedes_eingebaute_werkzeug_hat_einen_satz():
         saetze = _katalog(sprache)["werkzeuge"]["eingebaut_satz"]
         for name in bestand:
             assert saetze[name].strip(), f"{sprache}: {name}"
+
+
+def test_a_document_that_did_not_fit_says_it_was_too_large_for_the_context():
+    # Both states of the card that mean "the document did not reach the
+    # model" carry the same words, in the language of the window.
+    for language, words in (("de", "Zu groß für den Kontext"), ("en", "Document too large")):
+        messages = _katalog(language)["nachricht"]
+        assert messages["dokument_kein_platz"] == words, language
+        assert messages["dokument_abgelehnt"] == words, language

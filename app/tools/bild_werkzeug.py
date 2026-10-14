@@ -70,17 +70,16 @@ STOPP_TAKT_S = 1.0
 # panel (app/api/v1/bilder.py lists that folder) — and the tool's answer
 # names the file.
 IN_CHAT = (
-    "The finished picture appears in your answer by itself, and the result "
-    "names its file and path; do not describe its contents afterwards — "
-    "you have not seen it."
+    "The finished image appears automatically in your response, and the result includes its "
+    "filename and path. Do not describe its contents afterward; you have not seen it."
 )
 # What the model reads about the optional input picture, in every list.
 INPUT_PICTURE = {
     "type": "string",
     "description": (
-        "Optional: the path of a picture to draw from — a file you may read, "
-        "in a shared folder or in the pictures folder. With it, the picture "
-        "is drawn from that one instead of from scratch."
+        "Optional: path to a readable image in a shared folder or the pictures folder. If "
+        "provided, this image is used as the starting point instead of generating one from "
+        "scratch."
     ),
 }
 # The kinds of picture the service takes in, by the file's ending.
@@ -88,9 +87,9 @@ _PICTURE_TYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
 }
 IN_JOB = (
-    "The finished picture is saved in the pictures folder, which the user "
-    "sees under Images, and the answer names its file; do not describe its "
-    "contents afterwards — you have not seen it."
+    "The finished image is saved in the pictures folder, visible to the user under Images. "
+    "The response includes its filename. Do not describe its contents afterward; you have not "
+    "seen it."
 )
 
 # What the model reads when the picture service answered without an error
@@ -98,10 +97,9 @@ IN_JOB = (
 # model cannot repair the service, it can only tell the user that the
 # picture did not come.
 UNUSABLE_ANSWER = (
-    "The picture could not be drawn: the picture service sent an answer "
-    "that could not be used."
+    "The image could not be generated: the image service returned an unusable response."
 )
-NO_PICTURE = "The picture could not be drawn: the picture service sent no picture."
+NO_PICTURE = "The image could not be generated: the image service returned no image."
 
 
 @dataclass(frozen=True)
@@ -120,14 +118,13 @@ class Made:
     unusable: str
 
 
-PICTURE = Made("The picture could not be drawn", "The picture was not drawn", UNUSABLE_ANSWER)
+PICTURE = Made("The image could not be generated", "The image was not generated", UNUSABLE_ANSWER)
 # Nothing chooses the default model by itself, so without one the model
 # learns where the user chooses it.
 NO_DEFAULT_MODEL = (
-    "The picture was not drawn: no default image model is chosen, and this "
-    "chat names no model of its own. Ask the user to choose the default "
-    "model on the picture server page (Local, picture server, the row "
-    "Default model) and try again."
+    "The image was not generated: no default image model is selected, and this chat has no "
+    "model assigned. Ask the user to select a default model on the picture server page "
+    "(Local, picture server, Default model), then try again."
 )
 
 
@@ -142,17 +139,17 @@ class BildWerkzeugFehler(Exception):
 # are sd.cpp's own (docs/tokenizers.md, CLIP 77 and T5 256 tokens).
 _PROMPT_STIL = {
     "clip": (
-        "Write it as short, dense keyword phrases, most important first; "
-        "weights like (word:1.2) are read. Long prompts are read in pieces "
-        "of 77 tokens, so what stands first weighs most."
+        "Use concise, information-rich keyword phrases, placing the most important elements "
+        "first. Weights such as (word:1.2) are supported. Long prompts are processed in "
+        "chunks of 77 tokens, so earlier elements carry more weight."
     ),
     "t5": (
-        "Write whole, flowing sentences. Long prompts are read in pieces of "
-        "256 tokens, so the opening sentence carries the most weight."
+        "Write complete, fluent sentences. Long prompts are processed in chunks of 256 "
+        "tokens, so the opening sentence carries the most weight."
     ),
     "llm": (
-        "Write a full description in plain prose; a short piece of text "
-        "inside the picture works too."
+        "Write a complete description in plain prose. The image can also include a short "
+        "passage of text."
     ),
 }
 
@@ -164,49 +161,49 @@ _PROMPT_STIL = {
 _WERTEFELDER: tuple[tuple[str, str, str, str], ...] = (
     (
         "width", "breite",
-        "The picture's width in pixels. Defaults to this chat's current "
-        "setting. Omit unless the user asks for a width.",
+        "Image width in pixels. Uses this chat's current setting by default. Omit unless the "
+        "user requests a specific width.",
         "size",
     ),
     (
         "height", "hoehe",
-        "The picture's height in pixels. Defaults to this chat's current "
-        "setting. Omit unless the user asks for a height.",
+        "Image height in pixels. Uses this chat's current setting by default. Omit unless the "
+        "user requests a specific height.",
         "size",
     ),
     (
         "steps", "schritte",
-        "The number of sampling steps. Defaults to this chat's current "
-        "setting. Omit unless the user asks for a step count.",
+        "Number of sampling steps. Uses this chat's current setting by default. Omit unless "
+        "the user requests a step count.",
         "steps",
     ),
     (
         "cfg", "cfg",
-        "The CFG scale. Defaults to this chat's current setting. Omit unless "
-        "the user asks for one.",
+        "CFG scale. Uses this chat's current setting by default. Omit unless the user "
+        "requests a specific value.",
         "CFG",
     ),
     (
         "sampler", "sampler",
-        "The sampler, e.g. euler_a. Defaults to this chat's current setting. "
-        "Omit unless the user asks for a sampler.",
+        "Sampler, e.g. euler_a. Uses this chat's current setting by default. Omit unless the "
+        "user requests a sampler.",
         "sampler",
     ),
     (
         "scheduler", "scheduler",
-        "The scheduler, e.g. discrete. Defaults to this chat's current "
-        "setting. Omit unless the user asks for a scheduler.",
+        "Scheduler, e.g. discrete. Uses this chat's current setting by default. Omit unless "
+        "the user requests a scheduler.",
         "scheduler",
     ),
     (
         "seed", "seed",
-        "The seed. Random by default. Omit unless the user names a seed.",
+        "Seed. Random by default. Omit unless the user specifies a seed.",
         "seed",
     ),
     (
         "guidance", "guidance",
-        "The distilled guidance (Flux only). Defaults to this chat's current "
-        "setting. Omit unless the user asks for one.",
+        "Distilled guidance (Flux only). Uses this chat's current setting by default. Omit "
+        "unless the user requests a specific value.",
         "guidance",
     ),
 )
@@ -282,20 +279,20 @@ def werkzeug_beschreibung(
         return MCPWerkzeug(
             name=WERKZEUG_NAME,
             beschreibung=(
-                "Draws a picture with the image model installed on this "
-                "machine. Turn the wish into ONE dense visual sentence: "
-                f"subject, setting, light, mood, look — vague adjectives do nothing. {where}"
+                "Generates an image using the image model installed on this machine. Express "
+                "the request in ONE precise visual sentence covering the subject, setting, "
+                f"lighting, mood, and appearance. Avoid vague adjectives. {where}"
             ),
             schema={
                 "type": "object",
                 "properties": {
                     "prompt": {
                         "type": "string",
-                        "description": "What the picture shows. Write it in English.",
+                        "description": "Describe what the image should show, in English.",
                     },
                     "negative_prompt": {
                         "type": "string",
-                        "description": "What must stay out of the picture. Optional.",
+                        "description": "Optional. Elements to exclude from the image.",
                     },
                     "image": INPUT_PICTURE,
                 },
@@ -320,23 +317,21 @@ def werkzeug_beschreibung(
         # English FIRST: measured twice against a German wish, the model
         # wrote German keywords when this sentence stood behind the one
         # naming the model (picture window on SDXL).
-        "Write the prompt in ENGLISH, whatever language the user writes in — "
-        "the picture model was trained on English and reads nothing else "
-        "reliably.",
-        f"Draws a picture with {familie.label}, the image model this chat "
-        "is set to.",
-        "Turn the wish into a picture: subject, setting, light, mood, look — "
-        "vague adjectives do nothing.",
+        "Write the prompt in ENGLISH regardless of the user's language. The image model was "
+        "trained on English and does not reliably interpret other languages.",
+        f"Generates an image using {familie.label}, the image model selected for this chat.",
+        "Describe the requested image through its subject, setting, lighting, mood, and "
+        "appearance. Avoid vague adjectives.",
         _prompt_stil(familie),
     ]
     if wirksame_cfg == 1:
         saetze.append(
-            "At CFG 1 the negative prompt has no effect — leave it out."
+            "At CFG 1, the negative prompt has no effect. Omit it."
         )
     saetze.append(
-        "Size, steps, CFG, sampler and seed default to this chat's current "
-        "settings. Send one only when the user asks for it; it applies to "
-        "this picture only and does not change the settings."
+        "Size, steps, CFG, sampler, and seed use this chat's current settings by default. "
+        "Specify a value only when the user requests it. It applies to this image only and "
+        "does not change the settings."
     )
     saetze.append(where)
     return MCPWerkzeug(
@@ -348,13 +343,12 @@ def werkzeug_beschreibung(
                 "prompt": {
                     "type": "string",
                     "description": (
-                        f"What the picture shows, written in English for "
-                        f"{familie.label}."
+                        f"Describe what the image should show, in English for {familie.label}."
                     ),
                 },
                 "negative_prompt": {
                     "type": "string",
-                    "description": "What must stay out of the picture. Optional.",
+                    "description": "Optional. Elements to exclude from the image.",
                 },
                 "image": INPUT_PICTURE,
                 **_werte_schema(start, values),
@@ -569,10 +563,10 @@ async def ausfuehren(
     werte, unbrauchbar = _geprueft(argumente)
     if unbrauchbar:
         return (
-            "The picture was not drawn: these values were not usable: "
+            "The image was not generated because these values were invalid: "
             + ", ".join(unbrauchbar)
-            + ". Send numbers (and a known sampler or scheduler), or omit "
-            "them to use this chat's current settings."
+            + ". Provide numbers and a supported sampler or scheduler, or omit them to use "
+              "this chat's current settings."
         )
 
     # Every sentence this tool reads back comes from the picture route, and
@@ -597,7 +591,7 @@ async def ausfuehren(
                 antwort_id if in_chat else None, abbruch, input_picture,
             )
     except (httpx.HTTPError, httpx.InvalidURL) as error:
-        return f"The picture could not be drawn: {str(error) or type(error).__name__}"
+        return f"The image could not be generated: {str(error) or type(error).__name__}"
     if isinstance(drawn, str):
         return drawn
     modell, koerper, daten = drawn.model, drawn.body, drawn.answer
@@ -605,11 +599,11 @@ async def ausfuehren(
     # when nobody prepared it, that it was drawn as the model wrote it.
     if drawn.prepared.not_prepared:
         prompt_satz = (
-            f" The prompt was not prepared ({drawn.prepared.not_prepared}); the "
-            f'picture was drawn with your prompt as written: "{drawn.prepared.prompt}".'
+            f' The prompt was not prepared ({drawn.prepared.not_prepared}). The image was '
+            f'generated using your original prompt: "{drawn.prepared.prompt}".'
         )
     else:
-        prompt_satz = f' The prompt it was drawn with: "{drawn.prepared.prompt}".'
+        prompt_satz = f' Prompt used to generate the image: "{drawn.prepared.prompt}".'
 
     pfad = bilderordner / daten.get("bild", "")
 
@@ -637,22 +631,26 @@ async def ausfuehren(
     if seed is not None:
         benutzt.append(f"seed {seed}")
     if input_picture is not None:
-        benutzt.append(f"drawn from {input_picture.name}")
+        benutzt.append(f"generated from {input_picture.name}")
     if not in_chat:
         sentence = (
-            f"The picture was drawn ({', '.join(benutzt)}) and saved as {pfad}, "
-            "in the pictures folder the user sees under Images; it is not "
-            "attached to your report." + prompt_satz
+            f"The image was generated ({', '.join(benutzt)}) and saved as {pfad} in the "
+            "pictures folder, visible to the user under Images. It is not attached to your "
+            "report." + prompt_satz
         )
         if deliver_with:
             sentence += (
-                " When it is meant for the user as a result of this job, "
-                f"deliver it with {deliver_with}, passing this path."
+                " If this image is a deliverable for the user, deliver it using "
+                f"{deliver_with} with this path."
             )
         return sentence
+    # The picture hangs on the answer already. Told its path, a model writes
+    # a link or an image tag onto it that points nowhere, under the picture
+    # that is really there.
     return (
-        f"The picture was drawn ({', '.join(benutzt)}), is attached to this "
-        f"answer and saved as {pfad}." + prompt_satz
+        f"The image was generated ({', '.join(benutzt)}), attached to this response, and saved "
+        f"as {pfad}. It is already attached to your response, so write no link and no image "
+        "markdown for it." + prompt_satz
     )
 
 
@@ -707,7 +705,7 @@ async def _aufbereiten(
         return _Prepared(prompt, negativ, _reason(antwort, daten))
     neu = daten.get("prompt") if daten is not None else None
     if not isinstance(neu, str) or not neu.strip():
-        return _Prepared(prompt, negativ, "the answer carried no prompt")
+        return _Prepared(prompt, negativ, "The response contained no prompt.")
     neu_negativ = daten.get("negativ") if daten is not None else ""
     return _Prepared(neu.strip(), neu_negativ.strip() if isinstance(neu_negativ, str) else "")
 
@@ -770,7 +768,7 @@ async def _bis_abbruch(arbeit: Any, abbruch: asyncio.Event | None) -> Any:
 def _gestoppt() -> str:
     """The sentence of a picture that was stopped: the route's own, the one a
     stop during the drawing hands back as well."""
-    return f"The picture could not be drawn: {t('bild.abgebrochen', 'en')}"
+    return f"The image could not be generated: {t('bild.abgebrochen', 'en')}"
 
 
 async def _draw(
@@ -812,8 +810,8 @@ async def _draw(
         return UNUSABLE_ANSWER
     if not lage.get("programm_da"):
         return (
-            "No image generator is installed. The user can fetch it under "
-            "Images (plus menu)."
+            "No image generator is installed. The user can download it from the plus menu "
+            "under Images."
         )
     modelle = lage.get("modelle") or []
     familien = lage.get("families") or {}
@@ -895,12 +893,10 @@ async def _draw(
         # branches above). What is true in all of them is that the model
         # this call would draw with cannot draw from text.
         return (
-            "The picture was not drawn: the image model in use — "
-            f"{wache.label} — cannot draw from text; it edits an "
-            "existing picture or makes video. Ask the user to pick a "
-            "text-to-image model and try again — under Images for this "
-            "chat, or as the default model on the picture server page "
-            "when the run has no chat of its own."
+            f"The image was not generated: the selected model, {wache.label}, cannot generate "
+            "images from text. It edits existing images or creates videos. Ask the user to "
+            "select a text-to-image model and try again: under Images for this chat, or as "
+            "the default on the picture server page if the run has no chat."
         )
     # What the chat never set starts where the model starts: the values the
     # user set for this model in the picture server, laid over its family's
@@ -950,9 +946,8 @@ async def _draw(
         if field is None:
             assert family is not None  # an unknown family has a field
             return (
-                "The picture was not drawn: the image model in use — "
-                f"{family.label} — cannot draw from a picture. Call again "
-                "without an image."
+                f"The image was not generated: the selected model, {family.label}, cannot use "
+                "an image as input. Call again without an image."
             )
         name, refusal = await _hand_in(client, basis, input_picture)
         if name is None:
@@ -995,9 +990,9 @@ async def _draw(
         # The request went out and the route may still be drawing: a
         # second call would draw the same picture twice.
         return (
-            "The picture took too long: no answer came within "
-            f"{ZEITFENSTER_S / 60:g} minutes. It may still be drawn, so "
-            "do not draw it again."
+            "Image generation timed out: no response was received within "
+            f"{ZEITFENSTER_S / 60:g} minutes. Generation may still be running; do not start it "
+            "again."
         )
     daten = _json_object(antwort)
     if antwort.status_code >= 400:
@@ -1035,7 +1030,7 @@ async def _hand_in(
     gave it, or with no name and the sentence the model reads instead."""
     kind = _PICTURE_TYPES.get(picture.suffix.lower())
     if kind is None:
-        return None, f"{made.refused}: {picture.name} is not a PNG, JPEG or WebP picture."
+        return None, f"{made.refused}: {picture.name} is not a PNG, JPEG, or WebP image."
     try:
         data = await asyncio.to_thread(picture.read_bytes)
     except OSError as error:

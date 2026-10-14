@@ -71,12 +71,12 @@
   .schalter.eingriff[aria-checked='true'] {
     background: var(--rot);
   }
-  /* The knob on the colour is the ground of the look: opaque everywhere,
-     light on the colour where the look is light and dark where it is dark.
+  /* The knob on the colour is opaque everywhere: white in the light looks
+     (`--knauf-an`, global.css), the ground of the look in the dark ones.
      The raised ground would not do — a menu page turns it into glass, and a
      knob one can see through sinks into its track. */
   .schalter[aria-checked='true'] i {
-    background: var(--bg);
+    background: var(--knauf-an, var(--bg));
     transform: translateX(14px);
   }
   .schalter:disabled {

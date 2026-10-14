@@ -163,10 +163,10 @@ def test_ohne_fassung_und_ohne_passagen_wird_das_dokument_benannt(tmp_path):
     plan = {dokument.id: Anteil(ganz=False)}
     text = zeilentext(zeile, repos, dokumentplan=plan)
     assert (
-        '300000 characters, too large for this model\'s context and not included here'
+        'contains 300000 characters, is too large to be sent with this request, and is not included here'
         in text
     )
-    assert "Say so rather than answering as if you knew its content" in text
+    assert "Explain this rather than answering as though you had read it" in text
     assert "A" * 100 not in text
     assert text.endswith("Fasse zusammen.")
 
@@ -178,7 +178,7 @@ def test_ein_dokument_ohne_eintrag_im_plan_wird_benannt(tmp_path):
     zeile, dokument = _zeile_mit_dokument(repos, "A" * 300_000)
     text = zeilentext(zeile, repos, dokumentplan={})
     assert (
-        '300000 characters, too large for this model\'s context and not included here'
+        'contains 300000 characters, is too large to be sent with this request, and is not included here'
         in text
     )
     assert "A" * 100 not in text
@@ -292,7 +292,7 @@ def test_zu_grosses_dokument_traegt_keinen_text_in_den_prompt(client, chat_id):
     text = _nutzertext(provider)
     assert "x" * 100 not in text
     assert "not included here" in text
-    assert "Say so rather than answering as if you knew its content" in text
+    assert "Explain this rather than answering as though you had read it" in text
     assert provider.durchlaeufe == 1
     assert _getragen(antwort) == [{kennung: "kein_platz"}]
 

@@ -11,7 +11,7 @@ import { api } from './api.js'
 import { farbtonDrehen } from './agentenfarbe.svelte.js'
 import {
   VORGABE_DARSTELLUNG, VORGABE_LAYOUT,
-  darstellungSpeichern, layoutSpeichern, modellSpeichern,
+  darstellungSpeichern, keptModelName, layoutSpeichern, modellSpeichern, storedModelId,
 } from './anzeige.js'
 import { chatZustandLaden, chatanzeige, chatless } from './chatanzeige.svelte.js'
 import { VORGABE_CHATLAYOUT, chatlayoutAnwenden, chatlayoutAusGespeichert, chatlayoutZumSpeichern } from './chatlayout.js'
@@ -86,6 +86,14 @@ export const zustand = $state({
      App.svelte, which rebuilds this list whenever it changes. */
   pictureQueue: [],
   modellId: '',
+  /* The chosen model while it is not among the reachable ones: the entry
+     the window had of it, or the one the service still names for it, under
+     the name stored with the choice where the window had none, with the
+     word of its server. Kept beside `modelle` and not in it — the
+     picker offers reachable models only — and read through
+     `aktuellesModell()`, so the bar and the strip keep naming the model
+     that is chosen instead of another one. */
+  unlistedModel: null,
   suche: '',
   // Running text answers, keyed by chat id: { [chatId]: { abbruch,
   // generationId, chatId } }. One entry per chat with a run in flight —
@@ -512,7 +520,10 @@ export async function chatSichern() {
   return chatWirdGesichert
 }
 export function aktuellesModell() {
-  return zustand.modelle.find((m) => m.id === zustand.modellId) || null
+  return (
+    zustand.modelle.find((m) => m.id === zustand.modellId)
+    || (zustand.unlistedModel?.id === zustand.modellId ? zustand.unlistedModel : null)
+  )
 }
 
 export async function featuresLaden() {
@@ -527,11 +538,110 @@ export async function featuresLaden() {
   }
 }
 
+/* The endpoint id of the agent server — the one word `SLOT_ENDPUNKT` in
+   agentenserver.svelte.js says, kept here so this module needs no import
+   of it (tests pin the two together). Its models are on the list for the
+   runs and the agent mask, never for the chat's pick. */
+const AGENT_SERVER_ID = 'agentenmodell'
+
+/* The first model the chat may take of its own accord. */
+function firstChatModel(list) {
+  return list.find((m) => m.anbieter !== AGENT_SERVER_ID) ?? null
+}
+
+/* The provider a model id belongs to. The service names a model at a
+   provider `provider:model` and a provider that names no model by its bare
+   id; provider ids carry no colon (app/modellkennung.py). */
+function providerOf(modelId) {
+  return String(modelId).split(':')[0]
+}
+
+/* Counts the loads of the model list: of several in flight only the one
+   started last may write. An outage sets off more than one at once — the
+   service's announcement, the regular beat — and an older answer landing
+   after a newer one would put the model back that has just dropped out. */
+let modelLoadRun = 0
+
+/* The list of reachable models, and what becomes of the chosen one.
+
+   A chosen model that is not reachable stays chosen and stays stored:
+   nothing switches by itself, at the start or while the window is open. The
+   first model of the list is taken only where none is chosen yet, or where
+   the service no longer carries the server of the chosen one — asked of the
+   full list, the one that names unreachable servers too.
+
+   The name stored with the choice follows the list: a server may run
+   another model behind the same id, or name its model anew, and the stored
+   name is what a start with the server away has to show. So where the
+   list names the chosen model otherwise than stored, the choice is stored
+   again under that name — the same choice, and without a word. Only a name
+   the server reports is followed, not the one the configuration gives the
+   server, and only while the service still holds this model as the choice:
+   a name never changes which model is stored. */
 export async function modelleLaden(frisch = false) {
+  const run = ++modelLoadRun
   try {
-    zustand.modelle = await api.modelle(frisch)
-    const bekannt = zustand.modelle.some((m) => m.id === zustand.modellId)
-    if (!bekannt && zustand.modelle.length) modellWaehlen(zustand.modelle[0].id)
+    const known = aktuellesModell()
+    const reachable = await api.modelle(frisch)
+    if (run !== modelLoadRun) return
+    const chosen = zustand.modellId
+    const listed = chosen ? reachable.find((m) => m.id === chosen) : null
+    if (!chosen || listed) {
+      zustand.modelle = reachable
+      zustand.unlistedModel = null
+      const first = firstChatModel(reachable)
+      if (!chosen && first) modellWaehlen(first.id)
+      // An entry without a name says nothing about it: the stored one stays.
+      // So does one whose name is only the one the configuration gives its
+      // server: that names the server, and the model is not what it names.
+      if (listed?.name && listed.name_gemeldet && listed.name !== keptModelName(chosen)) {
+        // Read again first, and checked in the same breath it is written
+        // in: where the service holds another model by now, another load has
+        // started, or the window chose again while the read was out, nothing
+        // is written and the window keeps showing the model it has.
+        const held = await storedModelId()
+        if (run === modelLoadRun && zustand.modellId === chosen && held === chosen) {
+          modellSpeichern(chosen, listed.name)
+        }
+      }
+      return
+    }
+    const all = await api.modelleAlle()
+    if (run !== modelLoadRun) return
+    // Chosen anew while the two requests were out: the list stands, and the
+    // next load reads the new choice.
+    if (zustand.modellId !== chosen) {
+      zustand.modelle = reachable
+      return
+    }
+    const provider = providerOf(chosen)
+    const server = all.find((m) => m.id === chosen) || all.find((m) => m.anbieter === provider)
+    zustand.modelle = reachable
+    if (!server) {
+      zustand.unlistedModel = null
+      const first = firstChatModel(reachable)
+      if (first) modellWaehlen(first.id)
+      return
+    }
+    // The entry the window already had of it, else the one the service
+    // still gives for this very id. Its name, in this order: the one the
+    // window had, the one stored with the choice, the one of that entry —
+    // the service names a server it cannot ask by its configured name, so
+    // after a start with the server away the stored one is the only name
+    // that is the model's. The word is the server's, as the service says
+    // it now, and the model itself is not reachable whatever its entry
+    // said while it was listed.
+    const had = known?.id === chosen ? known : null
+    const entry = had || (server.id === chosen ? server : null)
+    const name = had?.name || keptModelName(chosen) || entry?.name
+    zustand.unlistedModel = {
+      ...entry,
+      ...(name && { name }),
+      id: chosen,
+      anbieter: server.anbieter,
+      erreichbar: false,
+      server_state: server.server_state,
+    }
   } catch {
     melde(t('modell.nicht_geladen'), 'fehler')
   }
@@ -692,10 +802,12 @@ function nimmFallsDa(wurzel, name) {
   if (wurzel.getPropertyValue(name) !== '') wurzel.removeProperty(name)
 }
 
-/* The look whose frame colour the shell heard last. The tone hangs on the
-   look alone, so a redraw of the same look asks the sheet nothing — a drag
-   on the own gradient redraws once per pointer event, and reading a
-   computed style there would recalculate the styles each time. */
+/* The look whose frame colour the shell heard last. The tone of a fixed
+   look hangs on the look alone, so a redraw of the same look asks the sheet
+   nothing — a drag on the own gradient redraws once per pointer event, and
+   reading a computed style there would recalculate the styles each time.
+   The own gradient carries its first colour in the key, as that is what the
+   shell is told for it. */
 let frameLookTold = ''
 
 /* The window around the page opens before the page is there. So that it
@@ -703,12 +815,15 @@ let frameLookTold = ''
    the shell the solid tone of its frame — at its start and whenever the
    look changes — and the shell keeps it for its next start. Read off the
    sheet as it applies right now, after the attributes the look hangs on are
-   set. In a browser there is no shell, and nothing is told. */
-function frameColourToShell(look) {
+   set; the own gradient hands in the colour it draws, as the shell opens on
+   one colour only. In a browser there is no shell, and nothing is told. */
+function frameColourToShell(look, drawn = null) {
   const tell = window.exeHuelle?.frameColour
   if (typeof tell !== 'function' || look === frameLookTold) return
-  const colour = getComputedStyle(document.documentElement)
-    .getPropertyValue('--bg-seite').trim().toLowerCase()
+  const colour = (
+    drawn ??
+    getComputedStyle(document.documentElement).getPropertyValue('--bg-seite')
+  ).trim().toLowerCase()
   if (!/^#[0-9a-f]{6}$/.test(colour)) return
   frameLookTold = look
   tell(colour)
@@ -780,8 +895,9 @@ export function rahmenNeuZeichnen(modus) {
   if (document.documentElement.getAttribute('data-eigen') !== art) {
     document.documentElement.setAttribute('data-eigen', art)
   }
-  /* The own gradient stands on the dark or on the light set of values. */
-  frameColourToShell(`${schema}:${art}`)
+  /* The own gradient stands on the dark or on the light set of values, and
+     the shell opens on the first colour of the gradient as it is drawn. */
+  frameColourToShell(`${schema}:${art}:${farben[0] ?? ''}`, farben[0] ?? null)
   frameSchemeToShell(hell ? 'light' : 'dark')
 }
 
@@ -908,9 +1024,12 @@ let oeffnungsLauf = 0
    stale list. */
 let chatsLadenLauf = 0
 
+/* Chooses a model and stores the choice, the name with the id: whatever
+   chooses — the picker, a chat's own model, the first of the list — chooses
+   among the listed models, and the list names them. */
 export function modellWaehlen(id) {
   zustand.modellId = id
-  modellSpeichern(id)
+  modellSpeichern(id, aktuellesModell()?.name)
 }
 
 /* The look and the two panel positions as the service hands them out — set
@@ -1012,10 +1131,27 @@ export function bildlaufPlatzhalter(chatId) {
   }
 }
 
-/* The same working tile for a picture the model draws while it answers
-   (`draw_image`), with a key of its own: the picture window can be drawing
-   in the same chat at the same time, and two rows under one key stop the
-   list from drawing. `answerId` names the answer whose run it joins. */
+/* The calls that make a picture or a video while the model answers: both
+   stand in the chat the same way — the working tile while they run, the
+   finished file at once. One list, so the two places that ask agree. */
+export function isDrawingTool(name) {
+  return name === 'draw_image' || name === 'draw_video'
+}
+
+/* Whether the drawing call this answer is running right now makes a video:
+   the word on its working tile says "video" instead of "picture". The
+   picture window's own tile has no answer behind it and stays a picture. */
+export function drawingMakesVideo(answerId) {
+  if (answerId == null) return false
+  const answer = zustand.nachrichten.find((n) => n.id === answerId)
+  return Boolean(answer?.werkzeuge?.some((w) => w.name === 'draw_video' && w.ergebnis == null))
+}
+
+/* The same working tile for a picture or a video the model makes while it
+   answers (`draw_image`, `draw_video`), with a key of its own: the picture
+   window can be drawing in the same chat at the same time, and two rows
+   under one key stop the list from drawing. `answerId` names the answer
+   whose run it joins. */
 export function answerDrawingTile(chatId, answerId) {
   return { ...bildlaufPlatzhalter(chatId), id: `bildlauf-${answerId}`, answerId }
 }
@@ -1111,11 +1247,10 @@ export async function chatOeffnen(id) {
   const meinLauf = ++oeffnungsLauf
   const vorher = zustand.aktiverChat
   /* The model pick is one of them and is put back on the way out: it is set
-     for the NEW chat before the fetch has answered, so a failed open that
-     returns to the previous chat has to take it back with it — otherwise the
-     reader sits in one chat and sends with the other chat's model.
-     `modellAnwenden` and not `modellWaehlen`: putting the old value back is
-     not a choice worth storing. */
+     for the NEW chat before the fetch has answered, so a failed open has to
+     take it back — otherwise the reader sends with the model of a chat that
+     never opened. `modellAnwenden` and not `modellWaehlen`: putting the old
+     value back is not a choice worth storing. */
   const modellVorher = zustand.modellId
   const wechsel = vorher !== id
   delete zustand.wiederanhaengen[id]
@@ -1156,8 +1291,16 @@ export async function chatOeffnen(id) {
        lies over the chat, so a chat that was just chosen is behind it until
        it closes. */
     const chat = aktuellerChat()
-    if (chat?.endpoint_id && zustand.modelle.some((m) => m.id === chat.endpoint_id)) {
-      modellWaehlen(chat.endpoint_id)
+    const carried = chat?.endpoint_id
+      ? zustand.modelle.find((m) => m.id === chat.endpoint_id)
+      : null
+    if (carried && carried.anbieter !== AGENT_SERVER_ID) {
+      modellWaehlen(carried.id)
+    } else if (carried) {
+      // A chat that carries a model of the agent server takes the first
+      // model of the chat's own choice, like a chat whose server is gone.
+      const first = firstChatModel(zustand.modelle)
+      if (first) modellWaehlen(first.id)
     }
     zustand.seitenleisteOffen = false
   }
@@ -1168,19 +1311,19 @@ export async function chatOeffnen(id) {
   } catch {
     /* A failure of a look nobody is waiting for any more — a younger open
        owns the screen, or the chat was left — says nothing about what stands
-       there. For the one that counts, nothing else is touched on the way
-       out: the list keeps standing (a chat that was readable a moment ago
-       does not become empty because the service did not answer) and the chat
-       that was open before is the active one again, with the model that
-       belonged to it. That the look failed is what the notice says. */
+       there. For the one that counts, the model goes back to the one from
+       before the click, and the notice says that the look failed.
+
+       A switch that failed lands on the start page, as after "New chat":
+       no chat is selected and no row is shown, so nothing of another
+       conversation stands under the name of the one that was asked for. A
+       look at the chat that is already open is not a switch: that chat
+       stays selected and its list keeps standing — a chat that was readable
+       a moment ago does not become empty because the service did not
+       answer. */
     if (meinLauf !== oeffnungsLauf || zustand.aktiverChat !== id) return
-    zustand.aktiverChat = vorher
+    if (wechsel) neuerChat()
     modellAnwenden(modellVorher)
-    /* The picture window went with the chat being opened; going back means it
-       goes back too, or the reader would type into the settings of a
-       conversation they are no longer in. Nothing to put back where there
-       was no switch: there the window never left this chat. */
-    if (wechsel) chatZustandLaden(vorher)
     melde(t('chat.nicht_geoeffnet'), 'fehler')
     return
   }
@@ -1259,10 +1402,11 @@ export async function chatOeffnen(id) {
     else if (zustand.nachrichten[stelle] !== meinPlatzhalter) {
       zustand.nachrichten[stelle] = meinPlatzhalter
     }
-    /* And a picture that answer's model is drawing right now (`draw_image`):
-       the same working tile the picture window's picture gets back above,
-       for the same reason — it lives here alone. */
-    if (meinPlatzhalter.werkzeuge?.some((w) => w.name === 'draw_image' && w.ergebnis == null)
+    /* And a picture or a video that answer's model is making right now
+       (`draw_image`, `draw_video`): the same working tile the picture
+       window's picture gets back above, for the same reason — it lives here
+       alone. */
+    if (meinPlatzhalter.werkzeuge?.some((w) => isDrawingTool(w.name) && w.ergebnis == null)
         && !zustand.nachrichten.some((n) => n.answerId === meinPlatzhalter.id)) {
       zustand.nachrichten.push(answerDrawingTile(id, meinPlatzhalter.id))
     }

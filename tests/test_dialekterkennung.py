@@ -243,9 +243,9 @@ async def test_ohne_antwort_wird_beim_naechsten_mal_gefragt(tmp_path, monkeypatc
 
 async def test_ein_props_das_nicht_antwortet_wird_wieder_gefragt(tmp_path, monkeypatch):
     """A timeout on /props used to be written down as "this server can
-    nothing" — and that answer stands for as long as the endpoint remains
-    reachable, so a server that was merely slow to start never got asked
-    again. No answer is now no answer, and the next pass knocks once more."""
+    nothing", so a server that was merely slow to start was never believed
+    again. No answer is now no answer: it changes nothing that is known, and
+    the next pass knocks once more."""
 
     def handler(request):
         pfad = request.url.path
@@ -267,21 +267,105 @@ async def test_ein_props_das_nicht_antwortet_wird_wieder_gefragt(tmp_path, monke
 
     await discovery.einmal_pruefen()
     zustand = discovery.zustaende["omlx"]
-    # The template half is still owed, so it is asked again — but what is
-    # already known stays readable rather than being blanked.
-    assert zustand.props_beantwortet is False
     assert "tool_calls" not in zustand.faehigkeiten_erkannt
 
     stumm["ja"] = False
     await discovery.einmal_pruefen()
 
-    assert zustand.props_beantwortet is True
     assert zustand.faehigkeiten_erkannt["tool_calls"] is True
 
-    # And once it has answered, it is not knocked on again.
+    # One silent pass after an answer keeps what the answer said.
     stumm["ja"] = True
     await discovery.einmal_pruefen()
     assert zustand.faehigkeiten_erkannt["tool_calls"] is True
+
+
+def _props_server(mode, asked):
+    """A server whose /props answers as ``mode["kind"]`` says: ``"answer"``
+    (a chat template with tool calls), ``"silent"`` (a timeout) or ``"missing"``
+    (a 404). Every knock is counted in ``asked``."""
+
+    def handler(request):
+        path = request.url.path
+        if path.endswith("/props"):
+            asked.append(path)
+            if mode["kind"] == "silent":
+                raise httpx.ConnectTimeout("too slow")
+            if mode["kind"] == "missing":
+                return httpx.Response(404)
+            return httpx.Response(
+                200, json={"chat_template_caps": {"supports_tool_calls": True}}
+            )
+        if path.endswith("/models/status"):
+            return httpx.Response(404)
+        if path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": QWEN}]})
+        return httpx.Response(404)
+
+    return handler
+
+
+async def test_props_is_asked_on_every_pass_and_follows_the_server(tmp_path, monkeypatch):
+    """A reachable server that stops answering /props loses what /props said
+    once the silence passes the cap, and gets it back when /props returns —
+    nothing resets by hand in between."""
+    mode = {"kind": "answer"}
+    asked: list[str] = []
+    _transport(monkeypatch, _props_server(mode, asked))
+    discovery, _ = _discovery(tmp_path)
+
+    await discovery.einmal_pruefen()
+    zustand = discovery.zustaende["omlx"]
+    assert zustand.faehigkeiten_erkannt["tool_calls"] is True
+
+    before = len(asked)
+    mode["kind"] = "silent"
+    for _ in range(STILLE_BIS_WEG - 1):
+        await discovery.einmal_pruefen()
+        assert zustand.faehigkeiten_erkannt["tool_calls"] is True
+    await discovery.einmal_pruefen()
+    assert "tool_calls" not in zustand.faehigkeiten_erkannt
+
+    mode["kind"] = "answer"
+    await discovery.einmal_pruefen()
+    assert zustand.faehigkeiten_erkannt["tool_calls"] is True
+    # One knock per pass, silent or not.
+    assert len(asked) - before == STILLE_BIS_WEG + 1
+
+
+async def test_a_props_route_that_disappears_is_an_answer(tmp_path, monkeypatch):
+    """A 404 is the server saying there is no such route: what /props said
+    before is gone at once, not after the cap."""
+    mode = {"kind": "answer"}
+    _transport(monkeypatch, _props_server(mode, []))
+    discovery, _ = _discovery(tmp_path)
+    await discovery.einmal_pruefen()
+    zustand = discovery.zustaende["omlx"]
+    assert zustand.faehigkeiten_erkannt["tool_calls"] is True
+
+    mode["kind"] = "missing"
+    await discovery.einmal_pruefen()
+    assert "tool_calls" not in zustand.faehigkeiten_erkannt
+
+    mode["kind"] = "answer"
+    await discovery.einmal_pruefen()
+    assert zustand.faehigkeiten_erkannt["tool_calls"] is True
+
+
+async def test_silence_probe_a_steady_props_gives_the_same_state_on_every_pass(
+    tmp_path, monkeypatch
+):
+    mode = {"kind": "answer"}
+    _transport(monkeypatch, _props_server(mode, []))
+    discovery, _ = _discovery(tmp_path)
+    await discovery.einmal_pruefen()
+    zustand = discovery.zustaende["omlx"]
+    first = dict(zustand.faehigkeiten_erkannt)
+
+    for _ in range(STILLE_BIS_WEG + 2):
+        await discovery.einmal_pruefen()
+
+    assert zustand.faehigkeiten_erkannt == first
 
 
 async def test_ein_spaet_erkannter_dialekt_holt_die_familien_nach(tmp_path, monkeypatch):

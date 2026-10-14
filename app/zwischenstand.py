@@ -106,9 +106,9 @@ What to do next, specific enough to act on immediately.
 OFFENE_ABLAGE_KOPF = "## Not delivered"
 
 OFFENE_ABLAGE_SATZ = (
-    "The previous run tried to deliver these files to the agent dock and the "
-    "shelf refused them. They are still owed — deliver each one again with "
-    "deliver_file, under the same name, before you finish."
+    "The previous run attempted to deliver these files to the agent dock, but the shelf "
+    "rejected them. Delivery remains outstanding. Before finishing, deliver each file again "
+    "using deliver_file with the same name."
 )
 
 
@@ -464,8 +464,8 @@ def naechste_aufgabe(urspruenglich: str, zwischenstand: str, offene_ablagen=()) 
 def nach_neustart_fortsetzen(config, repositories, *, nur_eigene: bool = False) -> int:
     """Schedules a resumption for every job a hard restart cut off mid-run
     — not only the ones that already belonged to a restart
-    chain. Call right after ``AuftragRepository.beim_start_aufraeumen`` has
-    moved them from ``laeuft`` to ``unterbrochen``.
+    chain. Call right after the start-up clean-up of the job repository has
+    moved them from running to interrupted.
 
     Each job already carries its own status from the periodic write during
     the run (``AuftragRepository.zwischenstand_setzen``) — nothing here

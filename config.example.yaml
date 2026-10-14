@@ -1,7 +1,8 @@
 # Exe AI — configuration
 #
-# This file is version-controlled and serves as the template. Secrets (API keys,
-# passwords) do NOT belong here — put them in .env, see .env.example.
+# This version-controlled file is the configuration template. Do NOT store
+# secrets such as API keys or passwords here. Put them in .env; see
+# .env.example.
 #
 # It is also the list of everything the program knows. On every start the file
 # you actually use is compared against this one, and any key missing from
@@ -15,9 +16,9 @@
 # Comments here are English because everyone who sets this up reads them.
 # The source code stays German; that is the project's own language.
 #
-# When adding a key: its explanation goes ABOVE it, or on the same line. A
-# comment line standing alone AFTER a value is read as introducing the next
-# key and would travel with that one instead.
+# Place each key's explanation ABOVE it or on the same line. A standalone
+# comment AFTER a value is associated with the next key and will be copied
+# with that key.
 
 app:
   # Address the service listens on.
@@ -25,6 +26,12 @@ app:
   # in front if you need remote access.
   host: "127.0.0.1"
   port: 8090
+  # A service bound beyond 127.0.0.1 — your LAN, a VPN — runs only with a
+  # password, and asks every client for it once. The password stands in the
+  # file named here (relative to the data folder, or absolute), never in
+  # this file itself. Empty: no password, and the service refuses to start
+  # on any host but the loopback address.
+  password_file: ""
   # Default language of the interface: "en" or "de". English is the primary
   # language, German is kept fully equivalent. A request that names a
   # language overrides this: the interface's own X-Ui-Language header first,
@@ -34,10 +41,10 @@ app:
   # scroll anomalies, shows a report window and writes marker lines into
   # the access log. Meant for test services only.
   diagnose: false
-  # The name a system notification carries when a schedule fires. Empty is
-  # the program's own name. A test service running beside the shipped
-  # install writes its own here — otherwise both announce themselves as the
-  # same program and nobody can tell which of the two spoke.
+  # Name displayed in system notifications for scheduled tasks. If empty,
+  # the program's own name is used. Give test services a distinct name so
+  # their notifications can be distinguished from those of the installed
+  # app.
   meldetitel: ""
   # Timezone for agent schedules (6.7). Times like schedule: "08:00" in an
   # agent file are read in this zone. Without it, the server zone applies —
@@ -46,20 +53,19 @@ app:
   # Directory for the database, uploaded documents and generated images.
   data_dir: "./data"
   log_dir: "./logs"
-  # Where the pictures the generator draws are written. A named storage
-  # location (app/speicherorte.py). Empty means "under data_dir" (so it
-  # follows a moved data folder); set an absolute path to keep your pictures
-  # on another drive.
+  # Directory for generated images; a named storage location managed by
+  # app/speicherorte.py. If empty, it resides under data_dir and moves with
+  # the data folder. Set an absolute path to store images on another drive.
   bilder_verzeichnis: ""
   # Where the scripts a cron entry may start are kept. A named storage
   # location like the pictures above, and empty means the same thing: under
   # data_dir. It is also the boundary — a schedule can only start a file that
   # lies inside this folder, links leading out of it included.
   skripte_verzeichnis: ""
-  # Where the files agents deliver to the dock are kept. A named storage
-  # location like the two above, and empty means the same thing: under
-  # data_dir. The shelf's own record lives inside this folder, so the folder
-  # IS the shelf — move it and the whole shelf goes with it.
+  # Directory for files delivered by agents to the dock. Like the two
+  # locations above, an empty value places it under data_dir. The shelf's
+  # index is stored in this folder, so moving the folder moves the entire
+  # shelf.
   agentendock_verzeichnis: ""
   # Where the system prompt lives. Exactly one file for the whole program — not
   # one per model and no copy in the database. It is read fresh on EVERY
@@ -67,46 +73,50 @@ app:
   # already exist. Edit it in the program under Chat -> System prompt, or by
   # hand. It ships empty.
   system_prompt_file: "./prompts/system.md"
-  # The persistent memory: a second prompt file beside the first, written by
-  # the model and by hand, read fresh on every request as well. Ships empty.
+  # Persistent memory: a separate prompt file that can be edited by the
+  # model or manually and is read afresh with every request. Initially
+  # empty.
   memory_file: "./prompts/memory.md"
-  # One Markdown file per agent — front matter plus prompt. Like the skills
-  # below, agents live in two places: the shipped ones sit next to the
-  # program and are replaced by every update; yours sit next to your prompts
-  # and are never touched. Same name in both: yours wins.
+  # Each agent is a Markdown file containing front matter and instructions.
+  # Built-in agents are stored beside the program and replaced during
+  # updates. User-defined agents are stored beside the prompts and remain
+  # untouched. If both locations contain the same name, the user's version
+  # takes precedence.
   agenten_verzeichnis: "./prompts/agenten"
   agenten_mitgeliefert: "./agenten"
-  # The permission rules a tool call is judged by (Tor 3). Personal, like
-  # mcp_servers.json — what ships is berechtigungen.example.json, and this is
-  # your own copy of it, created the first time the program runs.
+  # Permission rules used to evaluate tool calls (Tor 3). Like
+  # mcp_servers.json, this is a personal configuration file. The program
+  # ships berechtigungen.example.json and creates your own copy on first
+  # launch.
   berechtigungen_datei: "./berechtigungen.json"
-  # Skills live in two places. The shipped ones sit next to the program and
-  # are replaced by every update; yours sit next to your prompts and are never
-  # touched. Same name in both: yours wins.
+  # Skills are stored in two locations. Built-in skills reside beside the
+  # program and are replaced during updates. User-defined skills reside beside
+  # the prompts and remain untouched. If both locations contain the same name,
+  # the user's version takes precedence.
   skills_mitgeliefert: "./skills"
   skills_verzeichnis: "./prompts/skills"
-  # Where the model files live. This folder is the boundary — only what lies
-  # inside it can be started.
+  # Directory containing model files. Only files within this directory can
+  # be started.
   modelle_verzeichnis: "./data/models"
-  # The program that runs those files. Empty means "look for it", in the PATH
-  # first: whoever installed one of their own meant it to be used.
+  # Program used to run the model files. An empty value enables discovery,
+  # starting with PATH so a user-installed version takes precedence.
   runner_programm: null
-  # Models that are not language models get folders of their own, and the
-  # FOLDER is what decides which kind a file is — telling them apart by name
-  # put an embedding model into the chat picker more than once.
+  # Non-language models have separate directories. A file's directory
+  # determines its model type; relying on filenames previously caused
+  # embedding models to appear in the chat model selector.
   einbettungsmodelle_verzeichnis: "./data/embedding_models"
   bildmodelle_verzeichnis: "./data/image_models"
-  # Speech models, and beside them the small text model that may tidy up a
-  # dictation. Nothing ships in here: the folder starts empty and the
-  # catalogue stands next to it.
+  # Speech models and the small text model used to clean up dictation. No
+  # models are included: the directory starts empty, and models are
+  # available from the catalogue.
   sprachmodelle_verzeichnis: "./data/speech_models"
-  # The embedding server is a small model server of its own, so it needs a
-  # port of its own — sharing one with the chat model makes the second start
-  # fail.
+  # The embedding server is a separate model server and requires its own
+  # port. Sharing a port with the chat model prevents the second server from
+  # starting.
   einbettung_port: 8081
-  # The speech server and its tidy-up model, one port each for the same
-  # reason. 8082 stays free on purpose: a model server started by hand lands
-  # there often enough to collide with a default.
+  # The speech server and its cleanup model likewise require separate ports.
+  # Port 8082 is deliberately left available because manually started model
+  # servers commonly use it.
   sprache_port: 8084
   sprachputz_port: 8085
 
@@ -126,15 +136,14 @@ features:
   # reaching outside the share asks first.
   shell_tool: true
 
-# Candidate endpoints — WHERE a model server is and HOW to talk to it.
+# Candidate endpoints specify WHERE a model server is located and HOW to communicate with it.
 #
-# What the model is CALLED is deliberately not in here. The name is read from
-# the server itself (GET /v1/models) so that nobody has to maintain it in two
-# places. An optional `name:` exists as a fallback for servers that report
-# nothing; without it the id below is shown.
+# The model name is read from the server using GET /v1/models, avoiding
+# duplicate configuration. An optional `name:` provides a fallback if the
+# server returns no name; otherwise, the id below is displayed.
 #
-# The list is maintained by hand; which entries are actually reachable is
-# checked at runtime by the health check.
+# Maintain this list manually. A runtime health check determines which
+# endpoints are reachable.
 #
 # reasoning_format — how the reasoning pass is read out of the response:
 #   native  = separate field delta.reasoning (Gemma 4)
@@ -145,11 +154,12 @@ features:
 # parameter_dialect — what the server calls its sampling parameters:
 #   llama_cpp | mlx | openai (the last one also covers anything unknown)
 #
-# Empty on purpose: a fresh install knows no server yet. Uncomment one of
-# the examples below, or add your own. One reachable entry is enough.
+# Intentionally empty: a fresh installation has no configured servers.
+# Uncomment an example below or add your own. One reachable endpoint is
+# sufficient.
 endpoints: []
-  # Add one entry per provider you want to use. One reachable endpoint
-  # is enough - the program works with a single one.
+  # Add an entry for each provider you want to use. The program
+  # requires only one reachable endpoint.
   #
   # Every entry here is a provider reached over the network, and `group` says
   # as much: `cloud` for a paid service or for one on somebody else's
@@ -159,9 +169,9 @@ endpoints: []
   # LOCAL servers are the two this program starts itself - the main model
   # server and the agent server - and neither of them stands in this file.
   #
-  # What `group` decides: how the model picker groups the model, and whether
-  # a chat's memory may travel to this endpoint unasked (it may not, for a
-  # provider).
+  # `group` determines how the model appears in the model selector and
+  # whether chat memory may be sent to the endpoint without explicit
+  # permission. This is not permitted for providers.
   #
   # Providers (requests leave this computer, key goes into .env):
   #
@@ -178,19 +188,19 @@ endpoints: []
   #     api_key_env: "ANTHROPIC_API_KEY"
   #     parameter_dialect: "anthropic"
   #
-  # An entry without `modell:` is a PROVIDER: its catalogue is asked for and
-  # every model in it can be picked. With `modell:` the entry stands for
-  # exactly that one model — useful where the catalogue holds hundreds of
-  # entries that have nothing to do with chatting.
+  # Without `modell:`, an entry represents a PROVIDER: its catalogue is
+  # queried and all returned models can be selected. With `modell:`, the
+  # entry refers only to that model, which is useful for catalogues
+  # containing many models unrelated to chat.
 
 mcp:
-  # Where the tool servers are registered. A separate file rather than a
-  # section here, because the format matches what other programs use — an
-  # existing server list can be adopted without rewriting it.
+  # File containing tool server registrations. Its format matches other
+  # programs, allowing existing server lists to be adopted without
+  # conversion.
   servers_file: "./mcp_servers.json"
-  # The rotating OAuth credentials of the hosted servers. Separate from the
-  # server list (you edit that one, the program edits this one) and separate
-  # from .env, which holds fixed keys.
+  # Rotating OAuth credentials for hosted servers. Stored separately from
+  # the user-edited server list because this file is managed by the program,
+  # and separately from .env, which holds fixed keys.
   auth_file: "./data/mcp_auth.json"
 
 
@@ -201,10 +211,10 @@ discovery:
 
 logging:
   level: "INFO"
-  # "text" reads well in the journal, "json" can be processed by machine.
+  # Use "text" for readable journal output or "json" for machine processing.
   format: "text"
   # File name inside log_dir. Leave empty for console/journal only.
   file: "exe-ai-terminal.log"
-  # Rotate above this size, keep this many old files.
+  # Rotate logs above this size and retain the specified number of older files.
   max_bytes: 10485760
   file_count: 5

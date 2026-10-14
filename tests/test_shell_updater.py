@@ -47,10 +47,22 @@ def _run(script: str, env: dict[str, str] | None = None) -> Any:
     return json.loads(run.stdout.strip().splitlines()[-1])
 
 
-def _updater(body: str, *, packaged: bool = True, store: bool = False, env: dict[str, str] | None = None) -> Any:
+def _updater(
+    body: str,
+    *,
+    packaged: bool = True,
+    store: bool = False,
+    service: bool = False,
+    env: dict[str, str] | None = None,
+) -> Any:
     """Loads updater.js with stand-ins and runs `body` (async) against it.
     The stand-in for the library behaves like the library where it matters:
-    a failure is the 'error' event first and the rejected promise second."""
+    a failure is the 'error' event first and the rejected promise second.
+
+    With `service` the shell hands in what an installation asks of the
+    service, as main.js does: two stand-ins that note their call among the
+    library's. `ending.fails` makes the end fail with that reason;
+    `ending.held` keeps it on its way for as long as the scenario wants."""
     script = f"""
 const Module = require('module')
 const {{ EventEmitter }} = require('events')
@@ -80,7 +92,16 @@ Module._load = function (request, ...rest) {{
 }}
 if ({str(store).lower()}) process.windowsStore = true
 const updater = require({json.dumps(str(UPDATER))})
-updater.start(() => window)
+const ending = {{ fails: '', held: null }}
+const installation = {{
+  endService: async () => {{
+    calls.push('end')
+    if (ending.held) await ending.held
+    if (ending.fails) throw new Error(ending.fails)
+  }},
+  restartService: () => {{ calls.push('restart') }},
+}}
+updater.start(() => window, {'installation' if service else 'undefined'})
 const status = () => handlers['updates-status']()
 ;(async () => {{
   const result = await (async () => {{
@@ -119,7 +140,7 @@ def test_the_shell_looks_once_after_the_service_has_started():
     start = match.group(0)
     assert start.index("await dienstStarten()") < start.index("updater.check()")
     assert source.count("updater.check()") == 1
-    assert "updater.start(() => fenster)" in source
+    assert "updater.start(() => fenster, {" in source
 
 
 def test_before_any_look_the_state_is_none_with_the_running_version():
@@ -215,6 +236,117 @@ def test_a_failed_installation_can_be_tried_again():
     assert result["calls"] == ["install", "install"]
     assert result["state"]["state"] == "error"
     assert result["state"]["reason"] == "the package could not be taken over"
+
+
+# --- an installation ends the service first ------------------------------------
+
+DOWNLOADED = f"""
+    autoUpdater.emit('update-available', {AVAILABLE})
+    autoUpdater.emit('update-downloaded', {{ version: '0.6.10' }})
+"""
+
+
+def test_installing_ends_the_service_before_the_program_is_handed_over():
+    """Falls over without the fix: the program was handed over with the
+    service still running, and the release replaced its files under it."""
+    result = _updater(DOWNLOADED + """
+    const answer = await handlers['updates-install']()
+    return { calls, state: answer.state }
+    """, service=True)
+    assert result == {"calls": ["end", "install"], "state": "downloaded"}
+
+
+def test_nothing_is_handed_over_while_the_service_is_still_ending():
+    """The end of the service takes its time. Until it is over the program
+    is not handed over, and a second click does not end or install twice."""
+    result = _updater(DOWNLOADED + """
+    let release
+    ending.held = new Promise((resolve) => { release = resolve })
+    const first = handlers['updates-install']()
+    await new Promise((resolve) => setImmediate(resolve))
+    const second = await handlers['updates-install']()
+    const meanwhile = calls.slice()
+    release()
+    await first
+    return { meanwhile, second: second.state, calls }
+    """, service=True)
+    assert result["meanwhile"] == ["end"]
+    assert result["second"] == "downloaded"
+    assert result["calls"] == ["end", "install"]
+
+
+def test_a_service_that_does_not_end_keeps_the_release_from_being_installed():
+    """Nothing is installed over a running service: the state is the error
+    with the reason the end gave, the service is not started again — it
+    never went — and the next try asks it to end anew."""
+    result = _updater(DOWNLOADED + """
+    ending.fails = 'The service on port 8090 is still running.'
+    const refused = await handlers['updates-install']()
+    const after = calls.slice()
+    ending.fails = ''
+    autoUpdater.emit('update-downloaded', { version: '0.6.10' })
+    await handlers['updates-install']()
+    return { refused: [refused.state, refused.reason], after, calls }
+    """, service=True)
+    assert result["refused"] == ["error", "The service on port 8090 is still running."]
+    assert result["after"] == ["end"]
+    assert result["calls"] == ["end", "end", "install"]
+
+
+def test_an_installation_that_fails_after_the_service_ended_brings_the_service_back():
+    """The program runs on then, and so must its service — whether the
+    library throws at once or announces the failure a moment later. Once
+    per failed installation."""
+    result = _updater(DOWNLOADED + """
+    autoUpdater.quitAndInstall = () => { calls.push('install'); throw new Error('no hand-over') }
+    const thrown = await handlers['updates-install']()
+    const first = calls.splice(0)
+    autoUpdater.quitAndInstall = () => { calls.push('install') }
+    autoUpdater.emit('update-downloaded', { version: '0.6.10' })
+    await handlers['updates-install']()
+    autoUpdater.emit('error', new Error('the package could not be taken over'))
+    autoUpdater.emit('error', new Error('said twice'))
+    return { thrown: [thrown.state, thrown.reason], first, second: calls }
+    """, service=True)
+    assert result["thrown"] == ["error", "no hand-over"]
+    assert result["first"] == ["end", "install", "restart"]
+    assert result["second"] == ["end", "install", "restart"]
+
+
+def test_silence_probe_without_a_fetched_release_the_service_is_left_alone():
+    """Install without a download does nothing, as before — and neither a
+    failed look nor a failed download starts a service that never ended."""
+    result = _updater(f"""
+    await handlers['updates-install']()
+    autoUpdater.emit('update-available', {AVAILABLE})
+    await handlers['updates-install']()
+    autoUpdater.emit('download-progress', {{ percent: 40, transferred: 4, total: 10, bytesPerSecond: 1 }})
+    await handlers['updates-install']()
+    autoUpdater.emit('error', new Error('the download broke off'))
+    autoUpdater.checkForUpdates = () => {{ calls.push('check'); return fail(new Error('no network')) }}
+    await handlers['updates-check']()
+    return {{ calls, state: (await status()).state }}
+    """, service=True)
+    assert result == {"calls": ["check"], "state": "error"}
+
+
+def test_the_shell_hands_the_updater_the_end_of_the_service_and_its_way_back():
+    """Read off the source: the two things an installation asks of the
+    service are the shell's own, and the end of the service is called from
+    nowhere but the installation — closing the window still leaves it."""
+    source = MAIN.read_text(encoding="utf-8")
+    wiring = re.search(r"\nupdater\.start\(\(\) => fenster, \{\n(.*?)\n\}\)\n", source, re.S)
+    assert wiring, "the wiring not found"
+    assert wiring.group(1).split() == [
+        "endService:", "endServiceForUpdate,", "restartService:", "restartServiceAfterUpdate,",
+    ]
+    quit_ = re.search(r"\napp\.on\('before-quit', \(\) => \{\n.*?\n\}\)\n", source, re.S)
+    assert quit_, "before-quit not found"
+    assert "endServiceForUpdate" not in quit_.group(0)
+    assert "updater" not in quit_.group(0)
+    # Named where it is defined and where it is handed in; the third is the
+    # sentence of the file's head that points at it.
+    assert len(re.findall(r"\bendServiceForUpdate\b", source)) == 3
 
 
 # --- the silence probes ------------------------------------------------------
@@ -503,8 +635,8 @@ def test_the_bridge_listens_for_nothing_without_a_callback():
 def test_the_bridge_carries_these_calls_and_no_others():
     names = _bridge("return Object.keys(bridge).sort()")
     assert names == [
-        "aufDiktat", "aufVorlesen", "frameColour", "frameScheme", "thumbnail", "updates",
-        "vorlesenBeschriftung",
+        "aufBetrachterEscape", "aufDiktat", "aufVorlesen", "frameColour", "frameScheme", "menuWords",
+        "terminal", "thumbnail", "updates", "vorlesenBeschriftung",
     ]
 
 

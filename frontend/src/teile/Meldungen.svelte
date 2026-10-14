@@ -67,7 +67,7 @@
     <div class="meldung {meldung.art}" in:fly={REIN} out:fly={RAUS}>
       <span class="zeichen">
         {#if meldung.art === 'werkzeug'}
-          <Werkzeugzeichen name={meldung.werkzeug} laeuft={true} />
+          <Werkzeugzeichen name={meldung.werkzeug} server={meldung.server} laeuft={true} />
         {:else}
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

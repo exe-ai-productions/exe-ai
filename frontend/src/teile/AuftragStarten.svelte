@@ -201,7 +201,9 @@
   }
 
   async function starten() {
-    if (!agentName || !aufgabe.trim() || !endpointId) return
+    // Asked a second time here, not only at the button: a start the window
+    // shows as locked is never sent, whichever way it was reached.
+    if (keinModell || !agentName || !aufgabe.trim() || !endpointId) return
     startet = true
     try {
       const daten = {
@@ -324,7 +326,7 @@
   werkzeugnamen={agent ? agent.tools ?? null : []}
   bind:text={aufgabe}
   feldbeschriftung={t('jobs.aufgabe_platzhalter')}
-  startbar={Boolean(agentName && endpointId && aufgabe.trim() && !startet)}
+  startbar={Boolean(agentName && endpointId && aufgabe.trim() && !startet && !keinModell)}
   aufStarten={starten}
   aufAbbrechen={() => (offen = false)}
   {kopf}

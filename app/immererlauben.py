@@ -8,7 +8,7 @@ Before this, the confirmation box's third button only remembered its yes in
 the browser (``frontend/src/lib/zustand.svelte.js``) — gone on reload, never
 seen by an agent run, and nowhere to look it up or take it back. Writing it
 here instead makes it exactly what the file's own docstring calls it: "the
-precise, hand-editable source" — dauerhaft, sichtbar, löschbar.
+precise, hand-editable source" — permanent, visible, deletable.
 """
 
 from __future__ import annotations

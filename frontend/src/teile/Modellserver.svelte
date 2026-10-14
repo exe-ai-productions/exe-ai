@@ -744,7 +744,12 @@
     updateAnswer = null
     try {
       const answer = await api.serverProgramUpdateCheck()
-      if (run === checkRun) updateAnswer = answer
+      if (run === checkRun) {
+        updateAnswer = answer
+        // A list that could not be read compares nothing: said at the top,
+        // so the button does not look as if it did nothing.
+        if (answer.unreadable) melde(t('bildserver.updates_nicht_pruefbar'), 'fehler')
+      }
     } catch (fehler) {
       if (run === checkRun) melde(fehler.message, 'fehler')
     } finally {

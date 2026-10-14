@@ -484,6 +484,25 @@ def test_a_kit_missing_a_part_is_refused_and_names_it(bausatz_senden, client, we
     assert name in antwort.json()["detail"]
 
 
+def test_a_krea_2_kit_without_its_vae_is_refused_and_names_it(bausatz_senden, client):
+    """Krea 2 names a VAE in its kit and gives no channel count: the VAE is
+    asked for all the same, before sd.cpp starts."""
+    antwort = client.post("/api/v1/bild", json={
+        "prompt": "x", "modell": "base.safetensors", "diffusion_model": "flux1-dev.gguf",
+        "familie": "krea2", "llm": "llm.gguf",
+    }, headers={"Accept-Language": "en"})
+    assert antwort.status_code == 412
+    assert "VAE" in antwort.json()["detail"]
+
+
+def test_a_krea_2_kit_with_its_vae_still_draws(bausatz_senden):
+    """The silence probe: the same kit with a VAE is not refused."""
+    auftrag = bausatz_senden(
+        diffusion_model="flux1-dev.gguf", familie="krea2", llm="llm.gguf", vae="ae.safetensors",
+    )
+    assert auftrag.vae is not None
+
+
 def test_a_flux_kit_without_its_t5_is_refused(bausatz_senden, client):
     antwort = client.post("/api/v1/bild", json={
         "prompt": "x", "modell": "base.safetensors", "diffusion_model": "flux1-dev.gguf",

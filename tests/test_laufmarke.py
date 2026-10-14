@@ -30,7 +30,19 @@ def _laufmarke() -> str:
     # lifted the same way so the real one runs.
     frage = re.search(r"export function fragtNach\(chatId\) \{.*?\n\}", RINGE.read_text(), re.S)
     assert frage, "fragtNach not found"
-    return frage.group(0).removeprefix("export ") + f"\nconst laufMarke = {treffer.group(1)};\n"
+    return (
+        frage.group(0).removeprefix("export ")
+        + "\n" + _zeile_laeuft()
+        + f"\nconst laufMarke = {treffer.group(1)};\n"
+    )
+
+
+def _zeile_laeuft() -> str:
+    """The one reading of "this row is running" that the mark and the bubble
+    both ask, lifted out of the component."""
+    treffer = re.search(r"\n  function zeileLaeuft\(zeile\) \{.*?\n  \}\n", QUELLE.read_text(), re.S)
+    assert treffer, "zeileLaeuft not found"
+    return treffer.group(0)
 
 
 def _lauf(nachrichten: list, laufender_id: str | None = None, fragen: dict | None = None) -> dict | None:
@@ -146,6 +158,31 @@ def test_der_kontext_traegt_seine_eigene_uhr():
          "taetigkeit": "kontext", "taetigkeitSeit": 7},
     ])
     assert marke == {"art": "antwort", "text": "", "kontext": True, "seit": 7}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed here")
+def test_the_mark_counts_nothing_while_the_thinking_head_counts():
+    """The head over it runs this very stretch's clock; the mark stays, with
+    its word and its line, and shows no clock of its own."""
+    row = {"role": "assistant", "zustand": "laeuft", "content": "", "taetigkeit": "denkt",
+           "taetigkeitSeit": 4,
+           "abschnitte": [{"art": "reasoning", "text": "hm", "seit": 4}]}
+    assert _lauf([row]) == {"art": "antwort", "text": "", "seit": None}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed here")
+def test_the_clock_keeps_running_under_every_other_activity():
+    """Silence probe: a tool, written text and the context read-through keep
+    the clock of their stretch; so does the clock once the thinking is over
+    and the next activity has stamped its own start."""
+    base = {"role": "assistant", "zustand": "laeuft", "content": ""}
+    assert _lauf([dict(base, taetigkeit="werkzeug", taetigkeitSeit=9)])["seit"] == 9
+    assert _lauf([dict(base, content="text", taetigkeit="schreibt", taetigkeitSeit=12)])["seit"] == 12
+    assert _lauf([dict(base, taetigkeit="kontext", taetigkeitSeit=5)]) == {
+        "art": "antwort", "text": "", "kontext": True, "seit": 5,
+    }
+    # The same row after the thinking: a new activity, a new start.
+    assert _lauf([dict(base, taetigkeit="schreibt", taetigkeitSeit=30)])["seit"] == 30
 
 
 HILFE = WURZEL / "frontend/src/lib/taetigkeit.js"
@@ -325,3 +362,52 @@ def test_a_pushed_row_after_a_plain_question_has_no_eye():
         {"id": "u1", "role": "user", "content": "text only"},
     ]) is False
     assert _pushed_row_vision([]) is False
+
+
+def _laeuft(row: dict, laufender_id: str | None = None) -> bool:
+    skript = f"""
+const laufenderId = {json.dumps(laufender_id)};
+{_zeile_laeuft()}
+console.log(JSON.stringify(zeileLaeuft({json.dumps(row)})));
+"""
+    lauf = subprocess.run(["node", "-e", skript], capture_output=True, text=True)
+    assert lauf.returncode == 0, f"{lauf.stderr}\n{lauf.stdout}"
+    return json.loads(lauf.stdout)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed here")
+def test_a_run_that_ended_here_is_no_running_row_while_the_fetch_waits():
+    """The end of a run reconciles with the stored list, up to fifteen
+    seconds. During that wait the row of the run, finished or with its
+    stream broken and no closing word, is neither running nor marked."""
+    finished = {"id": "p1", "role": "assistant", "zustand": "fertig", "content": "done",
+                "runEnded": True}
+    broken = {"id": "p1", "role": "assistant", "zustand": None, "content": "half",
+              "taetigkeit": "schreibt", "runEnded": True}
+    for row in (finished, broken):
+        assert _laeuft(row, laufender_id="p1") is False
+        assert _lauf([row], laufender_id="p1") is None
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed here")
+def test_silence_a_run_before_its_end_and_a_row_the_service_names_keep_running():
+    own = {"id": "p1", "role": "assistant", "zustand": None, "content": "", "runEnded": False}
+    assert _laeuft(own, laufender_id="p1") is True
+    assert _laeuft({"id": "p1", "role": "assistant", "zustand": None, "content": ""}, "p1") is True
+    # A row the service holds as running stays running, whoever started it.
+    foreign = {"id": "x9", "role": "assistant", "zustand": "laeuft", "content": "", "runEnded": True}
+    assert _laeuft(foreign, laufender_id="p1") is True
+    # A row of no run of this window is no running row.
+    assert _laeuft({"id": "x9", "role": "assistant", "zustand": "fertig"}, laufender_id="p1") is False
+    assert _lauf([own], laufender_id="p1")["art"] == "antwort"
+
+
+def test_the_bubble_and_the_mark_read_the_same_condition():
+    source = QUELLE.read_text()
+    assert ".find(zeileLaeuft)" in source
+    assert "laeuft={zeileLaeuft(nachricht)" in source
+    # The end of the run is written once, next to the closing word.
+    ended = re.search(r"platzhalter\.zustand = schlussZustand.*?\n.*?\n\s*platzhalter\.runEnded = true", source)
+    assert ended
+    # A row taken over by a new run starts live again.
+    assert "platzhalter.runEnded = false" in source

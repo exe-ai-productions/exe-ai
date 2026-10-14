@@ -53,8 +53,17 @@ async function gewuenschteSprache() {
   return (navigator.language || 'de').slice(0, 2).toLowerCase()
 }
 
+/* The newest catalogue request. A switch made while an earlier one is still
+   on its way takes over: when the older catalogue arrives afterwards it must
+   neither replace the texts nor claim the language. */
+let neuesteAnfrage = 0
+
+/* Loads the catalogue and puts it on screen. Answers the language that now
+   stands, or `null` when a newer request overtook this one — then nothing of
+   it was applied. */
 export async function texteLaden(sprache) {
   if (sprache === undefined) sprache = await gewuenschteSprache()
+  const meine = ++neuesteAnfrage
   /* The catalogue is the only request that already carries the language
      being switched TO — it asks for exactly those texts, and the window
      still shows the old ones while it runs (api.js, `uebersetzungen`). Every
@@ -62,6 +71,7 @@ export async function texteLaden(sprache) {
      arrived: a switch that hangs or fails must not leave the service
      answering in a language nobody is looking at. */
   const daten = await api.uebersetzungen(sprache)
+  if (meine !== neuesteAnfrage) return null
   texte.katalog = daten.texte
   texte.sprache = daten.sprache
   document.documentElement.lang = daten.sprache
@@ -75,30 +85,28 @@ export async function texteLaden(sprache) {
   return daten.sprache
 }
 
+/* A switch counts only once its texts are here: the choice is set and stored
+   after the catalogue, never before. A catalogue that hangs or fails leaves
+   the choice, the window and the stored value as they were — the stored
+   choice is how the service knows which language to write its own texts in
+   (app/sprachwahl.py, interface_language) and which one the next start
+   loads. A switch overtaken by a newer one changes nothing at all. */
 export async function spracheWaehlen(sprache) {
-  const vorher = texte.wahl
+  const geladen = await texteLaden(sprache)
+  if (geladen === null) return texte.sprache
   texte.wahl = sprache
   await api.einstellungSetzen('global', SPEICHER, { sprache }).catch(() => {})
-  try {
-    return await texteLaden(sprache)
-  } catch (fehler) {
-    /* The switch did not happen, so nothing of it may stay — the stored
-       choice is how the service knows which language to write its own texts
-       in (app/sprachwahl.py, interface_language) and which one the next
-       start loads. Left standing after a catalogue that never arrived, the
-       service would answer in German over an English window, and the next
-       start would come up in a language it cannot load. */
-    texte.wahl = vorher
-    await api.einstellungSetzen('global', SPEICHER, { sprache: vorher }).catch(() => {})
-    throw fehler
-  }
+  return geladen
 }
 
-/* Back to "auto": stored as such, and the device decides again. */
+/* Back to "auto": the device decides again, stored as such once its texts
+   are here. */
 export async function spracheZuruecksetzen() {
+  const geladen = await texteLaden((navigator.language || 'de').slice(0, 2).toLowerCase())
+  if (geladen === null) return texte.sprache
   texte.wahl = 'auto'
   await api.einstellungSetzen('global', SPEICHER, { sprache: 'auto' }).catch(() => {})
-  return texteLaden((navigator.language || 'de').slice(0, 2).toLowerCase())
+  return geladen
 }
 
 /* A text for a dot path, e.g. t('chat.neu').

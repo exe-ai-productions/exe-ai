@@ -105,7 +105,7 @@ def test_lesen_kappt_lange_dateien(ordner, tmp_path):
     assert "continue with offset" in text
     assert len(text) <= datei_lesen.MAX_ZEICHEN
     letzte = text.splitlines()[-1]
-    assert letzte.startswith("… [cut off at") and letzte.endswith("]"), letzte
+    assert letzte.startswith("… [truncated at") and letzte.endswith("]"), letzte
 
 
 def test_lesen_lehnt_binaerdateien_ab(ordner, tmp_path):
@@ -247,7 +247,7 @@ def test_pdf_ohne_textebene_sagt_es(ordner, tmp_path):
     text = lauf(datei_lesen.ausfuehren({"path": "scan.pdf"}, ordner))
     assert "no text" in text
     text = lauf(datei_lesen.ausfuehren({"path": "scan.pdf", "page": 1}, ordner))
-    assert "no text on this page" in text
+    assert "no text layer" in text
 
 
 def test_datei_die_nur_pdf_heisst_wird_als_text_gelesen(ordner, tmp_path):
@@ -279,7 +279,7 @@ def test_bild_geht_als_bild_an_das_modell(ordner, tmp_path, daten):
     # can say where to read it again (app/werkzeugbild.py).
     assert gereicht[0][2].endswith("foto.png")
     assert gereicht[0][2] != "foto.png"
-    assert "attached below, for THIS answer only" in text
+    assert "attached below for THIS response only" in text
 
 
 def test_bild_ohne_bildsicht_sagt_es_ehrlich(ordner, tmp_path):
@@ -287,7 +287,7 @@ def test_bild_ohne_bildsicht_sagt_es_ehrlich(ordner, tmp_path):
     description of a picture nobody looked at."""
     (tmp_path / "foto.png").write_bytes(png_bytes())
     text = lauf(datei_lesen.ausfuehren({"path": "foto.png"}, ordner))
-    assert "cannot be shown images" in text
+    assert "does not support image input" in text
     assert "Nothing was read" in text
 
 
@@ -361,7 +361,7 @@ def test_zu_grosse_datei_wird_gar_nicht_erst_geoeffnet(ordner, tmp_path, monkeyp
     (tmp_path / "dick.pdf").write_bytes(pdf_mit_seiten(["alpha", "beta"]))
     with pytest.raises(grenzen.GrenzeVerletzt) as fehler:
         lauf(datei_lesen.ausfuehren({"path": "dick.pdf"}, ordner))
-    assert "too large to open whole" in str(fehler.value)
+    assert "exceeding the limit of" in str(fehler.value)
 
 
 def test_schnitt_auf_einer_seite_nennt_die_seite_weiter(ordner, tmp_path, monkeypatch):
@@ -371,7 +371,7 @@ def test_schnitt_auf_einer_seite_nennt_die_seite_weiter(ordner, tmp_path, monkey
     lange_seite = "\n".join(f"Line {nr} of a very long page." for nr in range(1, 60))
     (tmp_path / "lang.pdf").write_bytes(pdf_mit_seiten(["kurz", lange_seite]))
     text = lauf(datei_lesen.ausfuehren({"path": "lang.pdf", "page": 2}, ordner))
-    assert "cut off at" in text
+    assert "truncated at" in text
     assert "and page 2" in text
 
 
@@ -391,7 +391,7 @@ def _daten(url: str) -> bytes:
 
 def test_ein_bild_ueber_20_mb_geht_als_kleinere_kopie_hinein(ordner, tmp_path, daten):
     """A real picture goes in whatever its size — before, this one
-    was refused with 'too large to open whole'."""
+    was refused with 'exceeding the limit of'."""
     from app import model_image
     from tests.test_verlaufsbau import _png
 
@@ -640,18 +640,72 @@ def test_ein_pdf_ueber_20_mb_bekommt_weiter_die_absage(ordner, tmp_path):
     (tmp_path / "gross.pdf").write_bytes(b"%PDF-1.4\n" + b"x" * (21 * 1024 * 1024))
     with pytest.raises(grenzen.GrenzeVerletzt) as fehler:
         lauf(datei_lesen.ausfuehren({"path": "gross.pdf"}, ordner))
-    assert "too large to open whole" in str(fehler.value)
+    assert "exceeding the limit of" in str(fehler.value)
 
 
-def test_eine_textdatei_mit_bildendung_ueber_20_mb_bleibt_wie_heute(ordner, tmp_path):
-    """Silence probe 613: a text file merely NAMED like a picture is not part
-    of this order — past the ceiling it keeps today's refusal."""
-    gesehen, merken = _gereicht()
-    (tmp_path / "dump.png").write_bytes(b"kein Bild, nur Text\n" * (2 * 1024 * 1024))
-    with pytest.raises(grenzen.GrenzeVerletzt) as fehler:
-        lauf(datei_lesen.ausfuehren({"path": "dump.png"}, ordner, modellbild=merken))
-    assert "too large to open whole" in str(fehler.value)
-    assert gesehen == []
+def test_a_text_file_with_a_picture_name_over_20_mb_is_read_in_pieces(ordner, tmp_path):
+    """The bytes decide, not the name: a 25 MB text file called .png is read
+    like the same file called .txt — in pieces, with no refusal, and nothing
+    handed to the model as a picture."""
+    seen, hand_over = _gereicht()
+    content = b"no picture, only text\n" * (1200 * 1024)
+    assert len(content) > 25 * 1024 * 1024
+    (tmp_path / "dump.png").write_bytes(content)
+    (tmp_path / "dump.txt").write_bytes(content)
+    as_picture = lauf(
+        datei_lesen.ausfuehren({"path": "dump.png", "limit": 5}, ordner, modellbild=hand_over)
+    )
+    as_text = lauf(datei_lesen.ausfuehren({"path": "dump.txt", "limit": 5}, ordner))
+    assert seen == []
+    assert "exceeding the limit" not in as_picture
+    assert as_picture.startswith("lines 1–5 of "), as_picture[:80]
+    assert as_picture == as_text
+
+
+def test_a_text_file_with_a_pdf_name_over_20_mb_is_read_in_pieces(ordner, tmp_path):
+    (tmp_path / "dump.pdf").write_bytes(b"no pdf, only text\n" * (1500 * 1024))
+    text = lauf(datei_lesen.ausfuehren({"path": "dump.pdf", "limit": 5}, ordner))
+    assert "exceeding the limit" not in text
+    assert text.startswith("lines 1–5 of "), text[:80]
+
+
+def test_a_file_with_a_picture_name_is_read_once(ordner, tmp_path, monkeypatch):
+    """The whole-file read is for a PDF only; a text file with a picture name
+    used to be read whole, and then once more as text."""
+    import pathlib
+
+    (tmp_path / "note.png").write_text("plain words\n", encoding="utf-8")
+    real = pathlib.Path.read_bytes
+    whole_reads: list[str] = []
+
+    def counting(self):
+        whole_reads.append(self.name)
+        return real(self)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", counting)
+    text = lauf(datei_lesen.ausfuehren({"path": "note.png"}, ordner))
+    assert "plain words" in text
+    assert whole_reads == []
+
+
+def test_a_real_pdf_with_a_picture_name_is_not_read_as_pages(ordner, tmp_path):
+    """Silence probe: only the .pdf name opens the page reading, and only
+    when the bytes are a PDF."""
+    (tmp_path / "scan.png").write_bytes(pdf_mit_seiten(["alpha", "beta"]))
+    try:
+        text = lauf(datei_lesen.ausfuehren({"path": "scan.png"}, ordner))
+    except grenzen.GrenzeVerletzt as refusal:
+        text = str(refusal)
+    # Neither the page marks nor the page count of the PDF reading.
+    assert "[page 1]" not in text
+    assert "pages, each marked" not in text
+
+
+def test_a_text_file_over_20_mb_is_read_as_before(ordner, tmp_path):
+    """Silence probe: the plain text file never had a ceiling."""
+    (tmp_path / "dump.txt").write_bytes(b"no picture, only text\n" * (1200 * 1024))
+    text = lauf(datei_lesen.ausfuehren({"path": "dump.txt", "limit": 5}, ordner))
+    assert text.startswith("lines 1–5 of "), text[:80]
 
 
 def test_ohne_werkzeug_geht_das_original_hinein(ordner, tmp_path, daten, monkeypatch):
@@ -700,7 +754,7 @@ def test_text_named_like_a_picture_without_vision_is_read_as_text(ordner, tmp_pa
     text = lauf(datei_lesen.ausfuehren({"path": "note.png"}, ordner))
     assert text.startswith("lines 1–1 of 1")
     assert "plain words in a file with a picture name" in text
-    assert "cannot be shown images" not in text
+    assert "does not support image input" not in text
 
 
 def test_binary_named_like_a_picture_without_vision_is_a_binary_file(ordner, tmp_path):
@@ -764,7 +818,7 @@ def test_schreiben_auf_pdf_erzeugt_ein_echtes_pdf(ordner, tmp_path):
     assert antwort.startswith("Created")
     # The answer says which of the two it wrote — a caller that asked for a
     # PDF and got text back would otherwise not know.
-    assert "Written as a PDF." in antwort
+    assert "Saved as a PDF." in antwort
 
 
 # --- write_file · a slow PDF does not stall the event loop -----------------
@@ -908,7 +962,7 @@ def test_kyrillisch_griechisch_und_emoji_werden_gezeichnet(ordner, tmp_path):
     antwort = lauf(datei_schreiben.ausfuehren({"path": "welt.pdf", "content": inhalt}, ordner))
 
     assert antwort.startswith("Created")
-    assert "Written as a PDF." in antwort
+    assert "Saved as a PDF." in antwort
     ziel = tmp_path / "welt.pdf"
     assert ziel.read_bytes()[:5] == b"%PDF-"
     text = PdfReader(str(ziel)).pages[0].extract_text()
@@ -929,7 +983,7 @@ def test_ein_zeichen_ohne_glyph_wird_abgelehnt_statt_stumm_verloren(ordner, tmp_
     # Both unknown characters are named, not just the first one found.
     assert "你" in str(fehler.value)
     assert "好" in str(fehler.value)
-    assert "different extension" in str(fehler.value)
+    assert "different file extension" in str(fehler.value)
     assert not (tmp_path / "chinesisch.pdf").exists()
 
 
@@ -1117,7 +1171,7 @@ def test_eine_pdf_endung_in_grossbuchstaben_zaehlt_auch(ordner, tmp_path):
         {"path": "GROSS.PDF", "content": "Zeile eins"}, ordner))
 
     assert (tmp_path / "GROSS.PDF").read_bytes()[:5] == b"%PDF-"
-    assert "Written as a PDF." in antwort
+    assert "Saved as a PDF." in antwort
 
 
 def test_ein_leerer_text_bekommt_trotzdem_eine_seite(ordner, tmp_path):
@@ -1141,7 +1195,7 @@ def test_ohne_pdf_endung_bleibt_alles_wie_vorher(ordner, tmp_path):
     antwort = lauf(datei_schreiben.ausfuehren(
         {"path": "a.txt", "content": "Zeile eins\nZeile drei\n"}, ordner))
     assert "@@" in antwort
-    assert "Written as a PDF." not in antwort
+    assert "Saved as a PDF." not in antwort
 
 
 def test_ein_ueberschriebenes_pdf_traegt_keinen_aenderungsblock(ordner):

@@ -10,11 +10,14 @@ rest of the message.
 
 from __future__ import annotations
 
+import itertools
+
 from app.providers import ChatNachricht, MockProvider
 from app.providers.openai_kompatibel import OpenAIKompatiblerProvider
 from tests.conftest import provider_setzen
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"testbild"
+_UPLOADS = itertools.count()
 
 
 def _chat(client):
@@ -22,8 +25,10 @@ def _chat(client):
 
 
 def _bild_hochladen(client) -> str:
+    # Every call is a picture of its own: the same bytes would be one file.
+    inhalt = PNG_BYTES + str(next(_UPLOADS)).encode()
     return client.post(
-        "/api/v1/images", content=PNG_BYTES, headers={"Content-Type": "image/png"}
+        "/api/v1/images", content=inhalt, headers={"Content-Type": "image/png"}
     ).json()["bild"]
 
 

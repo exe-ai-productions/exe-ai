@@ -17,6 +17,7 @@ from app.api.abhaengigkeiten import (
 from app.config import Config
 from app.api.v1.bilder import bilder_entfernen, bilder_verzeichnis
 from app.api.v1.generierung import (
+    hole_discovery,
     hole_generierungen,
     ordner_umzug_melden,
     ordner_umzug_vergessen,
@@ -26,6 +27,8 @@ from app.api.v1.schemas import (
     ChatAendern,
     ChatAnlegen,
     ChatAntwort,
+    ChatCompact,
+    ChatCompactResult,
     LaufendeGenerierung,
     NachrichtAnlegen,
     NachrichtAntwort,
@@ -35,11 +38,22 @@ from app.api.v1.schemas import (
 )
 from app.db import Repositories
 from app.db.repositories.einstellungen import chat_bereich
+from app.discovery import Discovery
 from app.events import Ereignisse, bus
 from app.generationen import Generierungsverwaltung
 from app.i18n import t
 from app.tools.hintergrund import laeufe
 from app import arbeitsordnerpruefung, bildfensterwahl, ordnerstand
+from app import (
+    chatverdichtung,
+    dokumentbudget,
+    dokumentcache,
+    faltpause,
+    tokenmass,
+    verdichtung,
+    verdichtungswahl,
+)
+from app.verlaufsbau import werkzeuggewicht, zeilentext
 
 log = logging.getLogger(__name__)
 
@@ -108,11 +122,11 @@ async def chat_anlegen(
 @router.get("", response_model=list[ChatAntwort], summary="List chats")
 def chats_auflisten(
     suche: str | None = Query(
-        default=None, description="Filtert auf Titel und Inhalt der Nachrichten"
+        default=None, description="Filters by title and message content."
     ),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    archived: bool = Query(default=False, description="Lists the archive instead"),
+    archived: bool = Query(default=False, description="List archived chats instead"),
     repositories: Repositories = Depends(hole_repositories),
     user_id: str = Depends(hole_benutzer_id),
     generierungen: Generierungsverwaltung = Depends(hole_generierungen),
@@ -143,7 +157,7 @@ def chat_holen(
 @router.get(
     "/{chat_id}/ordnerstand",
     response_model=OrdnerStand,
-    summary="Missing working folders of a chat",
+    summary="Missing working folders for a chat",
 )
 def ordnerstand_holen(
     chat_id: str,
@@ -162,7 +176,7 @@ def ordnerstand_holen(
     return OrdnerStand(fehlend=ordnerstand.fehlende(list(chat.working_dirs or [])))
 
 
-@router.patch("/{chat_id}", response_model=ChatAntwort, summary="Change a chat")
+@router.patch("/{chat_id}", response_model=ChatAntwort, summary="Update a chat")
 def chat_aendern(
     chat_id: str,
     daten: ChatAendern,
@@ -281,6 +295,129 @@ def chat_aendern(
     return antwort
 
 
+def _document_plan(repositories: Repositories, chat_id: str, zeilen: list, fenster: int):
+    """What each document of the chat would travel with, read from the rows
+    alone.
+
+    The same share-out an answer works out for its own request, minus what
+    only an answer knows — the system text, the tool offer and a ceiling the
+    user set: a hand-made fold has no request of its own to measure against.
+    ``None`` where the chat has no documents.
+    """
+    if not repositories.documents.anzahl(chat_id=chat_id):
+        return None
+    kennungen: list[str] = []
+    for zeile in reversed(zeilen):
+        for kennung in reversed(zeile.dokument_ids()):
+            if kennung not in kennungen:
+                kennungen.append(kennung)
+    dokumente = [
+        d
+        for d in (dokumentcache.holen(repositories, k) for k in kennungen)
+        if d is not None and d.extracted_text
+    ]
+    belegt = sum(
+        tokenmass.tokens(zeilentext(z, repositories, volltext_mitschicken=False))
+        + werkzeuggewicht(z) // tokenmass.ZEICHEN_JE_TOKEN_ROH
+        for z in zeilen
+    )
+    return dokumentbudget.verteilen(
+        dokumente, dokumentbudget.budget_tokens(fenster, None, belegt)
+    )
+
+
+@router.post(
+    "/{chat_id}/compact",
+    response_model=ChatCompactResult,
+    summary="Compact a chat by hand",
+)
+async def compact_chat(
+    chat_id: str,
+    daten: ChatCompact,
+    repositories: Repositories = Depends(hole_repositories),
+    discovery: Discovery = Depends(hole_discovery),
+    generierungen: Generierungsverwaltung = Depends(hole_generierungen),
+    user_id: str = Depends(hole_benutzer_id),
+    sprache: str = Depends(hole_sprache),
+    config: Config = Depends(hole_config),
+) -> ChatCompactResult:
+    """Folds the middle of a chat once, now.
+
+    No threshold and no brake: the user asked, so a chat under its threshold
+    folds too, and so does a middle an earlier try found too thin to be
+    worth a summary. The pause a failed fold left behind is lifted first —
+    after the user asked, the model gets asked — and a success clears the
+    run of failures as any success does, so the automatic fold works again
+    from here.
+
+    The chat is claimed the way an answer claims it: a fold rewrites the
+    history, and an answer being written into it at the same time would be
+    built from rows that are folded under it. That claim is also what the
+    stop button reaches by the chat's id: a stop while the summary is being
+    written closes the request and answers ``stopped``.
+    """
+    chat = _chat_oder_404(repositories, chat_id, user_id, sprache)
+    endpoint_id = daten.endpoint_id or chat.endpoint_id
+    if not endpoint_id:
+        raise HTTPException(400, t("fehler.kein_modell_verfuegbar", sprache))
+    gefunden = discovery.aufloesen(endpoint_id)
+    if gefunden is None:
+        raise HTTPException(
+            404, t("fehler.modell_nicht_erreichbar", sprache, name=endpoint_id)
+        )
+    zustand, modellname = gefunden
+    if not zustand.erreichbar:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            t("fehler.modell_nicht_erreichbar", sprache, name=zustand.endpunkt.name),
+        )
+    if not generierungen.reservieren(chat.id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, t("fehler.antwort_laeuft_schon", sprache)
+        )
+    try:
+        with dokumentcache.aktiv():
+            zeilen = repositories.messages.fuer_das_modell(chat_id=chat.id)
+            schwelle = verdichtungswahl.schwelle(
+                repositories, modell=endpoint_id, chat=chat.id
+            )
+            faltpause.freigeben(chat.id)
+            kennung, ergebnis = await chatverdichtung.erzwungen_verdichten(
+                zustand=zustand,
+                repositories=repositories,
+                chat=chat,
+                endpoint_id=endpoint_id,
+                modellname=modellname,
+                zeilen=zeilen,
+                budget=verdichtung.schwanz_budget(zustand.context_tokens, schwelle),
+                dokumentplan=_document_plan(
+                    repositories, chat.id, zeilen, zustand.context_tokens or 0
+                ),
+                topic=(daten.topic or "").strip() or None,
+                # The claim above carries the stop button's signal: pressed
+                # while the summary is being written, the request is closed,
+                # nothing is folded and nothing is booked.
+                stopp=generierungen.anspruch(chat.id),
+                config=config,
+            )
+            if ergebnis.gestoppt:
+                return ChatCompactResult(result="stopped")
+            if kennung is None:
+                if ergebnis.keine_mitte:
+                    word = "too_short"
+                elif ergebnis.ohne_ersparnis:
+                    word = "no_saving"
+                else:
+                    word = "failed"
+                return ChatCompactResult(result=word)
+        # The fold is where what the model wrote meanwhile comes into the
+        # system message: the next send builds it anew.
+        forget_system_message(chat.id)
+        return ChatCompactResult(result="folded", replaced=ergebnis.ersetzt)
+    finally:
+        generierungen.freigeben(chat.id)
+
+
 @router.delete(
     "/{chat_id}",
     status_code=204,
@@ -303,6 +440,7 @@ async def chat_loeschen(
         generierungen=generierungen,
         user_id=user_id,
         config=config,
+        sprache=sprache,
     )
 
 
@@ -313,11 +451,16 @@ async def remove_chat(
     generierungen: Generierungsverwaltung,
     user_id: str,
     config: Config,
+    sprache: str,
 ) -> None:
     """Deletes one chat for good, with everything that hangs off it.
 
     The chat's own route and a project deleted from the archive both end a
     chat through here, so a chat never goes in two different ways.
+
+    The chat is deleted only once its run has ended: a run that is still
+    writing would meet a chat that is gone. A run that does not end in time
+    leaves the chat where it is and the answer is a 409.
     """
     # The answer being written here, if there is one, is stopped before the
     # row goes.
@@ -336,6 +479,15 @@ async def remove_chat(
     # reads it at its next chunk and finishes itself the way the stop button
     # finishes it — nothing is torn out from under a tool that is mid-run.
     generierungen.alle_im_chat_abbrechen(chat_id)
+    # Its end is waited for before the row goes: the run writes its closing
+    # rows into the chat and deregisters after that, and a chat that is
+    # already gone fails that write and leaves the run registered for good.
+    # A run that does not end in time keeps the chat — nothing below has
+    # happened yet, so the same delete can simply be pressed again.
+    if not await generierungen.wait_for_chat_runs(chat_id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, t("fehler.chat_loeschen_lauf_laeuft", sprache)
+        )
     # And the agents it started, with every run under them: nobody could
     # reach them any more to stop them, and their report would come back to
     # a chat that is gone. Imported here: the jobs module imports the chat
@@ -391,7 +543,7 @@ async def remove_chat(
 @router.get(
     "/{chat_id}/messages",
     response_model=NachrichtenSeite,
-    summary="Messages of a chat",
+    summary="Chat messages",
 )
 def nachrichten_auflisten(
     chat_id: str,
@@ -534,7 +686,7 @@ async def nachricht_speichern(
 @router.delete(
     "/{chat_id}/messages/{message_id}/anhang",
     response_model=NachrichtAntwort,
-    summary="Remove one attachment of a message",
+    summary="Remove an attachment from a message",
 )
 def anhang_entfernen(
     chat_id: str,

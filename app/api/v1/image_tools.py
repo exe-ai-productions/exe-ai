@@ -109,7 +109,7 @@ async def convert(
     return {"file": new.name}
 
 
-@router.post("/bild/imatrix", response_model=bool, summary="Collect an importance matrix")
+@router.post("/bild/imatrix", response_model=bool, summary="Generate an importance matrix")
 def imatrix(
     wish: ImatrixWish, request: Request,
     config: Config = Depends(hole_config), language: str = Depends(hole_sprache),
@@ -125,7 +125,7 @@ def imatrix(
     return wish.on
 
 
-@router.get("/bild/devices", summary="Devices sd-cli computes on")
+@router.get("/bild/devices", summary="Devices available to sd-cli for computation")
 async def devices(request: Request) -> list[dict[str, str]]:
     program = _runner(request).programm
     if program is None:

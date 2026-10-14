@@ -157,7 +157,7 @@ def standard(config: "Config", name: str) -> Path:
     hardcoded path that would strand old files when someone set data_dir."""
     eintrag = _NACH_NAME.get(name)
     if eintrag is None:
-        raise KeyError(f"Unbekannter Speicherort: {name!r}")
+        raise KeyError(f"Unknown storage location: {name!r}")
     wert = getattr(config.app, eintrag.feld)
     if not wert:
         return config.datenverzeichnis / name
@@ -169,7 +169,7 @@ def ort(config: "Config", name: str) -> Path:
     otherwise the installed default. Raises ``KeyError`` for an unknown name
     so a typo fails loud, not silently at some wrong folder."""
     if name not in _NACH_NAME:
-        raise KeyError(f"Unbekannter Speicherort: {name!r}")
+        raise KeyError(f"Unknown storage location: {name!r}")
     ueber = ueberschreibungen(config).get(name)
     if ueber:
         return Path(ueber).expanduser().resolve()
@@ -297,7 +297,7 @@ def setzen(config: "Config", name: str, pfad: str | Path) -> Path:
     instead of storing it, so 'back to default' leaves no dead line behind.
     Returns the resolved folder now in force."""
     if name not in _NACH_NAME:
-        raise KeyError(f"Unbekannter Speicherort: {name!r}")
+        raise KeyError(f"Unknown storage location: {name!r}")
     ziel = _pruefen(config, name, pfad)
     if _gleicher_ort(ziel, standard(config, name)):
         loeschen(config, name)
@@ -314,7 +314,7 @@ def loeschen(config: "Config", name: str) -> Path:
     default now in force. Doing nothing when there was no override is fine —
     the end state is the same."""
     if name not in _NACH_NAME:
-        raise KeyError(f"Unbekannter Speicherort: {name!r}")
+        raise KeyError(f"Unknown storage location: {name!r}")
     with _SCHLOSS:
         daten = ueberschreibungen(config)
         if name in daten:

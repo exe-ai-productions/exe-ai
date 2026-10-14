@@ -76,7 +76,7 @@ async def anfrage_behandeln(
 
     if kennung is None:
         return None
-    return _fehler(kennung, -32601, f"Unbekannte Methode: {methode}")
+    return _fehler(kennung, -32601, f"Unknown method: {methode}")
 
 
 async def _zeilen():

@@ -158,7 +158,7 @@ def familie_pruefen(
         # has a guidance dial), which every family may make — a merged
         # single-file Flux is still a Flux. Only an unknown word is refused.
         if familie and not image_families.known(familie):
-            raise ValueError(f"{familie!r} is not a family this program knows")
+            raise ValueError(f"Unknown model family: {familie!r}")
         # A text encoder with no diffusion model to assemble it with is the
         # other direction of the same mistake, and the quiet one: both
         # callers' plain-model branch builds "-m <file>" and never reads
@@ -183,10 +183,11 @@ def familie_pruefen(
             ("uncond_diffusion_model", uncond_diffusion_model), *further_parts.items(),
         ):
             if wert and feld not in read:
-                raise ValueError(f"{feld} is set without a diffusion model to assemble it with")
+                raise ValueError(f"{feld} is set, but no diffusion model is specified for the "
+                                 "assembly.")
         return
     if not image_families.is_kit(familie):
-        raise ValueError(f"{familie!r} is not a Bausatz family")
+        raise ValueError(f"{familie!r} is not a Bausatz family.")
     erlaubt = {**_encoders(familie or ""), **_parts(familie or "")}
     for feld, wert in (
         ("t5xxl", t5xxl), ("clip_l", clip_l), ("llm", llm), ("llm_vision", llm_vision),
@@ -194,7 +195,7 @@ def familie_pruefen(
         *further_parts.items(),
     ):
         if wert and feld not in erlaubt:
-            raise ValueError(f"{feld} does not belong to family {familie}")
+            raise ValueError(f"{feld} does not belong to model family {familie}.")
 
 
 # What a part is called where the user reads that it is missing — the name
@@ -205,14 +206,14 @@ _PART_NAMES = {"t5xxl": "T5-XXL", "clip_l": "CLIP-L", "clip_g": "CLIP-G", "llm":
 def fehlendes_teil(familie: str | None, teile: dict[str, object | None]) -> str | None:
     """The first part a kit of this family needs that ``teile`` does not
     carry, or None when nothing is missing. Needed are every text encoder the
-    family reads and, where it decodes with a VAE of its own
-    (``Family.vae_channels``), the VAE. Asked before sd.cpp is started, on
+    family reads and, where its kit names a VAE or it decodes with one of its
+    own (``image_families.needs_vae``), the VAE. Asked before sd.cpp is started, on
     the server's start as on a drawing, so it never starts on half a kit and
     the user learns which part is missing instead of reading a load error."""
     family = image_families.get(familie)
     if family is None or not family.kit:
         return None
-    needed = [*family.encoders, *(["vae"] if family.vae_channels is not None else [])]
+    needed = [*family.encoders, *(["vae"] if image_families.needs_vae(family) else [])]
     return next((teil for teil in needed if not teile.get(teil)), None)
 
 
@@ -243,14 +244,14 @@ def schalter(gespann: Gespann) -> list[str]:
         erlaubt = dict(_ENCODER_SWITCHES)
         teile_erlaubt = dict(PART_SWITCHES)
     elif not image_families.is_kit(gespann.familie):
-        raise ValueError(f"{gespann.familie!r} is not a Bausatz family")
+        raise ValueError(f"{gespann.familie!r} is not a Bausatz family.")
     else:
         erlaubt = _encoders(gespann.familie)
         teile_erlaubt = _parts(gespann.familie)
     for feld in ("t5xxl", "clip_l", "llm", *PART_SWITCHES):
         wert = getattr(gespann, feld)
         if wert and feld not in erlaubt and feld not in teile_erlaubt:
-            raise ValueError(f"{feld} does not belong to family {gespann.familie}")
+            raise ValueError(f"{feld} does not belong to model family {gespann.familie}.")
 
     teile = ["--diffusion-model", str(gespann.diffusion_model)]
     for feld, schalter_name in {**erlaubt, **teile_erlaubt}.items():

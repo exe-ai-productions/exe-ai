@@ -20,6 +20,11 @@ A file being written carries a ``.teil`` ending until it is complete, and is
 only then renamed. Nothing half-downloaded is ever mistaken for a model —
 which is what a model server would do, right before it fails to explain why.
 
+A half file that is still there when the same file is asked for again — the
+program was closed while it was fetched — is continued from its end by a
+range request; a server that answers with the whole file starts it over.
+Cancelling or a failed fetch removes it, as before.
+
 A split GGUF (``-00001-of-0000N`` … ``-0000N-of-0000N``) is fetched whole:
 naming part 1 fetches every part into the same folder, and only when all of
 them are there are they renamed. The server is started with part 1 and finds
@@ -28,6 +33,8 @@ the others next to it.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import threading
 from collections.abc import Callable
@@ -88,6 +95,115 @@ def alle_teile(name: str) -> list[str]:
     stamm, _, anzahl = teil
     endung = name[-len(".gguf"):]
     return [f"{stamm}-{n:05d}-of-{anzahl:05d}{endung}" for n in range(1, anzahl + 1)]
+
+
+def all_parts_there(folder: Path, name: str) -> bool:
+    """Whether every part of the model ``name`` names lies in ``folder`` under
+    its own name: for a split GGUF each of its parts, for any other file that
+    file. The one rule of "there" for a model in several parts — the catalogue
+    row and the download both read it."""
+    return all((folder / part.rsplit("/", 1)[-1]).is_file() for part in alle_teile(name))
+
+
+def _half_file(folder: Path, name: str, url: str) -> Path:
+    """Where the file ``name``, fetched from ``url``, is written while it is
+    incomplete. The address is part of the name, so the half file of another
+    repository's file of the same name is never continued as this one."""
+    tag = hashlib.sha256(url.encode()).hexdigest()[:12]
+    return folder / f"{name}.{tag}{UNFERTIG}"
+
+
+# Written next to a half file: the version of the file in the repository it
+# was begun from (its ETag). A half file is continued only while the file
+# there is still that version.
+FASSUNG = ".fassung"
+
+
+def _version_file(half: Path) -> Path:
+    return half.with_name(half.name + FASSUNG)
+
+
+def _drop_half(half: Path) -> None:
+    """A half file and the version it was begun from."""
+    half.unlink(missing_ok=True)
+    _version_file(half).unlink(missing_ok=True)
+
+
+def _range_start(value: str | None) -> int | None:
+    """The first byte of a ``Content-Range: bytes <first>-<last>/<size>``."""
+    match = re.match(r"^bytes (\d+)-\d+/(\d+|\*)$", (value or "").strip())
+    return int(match.group(1)) if match else None
+
+
+@dataclass(frozen=True)
+class Place:
+    """Where a file of the hub would be kept in a folder, and whether it is
+    there already."""
+
+    # The name it is kept under: its own, ``<repo>-<name>`` when another file
+    # holds its own, or ``<owner>-<repo>-<name>`` when another file holds that
+    # one too.
+    name: str
+    # A file of that name and of the size the hub states lies there.
+    da: bool
+    # All the names it may take are held by other files: nothing can be stored
+    # without overwriting one of them.
+    collision: bool = False
+
+
+def place_for(
+    folder: Path,
+    name: str,
+    size: int | None,
+    repo: str,
+    also_in: tuple[Path, ...] = (),
+) -> Place:
+    """The one rule for "is it there": a file counts as there when a file of
+    its name and of its size in bytes, as the hub states it, lies in the
+    folder — or in one of ``also_in``, the other places the same file may lie
+    in. A file of the same name and another size is another file: the new one
+    is kept under ``<repo>-<name>`` (the repo without its owner), and both
+    stay. When another file holds that name too, the new one is kept under
+    ``<owner>-<repo>-<name>``. Without a size the name alone decides, as it
+    did before.
+
+    A third name that is held by yet another file — or a repo that names no
+    owner, so there is no third name — is a collision, which nothing here
+    resolves."""
+    places = (folder, *also_in)
+    # A size of 0 is a size the hub did not state, not an empty model.
+    if size is not None and size <= 0:
+        size = None
+
+    def find(wanted: str) -> list[Path]:
+        return [where / wanted for where in places if (where / wanted).is_file()]
+
+    def same(found: list[Path]) -> bool:
+        return any(path.stat().st_size == size for path in found)
+
+    existing = find(name)
+    if size is None:
+        return Place(name, bool(existing))
+    if not existing:
+        return Place(name, False)
+    if same(existing):
+        return Place(name, True)
+    second = f"{repo.rsplit('/', 1)[-1]}-{name}"
+    others = find(second)
+    if not others:
+        return Place(second, False)
+    if same(others):
+        return Place(second, True)
+    owner = repo.rpartition("/")[0]
+    if not owner:
+        return Place(second, False, True)
+    third = f"{owner}-{second}"
+    last = find(third)
+    if not last:
+        return Place(third, False)
+    if same(last):
+        return Place(third, True)
+    return Place(third, False, True)
 
 
 class DownloadFehler(Exception):
@@ -159,8 +275,15 @@ class Modelldownload:
         endungen: tuple[str, ...] = (ENDUNG,),
         manifest_ordner: Path | None = None,
         nach: Callable[[], None] | None = None,
+        size: int | None = None,
     ) -> Fortschritt:
         """``ziel`` is the local name, when it must differ from the remote one.
+
+        ``size`` is the size in bytes the hub states for the file. With it,
+        a name that another file holds is not a reason to refuse: the file is
+        kept under ``<repo>-<name>`` (``place_for``). A file that is there
+        already, by name and size, is still refused. A split model keeps the
+        names of its parts; for it the name alone decides.
 
         Vision companions need this: several repositories call their
         projector plainly ``mmproj-BF16.gguf``, and two of those in one
@@ -195,7 +318,18 @@ class Modelldownload:
             if len(fern) > 1:
                 ziel = None
             ziel = _pruefen(ziel, endungen) if ziel else _pruefen(datei.rsplit("/", 1)[-1], endungen)
-            if (zielordner / ziel).is_file():
+            if size is not None and len(fern) == 1:
+                place = place_for(zielordner, ziel, size, repo)
+                if place.da or place.collision:
+                    raise DownloadFehler("schon_da")
+                ziel = _pruefen(place.name, endungen)
+            if len(fern) > 1:
+                # A split model is there when every one of its parts is; a
+                # part that lies there already is kept and not fetched again
+                # (``_holen``).
+                if all_parts_there(zielordner, datei):
+                    raise DownloadFehler("schon_da")
+            elif (zielordner / ziel).is_file():
                 raise DownloadFehler("schon_da")
 
             # The manifest belongs to the MODEL folder, not the companion's
@@ -209,6 +343,75 @@ class Modelldownload:
                 daemon=True,
             ).start()
             return self._stand
+
+    def _fetch_part(
+        self, url: str, half: Path, headers: dict[str, str], single: bool
+    ) -> None:
+        """Streams one file into its half file. A half file that lies there
+        already is continued from its end; an answer that is not the rest
+        starts the file over. ``single``: the bar is this one file's."""
+        have = half.stat().st_size if half.is_file() else 0
+        version_file = _version_file(half)
+        try:
+            known = version_file.read_text(encoding="utf-8").strip()
+        except (OSError, ValueError):
+            known = ""
+        if have and not known:
+            # Begun from a version nobody wrote down: there is nothing to
+            # tell whether the file in the repository is still that one.
+            _drop_half(half)
+            have = 0
+        while True:
+            asked = dict(headers)
+            if have:
+                asked["Range"] = f"bytes={have}-"
+            with httpx.stream(
+                "GET", url, follow_redirects=True, timeout=60, headers=asked
+            ) as answer:
+                if have and answer.status_code == 416:
+                    # The half file is whole or longer than the file: it is
+                    # of no use, the file begins again.
+                    _drop_half(half)
+                    have = 0
+                    continue
+                answer.raise_for_status()
+                current = (
+                    answer.headers.get("x-linked-etag") or answer.headers.get("etag") or ""
+                ).strip()
+                if have and current != known:
+                    # The repository holds another file under this name now:
+                    # the half file is the beginning of a different one.
+                    _drop_half(half)
+                    have = 0
+                    continue
+                resumed = (
+                    have > 0
+                    and answer.status_code == 206
+                    and _range_start(answer.headers.get("content-range")) == have
+                )
+                if not resumed:
+                    have = 0
+                length = int(answer.headers.get("content-length") or 0)
+                if single and self._stand:
+                    self._stand.gesamt = have + length if length else 0
+                if self._stand:
+                    self._stand.geladen += have
+                if not resumed:
+                    # The version is written before the first byte, so a
+                    # half file that is left lying always carries the
+                    # version it was begun from; a server that names none
+                    # leaves a half file that is never continued.
+                    _version_file(half).unlink(missing_ok=True)
+                    if current:
+                        _version_file(half).write_text(current, encoding="utf-8")
+                with half.open("ab" if resumed else "wb") as out:
+                    for chunk in answer.iter_bytes(BROCKEN):
+                        if self._abbruch.is_set():
+                            raise DownloadFehler("abgebrochen")
+                        out.write(chunk)
+                        if self._stand:
+                            self._stand.geladen += len(chunk)
+            return
 
     def _holen(
         self,
@@ -227,13 +430,26 @@ class Modelldownload:
         # One file keeps the chosen local name; the parts of a split model
         # keep their own, each landing next to part 1.
         namen = [ziel_name] if len(fern) == 1 else [d.rsplit("/", 1)[-1] for d in fern]
-        halbe = [zielordner / (name + UNFERTIG) for name in namen]
-        adressen = [f"{BASIS}/{repo}/resolve/main/{datei}" for datei in fern]
+        # A part of a split model that lies in the folder already is kept
+        # as it is and not fetched again: replacing it would overwrite a
+        # file nobody asked to replace.
+        vorhanden = (
+            {name for name in namen if (zielordner / name).is_file()} if len(fern) > 1 else set()
+        )
+        zu_holen = [name for name in namen if name not in vorhanden]
+        fern_geholt = [d for d, name in zip(fern, namen, strict=True) if name not in vorhanden]
+        adressen = [f"{BASIS}/{repo}/resolve/main/{datei}" for datei in fern_geholt]
+        halbe = [
+            _half_file(zielordner, name, adresse)
+            for name, adresse in zip(zu_holen, adressen, strict=True)
+        ]
+        # A half file under the plain ``.teil`` name is no half file of any
+        # address; it is of no use and is not left lying.
+        for name in zu_holen:
+            (zielordner / (name + UNFERTIG)).unlink(missing_ok=True)
 
         # A Hugging Face token, when the user set one: lifts rate limits and
         # opens gated models. Everything public works without it.
-        import os
-
         kopf = {}
         wert = os.environ.get("HF_TOKEN", "").strip()
         if wert:
@@ -257,26 +473,14 @@ class Modelldownload:
                 self._stand.gesamt = sum(groessen) if all(groessen) else 0
 
             for adresse, halb in zip(adressen, halbe, strict=True):
-                with httpx.stream(
-                    "GET", adresse, follow_redirects=True, timeout=60, headers=kopf
-                ) as antwort:
-                    antwort.raise_for_status()
-                    if len(adressen) == 1 and self._stand:
-                        self._stand.gesamt = int(antwort.headers.get("content-length") or 0)
-
-                    with halb.open("wb") as schreiben:
-                        for brocken in antwort.iter_bytes(BROCKEN):
-                            if self._abbruch.is_set():
-                                raise DownloadFehler("abgebrochen")
-                            schreiben.write(brocken)
-                            if self._stand:
-                                self._stand.geladen += len(brocken)
+                self._fetch_part(adresse, halb, kopf, single=len(adressen) == 1)
 
             # Only now does it become a model. Renaming is the one step that
             # makes a finished file visible to the runner — for a split model
             # only once every part has arrived.
-            for halb, name in zip(halbe, namen, strict=True):
+            for halb, name in zip(halbe, zu_holen, strict=True):
                 atomic_file.rename_onto(halb, zielordner / name)
+                _version_file(halb).unlink(missing_ok=True)
 
             # The bond is recorded only after the file is truly in place, so a
             # cancelled or failed fetch leaves no dangling manifest entry.
@@ -292,7 +496,7 @@ class Modelldownload:
 
         except Exception as fehler:  # noqa: BLE001 - the reason belongs in the state
             for halb in halbe:
-                halb.unlink(missing_ok=True)
+                _drop_half(halb)
             if self._stand:
                 self._stand.fehler = (
                     fehler.grund if isinstance(fehler, DownloadFehler) else "fehlgeschlagen"

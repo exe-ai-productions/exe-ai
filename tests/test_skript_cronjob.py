@@ -50,7 +50,7 @@ def gemeldet(monkeypatch):
     aufrufe: list[tuple[str, bool]] = []
     monkeypatch.setattr(
         cronablauf.cronmeldung, "melden",
-        lambda text, *, erfolgreich: aufrufe.append((text, erfolgreich)),
+        lambda text, *, erfolgreich, sprache=None: aufrufe.append((text, erfolgreich)),
     )
     return aufrufe
 
@@ -120,7 +120,7 @@ async def test_agentenlauf_darf_keinen_skript_eintrag_anlegen(repos, skriptordne
             repos, skriptordner, herkunft="agent", agent=EinAgent(),
         )
 
-    assert "only be set up from a chat" in str(fehler.value)
+    assert "only be created from a chat" in str(fehler.value)
     assert repos.cronjobs.auflisten() == []
 
 
@@ -138,7 +138,7 @@ async def test_agentenlauf_kann_skript_nicht_nachtraeglich_setzen(repos, skripto
             repos, skriptordner, herkunft="agent", agent=EinAgent(),
         )
 
-    assert "only be set up from a chat" in str(fehler.value)
+    assert "only be created from a chat" in str(fehler.value)
     assert repos.cronjobs.holen(eintrag.id).skript is None
 
 
@@ -153,7 +153,7 @@ async def test_agent_erreicht_einen_skript_eintrag_ueberhaupt_nicht(repos, skrip
                 {"action": aktion, "id": eintrag.id},
                 repos, skriptordner, herkunft="agent", agent=EinAgent(),
             )
-        assert str(fehler.value) == f"No entry '{eintrag.id}'."
+        assert str(fehler.value) == f"Entry '{eintrag.id}' does not exist."
 
     assert repos.cronjobs.holen(eintrag.id).aktiv is True
 
@@ -176,7 +176,7 @@ async def test_ein_agent_mit_dem_markernamen_kommt_auch_nicht_heran(repos, skrip
             repos, skriptordner, herkunft="agent", agent=MarkerAgent(),
         )
 
-    assert str(fehler.value) == f"No entry '{eintrag.id}'."
+    assert str(fehler.value) == f"Entry '{eintrag.id}' does not exist."
     assert repos.cronjobs.holen(eintrag.id).aktiv is True
 
 
@@ -211,7 +211,7 @@ async def test_symlink_nach_draussen_wird_abgewiesen(repos, skriptordner, tmp_pa
             repos, skriptordner,
         )
 
-    assert "does not resolve to a file inside the scripts folder" in str(fehler.value)
+    assert "does not resolve to a file within the scripts folder" in str(fehler.value)
     assert repos.cronjobs.auflisten() == []
 
 
@@ -290,6 +290,57 @@ def test_on_windows_the_launcher_counts_when_python_is_not_on_the_path(skriptord
     pfad = skript_schreiben(skriptordner, "c.py", "print(1)\n")
     assert skriptlauf.startable(pfad, "win32") is True
     assert skriptlauf.command_line(pfad, "win32") == ["C:/Windows/py.exe", str(pfad)]
+
+
+# The Store's stand-in: with no Python installed Windows still puts a
+# ``python.exe`` into the WindowsApps folder, and starting it opens the Store.
+STORE_STUB = r"C:\Users\u\AppData\Local\Microsoft\WindowsApps\python.exe"
+
+
+def _which_gibt(**gefunden):
+    """A ``shutil.which`` that knows only what the test hands it."""
+    return lambda programm: gefunden.get(programm)
+
+
+def test_on_windows_the_store_placeholder_is_not_a_python(skriptordner, monkeypatch):
+    monkeypatch.setattr(skriptlauf.shutil, "which", _which_gibt(python=STORE_STUB))
+    pfad = skript_schreiben(skriptordner, "c.py", "print(1)\n")
+
+    assert skriptlauf.startable(pfad, "win32") is False
+
+
+def test_on_windows_the_launcher_is_asked_after_the_placeholder(skriptordner, monkeypatch):
+    monkeypatch.setattr(
+        skriptlauf.shutil, "which", _which_gibt(python=STORE_STUB, py=r"C:\Windows\py.exe")
+    )
+    pfad = skript_schreiben(skriptordner, "c.py", "print(1)\n")
+
+    assert skriptlauf.startable(pfad, "win32") is True
+    assert skriptlauf.command_line(pfad, "win32") == [r"C:\Windows\py.exe", str(pfad)]
+
+
+@pytest.mark.parametrize("stub", [
+    r"C:\Users\u\AppData\Local\Microsoft\windowsapps\python.exe",
+    r"C:\Users\u\AppData\Local\Microsoft\WINDOWSAPPS\python.exe",
+    "C:/Users/u/AppData/Local/Microsoft/WindowsApps/python.exe",
+])
+def test_on_windows_the_placeholder_is_told_in_every_spelling(skriptordner, monkeypatch, stub):
+    monkeypatch.setattr(skriptlauf.shutil, "which", _which_gibt(python=stub))
+    pfad = skript_schreiben(skriptordner, "c.py", "print(1)\n")
+
+    assert skriptlauf.startable(pfad, "win32") is False
+
+
+def test_silence_on_windows_a_real_python_on_the_path_runs_as_before(skriptordner, monkeypatch):
+    """A Python outside WindowsApps wins, also with a launcher present."""
+    monkeypatch.setattr(
+        skriptlauf.shutil, "which",
+        _which_gibt(python=r"C:\Python313\python.exe", py=r"C:\Windows\py.exe"),
+    )
+    pfad = skript_schreiben(skriptordner, "c.py", "print(1)\n")
+
+    assert skriptlauf.startable(pfad, "win32") is True
+    assert skriptlauf.command_line(pfad, "win32") == [r"C:\Python313\python.exe", str(pfad)]
 
 
 def test_on_windows_the_command_line_follows_the_extension(skriptordner, monkeypatch):
@@ -391,7 +442,7 @@ async def test_skript_eintrag_bekommt_kein_ziel(repos, skriptordner):
             repos, skriptordner,
         )
 
-    assert "cannot carry a 'goal'" in str(fehler.value)
+    assert "cannot have a 'goal'" in str(fehler.value)
 
 
 async def test_ziel_kann_einem_skript_eintrag_nicht_nachgereicht_werden(repos, skriptordner):
@@ -416,7 +467,7 @@ async def test_agentenplan_wird_nicht_zum_skriptplan(repos, skriptordner):
             repos, skriptordner,
         )
 
-    assert "already runs one" in str(fehler.value)
+    assert "an existing script entry" in str(fehler.value)
 
 
 async def test_max_seconds_nur_am_skript_eintrag(repos, skriptordner):
@@ -515,10 +566,11 @@ async def test_exit_eins_scheitert_und_zaehlt_bis_zur_grenze(client, skriptordne
     assert frisch.aktiv is False
     # Two runs, two sentences, and never two about ONE ending: the first
     # run's own result, then the limit's — which is the one that survives on
-    # the run that reaches it (``schon_gemeldet``).
+    # the run that reaches it (``schon_gemeldet``), and which says why that
+    # run failed as the first one did.
     assert gemeldet == [
-        ("kaputt.py — ging schief — script ended with an error", False),
-        ("kaputt.py — stopped after 2 failed runs", False),
+        ("kaputt.py — ging schief — Skript mit Fehler beendet", False),
+        ("kaputt.py — nach 2 fehlgeschlagenen Durchläufen gestoppt — Skript mit Fehler beendet", False),
     ]
 
     lauf = laeufe(client, eintrag.id)[0]
@@ -538,7 +590,7 @@ async def test_zeitgrenze_beendet_den_lauf_mit_passendem_grund(client, skriptord
     assert lauf["grund"] == "zeitgrenze"
     auftrag = client.get("/api/v1/jobs").json()[0]
     voll = client.get(f"/api/v1/jobs/{auftrag['id']}").json()
-    assert "Stopped after 1 seconds" in voll["result"]
+    assert "Nach 1 Sekunden gestoppt" in voll["result"]
 
 
 @pytest.mark.platforms("posix", reason="the shebang line")
@@ -825,4 +877,4 @@ def test_anlegen_reicht_eine_refusal_ohne_schluessel_durch(client, skriptordner)
     detail = antwort.json()["detail"]
     assert "fehler." not in detail, detail
     assert "cronjob_refusal." not in detail, detail
-    assert detail == "Ein Datum gibt es nur für einen einmaligen Eintrag."
+    assert detail == "Ein Datum kann nur für einen einmaligen Eintrag angegeben werden."

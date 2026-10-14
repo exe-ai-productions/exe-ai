@@ -55,12 +55,12 @@ def gemeldet(monkeypatch):
     monkeypatch.setattr(
         ziel_werkzeug.cronmeldung,
         "melden",
-        lambda text, *, erfolgreich: aufrufe.append((text, erfolgreich)),
+        lambda text, *, erfolgreich, sprache=None: aufrufe.append((text, erfolgreich)),
     )
     monkeypatch.setattr(
         cronablauf.cronmeldung,
         "melden",
-        lambda text, *, erfolgreich: aufrufe.append((text, erfolgreich)),
+        lambda text, *, erfolgreich, sprache=None: aufrufe.append((text, erfolgreich)),
     )
     return aufrufe
 

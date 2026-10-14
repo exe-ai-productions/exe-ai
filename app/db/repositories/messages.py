@@ -116,6 +116,7 @@ class MessageRepository(Repository):
         zustand: str | None = None,
         lauf_id: str | None = None,
         gesamt_tokens: int | None = None,
+        replaces_id: str | None = None,
     ) -> Message:
         """``anhaenge``/``dokumente`` are the attachment LISTS; the scalar
         columns keep carrying the first entry so an older program version
@@ -138,11 +139,15 @@ class MessageRepository(Repository):
         bubble already showed before the round trip, and a reload racing
         the request recognizes its own row instead of doubling it. Left out,
         a fresh id is generated exactly as before.
+
+        ``replaces_id`` names the answer a "regenerate" attempt takes the
+        place of, for as long as the attempt runs (see the column in
+        schema.sql and :meth:`beim_start_aufraeumen`).
         """
         if art not in ARTEN:
-            raise ValueError(f"unbekannte Nachrichten-Art: {art!r}")
+            raise ValueError(f"Unknown message type: {art!r}")
         if zustand is not None and zustand not in ZUSTAENDE:
-            raise ValueError(f"unbekannter Lauf-Zustand: {zustand!r}")
+            raise ValueError(f"Unknown run state: {zustand!r}")
         anhaenge = [a for a in (anhaenge or []) if a] or None
         dokumente = [d for d in (dokumente or []) if d] or None
         if anhaenge and not bild:
@@ -178,8 +183,9 @@ class MessageRepository(Repository):
             """
             INSERT INTO messages (id, chat_id, role, content, reasoning, stats_json,
                                   bild, dokument, anhaenge, dokumente, created_at,
-                                  art, zustand, lauf_id, gesamt_tokens, dienst_port)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  art, zustand, lauf_id, gesamt_tokens, dienst_port,
+                                  replaces_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 nachricht.id,
@@ -203,6 +209,7 @@ class MessageRepository(Repository):
                 # answer alone. A row born in any other state has nobody to
                 # name — nothing but a running row is ever stranded.
                 self.db.dienst_port if nachricht.zustand == "laeuft" else None,
+                replaces_id,
             ),
         )
         return nachricht
@@ -398,6 +405,54 @@ class MessageRepository(Repository):
         zeile = self.verbindung.execute(sql, parameter).fetchone()
         return Message.aus_zeile(zeile) if zeile else None
 
+    def last_answer(self, *, chat_id: str) -> Message | None:
+        """The chat's newest answer of the model's own.
+
+        Not ``letzte`` with a role: a finished background command and a
+        picture are stored under the same role and are not answers — the
+        row's kind says which it is.
+        """
+        zeile = self.verbindung.execute(
+            "SELECT * FROM messages WHERE chat_id = ? AND role = 'assistant' "
+            "AND art = 'nachricht' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (chat_id,),
+        ).fetchone()
+        return Message.aus_zeile(zeile) if zeile else None
+
+    def finish_in_place_of(
+        self, message_id: str, replaced_id: str, **closing_write: Any
+    ) -> Message | None:
+        """An answer's closing write and the end of the answer it replaces,
+        as one step.
+
+        The replaced answer stays stored for as long as the new one is being
+        written; it goes in the very transaction that stores the new one as
+        finished, so the chat never stands without an answer and never keeps
+        both. ``closing_write`` is what ``inhalt_aktualisieren`` takes.
+        """
+        with self.db.transaktion() as verbindung:
+            written = self.inhalt_aktualisieren(message_id, **closing_write)
+            verbindung.execute("DELETE FROM messages WHERE id = ?", (replaced_id,))
+            verbindung.execute(
+                "UPDATE messages SET replaces_id = NULL WHERE id = ?", (message_id,)
+            )
+        return written
+
+    def run_again(self, message_id: str) -> Message | None:
+        """An answer's row taken up by a run once more: the state only.
+
+        The run that asks a failed answer's model call again writes into the
+        same row. It is marked as being written, signed with this service's
+        port like every running row (``speichern``), and nothing else of it
+        is touched — what it holds stays until the run has something to put
+        in its place.
+        """
+        self.verbindung.execute(
+            "UPDATE messages SET zustand = 'laeuft', dienst_port = ? WHERE id = ?",
+            (self.db.dienst_port, message_id),
+        )
+        return self.holen(message_id)
+
     def inhalt_aktualisieren(
         self,
         message_id: str,
@@ -428,7 +483,7 @@ class MessageRepository(Repository):
         both, applied before the write.
         """
         if zustand is not None and zustand not in ZUSTAENDE:
-            raise ValueError(f"unbekannter Lauf-Zustand: {zustand!r}")
+            raise ValueError(f"Unknown run state: {zustand!r}")
         self.verbindung.execute(
             "UPDATE messages SET content = ?, reasoning = ?, stats_json = ?, "
             + "bild = COALESCE(?, bild), "
@@ -602,16 +657,30 @@ class MessageRepository(Repository):
         Which rows that is, exactly, stands at `_eigentuemer_filter` in
         the jobs repository — both cleanups share it, because both ask the
         same question of the same column.
+
+        **An attempt that was to replace an answer is deleted, not marked.**
+        A "regenerate" attempt that is stopped by hand leaves no row: the old
+        answer stands (app/api/v1/generierung.py). A hard end is the same
+        thing seen from outside, and marked stopped the attempt would stand
+        beside the old answer as a second reply to one question. Only where
+        the answer it names is still there; otherwise it is marked like
+        every other row.
         """
         bedingung, eigner = _eigentuemer_filter(
             self.db.dienst_port, nur_eigene=nur_eigene
+        )
+        discarded_attempts = self.verbindung.execute(
+            "DELETE FROM messages WHERE zustand = 'laeuft' AND replaces_id IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM messages AS alt WHERE alt.id = messages.replaces_id) "
+            + bedingung,
+            eigner,
         )
         cursor = self.verbindung.execute(
             "UPDATE messages SET zustand = 'abgebrochen' WHERE zustand = 'laeuft' "
             + bedingung,
             eigner,
         )
-        return cursor.rowcount
+        return discarded_attempts.rowcount + cursor.rowcount
 
     def verdichten(
         self, *, chat_id: str, text: str, ersetzte_ids: list[str]
@@ -922,8 +991,7 @@ class MessageRepository(Repository):
         """The attached picture names of a chat's rows — the list the answer
         route warms its picture copies from (app/verlaufsbau.bilder_vorbereiten).
         A light pass of its own ON PURPOSE: the one history read
-        stays the one (tests/test_generierung.py::
-        test_die_geschichte_wird_je_antwort_einmal_gelesen). Only rows that
+        stays the one (pinned in tests/test_generierung.py). Only rows that
         carry an attachment are read at all, and which of the columns wins is
         the model's own rule (`Message.anhang_bilder`, reached through
         `aus_zeile` — its narrow selects are anticipated there).
@@ -956,6 +1024,45 @@ class MessageRepository(Repository):
         ).fetchall():
             namen.extend(Message.aus_zeile(zeile).anhang_bilder())
         return namen
+
+    def tool_entry_values(self, *, chat_id: str, key: str, newest: int) -> list[str]:
+        """The newest ``newest`` text values stored under ``key`` in
+        the tool entries of a chat's answers, oldest first — what the answer
+        route warms the pictures of earlier tool reads from
+        (app/verlaufsbau.py ``bilder_vorbereiten``). A light pass of its own
+        for the same reason as :meth:`bildanhaenge`: the one history read
+        stays the one. Only answers that stand in the model's history are
+        read (no folded rows), only those whose log names the key at all,
+        and newest first, so a long chat stops at the answers it needs."""
+        newest_values: list[str] = []
+        for zeile in self.verbindung.execute(
+            """
+            SELECT stats_json
+            FROM messages
+            WHERE chat_id = ?
+              AND role = 'assistant'
+              AND verdichtet_in IS NULL
+              AND stats_json LIKE ?
+            ORDER BY created_at DESC, rowid DESC
+            """,
+            (chat_id, f"%{key}%"),
+        ):
+            try:
+                stats = json.loads(zeile["stats_json"] or "{}")
+            except (TypeError, ValueError):
+                continue
+            eintraege = stats.get("werkzeuge") if isinstance(stats, dict) else None
+            values = [
+                eintrag[key]
+                for eintrag in (eintraege if isinstance(eintraege, list) else [])
+                if isinstance(eintrag, dict)
+                and isinstance(eintrag.get(key), str)
+                and eintrag[key]
+            ]
+            newest_values.extend(reversed(values))
+            if len(newest_values) >= newest:
+                break
+        return list(reversed(newest_values[:newest]))
 
     def _luecke(
         self,
@@ -995,11 +1102,10 @@ class MessageRepository(Repository):
             chat_id=chat_id,
             role="user",
             content=(
-                f"[{ausgelassen} messages of this conversation are not "
-                "included here. Above this line is its opening, below it is "
-                "its most recent stretch; the messages in between were left "
-                "out because the history no longer fits in one request. "
-                "Nothing was deleted — they are all still in the chat.]"
+                f"[{ausgelassen} messages from this conversation are not included here. Its "
+                "opening appears above this line and its most recent messages below. The "
+                "intervening messages were omitted because the history no longer fits in a "
+                "single request. Nothing was deleted; all messages remain in the chat.]"
             ),
             created_at=_kurz_nach(
                 anfang[-1].created_at, vor=schwanz[0].created_at
@@ -1085,7 +1191,7 @@ class MessageRepository(Repository):
         picture of a run keeps its own (``drawn_with`` below reads it).
         """
         if nr is not None and nr < 1:
-            raise ValueError(f"nr muss mindestens 1 sein, war {nr}")
+            raise ValueError(f"nr must be at least 1; received {nr}.")
 
         bestehend = self.run_row(chat_id=chat_id, lauf_kennung=lauf_kennung)
         grows = nr is None

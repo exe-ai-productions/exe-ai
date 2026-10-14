@@ -779,6 +779,48 @@ def test_starten_nimmt_den_mtp_aus_dem_manifest(ordner, falsches_programm, monke
         runner.stoppen()
 
 
+def test_start_takes_a_sibling_draft_from_the_manifest(
+    ordner, falsches_programm, monkeypatch
+):
+    """A sibling model noted as the draft lies in the model folder (the start
+    puts a whole model that was fetched into mtp/ back there): without a
+    chosen draft the start finds it through the note and names the plain
+    draft path."""
+    from app import modellzuordnung
+    import app.modellrunner as mr
+
+    (ordner / "geschwister.gguf").write_bytes(b"x" * 5)
+    modellzuordnung.eintragen(ordner, "klein.gguf", "mtp", "geschwister.gguf")
+
+    aufgezeichnet = {}
+    echtes_popen = mr.subprocess.Popen
+
+    def merken(befehl, *args, **kwargs):
+        aufgezeichnet["befehl"] = befehl
+        return echtes_popen(befehl, *args, **kwargs)
+
+    monkeypatch.setattr(mr.subprocess, "Popen", merken)
+
+    runner = Modellrunner(ordner, programm=str(falsches_programm))
+    try:
+        lauf = runner.starten("klein.gguf", port=18098)
+        assert lauf.drafter == "geschwister.gguf"
+        befehl = aufgezeichnet["befehl"]
+        assert befehl[befehl.index("--model-draft") + 1] == str(ordner / "geschwister.gguf")
+        assert befehl[befehl.index("--spec-type") + 1] == "draft-simple"
+    finally:
+        runner.stoppen()
+
+
+def test_without_a_draft_and_without_built_in_layers_there_is_no_spec_type(
+    ordner, falsches_programm
+):
+    runner = Modellrunner(ordner, programm=str(falsches_programm))
+    befehl = runner.befehl("klein.gguf", 4096, 33, 8081)
+    assert "--spec-type" not in befehl
+    assert "--model-draft" not in befehl
+
+
 def _start_and_capture(folder, program, monkeypatch, **options):
     import app.modellrunner as mr
 
@@ -808,8 +850,9 @@ def test_a_sibling_model_from_the_model_folder_drafts(ordner, falsches_programm,
     a draft; the start used to look only in mtp/ and refused them."""
     command = _start_and_capture(ordner, falsches_programm, monkeypatch, drafter="klein.gguf")
     assert command[command.index("--model-draft") + 1] == str(ordner / "klein.gguf")
-    # A whole model drafts by the plain path: no prediction mode.
-    assert "--spec-type" not in command
+    # A whole model drafts by the plain path, and the engine has to be told
+    # so: its default is no speculative backend at all.
+    assert command[command.index("--spec-type") + 1] == "draft-simple"
 
 
 def test_a_drafter_from_mtp_drafts_as_before(ordner, falsches_programm, monkeypatch):
@@ -1130,6 +1173,36 @@ def test_mtp_fehler_wenn_server_hochkam_ohne_die_zeile(ordner):
     assert runner.mtp_zustand() == "fehler"
 
 
+_NO_BACKEND_LINE = (
+    "0.00.887 W common_speculative_init: no implementations specified for speculative decoding"
+)
+
+
+def test_mtp_error_when_the_server_says_no_backend_was_chosen(ordner):
+    """The draft file was loaded (the init line passed) and the server then
+    says no way of drafting was chosen: nothing drafts, so the bolt is red,
+    not blue — and at once, without waiting for "model loaded"."""
+    runner = Modellrunner(ordner)
+    runner._prozess = _LaufenderProzess()
+    runner._drafter_gewuenscht = True
+    runner._zeile_aufnehmen(_MTP_ZEILE)
+    runner._zeile_aufnehmen(_NO_BACKEND_LINE)
+    assert runner.mtp_zustand() == "fehler"
+    runner._zeile_aufnehmen(_BEREIT_ZEILE)
+    assert runner.mtp_zustand() == "fehler"
+
+
+def test_mtp_stays_active_without_the_no_backend_line(ordner):
+    """Silence probe: the init line alone, as with a chosen mode, stays blue."""
+    runner = Modellrunner(ordner)
+    runner._prozess = _LaufenderProzess()
+    runner._drafter_gewuenscht = True
+    runner._zeile_aufnehmen(_MTP_ZEILE)
+    runner._zeile_aufnehmen("0.00.887 I common_speculative_init: using draft-simple")
+    runner._zeile_aufnehmen(_BEREIT_ZEILE)
+    assert runner.mtp_zustand() == "aktiv"
+
+
 def test_mtp_laedt_noch_ist_nichts(ordner):
     """Drafter configured but the server has not reached ready yet: grey, not
     a premature red."""
@@ -1321,9 +1394,16 @@ def test_gewaehlt_kein_drafter_holt_nichts_aus_dem_manifest(ordner, falsches_pro
 
 
 def _melder():
-    """Collects what the runner announces, in order."""
+    """Collects what the runner announces, in order — the first three facts;
+    the fourth, the unknown architecture, has its own collector below."""
     gehoert: list[tuple[bool, bool | None, str | None]] = []
-    return gehoert, lambda laeuft, flash, mtp: gehoert.append((laeuft, flash, mtp))
+    return gehoert, lambda laeuft, flash, mtp, arch=None: gehoert.append((laeuft, flash, mtp))
+
+
+def _melder_vier():
+    """Collects all four facts, in order."""
+    gehoert: list[tuple[bool, bool | None, str | None, str | None]] = []
+    return gehoert, lambda *tatsachen: gehoert.append(tatsachen)
 
 
 def test_der_start_meldet_dass_der_server_da_ist(ordner, falsches_programm):
@@ -1550,7 +1630,7 @@ def test_eine_meldung_die_nicht_ankam_gilt_nicht_als_gesagt(ordner):
     fehler = {"jetzt": True}
     gehoert = []
 
-    def melden(laeuft, flash, mtp):
+    def melden(laeuft, flash, mtp, arch=None):
         if fehler["jetzt"]:
             raise RuntimeError("die Leitung war weg")
         gehoert.append((laeuft, flash, mtp))
@@ -1633,3 +1713,39 @@ def test_a_refused_start_clears_the_earlier_unknown_architecture(ordner):
     with pytest.raises(RunnerFehler):
         runner.starten("gibtsnicht.gguf")
     assert runner.unknown_architecture() is None
+
+
+# --- the fourth fact: the architecture the build does not know ---------------
+
+
+def test_the_unknown_architecture_is_announced_with_the_server_that_ended(ordner):
+    """The reader reads the line, the process ends: the announcement carries
+    the name together with `laeuft=False` — a state that was never said
+    before, so it goes out."""
+    gehoert, melden = _melder_vier()
+    runner = Modellrunner(ordner, zustand_callback=melden)
+    runner._prozess = _ToterProzess(
+        iter(["llama_model_load: error loading model architecture: unknown model architecture: 'diffusion-gemma'\n"])
+    )
+    runner._mitlesen()
+    assert gehoert and gehoert[-1] == (False, None, None, "diffusion-gemma")
+
+
+def test_a_start_that_failed_for_another_reason_announces_no_architecture(ordner):
+    gehoert, melden = _melder_vier()
+    runner = Modellrunner(ordner, zustand_callback=melden)
+    runner._prozess = _ToterProzess(iter(["something else went wrong\n"]))
+    runner._mitlesen()
+    assert all(tatsachen[3] is None for tatsachen in gehoert)
+
+
+def test_a_running_server_and_an_unchanged_state_announce_no_architecture_twice(ordner):
+    gehoert, melden = _melder_vier()
+    runner = Modellrunner(ordner, zustand_callback=melden)
+    runner._unknown_arch = "diffusion-gemma"
+    runner._prozess = _LaufenderProzess()
+    runner._zustand_melden()
+    # Running: no failed start to name, whatever the earlier one was.
+    assert gehoert == [(True, None, None, None)]
+    runner._zustand_melden()
+    assert len(gehoert) == 1

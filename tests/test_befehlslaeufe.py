@@ -391,4 +391,4 @@ def test_der_puffer_behaelt_beide_enden():
     assert len(text) <= hintergrund.MAX_PUFFER_ZEICHEN + 200
     assert text.startswith("0000 ")
     assert text.rstrip().endswith(f"0399 {zeile}")
-    assert "cut out of the middle" in text
+    assert "omitted from the middle" in text

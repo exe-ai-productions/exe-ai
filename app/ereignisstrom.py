@@ -189,6 +189,14 @@ async def _termin_gefeuert(cronjob_id: str = "", **_rest) -> None:
     strom.melden("termin_gefeuert", cronjob_id=cronjob_id)
 
 
+async def _cron_changed(cronjob_id: str = "", **_rest) -> None:
+    strom.melden("cron_changed", cronjob_id=cronjob_id)
+
+
+async def _model_switches_changed(schluessel: str = "", **_rest) -> None:
+    strom.melden("model_switches_changed", schluessel=schluessel)
+
+
 async def _endpunkt_status(
     endpoint_id: str = "", erreichbar: bool = False, **_rest
 ) -> None:
@@ -212,18 +220,30 @@ async def _modellserver_zustand(
     laeuft: bool = False,
     flash_aktiv: bool | None = None,
     mtp_aktiv: str | None = None,
+    unknown_architecture: str | None = None,
     **_rest,
 ) -> None:
     # The one announcement that carries its answer instead of pointing at a
     # list. Why that is the right call, and what it costs, is written once
     # where the event is defined (app/events.py).
+    # The architecture rides along only when there is one: a start that
+    # failed on it is the one state that has a name to give, and every other
+    # announcement keeps the three facts it always had.
+    zusatz = {"unknown_architecture": unknown_architecture} if unknown_architecture else {}
     strom.melden(
         "modellserver_zustand",
         runner=runner,
         laeuft=laeuft,
         flash_aktiv=flash_aktiv,
         mtp_aktiv=mtp_aktiv,
+        **zusatz,
     )
+
+
+async def _server_state(endpoint_id: str = "", server_state: str = "", **_rest) -> None:
+    # Carries its answer, like the model server's announcement above: one
+    # word for one endpoint, nothing to go and look at (app/server_state.py).
+    strom.melden("server_state", endpoint_id=endpoint_id, server_state=server_state)
 
 
 async def _verdichtung_laeuft(chat_id: str = "", **_rest) -> None:
@@ -249,9 +269,12 @@ _WEITERLEITUNG = (
     (Ereignisse.AUFTRAG_FRAGT, _auftrag_fragt),
     (Ereignisse.AUFTRAG_KONTEXT, _auftrag_kontext),
     (Ereignisse.TERMIN_GEFEUERT, _termin_gefeuert),
+    (Ereignisse.CRON_CHANGED, _cron_changed),
+    (Ereignisse.MODEL_SWITCHES_CHANGED, _model_switches_changed),
     (Ereignisse.ENDPUNKT_STATUS_GEAENDERT, _endpunkt_status),
     (Ereignisse.EXEMD_ZU_GROSS, _exemd_zu_gross),
     (Ereignisse.MODELLSERVER_ZUSTAND, _modellserver_zustand),
+    (Ereignisse.SERVER_STATE, _server_state),
 )
 
 

@@ -26,8 +26,8 @@ from app.providers.base import ChatNachricht
 # said at all because a bare image part gives the model nothing to hang it on:
 # the file name is what the next sentence of the answer has to quote.
 EINLEITUNG = (
-    "The file you asked to read is an image and is attached here so you can "
-    "look at it: {namen}. Describe or use what you actually see in it."
+    "The requested file is an image and is attached here for inspection: {namen}. Describe or "
+    "use only what you can actually see."
 )
 
 # The tool's own result for such a read (``app/tools/datei_lesen.py``) — said
@@ -37,9 +37,8 @@ EINLEITUNG = (
 # the round the call ran in; :func:`gelesener_bildpfad` is how a later
 # reader recognises such a result.
 ANHANG_SATZ = (
-    "is attached below, for THIS answer only — read it again in a later turn "
-    "if you need it. Say what you see in it now, so the answer keeps what the "
-    "picture said."
+    "is attached below for THIS response only. Read it again if needed in a later turn. "
+    "Describe what you see now so the response preserves the image's relevant information."
 )
 
 # What stands in place of that result when a LATER request rebuilds the
@@ -53,9 +52,19 @@ ANHANG_SATZ = (
 # Nothing is lost: the model is told where the file is and which
 # tool reads it back.
 NICHT_MEHR_DABEI = (
-    "[This call read an image. It was attached to the answer of that round "
-    "only and is not part of this request.]"
+    "[This call read an image. It was attached only for that response and is not included in "
+    "this request.]"
 )
+
+
+# The key a stored tool entry carries when its call handed the model a
+# picture: the whole path of that file, written by the run at the moment the
+# picture was attached (``app/api/v1/generierung.py``). A later request that
+# rebuilds the history attaches a picture again only where this note stands.
+# The result's own words are no proof of it: a text file that quotes
+# :func:`bildsatz` is somebody's real output, and following its path would
+# send a file the model never opened to the provider.
+READ_IMAGE_PATH = "read_image_path"
 
 
 def bildsatz(pfad: str, groesse: int) -> str:

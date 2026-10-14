@@ -136,6 +136,11 @@ CREATE INDEX IF NOT EXISTS idx_einstellungen_bereich
 -- able to tell its own stranded answer from a second service's live one
 -- (app/main.py `_startbereinigung`). NULL for rows written before this
 -- column existed and for every row that was never 'laeuft'.
+-- replaces_id: The answer a "regenerate" attempt is to replace, while the attempt
+-- runs. The startup cleanup deletes such an attempt that a hard end left on
+-- 'laeuft' — the same thing a stop by hand does — so the chat is left with
+-- the old answer. Cleared when the attempt finishes and takes the old
+-- answer's place. NULL on every other row.
 CREATE TABLE IF NOT EXISTS messages (
     id         TEXT NOT NULL PRIMARY KEY,
     chat_id    TEXT NOT NULL REFERENCES chats (id) ON DELETE CASCADE,
@@ -157,6 +162,7 @@ CREATE TABLE IF NOT EXISTS messages (
     gesamt_tokens INTEGER,
     verdichtet_in TEXT,
     dienst_port INTEGER,
+    replaces_id TEXT,
     created_at TEXT NOT NULL
 );
 

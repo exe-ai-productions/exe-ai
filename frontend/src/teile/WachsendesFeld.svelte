@@ -34,6 +34,10 @@
        stretch every card beside it. */
     knapp = false,
     zeilen = 0,
+    /* A block of a fixed height that scrolls inside itself and that the
+       corner drags taller — the form of an agent's instruction. It neither
+       grows with its text nor fills the page. */
+    block = false,
   } = $props()
 
   let feld = $state(null)
@@ -42,7 +46,7 @@
     // In full mode, flexbox determines the size (rest of the 60vh row
     // after the extra blocks below) - setting a height of our own here
     // would work against it.
-    if (!feld || volleHoehe) return
+    if (!feld || volleHoehe || block) return
     feld.style.height = 'auto'
     feld.style.height = feld.scrollHeight + 'px'
   }
@@ -59,7 +63,7 @@
   }
 </script>
 
-<div class="feld" class:gedimmt class:volleHoehe class:quelle class:knapp>
+<div class="feld" class:gedimmt class:volleHoehe class:quelle class:knapp class:block>
   <textarea
     bind:this={feld}
     bind:value={wert}
@@ -146,6 +150,16 @@
   .feld.volleHoehe textarea {
     flex: 1;
     max-height: none;
+  }
+  /* The block: 320 px high, the text scrolls in it, the corner drags it
+     taller. Its height is the field's own, so there is no transition that
+     would trail the pointer while it is dragged. */
+  .feld.block textarea {
+    height: 320px;
+    min-height: 78px;
+    max-height: none;
+    resize: vertical;
+    transition: none;
   }
   @media (prefers-reduced-motion: reduce) {
     textarea { transition: none; }

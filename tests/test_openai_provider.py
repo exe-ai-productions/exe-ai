@@ -55,8 +55,8 @@ class ModellServerAttrappe:
         # What the Responses route streams. Empty means the closing event of a
         # plain answer, built by `antworten_senden`.
         self.antwort_ereignisse: list[dict] = []
-        # Errors the Responses route answers first, one per request, before
-        # it streams again: (status, error text).
+        # Errors either route answers first, one per request, before it
+        # streams again: (status, error text).
         self.refusals: list[tuple[int, str]] = []
         self.app = FastAPI()
 
@@ -74,6 +74,9 @@ class ModellServerAttrappe:
             self.empfangene_koerper.append(koerper)
             self.pfade.append("/v1/chat/completions")
 
+            if self.refusals:
+                status, text = self.refusals.pop(0)
+                return JSONResponse({"error": {"message": text}}, status_code=status)
             if self.status >= 400:
                 return JSONResponse({"error": self.fehlertext}, status_code=self.status)
 
@@ -1581,6 +1584,122 @@ def test_ohne_stufe_verlangt_der_umbau_keine_zusammenfassung():
     assert "reasoning" not in umgebaut
 
 
+# What a person can set for an endpoint in the OpenAI dialect beside the
+# answer length, each with a value of its own.
+SET_VALUES = {
+    "seed": 7,
+    "presence_penalty": 0.4,
+    "frequency_penalty": 0.6,
+}
+
+
+def _with_set_values(modell: str, werkzeuge: bool, stufe: str | None) -> Generierungsanfrage:
+    anfrage = _anfrage(werkzeuge=werkzeuge, stufe=stufe)
+    anfrage.modell = modell
+    anfrage.temperature = 0.3
+    anfrage.top_p = 0.8
+    anfrage.parameter = dict(SET_VALUES)
+    return anfrage
+
+
+def test_a_seed_is_left_out_of_the_body_for_the_responses_route():
+    """The defect: a seed set for the endpoint went on into `/v1/responses`,
+    which has no such field. Silence probe: a body without a seed comes out
+    the same as it did, and nothing else is taken with the seed."""
+    chat = {
+        "model": "gpt-5.6-luna",
+        "messages": [{"role": "user", "content": "Hallo"}],
+        "reasoning_effort": "high",
+        "temperature": 0.3,
+        "top_p": 0.8,
+        "max_completion_tokens": 900,
+    }
+    plain = koerper_umbauen(dict(chat))
+    seeded = koerper_umbauen({**chat, "seed": 7})
+
+    assert "seed" not in seeded
+    assert seeded == plain
+    assert plain["temperature"] == 0.3 and plain["top_p"] == 0.8
+    assert plain["max_output_tokens"] == 900
+
+
+def test_the_penalties_are_left_out_of_the_body_for_the_responses_route():
+    """The defect: with a model that keeps its sampling values (gpt-4.1) both
+    penalties went on into `/v1/responses`, which has neither field. Silence
+    probe: the temperature stays, and the body handed in is not changed."""
+    chat = {
+        "model": "gpt-4.1",
+        "messages": [{"role": "user", "content": "Hallo"}],
+        "tools": [WERKZEUG],
+        "tool_choice": "auto",
+        "temperature": 0.3,
+        "top_p": 0.8,
+        "presence_penalty": 0.4,
+        "frequency_penalty": 0.6,
+    }
+    before = json.loads(json.dumps(chat))
+
+    umgebaut = koerper_umbauen(chat)
+
+    assert not {"presence_penalty", "frequency_penalty", "seed"} & umgebaut.keys()
+    assert umgebaut["temperature"] == 0.3 and umgebaut["top_p"] == 0.8
+    assert chat == before, "the chat body itself was changed"
+
+
+def test_one_place_names_the_fields_the_responses_route_does_not_have():
+    """The three are named once, and every one of them is left out — for a
+    model that would take it on the chat route as for any other."""
+    from app.providers.openai_responses import CHAT_ONLY_FIELDS
+
+    assert CHAT_ONLY_FIELDS == ("seed", "presence_penalty", "frequency_penalty")
+    for modell in ("gpt-4.1", "gpt-4o", "gpt-5.6-luna", "o3-mini", "some-other-model"):
+        chat = {"model": modell, "messages": [], **dict.fromkeys(CHAT_ONLY_FIELDS, 1)}
+        assert not set(CHAT_ONLY_FIELDS) & koerper_umbauen(chat).keys(), modell
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("modell", ["gpt-4.1", "gpt-4o-mini", "gpt-5.6-luna"])
+async def test_set_values_do_not_reach_the_responses_route(modellserver, monkeypatch, modell):
+    """The whole way, as the server hears it: a request to OpenAI's own host
+    with a tool takes `/v1/responses`, and neither the seed nor a penalty set
+    for the endpoint is in what arrives."""
+    modellserver.antworten_senden("ok")
+    _ueber_proxy(monkeypatch, modellserver)
+
+    await _einsammeln(
+        _provider("http://api.openai.com/v1", parameter_dialect="openai"),
+        _with_set_values(modell, werkzeuge=True, stufe=None),
+    )
+
+    assert modellserver.pfade == ["/v1/responses"]
+    koerper = modellserver.empfangene_koerper[0]
+    assert not set(SET_VALUES) & koerper.keys()
+    assert koerper["model"] == modell
+
+
+@pytest.mark.asyncio
+async def test_the_chat_route_keeps_the_set_values(modellserver, monkeypatch):
+    """Silence probe: a plain chat with OpenAI — no tool, no stage — stays on
+    `/v1/chat/completions` and carries what was set, and so does every other
+    server on its only route, tool or not."""
+    modellserver.inhalt_senden("ok")
+    _ueber_proxy(monkeypatch, modellserver)
+    await _einsammeln(
+        _provider("http://api.openai.com/v1", parameter_dialect="openai"),
+        _with_set_values("gpt-4.1", werkzeuge=False, stufe=None),
+    )
+    monkeypatch.delenv("HTTP_PROXY")
+    await _einsammeln(
+        _provider(modellserver.basis, parameter_dialect="openai"),
+        _with_set_values("gpt-4.1", werkzeuge=True, stufe=None),
+    )
+
+    assert modellserver.pfade == ["/v1/chat/completions", "/v1/chat/completions"]
+    for koerper in modellserver.empfangene_koerper:
+        assert {name: koerper[name] for name in SET_VALUES} == SET_VALUES
+        assert koerper["temperature"] == 0.3 and koerper["top_p"] == 0.8
+
+
 @pytest.mark.asyncio
 async def test_ein_werkzeugaufruf_kommt_auch_ueber_die_responses_route_an(
     modellserver, monkeypatch
@@ -1996,6 +2115,113 @@ async def test_silence_probe_a_400_about_another_field_is_no_reason_to_drop_it(
     assert modellserver.empfangene_koerper[-1]["reasoning"] == {"effort": "high", "summary": "auto"}
 
 
+MAX_TOKENS_REFUSAL = (
+    400,
+    "Unsupported parameter: 'max_tokens' is not supported with this model. "
+    "Use 'max_completion_tokens' instead.",
+)
+
+
+def _limited_request(model: str = "prod-chat", max_tokens: int = 512) -> Generierungsanfrage:
+    return Generierungsanfrage(
+        nachrichten=[ChatNachricht(role="user", content="Hello")],
+        modell=model,
+        max_tokens=max_tokens,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_refused_max_tokens_is_sent_once_more_as_max_completion_tokens(modellserver):
+    """A model under a name of its own (a deployment, an intermediate server)
+    refuses the old field: the same request goes out once more with the same
+    limit under the new name, and the answer arrives."""
+    modellserver.inhalt_senden("It is sunny.")
+    modellserver.refusals = [MAX_TOKENS_REFUSAL]
+
+    stuecke = await _einsammeln(_provider(modellserver.basis), _limited_request())
+
+    assert modellserver.pfade == ["/v1/chat/completions", "/v1/chat/completions"]
+    first, second = modellserver.empfangene_koerper
+    assert first["max_tokens"] == 512
+    assert "max_completion_tokens" not in first
+    assert second["max_completion_tokens"] == 512
+    assert "max_tokens" not in second
+    assert {k: v for k, v in first.items() if k != "max_tokens"} == {
+        k: v for k, v in second.items() if k != "max_completion_tokens"
+    }
+    assert _text(stuecke, "content") == "It is sunny."
+    assert not [s for s in stuecke if s.sorte == "error"]
+
+
+@pytest.mark.asyncio
+async def test_silence_probe_nothing_is_remembered_between_requests(modellserver):
+    """Every request goes out first as it always did: the refusal is not
+    learned, so a server that refuses again is asked twice again — and one
+    that does not refuse sees one request."""
+    modellserver.inhalt_senden("ok")
+    modellserver.refusals = [MAX_TOKENS_REFUSAL]
+    provider = _provider(modellserver.basis)
+
+    await _einsammeln(provider, _limited_request())
+    await _einsammeln(provider, _limited_request())
+
+    assert len(modellserver.pfade) == 3
+    assert "max_tokens" in modellserver.empfangene_koerper[2]
+    assert "max_completion_tokens" not in modellserver.empfangene_koerper[2]
+
+
+@pytest.mark.asyncio
+async def test_silence_probe_a_second_refusal_ends_after_exactly_two_requests(modellserver):
+    """When the request under the new name is refused as well, the limit was
+    not the whole story: the error reaches the caller, no third one goes out."""
+    modellserver.inhalt_senden("ok")
+    modellserver.refusals = [MAX_TOKENS_REFUSAL, MAX_TOKENS_REFUSAL, MAX_TOKENS_REFUSAL]
+
+    with pytest.raises(ProviderFehler) as fehler:
+        await _einsammeln(_provider(modellserver.basis), _limited_request())
+
+    assert fehler.value.status == 400
+    assert modellserver.pfade == ["/v1/chat/completions", "/v1/chat/completions"]
+
+
+@pytest.mark.asyncio
+async def test_silence_probe_a_400_about_another_field_is_not_sent_again(modellserver):
+    """Only a refusal naming ``max_tokens`` is answered by sending again."""
+    modellserver.inhalt_senden("ok")
+    modellserver.refusals = [(400, "Unsupported parameter: 'seed'")]
+
+    with pytest.raises(ProviderFehler) as fehler:
+        await _einsammeln(_provider(modellserver.basis), _limited_request())
+
+    assert fehler.value.status == 400
+    assert modellserver.pfade == ["/v1/chat/completions"]
+
+
+@pytest.mark.asyncio
+async def test_silence_probe_a_server_that_takes_max_tokens_gets_one_request(modellserver):
+    modellserver.inhalt_senden("ok")
+
+    await _einsammeln(_provider(modellserver.basis), _limited_request())
+
+    assert modellserver.pfade == ["/v1/chat/completions"]
+    assert modellserver.empfangene_koerper[0]["max_tokens"] == 512
+
+
+@pytest.mark.asyncio
+async def test_silence_probe_a_refusal_of_the_new_name_is_not_sent_again(modellserver):
+    """A body that already carries ``max_completion_tokens`` has nothing to
+    rename: a model family that gets the new name from the start and is
+    refused anyway ends the request."""
+    modellserver.inhalt_senden("ok")
+    modellserver.refusals = [(400, "Unsupported parameter: 'max_completion_tokens'")]
+
+    with pytest.raises(ProviderFehler):
+        await _einsammeln(_provider(modellserver.basis), _limited_request(model="gpt-5.6-luna"))
+
+    assert modellserver.pfade == ["/v1/chat/completions"]
+    assert "max_completion_tokens" in modellserver.empfangene_koerper[0]
+
+
 def _runde_mit_denken() -> list[dict]:
     """A round that thinks, comments and calls a tool — the items in the order
     a real stream sends them."""
@@ -2249,6 +2475,75 @@ async def test_der_provider_reicht_die_eigene_zeitgrenze_an_httpx_durch(modellse
     assert _text(stuecke, "content") == "ok"
 
 
+def _record_timeouts(monkeypatch) -> list[httpx.Timeout]:
+    """Record the `timeout` every `httpx.AsyncClient` of the module is built with."""
+    real_client = httpx.AsyncClient
+    seen: list[httpx.Timeout] = []
+
+    def build(**kw):
+        seen.append(kw["timeout"])
+        return real_client(**kw)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build)
+    return seen
+
+
+def test_a_local_server_may_stay_silent_for_thirty_minutes():
+    """Fails without the fix: the read timeout was the flat 600 s."""
+    result = zeitlimit(600.0, True, 1800.0)
+    assert result.read == 1800.0
+    assert result.connect == 600.0
+
+
+def test_schweigeprobe_without_a_read_timeout_the_old_one_stays():
+    assert zeitlimit(600.0, True, None).read == 600.0
+
+
+def test_schweigeprobe_the_switch_off_takes_the_long_read_timeout_away():
+    result = zeitlimit(600.0, False, 1800.0)
+    assert result.read is None
+    assert result.connect == 600.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint_id", ["runner", "agentenmodell"])
+async def test_a_local_endpoint_hands_a_1800s_read_timeout_to_httpx(
+    modellserver, monkeypatch, endpoint_id
+):
+    """Fails without the fix: the provider handed 600 s to httpx."""
+    modellserver.inhalt_senden("ok")
+    seen = _record_timeouts(monkeypatch)
+    provider = _provider(modellserver.basis, id=endpoint_id, group="local")
+    chunks = await _einsammeln(provider)
+    assert _text(chunks, "content") == "ok"
+    assert seen[-1].read == 1800.0
+    assert seen[-1].connect == 600.0
+
+
+@pytest.mark.asyncio
+async def test_schweigeprobe_a_cloud_endpoint_keeps_600s(modellserver, monkeypatch):
+    modellserver.inhalt_senden("ok")
+    seen = _record_timeouts(monkeypatch)
+    chunks = await _einsammeln(_provider(modellserver.basis))
+    assert _text(chunks, "content") == "ok"
+    assert seen[-1].read == 600.0
+    assert seen[-1].connect == 600.0
+
+
+@pytest.mark.asyncio
+async def test_schweigeprobe_local_with_the_time_limit_off_has_no_read_timeout(
+    modellserver, monkeypatch
+):
+    modellserver.inhalt_senden("ok")
+    seen = _record_timeouts(monkeypatch)
+    provider = _provider(
+        modellserver.basis, id="runner", group="local", timeout_enabled=False
+    )
+    await _einsammeln(provider)
+    assert seen[-1].read is None
+    assert seen[-1].connect == 600.0
+
+
 # --- The Responses wire names the same numbers differently -----------------
 
 
@@ -2374,6 +2669,111 @@ async def test_ollama_names_the_running_window(monkeypatch):
         {"name": "qwen3:8b", "model": "qwen3:8b", "context_length": 40960},
     ]}})
     assert await provider.kontextgroesse(1.0, "qwen3:8b") == 40960
+
+
+async def test_lm_studio_before_loading_is_not_kept(monkeypatch):
+    """A model that is not loaded names the most it can take. That number
+    holds for this pass only: once the model is loaded, its own window
+    is read — and kept."""
+    answers = {"/api/v0/models": {"data": [
+        {"id": "gemma", "state": "not-loaded", "max_context_length": 131072},
+    ]}}
+    provider = _routes(monkeypatch, answers)
+    assert await provider.kontextgroesse(1.0, "gemma") == 131072
+
+    answers["/api/v0/models"] = {"data": [
+        {"id": "gemma", "state": "loaded", "max_context_length": 131072,
+         "loaded_context_length": 8192},
+    ]}
+    assert await provider.kontextgroesse(1.0, "gemma") == 8192
+
+    answers["/api/v0/models"] = {"data": [{"id": "gemma", "max_context_length": 4096}]}
+    assert await provider.kontextgroesse(1.0, "gemma") == 8192, "a loaded window is kept"
+
+
+async def test_a_window_of_a_model_not_loaded_is_called_provisional(monkeypatch):
+    """The provider says itself that the number it just gave is only the
+    most the model can take: the discovery reads that to ask again."""
+    answers = {"/api/v0/models": {"data": [
+        {"id": "gemma", "state": "not-loaded", "max_context_length": 131072},
+    ]}}
+    provider = _routes(monkeypatch, answers)
+    assert provider.kontext_vorlaeufig() is False, "nothing asked yet, nothing provisional"
+    assert await provider.kontextgroesse(1.0, "gemma") == 131072
+    assert provider.kontext_vorlaeufig() is True
+
+    answers["/api/v0/models"] = {"data": [
+        {"id": "gemma", "state": "loaded", "max_context_length": 131072,
+         "loaded_context_length": 8192},
+    ]}
+    assert await provider.kontextgroesse(1.0, "gemma") == 8192
+    assert provider.kontext_vorlaeufig() is False
+
+
+async def test_silence_a_kept_number_is_never_provisional(monkeypatch):
+    """A number that comes out of memory is final, even when the search of
+    another model came out provisional in between."""
+    answers = {"/api/v0/models": {"data": [
+        {"id": "gemma", "state": "loaded", "loaded_context_length": 8192,
+         "max_context_length": 131072},
+        {"id": "phi", "state": "not-loaded", "max_context_length": 16384},
+    ]}}
+    provider = _routes(monkeypatch, answers)
+    assert await provider.kontextgroesse(1.0, "gemma") == 8192
+    assert provider.kontext_vorlaeufig() is False
+    assert await provider.kontextgroesse(1.0, "phi") == 16384
+    assert provider.kontext_vorlaeufig() is True
+    assert await provider.kontextgroesse(1.0, "gemma") == 8192
+    assert provider.kontext_vorlaeufig() is False
+
+
+async def test_silence_a_window_entered_by_hand_is_never_provisional(monkeypatch):
+    provider = _routes(monkeypatch, {"/api/v0/models": {"data": [
+        {"id": "gemma", "state": "not-loaded", "max_context_length": 131072},
+    ]}})
+    provider.endpunkt.context_tokens = 20_000
+    assert await provider.kontextgroesse(1.0, "gemma") == 20_000
+    assert provider.kontext_vorlaeufig() is False
+
+
+async def test_ollama_before_the_first_chat_is_not_kept(monkeypatch):
+    """/api/ps names only what is in memory, so before the first chat it is
+    empty. That "nothing" is not kept: the pass after the model is loaded
+    finds its window — and keeps it."""
+    answers = {"/api/ps": {"models": []}}
+    provider = _routes(monkeypatch, answers)
+    assert await provider.kontextgroesse(1.0, "qwen3:8b") is None
+
+    answers["/api/ps"] = {"models": [
+        {"name": "qwen3:8b", "model": "qwen3:8b", "context_length": 40960},
+    ]}
+    assert await provider.kontextgroesse(1.0, "qwen3:8b") == 40960
+
+    answers["/api/ps"] = {"models": []}
+    assert await provider.kontextgroesse(1.0, "qwen3:8b") == 40960, "a found window is kept"
+
+
+async def test_silence_a_server_without_any_source_is_asked_once(monkeypatch):
+    """The "no number" of a server that carries it nowhere is kept as before:
+    the second call asks nothing."""
+    paths: list[str] = []
+
+    def handler(request):
+        paths.append(request.url.path)
+        return httpx.Response(404)
+
+    echt = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: echt(transport=transport, **kw))
+    provider = OpenAIKompatiblerProvider(EndpointConfig(
+        id="x", base_url="http://127.0.0.1:9/v1", parameter_dialect="openai",
+    ))
+
+    assert await provider.kontextgroesse(1.0, "m") is None
+    asked = len(paths)
+    assert asked > 0
+    assert await provider.kontextgroesse(1.0, "m") is None
+    assert len(paths) == asked
 
 
 async def test_a_server_without_any_of_the_routes_names_no_window(monkeypatch):

@@ -69,8 +69,8 @@ _schleuse = asyncio.Lock()
 
 # What a model is told where the memory does not travel to it.
 VERBORGEN = (
-    "The stored entries are not shown to this model: the memory is switched "
-    "off for its side in the settings."
+    "Stored entries are not shown to this model because memory is disabled for its side in "
+    "the settings."
 )
 
 
@@ -107,10 +107,9 @@ def werkzeug_beschreibung(shown: bool = True) -> MCPWerkzeug:
     """
     if shown:
         when = (
-            "Both are stored without asking. The memory is read when a "
-            "conversation begins, so an entry you save now is in front of you "
-            "from the next conversation on, not right away — this tool's "
-            "answer is what tells you it was kept."
+            "Both are saved without confirmation. Memory is loaded at the start of a "
+            "conversation, so newly saved entries become available in the next conversation, "
+            "not immediately. This tool's response confirms that an entry was saved."
         )
         correcting = (
             "to correct something, pass a short part of the existing entry's "
@@ -122,13 +121,12 @@ def werkzeug_beschreibung(shown: bool = True) -> MCPWerkzeug:
         )
     else:
         when = (
-            f"Both are stored without asking. {VERBORGEN} What you save "
-            "reaches the models the memory travels to."
+            f"Both are saved without confirmation. {VERBORGEN} Saved entries are available to "
+            "models that receive the memory."
         )
         correcting = (
-            "to correct something, pass the existing entry's whole text as "
-            "'replaces'.\n"
-            "The answer says what happened: saved, replaced or already known."
+            "to correct an entry, pass its full existing text as 'replaces'.\n"
+            "The response indicates whether it was saved, replaced, or already known."
         )
     return MCPWerkzeug(
         name=WERKZEUG_NAME,
@@ -151,22 +149,20 @@ def werkzeug_beschreibung(shown: bool = True) -> MCPWerkzeug:
                 "text": {
                     "type": "string",
                     "description": (
-                        "The entry, one sentence, phrased so it still makes "
-                        'sense on its own in a year. E.g. "Prefers being told '
-                        'the measured number over an estimate."'
+                        'A single-sentence entry that remains understandable on its own a '
+                        'year from now. For example: "Prefers measured values to estimates."'
                     ),
                 },
                 "kind": {
                     "type": "string",
                     "enum": [REGEL, FAKTUM],
-                    "description": "'rule' changes behaviour, 'fact' is knowledge.",
+                    "description": "'rule' specifies behaviour; 'fact' records information.",
                 },
                 "replaces": {
                     "type": "string",
                     "description": (
-                        "A short part of the text of the one existing entry "
-                        "this one supersedes. Leave out when adding something "
-                        "new."
+                        "A brief excerpt from the existing entry to replace. Omit when adding "
+                        "new information."
                     ),
                 },
             },
@@ -268,13 +264,13 @@ def eintragen(
             getroffen = {e for e in alle if gesucht in e}
         if len(getroffen) != 1:
             grund = (
-                f"No entry contains '{ersetzt}'"
+                f"No entry contains '{ersetzt}'."
                 if not getroffen
-                else f"{len(getroffen)} different entries contain '{ersetzt}'"
+                else f"{len(getroffen)} entries contain '{ersetzt}'."
             )
             raise ErsetztNichtEindeutig(
-                f"{grund} — nothing was saved. Retry with a part of exactly one "
-                "of the entries as 'replaces'.",
+                f"{grund} Nothing was saved. Retry with text matching exactly one entry as "
+                "'replaces'.",
                 eintraege=auflisten(inhalt),
             )
         (alter,) = getroffen
@@ -312,11 +308,11 @@ async def ausfuehren(argumente: dict[str, Any], pfad: Path, *, zeigen: bool) -> 
             return VERBORGEN
         async with _schleuse:
             alt = pfad.read_text(encoding="utf-8") if pfad.exists() else ""
-        return f"No text given — nothing was saved. The stored entries:\n\n{auflisten(alt)}"
+        return f"No text provided; nothing was saved. Stored entries:\n\n{auflisten(alt)}"
     if len(text) > MAX_LAENGE:
         raise MemoryVerboten(
-            f"Too long ({len(text)} characters, at most {MAX_LAENGE}). "
-            "A memory entry is one sentence, not a document."
+            f"The entry is too long ({len(text)} characters; maximum: {MAX_LAENGE}). A memory "
+            "entry should be a single sentence, not a document."
         )
 
     art = _art_von(argumente)
@@ -332,11 +328,11 @@ async def ausfuehren(argumente: dict[str, Any], pfad: Path, *, zeigen: bool) -> 
         except ErsetztNichtEindeutig as fehler:
             if not zeigen:
                 raise MemoryVerboten(
-                    f"No entry reads exactly '{ersetzt}' — nothing was saved. {VERBORGEN}"
+                    f"No entry exactly matches '{ersetzt}'. Nothing was saved. {VERBORGEN}"
                 ) from fehler
             raise MemoryVerboten(f"{fehler}\n\n{fehler.eintraege}") from fehler
         if neu.strip() == alt.strip():
-            return "Already known — nothing changed."
+            return "Already known; nothing changed."
         pfad.parent.mkdir(parents=True, exist_ok=True)
         # Whole or not at all (app/atomic_file.py): an interrupted write would
         # otherwise leave the program having forgotten half of what it knew.

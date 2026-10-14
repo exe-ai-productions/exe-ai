@@ -16,11 +16,14 @@
      model card, the network section with the port, and the log at the
      foot. */
   import { api } from '../lib/api.js'
+  import { untrack } from 'svelte'
   import { t } from '../lib/texte.svelte.js'
+  import { neuigkeit } from '../lib/ereignisstrom.svelte.js'
   import { katalogOeffnen, melde } from '../lib/zustand.svelte.js'
   import Servertafel from './Servertafel.svelte'
   import Serverregler from './Serverregler.svelte'
   import Startknopf from './Startknopf.svelte'
+  import Startfehler from './Startfehler.svelte'
   import Serverlogkopf from './Serverlogkopf.svelte'
   import {
     protokollOffen,
@@ -60,6 +63,17 @@
     }
   }
   laden()
+
+  /* This panel keeps no timer. Its server's own announcement is what makes
+     it read again — a start that failed while nobody watched left its
+     reason in the answer, and the page finds it there. */
+  let gesehen = untrack(() => neuigkeit.einbettung)
+  $effect(() => {
+    const neu = neuigkeit.einbettung
+    if (neu === gesehen) return
+    gesehen = neu
+    untrack(() => laden())
+  })
 
   async function schalten() {
     if (arbeitet) return
@@ -136,6 +150,7 @@
   speicherort="embedding_models"
 >
   {#snippet mitte()}
+    <Startfehler arch={auskunft?.unknown_architecture} />
     <Serverregler kennung="es" teil="netzwerk" gesperrt={laeuft} bind:port>
       {#snippet kopfrechts()}
         <Startknopf text={tat.text} punkt={tat.punkt} gesperrt={tat.gesperrt} onTat={tat.onTat} />

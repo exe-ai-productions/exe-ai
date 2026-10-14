@@ -141,6 +141,12 @@
   let maschineGb = $state(null)
   let vorhanden = $state([])
   let stand = $state(null)
+  /* The file this window saw running last, and the failed download already
+     reported on top (by file and reason): a failure is told once, and only
+     for a download this window saw start — the service keeps the state of
+     an old failure until the next download. */
+  let watchedFile = null
+  let lastFailure = null
 
   /* Which model the detail shows, or null for the gallery. */
   let detail = $state(null)
@@ -259,6 +265,18 @@
         // A file that arrived stays in the panel as a receipt; a cancelled
         // or failed one does not.
         if (stand && stand.fertig && !stand.fehler) fertigMerken(stand.datei, stand.gesamt)
+        // A download that broke says so, once: its row is gone from the
+        // panel and nothing else would tell. Cancelling is no breaking.
+        if (stand && !stand.fertig && !stand.fehler) watchedFile = stand.datei
+        if (stand?.fehler && stand.fehler !== 'abgebrochen' && stand.datei === watchedFile) {
+          const mark = `${stand.datei}:${stand.fehler}`
+          if (mark !== lastFailure) {
+            lastFailure = mark
+            melde(t('bildserver.generator_fehler'), 'fehler')
+          }
+        } else if (!stand?.fehler) {
+          lastFailure = null
+        }
         // The panel's own copy, so the header count is right even while the
         // list below still shows the card that started it.
         downloads.laufend = stand && !stand.fertig && !stand.fehler ? stand : null
@@ -267,7 +285,11 @@
         if (!downloads.laufend && downloads.warteschlange.length) {
           try {
             const naechster = await antreiben(vorhanden)
-            if (naechster) stand = naechster
+            if (naechster) {
+              stand = naechster
+              watchedFile = naechster.datei
+              lastFailure = null
+            }
           } catch (fehler) {
             melde(fehler.message, 'fehler')
           }
@@ -313,7 +335,11 @@
     for (const j of [job, ...rest]) einreihen(gerichtet(j))
     try {
       const frisch = await antreiben(vorhanden)
-      if (frisch) stand = frisch
+      if (frisch) {
+        stand = frisch
+        watchedFile = frisch.datei
+        lastFailure = null
+      }
     } catch (fehler) {
       melde(fehler.message, 'fehler')
     }
@@ -384,10 +410,51 @@
       if (lauf === suchlauf) sucht = false
     }
   }
+  /* The picture tab's rows say what they are, and bring their kit, only
+     once the service has read the head of their file. The list stands first;
+     each row then asks for its own answer, four at a time, and takes it in
+     place — the order of the rows never changes. A newer page makes the
+     older answers fall away. */
+  const HEADS_AT_ONCE = 4
+  let headPage = 0
+  let heads = new Map()
+  function headFor(repo, row) {
+    const page = headPage
+    let pending = heads.get(row.datei)
+    if (!pending) {
+      pending = api.fileHead(repo, row).then((answer) => {
+        const index = page === headPage ? (dateien?.findIndex((d) => d.datei === row.datei) ?? -1) : -1
+        if (index >= 0) dateien[index] = answer
+        return answer
+      })
+      heads.set(row.datei, pending)
+      // A request that failed may be asked again by the next click.
+      pending.catch(() => {
+        if (heads.get(row.datei) === pending) heads.delete(row.datei)
+      })
+    }
+    return pending
+  }
+  function readHeads(repo, rows) {
+    const page = headPage
+    const queue = [...rows]
+    const worker = async () => {
+      while (queue.length && page === headPage) {
+        try {
+          await headFor(repo, queue.shift())
+        } catch {
+          // The row stays as the list gave it.
+        }
+      }
+    }
+    for (let n = 0; n < HEADS_AT_ONCE; n++) worker()
+  }
   async function trefferOeffnen(fund) {
     trefferSeite = fund
     dateien = null
     repoAugen = null
+    headPage += 1
+    heads = new Map()
     try {
       const antwort = await api.modellDateien(fund.id, art)
       // A slow answer for a page that was left in the meantime must not
@@ -395,6 +462,7 @@
       if (trefferSeite?.id !== fund.id) return
       dateien = antwort.dateien
       repoAugen = antwort.mmproj
+      if (art === 'bild') readHeads(fund.id, antwort.dateien)
     } catch (fehler) {
       if (trefferSeite?.id !== fund.id) return
       melde(fehler.message, 'fehler')
@@ -405,6 +473,13 @@
      lies flat, under its last segment — so presence, progress and the
      projector's name all go by that. */
   const flach = (pfad) => pfad.split('/').pop()
+  /* The name a file of the hub is kept under in its folder, and whether it
+     is there — the service's word (`local_name`, `collision`, `app/api/v1/modelldateien.py`),
+     not the window's: a file of the same name and another size is another
+     file, and the new one is kept as `<repo>-<name>`. `istDa` reads the
+     lists polled every two seconds, so what arrived since shows at once. */
+  const localName = (e) => e.local_name || flach(e.datei ?? e.name)
+  const isThere = (e) => !e.collision && istDa(localName(e))
   /* Local name for a found projector: the model's own stem plus the
      projector's tail, so the runner can tie the two together. */
   const augenZiel = (modellDatei, mmprojDatei) =>
@@ -415,23 +490,38 @@
      the model — fetched now or long ago, it is the model's part — so each one
      goes to the service: a part that lies there already is not fetched
      again, the service only writes the bond. */
-  async function suchDateiHolen(repo, d) {
-    const modelThere = istDa(flach(d.datei))
+  async function suchDateiHolen(repo, picked) {
+    // A picture file brings its kit with its head: the click waits for the
+    // row's answer, so a model is never fetched without its parts.
+    let d = picked
+    if (art === 'bild') {
+      try {
+        d = await headFor(repo, picked)
+      } catch (fehler) {
+        melde(fehler.message, 'fehler')
+        return
+      }
+    }
+    const modelThere = isThere(d)
     if (modelThere && !d.bausatz) return
+    const modell = localName(d)
     const jobs = []
     if (repoAugen && !modelThere) {
-      const ziel = augenZiel(d.datei, repoAugen.datei)
-      if (!istDa(ziel)) jobs.push({ repo, datei: repoAugen.datei, ziel, gehoert_zu: flach(d.datei), rolle: 'mmproj' })
+      const ziel = augenZiel(modell, repoAugen.datei)
+      if (!istDa(ziel)) jobs.push({ repo, datei: repoAugen.datei, ziel, gehoert_zu: modell, rolle: 'mmproj' })
     }
     for (const teil of d.bausatz?.teile ?? []) {
       if (teil.rolle === 'modell') continue
       const job = {
-        repo: teil.repo, datei: teil.datei, ziel: teil.name, unterordner: teil.ordner,
-        gehoert_zu: flach(d.datei), rolle: teil.feld,
+        repo: teil.repo, datei: teil.datei, ziel: localName(teil), unterordner: teil.ordner,
+        gehoert_zu: modell, rolle: teil.feld,
       }
       // The lists read just now decide what is there; the file list's own
-      // answer only until those lists have been read once.
-      const da = partLists ? (partLists[teil.ordner] ?? []).includes(teil.name) : teil.da
+      // answer only until those lists have been read once. A part of another
+      // size under the name is not it (`collision`: nothing can be stored).
+      const da = teil.collision
+        ? false
+        : partLists ? (partLists[teil.ordner] ?? []).includes(localName(teil)) : teil.da
       if (da) await tiePart(job)
       else jobs.push(job)
     }
@@ -442,7 +532,10 @@
       if (erst) await starteJob(erst, rest, { art })
       return
     }
-    await starteJob({ repo, datei: d.datei, ziel: null }, jobs, { art })
+    await starteJob(
+      { repo, datei: d.datei, ziel: modell === flach(d.datei) ? null : modell },
+      jobs, { art },
+    )
   }
   /* A part that lies in its folder already needs no download, only its bond
      to the model; the service writes it and answers at once. */
@@ -454,12 +547,12 @@
     }
   }
   function suchDran(d) {
-    const ziel = repoAugen ? augenZiel(d.datei, repoAugen.datei) : null
+    const ziel = repoAugen ? augenZiel(localName(d), repoAugen.datei) : null
     return (
-      wirdGeholt(flach(d.datei)) || (ziel && wirdGeholt(ziel))
+      wirdGeholt(localName(d)) || (ziel && wirdGeholt(ziel))
       // A kit's parts are shared by every file of its family: a part being
       // fetched completes the kit of each model that is here, and of no other.
-      || (istDa(flach(d.datei)) && (d.bausatz?.teile ?? []).some((teil) => wirdGeholt(teil.name)))
+      || (isThere(d) && (d.bausatz?.teile ?? []).some((teil) => wirdGeholt(localName(teil))))
     )
   }
   /* An accessory's kind and, where it is bound to a family, that family. */
@@ -472,6 +565,17 @@
         ]
       : [],
   )
+  /* What a file row says it is, from the head of the file the service read:
+     "Image model · <family>" in the full text colour, "VAE" and "Text
+     encoder" in the quiet one. Nothing where the head said nothing. */
+  function artPlakette(d) {
+    if (!d.art) return null
+    if (d.art === 'vae') return { text: t('katalog.sorte_vae'), farbe: 'var(--text-leise)' }
+    if (d.art === 'textleser') return { text: t('katalog.bausatz_textleser'), farbe: 'var(--text-leise)' }
+    const wort = t('katalog.bausatz_modell')
+    const familie = d.familie ? (familyOf(d.familie)?.label ?? d.familie) : ''
+    return { text: familie ? `${wort} · ${familie}` : wort, farbe: 'var(--text)' }
+  }
   /* The rows of the open page: a hit's files, or a card's builds. */
   const trefferZeilen = $derived(
     dateien
@@ -480,11 +584,12 @@
           // A part counts as there when the service saw it lying in its folder
           // or the model list shows it now; the row is complete when the model
           // and every part are.
-          const teile = d.bausatz?.teile.map((teil) => ({ ...teil, da: teil.da || istDa(teil.name) }))
-          const da = istDa(flach(d.datei)) && (!ziel || istDa(ziel)) && (!teile || teile.every((teil) => teil.da))
+          const teile = d.bausatz?.teile.map((teil) => ({ ...teil, da: !teil.collision && (teil.da || istDa(localName(teil))) }))
+          const da = isThere(d) && (!ziel || istDa(ziel)) && (!teile || teile.every((teil) => teil.da))
           const dran = suchDran(d)
           return {
             bausatz: teile ? { ...d.bausatz, teile } : null,
+            plakette: artPlakette(d),
             schluessel: d.datei,
             name: d.datei,
             gb: d.groesse_gb,
@@ -497,7 +602,7 @@
         })
       : null,
   )
-  const augenZielFuer = (d) => augenZiel(d.datei, repoAugen.datei)
+  const augenZielFuer = (d) => augenZiel(localName(d), repoAugen.datei)
   function kartenSatz(fassung, empfohlen) {
     if (passt(fassung, maschineGb)) {
       return empfohlen
@@ -627,7 +732,7 @@
       {:else if detail}
         {@const erste = detail.fassungen[0]}
         <Modelldetail
-          name={detail.name}
+          name={detail.nameKey ? t(detail.nameKey) : detail.name}
           unter={detail.von}
           marke={detail.marke ? LOGOS[detail.marke] : null}
           buchstabe={detail.logo}

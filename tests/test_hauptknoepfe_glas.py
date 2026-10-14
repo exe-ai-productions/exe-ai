@@ -4,9 +4,9 @@ Only Send in the input bar stays filled with the text colour. Every other
 main button (`.wichtig`) wears the glass of the start button: the glass
 ground, its fine edge and the text colour. Read off the source.
 
-The same holds for the two main buttons that carry a class of their own and
-for the switch: off it is glass, on it fills with the colour of "switched
-on", and there is one switch in the house.
+The foot of the folder window and of the layout window is the house button
+too, and the same holds for the switch: off it is glass, on it fills with
+the colour of "switched on", and there is one switch in the house.
 """
 
 from __future__ import annotations
@@ -104,36 +104,31 @@ def test_senden_bleibt_gefuellt():
     assert re.search(r"\n  \.aktion[^{]*\{[^}]*background: var\(--text\)", css)
 
 
-WINDOW_BUTTONS = [("Arbeitsordner.svelte", r"\.knopf\.stark"), ("Layoutmodus.svelte", r"\.knopf\.voll")]
+WINDOWS_WITH_FOOT = ["Arbeitsordner.svelte", "Layoutmodus.svelte"]
 
 
-def test_the_main_buttons_with_a_class_of_their_own_are_button_glass():
-    for name, selector in WINDOW_BUTTONS:
-        css = _style(name)
-        rules = _rules(css, selector + r"(?![-\w])")
-        assert rules, name
-        # No button rule of the file fills with the text colour any more.
-        for body in _rules(css, r"\.knopf(?![-\w])"):
-            assert "background: var(--text)" not in body, (name, body)
-        ground = [b for b in rules if "background: var(--glass-button)" in b]
-        assert ground, name
-        assert any("var(--glass-button-edge)" in b for b in ground), name
-        assert any("color: var(--text)" in b for b in ground), name
-        # Under the pointer the glass darkens a little; it does not fade.
-        hover = _rules(css, selector + r":hover")
-        assert hover and "color-mix(in srgb, var(--text) 6%, var(--glass-button))" in hover[0], name
-        assert "opacity" not in hover[0], name
+def test_the_foot_of_the_two_windows_is_the_house_button_in_both_forms():
+    """Cancel is the quiet house button, the main button the primary one; no
+    copy of either is left in the file."""
+    for name in WINDOWS_WITH_FOOT:
+        markup, css = (TEILE / name).read_text(encoding="utf-8").split("<style>", 1)
+        assert re.search(r"""<button class="button"[^\n]*>\s*\{t\('app\.abbrechen'\)\}""", markup), name
+        assert 'class="button primary"' in markup, name
+        assert not re.search(r'class="knopf (?:stark|voll)"', markup), name
+        # The only rule on the house button that a window keeps is the quiet
+        # word's, which takes the ground away.
+        selectors = {m.group(1).strip() for m in re.finditer(r"\n  ([^{\n]+)\{", css) if ".button" in m.group(1)}
+        assert selectors <= {".button.leise"}, (name, selectors)
+        assert not _rules(css, r"\.knopf\.(?:stark|voll)"), name
 
 
-def test_the_quiet_buttons_beside_them_are_as_they_were():
-    """Silence probe: the order of the row is told by the main button alone."""
-    cancel = _rules(_style("Arbeitsordner.svelte"), r"^\.knopf$")
-    assert cancel and "background: none" in cancel[0] and "var(--linie-stark)" in cancel[0]
-    quiet = _rules(_style("Layoutmodus.svelte"), r"^\.knopf\.leise$")
-    assert quiet and "background: none" in quiet[0]
-    # A main button that cannot be pressed yet stays dimmed.
-    locked = _rules(_style("Arbeitsordner.svelte"), r"^\.knopf\.stark:disabled$")
-    assert locked and "opacity: 0.4" in locked[0]
+def test_the_quiet_words_beside_them_are_as_they_were():
+    """Silence: "Default" stays without ground and edge, and the buttons in
+    the rows of the folder window keep their own outlined face."""
+    quiet = _rules(_style("Layoutmodus.svelte"), r"^\.button\.leise$")
+    assert quiet and "background: none" in quiet[0] and "box-shadow: none" in quiet[0]
+    rows = _rules(_style("Arbeitsordner.svelte"), r"^\.knopf$")
+    assert rows and "background: none" in rows[0] and "var(--linie-stark)" in rows[0]
 
 
 def test_the_switch_is_glass_when_off_and_filled_when_on():
@@ -148,12 +143,14 @@ def test_the_switch_is_glass_when_off_and_filled_when_on():
     # Taking something away keeps its red.
     taking = _rules(css, r"^\.schalter\.eingriff\[aria-checked='true'\]$")
     assert taking and "background: var(--rot)" in taking[0]
-    # The knob: quiet on the glass; on the colour the opaque ground of the
-    # look, never the raised ground a menu page turns into glass. It travels.
+    # The knob: quiet on the glass; on the colour opaque — white in the light
+    # looks (`--knauf-an`), else the ground of the look, never the raised
+    # ground a menu page turns into glass. It travels.
     knob_off = _rules(css, r"^\.schalter i$")
     assert knob_off and "background: var(--text-still)" in knob_off[0]
     knob_on = _rules(css, r"^\.schalter\[aria-checked='true'\] i$")
-    assert knob_on and "background: var(--bg)" in knob_on[0] and "translateX(14px)" in knob_on[0]
+    assert knob_on and "background: var(--knauf-an, var(--bg))" in knob_on[0]
+    assert "translateX(14px)" in knob_on[0]
     assert "var(--bg-hoch)" not in css
 
 

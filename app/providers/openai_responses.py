@@ -11,10 +11,11 @@ Two things live here, and only these two:
 
   * what such a request looks like on the wire (:func:`koerper_umbauen`) — the
     messages become ``input`` items, the tools lose their nesting, the ceiling
-    is called ``max_output_tokens``, and the thinking stage moves from a
-    top-level field into ``reasoning.effort``. The last of these is asked of
-    ``app/denkschalter.py``, which is where a provider's spelling of a stage
-    belongs;
+    is called ``max_output_tokens``, the thinking stage moves from a
+    top-level field into ``reasoning.effort``, and what only the chat wire
+    has a field for stays behind (``CHAT_ONLY_FIELDS``). The thinking stage
+    is asked of ``app/denkschalter.py``, which is where a provider's spelling
+    of a stage belongs;
   * how such a stream is read (:class:`Leser`) — its events are turned into the
     packet shape the reader in ``app/providers/openai_kompatibel.py`` already
     understands, so speed, context reading, tool assembly and the "a stream
@@ -42,6 +43,12 @@ WIRT_OPENAI = "api.openai.com"
 # The stage that switches thinking off on this wire — the word the catalogue
 # keeps for OpenAI (``app/daten/denkstufen.yaml``).
 AUS = "none"
+
+# Fields of the chat wire that this wire does not have, for any model: a
+# value set for the endpoint would otherwise travel on into a request that
+# names a field the route does not know. Sampling by ``temperature`` and
+# ``top_p`` exists on both wires and stays.
+CHAT_ONLY_FIELDS: tuple[str, ...] = ("seed", "presence_penalty", "frequency_penalty")
 
 # What a request with a thinking stage asks to get back: the thinking as a
 # sealed item that a later request can hand back unread.
@@ -118,6 +125,9 @@ def koerper_umbauen(koerper: dict[str, Any], zusammenfassung: bool = True) -> di
 
     Dropped: ``stream_options``. It exists to make the chat wire report token
     counts at all, and this wire reports them in its closing event anyway.
+    Dropped too: what only the chat wire has a field for
+    (``CHAT_ONLY_FIELDS``) — a seed and the two penalties. That is the shape
+    of this wire, not a judgement of the model: the chat route keeps them.
 
     ``zusammenfassung`` is False once OpenAI has refused the thinking summary
     for this endpoint (:func:`lehnt_zusammenfassung_ab`): the request then
@@ -125,6 +135,8 @@ def koerper_umbauen(koerper: dict[str, Any], zusammenfassung: bool = True) -> di
     """
     umgebaut = dict(koerper)
     umgebaut.pop("stream_options", None)
+    for name in CHAT_ONLY_FIELDS:
+        umgebaut.pop(name, None)
     umgebaut["input"] = _eingabe(umgebaut.pop("messages", []))
     # Nothing is kept on OpenAI's side: every item a later round needs is sent
     # again by this request. Stored, a response would be kept there for

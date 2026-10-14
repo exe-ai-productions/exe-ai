@@ -31,7 +31,7 @@ from app import atomic_file
 from app.api.abhaengigkeiten import hole_config, hole_sprache
 from app import fenstergroesse
 from app.config import Config, EndpointConfig
-from app.env_datei import env_schreiben
+from app.env_datei import env_entfernen, env_schreiben, key_leaves_with
 from app.i18n import t
 
 router = APIRouter(prefix="/providers", tags=["anbieter"])
@@ -146,7 +146,7 @@ class ZeitgrenzeAendern(BaseModel):
 
 
 class NeuerAnbieter(BaseModel):
-    art: str = Field(description="anthropic, openai oder eigen")
+    art: str = Field(description="anthropic, openai, or eigen")
     schluessel: str = Field(min_length=8, max_length=400)
     # Only for `eigen`: everything else is known.
     kennung: str | None = None
@@ -421,11 +421,11 @@ async def loeschen(
 ) -> Response:
     """Removes a provider — the counterpart of ``hinzufuegen`` above.
 
-    Only the entry in ``config.yaml`` goes; the key stays in ``.env``
-    untouched, so re-adding the same provider later needs no new key. Writing
-    happens where the running service actually read its endpoints from
-    (``_konfig_datei``), never the template, and the other entries travel
-    through the round trip unchanged.
+    The entry leaves ``config.yaml`` and its key line leaves ``.env`` — unless
+    another provider reads the same variable, then the line stays for that
+    one. Writing happens where the running service actually read its
+    endpoints from (``_konfig_datei``), never the template, and the other
+    entries and lines travel through the round trip unchanged.
     """
     endpunkt = next((e for e in config.endpoints if e.id == endpoint_id), None)
     if endpunkt is None:
@@ -446,7 +446,16 @@ async def loeschen(
             if len(rohdaten["endpoints"]) != len(vorher):
                 await asyncio.to_thread(_atomar_schreiben, konfig_datei, rohdaten)
 
+    # Asked, removed from the list and taken out of ``.env`` in one go, with
+    # no wait in between: a provider added meanwhile either is in the list
+    # when this asks, or writes its line after this has run. The running
+    # environment loses the variable only where the line came out of the
+    # file — a variable the shell set was never this window's to take away.
+    key_goes = key_leaves_with(config.endpoints, endpoint_id)
     config.endpoints[:] = [e for e in config.endpoints if e.id != endpoint_id]
+    if key_goes and env_entfernen(config.pfad("./.env"), endpunkt.api_key_env):
+        os.environ.pop(endpunkt.api_key_env, None)
+
     await request.app.state.discovery.abmelden(endpoint_id)
 
     return Response(status_code=204)

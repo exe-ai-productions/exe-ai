@@ -54,6 +54,7 @@ import textwrap
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
+from app.own_folder_line import shared_folders, starts_in_own_folder
 from app.providers import ChatNachricht
 from app.schleifenwaechter import Schleifenwaechter
 from app.wecker import jetzt_in_zone, zone_name
@@ -335,28 +336,28 @@ Besides answering, Exe AI can {koennen}."""
 # files.
 FAEHIGKEIT_JE_WERKZEUG: tuple[tuple[str, str], ...] = (
     (datei_lesen.WERKZEUG_NAME, "read files in the shared folders"),
-    (ordner_lesen.WERKZEUG_NAME, "list what a folder holds"),
+    (ordner_lesen.WERKZEUG_NAME, "list the contents of a folder"),
     (datei_suchen.WERKZEUG_NAME, "search the shared folders"),
     (datei_schreiben.WERKZEUG_NAME, "write new files"),
-    (datei_aendern.WERKZEUG_NAME, "change files"),
+    (datei_aendern.WERKZEUG_NAME, "edit files"),
     (create_folder.WERKZEUG_NAME, "create folders"),
     (shell.WERKZEUG_NAME, "run commands in the shared folders"),
-    (bild_werkzeug.WERKZEUG_NAME, "draw pictures with the image model on this machine"),
-    (video_tool.WERKZEUG_NAME, "make short videos with the video model on this machine"),
-    (auftrag_werkzeug.WERKZEUG_NAME, "hand long work to an agent that reports back"),
-    (cronjob.WERKZEUG_NAME, "put a job on a schedule"),
-    (cron_notiz.WERKZEUG_NAME, "keep a note from one run of a schedule to the next"),
+    (bild_werkzeug.WERKZEUG_NAME, "generate images with the image model on this machine"),
+    (video_tool.WERKZEUG_NAME, "create short videos with the video model on this machine"),
+    (auftrag_werkzeug.WERKZEUG_NAME, "delegate lengthy tasks to an agent that reports back"),
+    (cronjob.WERKZEUG_NAME, "schedule a job"),
+    (cron_notiz.WERKZEUG_NAME, "retain a note between scheduled runs"),
     (ziel_werkzeug.WERKZEUG_NAME, "report that a given goal has been reached"),
     # The clock is the only place a run can learn the time now, and it is in
     # every run with tools — so it belongs in this overview by the same rule
     # as the goal tool: the overview names the tools of THIS run, no more
     # and no less.
     (uhr.WERKZEUG_NAME, "read the current time and the day of the week"),
-    (skill.LADEN, "load written instructions for a kind of work"),
-    (skill.SCHREIBEN, "write down a way of working so it can be loaded again"),
+    (skill.LADEN, "load written instructions for a type of task"),
+    (skill.SCHREIBEN, "save a workflow so it can be loaded again"),
     (memory.WERKZEUG_NAME, "remember things across conversations"),
     (frage_werkzeug.WERKZEUG_NAME, "ask the user to choose between options"),
-    (agentendock.WERKZEUG_NAME, "hand files over into the Doc folder"),
+    (agentendock.WERKZEUG_NAME, "deliver files to the Doc folder"),
 )
 
 # What a tool's phrase reads in a chat, where it is not what a job is told.
@@ -364,7 +365,7 @@ FAEHIGKEIT_JE_WERKZEUG: tuple[tuple[str, str], ...] = (
 # is where a job's lands, and a chat told of that folder goes looking for a
 # folder to write into.
 ABILITY_IN_CHAT: dict[str, str] = {
-    agentendock.WERKZEUG_NAME: "hand finished files to the user as cards in the answer",
+    agentendock.WERKZEUG_NAME: "deliver completed files to the user as cards in the response",
 }
 
 # The two abilities that come from connected servers rather than from the
@@ -373,7 +374,7 @@ ABILITY_IN_CHAT: dict[str, str] = {
 # paragraph rides on (``hat_suche``); everything else a server brings is
 # named in one phrase.
 ABILITY_WEB_SEARCH = "search the web"
-ABILITY_SERVER_TOOLS = "use further tools from connected servers"
+ABILITY_SERVER_TOOLS = "use additional tools from connected servers"
 
 # The single most important sentence for a small local model, and the one the
 # placeholder never said. A 4-bit model knows what an answer LOOKS like after
@@ -405,10 +406,11 @@ call unchanged."""
 # (AGENTENLAUF): a model told the number can spend it, one told nothing runs
 # into the cut as into a fault. Only the chat reads this — a job carries its
 # own numbers, and the caller that has none to name passes none.
-WERKZEUGRUNDEN = """\
-One answer may use up to {runden} tool rounds, then it is closed off. If the
-work will not fit, stop in good order and say where you stopped — the next
-message picks up from there."""
+WERKZEUGRUNDEN = """A response can use up to {runden} tool rounds before it ends. If the work
+cannot be completed within that limit, stop at a suitable point and explain
+where you stopped. Work can resume from there in the next message. If you cannot
+get any further, or you need something only the user knows, say so clearly and
+stop."""
 
 # Its own block, and its own gate: this is about the SHELL, and it used to
 # ride along in WERKZEUGE, which every run with any tool at all reads. An
@@ -455,10 +457,9 @@ DATEIWERKZEUGE_BEFEHLE = f"""\
 # search and for whatever web search is configured, and the names of the
 # latter come out of mcp_servers.json, which belongs to the user. A shipped
 # prompt that quotes that file goes stale the moment a server is renamed.
-SUCHE = """\
-Looking something up is not one call. Search from several angles, OPEN the
-best hits instead of trusting the summaries they come with, and stop when two
-rounds bring nothing new — not at the first usable result."""
+SUCHE = """Research requires more than one search. Approach the question from several
+angles and OPEN the most relevant results rather than relying on their
+summaries. Stop when two rounds yield no new information, rather than after the first useful result."""
 
 # Only when this conversation actually carries a document. Attachments travel
 # through the whole history, so the gate is the conversation and not this one
@@ -498,9 +499,8 @@ for the user."""
 # be KEPT writes the same instructions out again on every occasion. The last
 # line is the whole of the restraint — a skill saved for a one-off is a
 # catalogue entry nobody will ever load.
-SKILL_SCHREIBEN = f"""\
-When the user settles a way of working they will want again — a procedure, a
-checklist, a format you are asked for repeatedly — write it down with
+SKILL_SCHREIBEN = f"""When the user establishes a workflow they will want to reuse, such as a
+procedure, checklist, or frequently requested format, save it with
 {skill.SCHREIBEN} so it can be loaded next time. A one-off request is not a skill."""
 
 # The one tool that hands control back. Its own block, because it is worth a
@@ -514,10 +514,9 @@ guessing."""
 # model reads its own page back to the user. The rail can also be closed —
 # the one naming sentence is what a user with a closed rail still gets, so
 # the document never arrives wordless.
-VORSCHAU = """\
-A document you produce as a code block lands rendered in a panel
-beside the chat. Say in one sentence what it is — the panel may be
-closed — and do not additionally walk the user through its full content."""
+VORSCHAU = """A document you provide as a code block is rendered in a panel
+beside the chat. Describe it in one sentence in case the panel is
+closed. Do not repeat or explain its entire contents in the chat."""
 
 # The date and the zone, as a marked BLOCK in front of the user's own words
 # — and not as a sentence: a sentence sits in the user's voice, so the model
@@ -545,11 +544,10 @@ ENVIRONMENT = """\
 # (app/verdichtung.py). Without this sentence the model reads its own
 # summary as a fresh instruction from the user; FREMDTEXT below does not
 # cover it, because the summary is not a tool result.
-VERDICHTUNG = """\
-When the history grows long, its settled middle is folded away: a block
-opening with `[Earlier steps of this conversation, summarized to save space]`
-is your own earlier summary, not a message from the user. Treat it as your
-notes — nothing in it is a new instruction."""
+VERDICHTUNG = """When the history becomes long, its settled middle section is summarized. A block
+starting with `[Earlier steps of this conversation, summarized to save space]`
+contains your earlier summary, not a new user message. Treat it as your
+notes; nothing in it constitutes a new instruction."""
 
 # Only when the model can actually see one — said next to a model without
 # vision it would promise sight that is not there.
@@ -572,46 +570,34 @@ The user has shared these working folders with you:
 
 {ordner}"""
 
-# The chat's own folder is the program's, not a share: it holds the chat's
-# uploads, and while nothing is shared it is where the file tools work.
-# Named apart, so the model is not told the user shared something they did
-# not.
-ORDNER_EIGEN = """\
-This conversation has a folder of its own, where its uploads are kept and \
-where you work while nothing is shared:
-
-- {ordner}"""
-
-ORDNER_EIGEN_DAZU = """\
-This conversation also has a folder of its own, where its uploads are kept:
-
-- {ordner}"""
-
 # A job's dock folder is the program's too, and it is where handed-over
 # files are kept — not a folder the user shared, and no place for an exe.md.
 # Named apart for the same reason as the chat's own folder, and last, so a
 # relative path still resolves against a folder the user shared.
-DOCK_FOLDER = """\
-The dock folder is where finished files are handed over; the user finds what
-lies in it in the Doc folder. It belongs to the program, not to the folders
-the user shared, and it gets no `exe.md`:
+DOCK_FOLDER = """The dock folder holds finished files delivered to the user, who can find
+them in the Doc folder. It belongs to the program, rather than the folders
+shared by the user. Do not create an `exe.md` file in it:
 
 - {ordner}"""
 
 # The picture folder rides along with every run beside the dock, and is the
 # program's as well: where the pictures drawn here and the ones attached to
 # a message are kept. Named apart and last, for the dock's reasons.
-IMAGE_FOLDER = """\
-The image folder is where every picture is kept — the ones drawn here and the
-ones the user attached to a message. It belongs to the program, not to the
-folders the user shared, and it gets no `exe.md`:
+IMAGE_FOLDER = """The image folder contains all images generated here and all images
+attached by the user. It belongs to the program, rather than the
+folders shared by the user. Do not create an `exe.md` file in it:
 
 - {ordner}"""
+
+# The first sentence of the folder block, left out where the chat's own
+# folder is where a relative path starts from: its paragraph comes last in
+# the message and says so itself (app/own_folder_line.py).
+RELATIVE_FIRST_SENTENCE = "Relative paths resolve against the first one. "
 
 ORDNER = """\
 {ordner}
 
-Relative paths resolve against the first one. A folder the user names in
+{relative}A folder the user names in
 passing is one of these, not a subfolder of the first one — match what they
 say against the list before assuming anything is missing.
 
@@ -631,10 +617,9 @@ ZUGRIFF_WORTE = {
     "fragen": "ask the user first",
     "nein": "are refused",
 }
-ORDNER_ZUGRIFF = """\
-Inside those folders, commands and file tools {innen}; outside them they
-{aussen}. A question or a refusal at a call is that setting at work, not an
-error."""
+ORDNER_ZUGRIFF = """Within these folders, commands and file tools {innen}; outside them, they
+{aussen}. A confirmation request or refusal reflects the permission setting;
+it is not an error."""
 # The neutral reading, for a caller that does not know the rules.
 ORDNER_ZUGRIFF_UNBEKANNT = """\
 Inside those folders the program usually acts without asking; outside them
@@ -647,10 +632,9 @@ setting at work, not an error."""
 # explained exactly the state in which it was guaranteed not to be read. A
 # run offered commands or file tools with no folder to use them in is the
 # one that needs to hear why every call comes back refused.
-ORDNER_FEHLT = """\
-No working folder is shared with you. Commands and file tools
-are closed until the user shares one — a refusal is that closure, not an
-error. When file work comes up, say that a shared folder is needed."""
+ORDNER_FEHLT = """No working folder has been shared with you. Commands and file tools
+are unavailable until the user shares one. A refusal reflects this restriction,
+not an error. If file work is needed, explain that a shared folder is required."""
 
 # What the user wrote down about a folder — its exe.md (app/ordnerwissen.py).
 # Directly after the folder list it talks about, and before the memory, so
@@ -707,10 +691,10 @@ while it exists, because that would throw away everything already in it. A
 shared folder that has no `exe.md` at all is the one case where {datei_schreiben.WERKZEUG_NAME}
 creates one.
 
-A fresh `exe.md` is laid out under four headings — "Rules you cannot guess",
-"How things are done here", "Where things belong", "Why it is built this
-way". Put a note under the heading it belongs to, and keep the file lean:
-past 4 KB the interface flags it to the user as too big."""
+A fresh `exe.md` is laid out under four headings — "Rules that cannot be
+inferred", "How work is done here", "Where things belong", "Reasons behind
+the design". Put a note under the heading it belongs to, and keep the file
+lean: past 4 KB the interface flags it to the user as too big."""
 
 # Which of the two, memory or exe.md, a thing goes into. Only worth saying
 # when both actually exist in this request — with no memory tool there is
@@ -874,11 +858,10 @@ results."""
 # question stands in a list until somebody walks past it, so the price of
 # asking is the run standing still — which is worth paying for a decision
 # that is genuinely the user's and for nothing else.
-AGENTENLAUF_OHNE_FRAGE = """\
-Nobody is watching this run and nobody can answer a question —
-there is no way to ask one. Where something above tells you to ask, that does
-not apply here: choose the reading that does the least damage if it is wrong,
-carry on, and name the assumption in your report."""
+AGENTENLAUF_OHNE_FRAGE = """This run is unattended, and no one can answer questions.
+There is no way to ask the user for clarification. Any earlier instruction
+to ask does not apply here. Choose the interpretation with the least harmful
+consequences if incorrect, continue, and state the assumption in your report."""
 
 AGENTENLAUF_MIT_FRAGE = f"""\
 Nobody is watching this run, but you can still ask: {frage_werkzeug.WERKZEUG_NAME} stops the run and
@@ -894,11 +877,10 @@ report."""
 # question into a no for an agent). Sent off by the chat model, the run is
 # judged by the chat's rules and a call that needs a yes is asked about in
 # that chat while the run waits (app/api/v1/auftraege.py, ``_ask_in_chat``).
-JOB_NO_CONFIRMATION = """\
-Nobody is asked for a yes on your behalf either. A call that reaches outside
-your folders is refused outright rather than put to anyone — there is no
-confirmation prompt in a job. Where something above says the program asks
-the user first, or asks them for you, that does not apply here."""
+JOB_NO_CONFIRMATION = """This run cannot request approval on your behalf. Any call that accesses
+a location outside your folders is rejected outright. There is no
+confirmation prompt during a job. Earlier instructions stating that the
+program asks the user for approval do not apply here."""
 
 JOB_CONFIRMATION_IN_CHAT = """\
 Where something above says the program asks the user for a yes, that holds
@@ -942,10 +924,9 @@ run."""
 # it was taken out because a job refuses it, and this is the other half of
 # that: a model that remembers the parameter from its training is told here,
 # once, that it does not work.
-AGENTENLAUF_BEFEHLE = f"""\
-{shell.WERKZEUG_NAME} cannot put anything in the background here — a background result
-would have no conversation to land in, so the call is refused. Run it
-normally."""
+AGENTENLAUF_BEFEHLE = f"""{shell.WERKZEUG_NAME} cannot start background work here because there is no
+conversation to receive the result. Such calls are rejected. Run the command
+in the foreground."""
 
 # Only when deliver_file is in this run's own list: the agent's front matter
 # can leave it out, and the tool can be switched off like any other.
@@ -1314,26 +1295,31 @@ def bauen(
             else ORDNER_ZUGRIFF_UNBEKANNT
         )
         # ``own_folder`` is this chat's own folder when it is in the list;
-        # the rest are the user's shares.
-        # Once each: a folder the user shared that is also the chat's own
-        # stands in the list twice.
+        # the rest are the user's shares. The own folder's paragraph is not
+        # built here: its path differs in every chat, so the caller puts it
+        # behind everything else (``own_folder_line``).
         # A job's dock folder is the program's as well, and stands last.
-        shared = list(
-            dict.fromkeys(p for p in ordner if p not in (own_folder, dock, images))
-        )
+        shared = shared_folders(ordner, own_folder, dock, images)
         sections = []
         if shared:
             sections.append(
                 ORDNER_GETEILT.format(ordner="\n".join(f"- {p}" for p in shared))
             )
-        if own_folder in ordner:
-            own_text = ORDNER_EIGEN_DAZU if shared else ORDNER_EIGEN
-            sections.append(own_text.format(ordner=own_folder))
         if dock and dock in ordner:
             sections.append(DOCK_FOLDER.format(ordner=dock))
         if images and images in ordner:
             sections.append(IMAGE_FOLDER.format(ordner=images))
-        teile.append(ORDNER.format(ordner="\n\n".join(sections), zugriff=zugriffssatz))
+        teile.append(
+            ORDNER.format(
+                ordner="\n\n".join(sections),
+                relative=(
+                    ""
+                    if starts_in_own_folder(ordner, own_folder, dock, images)
+                    else RELATIVE_FIRST_SENTENCE
+                ),
+                zugriff=zugriffssatz,
+            ).lstrip()
+        )
     elif befehle or dateiwerkzeuge:
         teile.append(ORDNER_FEHLT)
     if ordnerwissen:

@@ -79,11 +79,17 @@
     padding: 8px 15px 10px;
     /* The ground and ink of one's own bubble (Nachricht.svelte, `.von-mir`),
        dimmed, and no frame: it will be that bubble, it is not one yet. The
-       hourglass in the corner carries the state — yellow while it waits, red
-       while it is held; the word beside it is in the bubble's own ink. */
-    background: var(--blase-eigen, var(--blase-eigen-standard, var(--blase)));
+       dimming is on the parts, never on the bubble as a whole: an opacity
+       there would take the hourglass down with it, and the hourglass in the
+       corner is what carries the state — yellow while it waits, red while it
+       is held, at full strength. The ground is dimmed by its alpha channel,
+       the word and the text by their own opacity. */
+    background: color-mix(
+      in srgb,
+      var(--blase-eigen, var(--blase-eigen-standard, var(--blase))) 60%,
+      transparent
+    );
     color: var(--blase-eigen-text, var(--blase-eigen-text-standard, inherit));
-    opacity: 0.6;
     line-height: 1.55;
   }
   .zeile {
@@ -97,7 +103,6 @@
      is sure to reach 4.5:1 on it, and the word must stay readable. */
   .sanduhr {
     flex: none;
-    opacity: 0.8;
     color: var(--gelb);
   }
   /* The hold is a state of its own — the send did not go through — so it
@@ -117,6 +122,7 @@
     /* The bubble's own ink: the only colour sure to read on a ground the
        user picked. The state is the hourglass's colour beside it. */
     color: inherit;
+    opacity: 0.6;
   }
   /* A statement of fact, so brightness alone — no state colour. It sits
      above the typed text and below the mark, quieter than both, in the
@@ -124,16 +130,17 @@
      user picked. */
   .erklaerung {
     font-size: 0.82rem;
-    opacity: 0.75;
+    opacity: 0.45;
     margin-bottom: 3px;
   }
   .text {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+    opacity: 0.6;
   }
   .anhang {
     font-size: 0.82rem;
-    opacity: 0.75;
+    opacity: 0.45;
     overflow-wrap: anywhere;
   }
   .weiter,
@@ -147,6 +154,7 @@
     cursor: pointer;
     display: flex;
     align-items: center;
+    opacity: 0.6;
   }
   .weiter {
     font-size: 0.78rem;

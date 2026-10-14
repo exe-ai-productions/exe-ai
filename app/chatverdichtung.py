@@ -33,6 +33,7 @@ every round answers with a fold or a lower ceiling. The emergency handoff
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 import re
@@ -48,13 +49,15 @@ from app import (
     faltbitte,
     faltpause,
     faltversuche,
+    fold_row_weights,
     kontextdruck,
     verdichtung,
     verdichtungswahl,
 )
 from app.discovery import refusal_key
 from app.events import Ereignisse, bus
-from app.verlaufsbau import _als_modellnachricht, werkzeuge_fuer_die_faltung, werkzeuggewicht, zeilentext
+from app.verlaufsbau import _als_modellnachricht, werkzeuge_fuer_die_faltung, zeilentext
+from app.verlaufsbau import tool_pictures_of_rows, row_weight
 from app.tools.hintergrund import laeufe
 from app.providers import ChatNachricht, Generierungsanfrage
 
@@ -112,16 +115,19 @@ laeufe.beim_vergessen(_vergessen)
 # Asked for by name, because a summary of forty turns about a contract
 # otherwise reads "the user asked about the contract" and keeps nothing.
 DOKUMENTREGEL = """
-The documents in this history are named by filename only; their text is not \
-included here. Under the two headings above, record for each one what it \
-was and what was established from it — after this compaction that is all \
-that is left of it.
+Documents in this history are listed by filename only; their contents are not included. Under the two headings above, record what each document was and what was established from it. After compaction, only this information will remain.
 """
+
+
+def _focus_rule(topic: str) -> str:
+    """The focus sentence, set apart from the request above it the way
+    ``DOKUMENTREGEL`` is."""
+    return "\n" + verdichtung.FOCUS_TEXT.format(topic=topic) + "\n"
 
 
 def _mitte_suchen(
     zeilen: list,
-    gewichte: list[str] | None = None,
+    gewichte: list[int] | None = None,
     budget: int = verdichtung.LETZTE_ZEICHEN,
 ) -> list:
     """The rows a summary may replace — never the opening, never the tail,
@@ -132,34 +138,36 @@ def _mitte_suchen(
     rather than a message count, because twenty messages can be two hundred
     tokens or two hundred thousand.
 
-    ``gewichte`` is what each row weighs in the prompt — one entry per row,
-    in the same order, built by the caller through the request builder
-    itself. Deliberately NOT ``messages.content``: a document's text is not
-    in that column, the row only POINTS at the document, and the text is
-    prepended when the request is built. Measured on a chat of forty short
+    ``gewichte`` is what each row weighs in the prompt, in characters — one
+    entry per row, in the same order, built by the caller through the request
+    builder itself (``app/fold_row_weights.py``): words, documents as the plan
+    sends them, pictures and tool log. Deliberately NOT ``messages.content``:
+    a document's text is not in that column, the row only POINTS at the
+    document, and the text is prepended when the request is built. Measured
+    on a chat of forty short
     turns each carrying a 24,000-character document, ``content`` said 700
     characters against a real prompt of 962,970 — the 80,000-character
     budget was never busted, the boundary came back 0, and the middle was
     empty every single turn. The chat that needed compaction most was the
     one chat that could never have it.
 
-    Left out, the weights fall back to the ``content`` column — which is
-    the right answer for a row that carries nothing but text and the wrong
-    one for every other row. It is there for the boundary tests, which hand
-    in stand-in rows made of text and nothing else, and it is safe here
+    Left out, the weights fall back to the length of the ``content`` column —
+    which is the right answer for a row that carries nothing but text and the
+    wrong one for every other row. It is there for the boundary tests, which
+    hand in stand-in rows made of text and nothing else, and it is safe here
     because this is private and has exactly one caller in the program: the
     function below, which has to build the weights anyway to measure the
     middle it picks — through ``zeilentext``, never through the column.
     """
     if gewichte is None:
-        gewichte = [z.content or "" for z in zeilen]
+        gewichte = [len(z.content or "") for z in zeilen]
     if len(zeilen) <= verdichtung.ERSTE_FEST:
         return []
     # The job's own boundary, asked with this chat's rows. It was a second
     # copy of the same walk, and a boundary written twice is a boundary that
     # drifts — which the tail-budget change would have caused here the
     # moment one of the two learned to keep the newest message.
-    schwanz = verdichtung.schwanz_anfang(gewichte, budget)
+    schwanz = verdichtung.tail_start_from_weights(gewichte, budget)
 
     # Rows past the last real answer are UNREAD — no answer has responded to
     # them yet — and a run woken to read a report must not be handed a
@@ -176,7 +184,7 @@ def _mitte_suchen(
     # alike: the unread stretch is protected whole while it fits and cut
     # from the front when it does not, so the newest reports — the ones a
     # wake is actually about — survive either way. Nine lines used to sit
-    # here that looked for the last real answer and walked `schwanz_anfang`
+    # here that looked for the last real answer and walked `tail_start_from_weights`
     # a SECOND time over `zeilen[ungelesen_ab:]`, folding the result in with
     # a `min`. They could not move the boundary: both walks add the same
     # texts from the same end against the same budget, so the same row `s`
@@ -252,11 +260,10 @@ def _dokumentnachweis(dokumente: list) -> str:
         for dokument in dokumente
     ).strip()
     return (
-        f"{_NOTE_START} {teile} "
-        f"Their text travelled with every request until this compaction and "
-        f"does not any more. They are still attached to this conversation "
-        f"and still readable in the chat — say so, and ask for what you "
-        f"need, {_NOTE_END}"
+        f"{_NOTE_START} {teile} Their contents accompanied every request before this "
+        "compaction but are no longer included. The documents remain attached to this "
+        "conversation and can still be read in the chat. Explain this and ask for the "
+        f"information you need, {_NOTE_END}"
     )
 
 
@@ -329,16 +336,29 @@ def append_document_notes(content: str, earlier: list[str], documents: list) -> 
 
 
 def _mitte_wirklich(
-    mitte: list, dokumente: list, repositories, dokumentplan: dict | None
+    mitte: list,
+    dokumente: list,
+    repositories,
+    dokumentplan: dict | None,
+    *,
+    offers_tools: bool = True,
+    vision: bool = True,
+    pictures: set[int] | None = None,
 ) -> int:
     """What the middle really puts into a prompt — the one measure a fold of
     this chat is judged by.
 
     Judged against this and not against the weights the boundary was drawn
-    with. Two readings, both from what a request really carries:
+    with. Three readings, each of what the request that is asked about
+    really carries (``app/verlaufsbau.py``, ``row_weight``):
 
-    * A row's tool calls travel back as calls and capped results
-      (app/verlaufsbau.py, ``werkzeuggewicht``), on top of its text.
+    * A row's tool calls travel back as calls and results where the request
+      offers tools (``werkzeuge``), as the text block above the answer where
+      it does not, and not at all for an answer the request sends as a
+      sentence; ``bilder`` are the entries whose pictures ride along again.
+    * A row's pictures weigh what the request sends for them: the price of a
+      picture where the model sees (``vision``), the sentence that goes
+      instead where it does not.
     * A document counts as what the plan for this request sends of it
       (app/dokumentbudget.py): the whole text where it fits and stays under
       the ceiling of half that window, nothing where it does not or
@@ -352,8 +372,14 @@ def _mitte_wirklich(
       never fold again while every turn kept paying for the document.
     """
     return sum(
-        len(zeilentext(z, repositories, volltext_mitschicken=False))
-        + werkzeuggewicht(z)
+        row_weight(
+            z,
+            repositories,
+            document_plan=dokumentplan,
+            offers_tools=offers_tools,
+            vision=vision,
+            pictures=pictures,
+        )
         for z in mitte
     ) + sum(
         dokumentbudget.beitrag_zeichen(d, dokumentplan)
@@ -388,6 +414,10 @@ async def vielleicht_verdichten(
     neu_tokens: int = 0,
     dokumentplan: dict | None = None,
     eingestellte_grenze: int | None = None,
+    without: str | None = None,
+    offers_tools: bool = True,
+    stopp: asyncio.Event | None = None,
+    config=None,
 ) -> str | None:
     """Folds the chat's middle if it is ABOUT TO grow past the threshold.
 
@@ -400,6 +430,15 @@ async def vielleicht_verdichten(
     ``dokumentplan`` is what the request being built will carry of each
     document (app/dokumentbudget.py); the rows are weighed with it, so the
     fold's saving is judged against the prompt that really goes out.
+
+    ``without`` names a row the request about to be built leaves out — the
+    answer a new one is being written in place of. It is left out here as
+    well, so the tail is measured over the rows that really go out and that
+    row is never folded.
+
+    ``offers_tools`` says whether that request offers tools: the rows are
+    weighed in the shape their tool calls will have in it
+    (``row_weight``). Left out, it is the offer.
 
     Returns the id of the summary that was written, or ``None`` where
     nothing was done — no reading, no ceiling, below the threshold, no
@@ -460,11 +499,18 @@ async def vielleicht_verdichten(
         chat=chat,
         endpoint_id=endpoint_id,
         modellname=modellname,
-        zeilen=repositories.messages.fuer_das_modell(chat_id=chat.id),
+        zeilen=[
+            zeile
+            for zeile in repositories.messages.fuer_das_modell(chat_id=chat.id)
+            if zeile.id != without
+        ],
         budget=budget,
         dokumentplan=dokumentplan,
         bremse=True,
         erzwungen=False,
+        offers_tools=offers_tools,
+        stopp=stopp,
+        config=config,
     )
     return kennung
 
@@ -479,9 +525,14 @@ async def erzwungen_verdichten(
     zeilen: list,
     budget: int,
     dokumentplan: dict | None = None,
+    topic: str | None = None,
+    offers_tools: bool = True,
+    stopp: asyncio.Event | None = None,
+    config=None,
 ) -> tuple[str | None, verdichtung.Ergebnis]:
     """Folds the chat's middle because the provider called the request too
-    long — no threshold, no known context size needed, and past the brake.
+    long, or because the user asked for it by hand — no threshold, no known
+    context size needed, and past the brake.
 
     The provider's refusal is the reading here: whether the window is known
     or the percentage crossed anything no longer matters once the request
@@ -507,6 +558,14 @@ async def erzwungen_verdichten(
     (``verdichtung.Ergebnis``): the loop over the fold steps reads the same
     two things on both ways, whether a step failed and whether a smaller one
     can still fold something.
+
+    ``topic`` is the focus a user named when compacting by hand: it is the
+    last sentence of the request and steers what the summary keeps. A fold
+    forced by the provider's refusal never has one.
+
+    ``offers_tools`` says whether the refused request offered tools; the
+    middle is weighed in the shape its calls had in it. A caller that has no
+    request (the user's own button) leaves it at the offer.
     """
     return await _falten(
         zustand=zustand,
@@ -519,6 +578,10 @@ async def erzwungen_verdichten(
         dokumentplan=dokumentplan,
         bremse=False,
         erzwungen=True,
+        topic=topic,
+        offers_tools=offers_tools,
+        stopp=stopp,
+        config=config,
     )
 
 
@@ -563,8 +626,16 @@ async def _falten(
     dokumentplan: dict | None,
     bremse: bool,
     erzwungen: bool,
+    topic: str | None = None,
+    offers_tools: bool = True,
+    stopp: asyncio.Event | None = None,
+    config=None,
 ) -> tuple[str | None, verdichtung.Ergebnis]:
     """The fold itself, once it has been decided that one is wanted.
+
+    ``stopp`` is the stop signal of whoever asks: set while the summary is
+    being asked for, the request is closed, nothing is folded and no failure
+    or pause is booked (``Ergebnis.gestoppt``).
 
     ``bremse`` says whether an attempt that already saved nothing for this
     very middle holds this one back. ``erzwungen`` says this fold is the
@@ -578,19 +649,33 @@ async def _falten(
     refused before, and a refusal of it is written down there."""
     # What each row WEIGHS in the prompt this fold is meant to shrink,
     # built by the builder that writes that prompt — not ``messages.content``,
-    # see `_mitte_suchen`. Without a plan a document is read as too large for
-    # the window and costs nothing here (app/verlaufsbau.py): the same
-    # reading a request without one gives it.
-    gewichte = [
-        zeilentext(z, repositories, dokumentplan=dokumentplan)
-        for z in zeilen
-    ]
+    # see `_mitte_suchen`: its words, its pictures at their price and its
+    # tool log (app/fold_row_weights.py). Without a plan a document is read
+    # as too large for the window and costs nothing here
+    # (app/verlaufsbau.py): the same reading a request without one gives it.
+    #
+    # The request this fold is meant to shrink is asked about as it will be
+    # built: whether it offers tools, and whether the model sees — the
+    # pictures a tool read ride again only for one that does.
+    sees = bool(zustand.kann("vision"))
+    # Sizing the pictures reads their files: off the event loop.
+    tool_pictures = (
+        await asyncio.to_thread(tool_pictures_of_rows, zeilen, config)
+        if sees and offers_tools
+        else None
+    )
+    gewichte = fold_row_weights.fold_row_weights(
+        zeilen,
+        repositories,
+        document_plan=dokumentplan,
+        offers_tools=offers_tools,
+        vision=sees,
+        pictures=tool_pictures,
+    )
     mitte = _mitte_suchen(zeilen, gewichte, budget)
     if not mitte:
         return None, verdichtung.Ergebnis(angewendet=False, keine_mitte=True)
-    gewicht = dict(
-        zip((z.id for z in zeilen), (len(g) for g in gewichte), strict=True)
-    )
+    gewicht = dict(zip((z.id for z in zeilen), gewichte, strict=True))
 
     # What this attempt IS: the model that would be asked, and how much
     # history it would be asked about. The model belongs in it because a
@@ -667,7 +752,11 @@ async def _falten(
         + [
             ChatNachricht(
                 role="user",
-                content=verdichtung.ANFRAGE_TEXT + (DOKUMENTREGEL if dokumente else ""),
+                content=(
+                    verdichtung.ANFRAGE_TEXT
+                    + (DOKUMENTREGEL if dokumente else "")
+                    + (_focus_rule(topic) if topic else "")
+                ),
             )
         ],
         zustand.context_tokens,
@@ -766,7 +855,12 @@ async def _falten(
     try:
         # One request under two clocks; the pause is booked once from what
         # it came back with.
-        text = await faltversuche.anfordern(zustand, anfrage)
+        text = await faltversuche.anfordern(zustand, anfrage, stopp)
+    except faltversuche.Gestoppt:
+        # Stop pressed while the summary was being written: nothing is
+        # folded, and nothing is booked — the attempt says nothing about the
+        # model, so no pause and no notice.
+        return None, verdichtung.Ergebnis(angewendet=False, gestoppt=True)
     except Exception as fehler:  # noqa: BLE001 - a failed fold must not cost the answer
         if not denkablehnung.lernen(
             repositories.einstellungen, refusal_id, fehler, anfrage.zusatz, "off",
@@ -783,7 +877,9 @@ async def _falten(
         # is booked once, as any failed fold is.
         anfrage = dataclasses.replace(anfrage, zusatz=switch_off())
         try:
-            text = await faltversuche.anfordern(zustand, anfrage)
+            text = await faltversuche.anfordern(zustand, anfrage, stopp)
+        except faltversuche.Gestoppt:
+            return None, verdichtung.Ergebnis(angewendet=False, gestoppt=True)
         except Exception:  # noqa: BLE001 - see above
             log.warning("Chat %s: fold failed again without the thinking switch", chat.id,
                         exc_info=True)
@@ -813,7 +909,18 @@ async def _falten(
     # builder will make of the row replacing them — a summary carries no
     # documents and no pictures, so its content IS its weight, the note
     # included.
-    if len(inhalt) >= _mitte_wirklich(mitte, dokumente, repositories, dokumentplan):
+    # The request the fold is meant to shrink, asked about as it will be
+    # built (``sees`` and ``tool_pictures`` above).
+    middle_weight = _mitte_wirklich(
+        mitte,
+        dokumente,
+        repositories,
+        dokumentplan,
+        offers_tools=offers_tools,
+        vision=sees,
+        pictures=tool_pictures,
+    )
+    if len(inhalt) >= middle_weight:
         # A real request went out and a real answer came back, and it still
         # would not have shrunk anything — the one signal the brake is for,
         # and the only branch left that sets it. A failed summary is not
@@ -852,11 +959,17 @@ async def _falten(
         len(mitte),
         extra={"ereignis": "chat_verdichtet", "chat": chat.id, "zeilen": len(mitte)},
     )
-    return zusammenfassung.id, verdichtung.Ergebnis(angewendet=True)
+    return zusammenfassung.id, verdichtung.Ergebnis(angewendet=True, ersetzt=len(mitte))
 
 
 def faltung_nachtragen(
-    *, chat, repositories, zusammenfassung: str, budget: int, ausser_id: str | None = None
+    *,
+    chat,
+    repositories,
+    zusammenfassung: str,
+    budget: int,
+    ausser_id: str | None = None,
+    without: str | None = None,
 ) -> str | None:
     """A fold that happened INSIDE an answer, written down afterwards.
 
@@ -874,13 +987,17 @@ def faltung_nachtragen(
     The rows the fold covered are the ones between the pinned opening and
     ``ausser_id`` — this answer's own row, which the summary must PRECEDE —
     and the verbatim tail is cut off them the way every fold cuts it, with
-    the same :func:`verdichtung.schwanz_anfang`. Only the rows are weighed
+    the same :func:`verdichtung.tail_start_from_weights`. Only the rows are weighed
     here, not the rounds that are not rows: rows alone weigh less than the
     request they open, so this boundary protects MORE than the fold did and
     FEWER rows are marked. That is the safe side. A row that stays in the
     prompt although the summary also speaks for it says the same thing
     twice; a row behind the seam that the summary never covered would be
     lost.
+
+    ``without`` names a row in front of this answer that was in none of its
+    requests — the answer it is being written in place of. The summary does
+    not speak for it, so it is not marked either.
 
     Returns the summary row's id, or ``None`` where nothing was written —
     the same handle the row path hands back, so the answer's own row can
@@ -890,7 +1007,8 @@ def faltung_nachtragen(
     for zeile in repositories.messages.fuer_das_modell(chat_id=chat.id):
         if ausser_id is not None and zeile.id == ausser_id:
             break
-        vor.append(zeile)
+        if zeile.id != without:
+            vor.append(zeile)
     mitte = vor[verdichtung.ERSTE_FEST :]
     if not mitte:
         return None
@@ -905,8 +1023,17 @@ def faltung_nachtragen(
     # safe side. A row that stays in the prompt although the summary also
     # speaks for it says the same thing twice; a row behind the seam that the
     # summary never covered would be lost.
-    gewichte = [zeilentext(z, repositories, dokumentplan=None) for z in mitte]
-    anfang = verdichtung.schwanz_anfang(gewichte, budget)
+    #
+    # Each row weighs its words and its pictures at their price, the way the
+    # fold of the request's own rounds counts its messages
+    # (``verdichtung.nachrichtengewicht``): a boundary drawn over the words
+    # alone would leave the rows of a picture-heavy chat on the wrong side of
+    # the seam. The tool log stays out: that fold weighs a call's arguments at
+    # nothing, so counting them here would mark rows it never covered.
+    gewichte = fold_row_weights.fold_row_weights(
+        mitte, repositories, document_plan=None, tool_log=False
+    )
+    anfang = verdichtung.tail_start_from_weights(gewichte, budget)
     if 0 < anfang < len(mitte):
         mitte = mitte[:anfang]
     if not mitte:

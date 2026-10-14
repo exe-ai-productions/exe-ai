@@ -263,7 +263,7 @@ def test_every_text_stands_word_for_word_in_both_languages():
     }
     assert texts["de"] == {
         "title": "Neue Version verfügbar",
-        "version_line": "Version {version} vom {date}",
+        "version_line": "Version {version}, veröffentlicht am {date}",
         "download": "Laden",
         "downloading": "Lädt … {percent} %",
         "install": "Installieren",
@@ -277,7 +277,7 @@ def test_every_text_stands_word_for_word_in_both_languages():
     }
     assert texts["en"] == {
         "title": "New version available",
-        "version_line": "Version {version} from {date}",
+        "version_line": "Version {version}, released {date}",
         "download": "Download",
         "downloading": "Downloading … {percent} %",
         "install": "Install",

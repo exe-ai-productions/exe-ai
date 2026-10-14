@@ -119,8 +119,10 @@ def test_verlauf_wird_mitgeschickt(client, chat_id):
     rollen = [n.role for n in provider.letzte_anfrage.nachrichten]
     inhalte = [n.content for n in provider.letzte_anfrage.nachrichten]
     # The user's prompt is a layer on the shipped one now, so it sits at the
-    # end of the single system message instead of being the whole of it.
-    assert rollen[0] == "system" and inhalte[0].endswith("Sei knapp.")
+    # end of the single system message instead of being the whole of it —
+    # only the paragraph naming the chat's own folder stands behind it.
+    before_folder = inhalte[0].split("\n\nThis conversation has a folder of its own")[0]
+    assert rollen[0] == "system" and before_folder.endswith("Sei knapp.")
     assert "Erste Frage" in inhalte
     # The newest turn carries the date block in front of what was said
     # (app/grundprompt.environment_block) — the row in the
@@ -545,7 +547,7 @@ def test_eine_unterbrochene_antwort_wird_dem_modell_gesagt(client, chat_id):
 
     letzte = provider.letzte_anfrage.nachrichten[-1]
     assert _ohne_block(letzte.content).startswith(
-        "[Note: the user interrupted your previous spoken reply before it finished.]\n\n"
+        "[Note: the user interrupted your previous spoken response before it finished.]\n\n"
         "This is a spoken conversation."
     )
     assert letzte.content.endswith("Nein, anders.")
@@ -1082,6 +1084,77 @@ async def test_naechstes_stueck_liest_ein_zufaelliges_ende_nicht_als_abbruch():
     stueck, abbruch_hat_gewonnen = await generierung.naechstes_stueck(quelle)
     assert stueck is None
     assert abbruch_hat_gewonnen is False, "a stream that ended on its own is not an abort"
+
+
+class _CountingEvent(asyncio.Event):
+    """A stop signal that counts how often something starts waiting on it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.waits = 0
+
+    async def wait(self) -> bool:
+        self.waits += 1
+        return await super().wait()
+
+
+def _open_tasks() -> list:
+    return [
+        task for task in asyncio.all_tasks()
+        if task is not asyncio.current_task() and not task.done()
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_long_answer_waits_for_the_stop_in_one_step_and_ends_it_with_the_run():
+    """A step per piece was a new task for every piece of an answer: a long
+    answer made thousands. One step stands for the whole run, made with its
+    first piece and gone when the run ends."""
+    run = Generierung(id="g1", chat_id="c1", endpoint_id="test")
+    run.signal = _CountingEvent()
+
+    async def many():
+        for _ in range(300):
+            yield Stueck("content", "x")
+
+    source = many()
+    count = 0
+    while True:
+        piece, stop_won = await run.naechstes_stueck(source)
+        if piece is None:
+            assert stop_won is False
+            break
+        count += 1
+    assert count == 300
+    assert run.signal.waits == 1
+    # The wait for the stop is the only thing still open, until the run ends.
+    assert len(_open_tasks()) == 1
+    run.beenden()
+    await asyncio.sleep(0)
+    assert _open_tasks() == []
+
+
+@pytest.mark.asyncio
+async def test_a_stop_still_wins_over_a_piece_that_never_comes_after_many_pieces():
+    """Silence probe: the one step does what a step per piece did."""
+    run = Generierung(id="g1", chat_id="c1", endpoint_id="test")
+
+    async def then_silence():
+        for _ in range(5):
+            yield Stueck("content", "x")
+        await asyncio.sleep(3600)
+        yield Stueck("content", "never")
+
+    source = then_silence()
+    for _ in range(5):
+        piece, _won = await run.naechstes_stueck(source)
+        assert piece is not None
+    asyncio.get_running_loop().call_later(0.05, run.signal.set)
+    piece, stop_won = await asyncio.wait_for(run.naechstes_stueck(source), timeout=5)
+    assert piece is None
+    assert stop_won is True
+    run.beenden()
+    await source.aclose()
 
 
 @pytest.mark.asyncio
@@ -1987,6 +2060,94 @@ def test_a_refusal_learns_what_was_sent_not_what_was_picked(client, chat_id, mon
     assert server.zusaetze == [{"reasoning_effort": "none"}, {}]
     assert written == ["off"]
 
+
+
+class _LowersTheCeilingThenRefusesThinking(MockProvider):
+    """The first request is refused for its answer length, naming a limit so
+    small that no thinking budget fits beside it; the request that goes out
+    then carries thinking switched off, and the server refuses that one for
+    its thinking field. The third answers."""
+
+    CEILING_REFUSAL = (
+        '{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Range of '
+        'max_tokens should be [1, 1500]","type":"invalid_request_error"}}'
+    )
+    THINKING_REFUSAL = (
+        '{"error":{"message":"Unsupported parameter: thinking",'
+        '"type":"invalid_request_error","param":"thinking"}}'
+    )
+
+    def __init__(self):
+        super().__init__(haeppchen=["ok"])
+        self.sent: list = []
+
+    async def streamen(self, anfrage):
+        self.sent.append(
+            dataclasses.replace(anfrage, zusatz=json.loads(json.dumps(anfrage.zusatz or {})))
+        )
+        if len(self.sent) == 1:
+            raise ProviderFehler("refused", status=400, rohtext=self.CEILING_REFUSAL)
+        if len(self.sent) == 2:
+            raise ProviderFehler("refused", status=400, rohtext=self.THINKING_REFUSAL)
+        async for stueck in super().streamen(anfrage):
+            yield stueck
+
+
+def test_a_refusal_after_a_lowered_ceiling_is_held_against_off_not_the_picked_stage(
+    client, chat_id
+):
+    """"on" is the stage picked on a model with a thinking budget. A refused
+    ceiling comes down so far that the request goes out with thinking off;
+    that request is refused for its thinking field. What is written down is
+    "off" — the stage that went out — and "on" stays on the list."""
+    from app import denkablehnung
+
+    provider = provider_setzen(client, _LowersTheCeilingThenRefusesThinking())
+    _als_modell(client, "anthropic", "https://api.anthropic.com/v1", "claude-sonnet-4-5")
+    client.post("/api/v1/chat/completions", json={
+        "chat_id": chat_id, "endpoint_id": "test", "content": "Hello", "thinking": "on",
+        "max_tokens": 8_192,
+    })
+
+    assert len(provider.sent) >= 2
+    assert provider.sent[0].zusatz.get("thinking", {}).get("type") == "enabled"
+    assert provider.sent[1].zusatz.get("thinking", {}).get("type") == "disabled", (
+        "the lowered ceiling must have sent thinking off, or the case is not reached"
+    )
+    refused = denkablehnung.gemerkt(client.app.state.repositories.einstellungen, "test")
+    assert refused == ["off"]
+
+
+def test_silence_a_refusal_without_a_lowered_ceiling_is_held_against_the_sent_stage(
+    client, chat_id
+):
+    """Nothing came down: the stage that went out is the stage picked, and a
+    refusal of it is written down as before."""
+    from app import denkablehnung
+
+    class RefusesThinking(MockProvider):
+        def __init__(self):
+            super().__init__(haeppchen=["ok"])
+            self.sent = 0
+
+        async def streamen(self, anfrage):
+            self.sent += 1
+            if self.sent == 1:
+                raise ProviderFehler(
+                    "refused", status=400,
+                    rohtext=_LowersTheCeilingThenRefusesThinking.THINKING_REFUSAL,
+                )
+            async for stueck in super().streamen(anfrage):
+                yield stueck
+
+    provider_setzen(client, RefusesThinking())
+    _als_modell(client, "anthropic", "https://api.anthropic.com/v1", "claude-sonnet-4-5")
+    client.post("/api/v1/chat/completions", json={
+        "chat_id": chat_id, "endpoint_id": "test", "content": "Hello", "thinking": "on",
+    })
+
+    refused = denkablehnung.gemerkt(client.app.state.repositories.einstellungen, "test")
+    assert refused == ["on"]
 
 
 @pytest.mark.parametrize("stored", [{"an": True}, {"stufe": "turbo"}])

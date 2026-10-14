@@ -23,6 +23,7 @@
   import Hauszeichen from './Hauszeichen.svelte'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import { slide } from 'svelte/transition'
+  import { slideIfDrawn } from '../lib/slideIfDrawn.js'
   import { ansiZuHtml, withoutAnsi } from '../lib/ansi.js'
   import { hervorheben } from '../lib/einfaerben.js'
   import { KOPIER_ZEICHEN } from '../lib/markdown.js'
@@ -59,6 +60,24 @@
     const naechste = new Set(offene)
     naechste.has(schluessel) ? naechste.delete(schluessel) : naechste.add(schluessel)
     offene = naechste
+  }
+
+  /* A run's block — the command with its folder and its output — stands
+     open while the run goes and folded once it is over, so a long history
+     of finished commands is a list of lines and not a wall of boxes. A
+     click on the command is the reader's own say, and it holds: a block
+     opened by hand stays open when the run ends, one folded by hand stays
+     folded while it still goes. Key → open or folded, only where somebody
+     clicked; renewed on every change like `offene`. */
+  let blockChoice = $state(new Map())
+  function isBlockOpen(lauf) {
+    const choice = blockChoice.get(`l${lauf.lauf}`)
+    return choice !== undefined ? choice : lauf.zustand === 'laeuft'
+  }
+  function toggleBlock(lauf) {
+    const next = new Map(blockChoice)
+    next.set(`l${lauf.lauf}`, !isBlockOpen(lauf))
+    blockChoice = next
   }
 
   /* Sticks to the end while nobody scrolls. The moment somebody scrolls up
@@ -133,15 +152,17 @@
                  the eye finds it in the list without reading. Its text is a
                  prompt and not a command, so it is not syntax-coloured. -->
             <span class="bildzeichen"><Hauszeichen zeichen="bild" groesse="klein" /></span>
-            <button class="befehl klartext" class:umbruch={offene.has(`l${eintrag.lauf.lauf}`)}
-                    onclick={() => klappen(`l${eintrag.lauf.lauf}`)}>{eintrag.lauf.befehl}</button>
+            <button class="befehl klartext" class:umbruch={isBlockOpen(eintrag.lauf)}
+                    aria-expanded={isBlockOpen(eintrag.lauf)}
+                    onclick={() => toggleBlock(eintrag.lauf)}>{eintrag.lauf.befehl}</button>
           {:else}
             <!-- The command line is cut off at the edge like any single
-                 line — a click lets it wrap, so the whole command can be
-                 read. That is all the click does: the output already
-                 stands below. -->
-            <button class="befehl" class:umbruch={offene.has(`l${eintrag.lauf.lauf}`)}
-                    onclick={() => klappen(`l${eintrag.lauf.lauf}`)}>{@html hervorheben(eintrag.lauf.befehl, 'bash')}</button>
+                 line. A click opens the whole block — the command wraps,
+                 and its folder and output stand below — or folds it to
+                 this one line again. -->
+            <button class="befehl" class:umbruch={isBlockOpen(eintrag.lauf)}
+                    aria-expanded={isBlockOpen(eintrag.lauf)}
+                    onclick={() => toggleBlock(eintrag.lauf)}>{@html hervorheben(eintrag.lauf.befehl, 'bash')}</button>
           {/if}
           {#if eintrag.lauf.hintergrund}
             <span class="marke">{t('terminal.hintergrund')}</span>
@@ -169,26 +190,28 @@
                     onclick={() => stop(eintrag.lauf.lauf)}>{t('terminal.stop')}</button>
           {/if}
         </div>
-        {#if eintrag.lauf.folder}
+        {#if isBlockOpen(eintrag.lauf) && eintrag.lauf.folder}
           <!-- Where it runs: a relative path in the command means nothing
                without it. Cut at the start, where a long path is least
                telling; the whole of it is the title. -->
-          <div class="folder" title={eintrag.lauf.folder}><span>{eintrag.lauf.folder}</span></div>
+          <div class="folder" title={eintrag.lauf.folder} transition:slideIfDrawn={{ duration: 200 }}>
+            <span>{eintrag.lauf.folder}</span>
+          </div>
         {/if}
-        {#if eintrag.lauf.ausgabe}
+        {#if isBlockOpen(eintrag.lauf) && eintrag.lauf.ausgabe}
           <!-- Capped, so a five-thousand-line build does not push the rest
                of the history out of the panel — and following its own tail,
                because a capped box nobody scrolls would simply hide
                everything past the first screen. The fade says there is more
                where the hidden scrollbar cannot. The copy sign takes the
                whole output, as the code blocks' sign does. -->
-          <div class="output">
+          <div class="output" transition:slideIfDrawn={{ duration: 200 }}>
             <pre class="ausgabe" use:rollfade use:folgtUnten>{@html ansiZuHtml(eintrag.lauf.ausgabe)}</pre>
             <button class="copy" title={t('nachricht.kopieren')} aria-label={t('nachricht.kopieren')}
                     onclick={() => copyOutput(eintrag.lauf)}>{@html KOPIER_ZEICHEN}</button>
           </div>
         {/if}
-        {#if eintrag.lauf.art === 'bild' && offene.has(`l${eintrag.lauf.lauf}`) && eintrag.lauf.regler}
+        {#if eintrag.lauf.art === 'bild' && isBlockOpen(eintrag.lauf) && eintrag.lauf.regler}
           <!-- The same shape a tool call's own arguments already use
                (.aufruf-text/.wz-argumente, below) — a drawing job is a call
                too, field by field, not a paragraph of prose. -->
@@ -365,6 +388,7 @@
   }
   .aufruf .kurz {
     color: var(--text-still);
+    padding-right: 12px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -436,7 +460,8 @@
     /* Button reset — the header line must look exactly as before. */
     background: none;
     border: none;
-    padding: 0;
+    /* The cut line ends with "…" a little before the card's edge. */
+    padding: 0 12px 0 0;
     text-align: left;
     cursor: pointer;
   }

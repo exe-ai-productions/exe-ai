@@ -39,8 +39,9 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app import skriptlauf, terminplan, zwischenstand
-from app import agentenname, ohne_agent, reminder
+from app import agentenname, no_agent, reminder
 from app.agenten import agenten_laden
+from app.events import Ereignisse, bus
 from app.tools.mcp_client import MCPWerkzeug
 
 SERVER_NAME = "cronjob"
@@ -63,8 +64,8 @@ AKTIONEN = ("create", "list", "remove", "pause", "resume", "update")
 # days it means, and an instant is a day and a time in one string — a second
 # day beside either of them could only contradict it.
 _NUR_MIT_TAGESZEIT = (
-    "'date' only applies to a daily 'HH:MM' time — a cron expression or an "
-    "instant 'YYYY-MM-DDTHH:MM' already says which day it means."
+    "'date' only applies to a daily 'HH:MM' time. A cron expression or a timestamp in "
+    "'YYYY-MM-DDTHH:MM' format already specifies the day."
 )
 
 # How many failed runs in a row an entry may take before it stops trying.
@@ -73,8 +74,7 @@ _NUR_MIT_TAGESZEIT = (
 GRENZE_KLEINSTE = 1
 GRENZE_GROESSTE = 20
 _GRENZE_TEXT = (
-    f"'max_failures' must be a whole number from {GRENZE_KLEINSTE} to "
-    f"{GRENZE_GROESSTE}."
+    f"'max_failures' must be an integer from {GRENZE_KLEINSTE} to {GRENZE_GROESSTE}."
 )
 
 # The numbers the two range refusals name, for the sentence a person reads.
@@ -84,8 +84,8 @@ _GRENZE_WERTE = {"min": GRENZE_KLEINSTE, "max": GRENZE_GROESSTE}
 # stops an entry when its goal is reached means nothing without a goal to
 # reach.
 _NUR_MIT_ZIEL = (
-    "'stop_when_reached' needs a 'goal' — set one in the same call, or use "
-    "it on an entry that already has one."
+    "'stop_when_reached' requires a 'goal'. Set one in the same call or use an entry that "
+    "already has one."
 )
 
 # How long a script may run, per entry. One second is the smallest
@@ -94,43 +94,39 @@ _NUR_MIT_ZIEL = (
 SEKUNDEN_KLEINSTE = 1
 SEKUNDEN_GROESSTE = 86_400
 _SEKUNDEN_TEXT = (
-    f"'max_seconds' must be a whole number from {SEKUNDEN_KLEINSTE} to "
-    f"{SEKUNDEN_GROESSTE}."
+    f"'max_seconds' must be an integer from {SEKUNDEN_KLEINSTE} to {SEKUNDEN_GROESSTE}."
 )
 _SEKUNDEN_WERTE = {"min": SEKUNDEN_KLEINSTE, "max": SEKUNDEN_GROESSTE}
 _SEKUNDEN_NUR_MIT_SKRIPT = (
-    "'max_seconds' belongs to a script entry — an agent run has its own "
-    "limits."
+    "'max_seconds' applies only to script entries. Agent runs have their own limits."
 )
 
 # The refusal that carries the whole security of script entries. Worded as a
 # reason rather than a rule: the caller is a model, and a model that is told
 # WHY does not spend the next round looking for a way round it.
 _NUR_AUS_DEM_CHAT = (
-    "A schedule that runs a script can only be set up from a chat. An "
-    "agent's own run cannot create one and cannot set or change 'script' — "
-    "a script runs with the user's full rights and is not asked about "
-    "before it starts, so a person has to have seen which file it is."
+    "Script schedules can only be created from a chat. An agent run cannot create them or set "
+    "or change 'script'. Scripts run with the user's full permissions without a confirmation "
+    "prompt, so a person must first see which file will run."
 )
 _SKRIPT_STATT_AGENT = (
-    "A script entry runs a script instead of an agent — leave 'agent' and "
-    "'task' out of the same call."
+    "A script entry runs a script instead of an agent. Omit 'agent' and 'task' from the call."
 )
 _KEIN_ZIEL_FUER_SKRIPT = (
-    "A script entry cannot carry a 'goal': there is no model in it to report "
-    "one. Its exit code is the answer — 0 is a good run, anything else a "
-    "failed one."
+    "A script entry cannot have a 'goal', because no model is available to report completion. "
+    "Its exit code determines the result: 0 indicates success; any other value indicates "
+    "failure."
 )
 _SKRIPT_NUR_TAUSCHEN = (
-    "'script' can only be changed on an entry that already runs one. Create "
-    "a new entry instead of turning an agent's schedule into a script."
+    "'script' can only be changed on an existing script entry. Create a new entry rather than "
+    "converting an agent schedule into a script schedule."
 )
 _REMINDER_ALONE = (
-    "A reminder shows its text and runs nothing — leave 'agent', 'script' "
-    "and 'goal' out of the same call."
+    "A reminder displays its text without running anything. Omit 'agent', 'script', and "
+    "'goal' from the call."
 )
 _KEINE_SKRIPTE = (
-    "Scripts are not available here — this service has no scripts folder."
+    "Scripts are unavailable because this service has no scripts folder."
 )
 
 
@@ -201,7 +197,7 @@ def werkzeug_beschreibung(agenten: dict[str, Any] | None = None) -> MCPWerkzeug:
                 "action": {"type": "string", "enum": list(AKTIONEN)},
                 "id": {
                     "type": "string",
-                    "description": "Which entry — for remove/pause/resume/update.",
+                    "description": "Entry to modify with remove/pause/resume/update.",
                 },
                 "time": {
                     "type": "string",
@@ -221,15 +217,15 @@ def werkzeug_beschreibung(agenten: dict[str, Any] | None = None) -> MCPWerkzeug:
                 "task": {
                     "type": "string",
                     "description": (
-                        "What the agent should do when this fires — or, for "
-                        "a reminder, the text the notification shows."
+                        "The task for the agent when the schedule runs, or the notification "
+                        "text for a reminder."
                     ),
                 },
                 "reminder": {
                     "type": "boolean",
                     "description": (
-                        "True for a reminder: no agent and no model, only "
-                        "the notification with 'task' as its text."
+                        "Set to true for a reminder: no agent or model runs; a notification "
+                        "displays 'task' as its text."
                     ),
                 },
                 "agent": {
@@ -242,11 +238,10 @@ def werkzeug_beschreibung(agenten: dict[str, Any] | None = None) -> MCPWerkzeug:
                     # is the one that gets stored.
                     **({"enum": sorted(agenten, key=str.casefold)} if agenten else {}),
                     "description": (
-                        "Which agent runs it. Leave out on create to run it "
-                        "with no agent: the model that runs unattended, with "
-                        "every approved tool except asking the user, the "
-                        "memory, scheduling and starting further runs, and "
-                        "with no folders.\n"
+                        "Agent to run the task. Omit on create to use an unattended model run "
+                        "without an agent or shared folders. All approved tools are available "
+                        "except those for asking the user, updating memory, scheduling, and "
+                        "starting additional runs.\n"
                         + (
                             f"Available: {agentenname.auswahl_satz(agenten)}."
                             if agenten
@@ -270,11 +265,10 @@ def werkzeug_beschreibung(agenten: dict[str, Any] | None = None) -> MCPWerkzeug:
                 "once": {
                     "type": "boolean",
                     "description": (
-                        "Fire at 'time' a single time, then deactivate — for "
-                        "a one-off entry ('in 10 minutes', 'today at 14:55') "
-                        "instead of a standing recurring one. Off by default. "
-                        "An instant 'time' already names a single moment and "
-                        "needs this only to say so plainly."
+                        "Run once at 'time', then deactivate. Use for a one-off entry ('in 10 "
+                        "minutes', 'today at 14:55') rather than a recurring schedule. "
+                        "Disabled by default. A timestamp in 'time' already specifies a "
+                        "single moment; this option only makes that explicit."
                     ),
                 },
                 "date": {
@@ -349,12 +343,10 @@ def werkzeug_beschreibung(agenten: dict[str, Any] | None = None) -> MCPWerkzeug:
                     "minimum": SEKUNDEN_KLEINSTE,
                     "maximum": SEKUNDEN_GROESSTE,
                     "description": (
-                        "How many seconds the script may run before it is "
-                        "stopped and the run counts as failed, "
-                        f"{SEKUNDEN_KLEINSTE}-{SEKUNDEN_GROESSTE}. Leave it "
-                        "out for the standard command limit; raise it for "
-                        "something long, like a backup. Only for a 'script' "
-                        "entry."
+                        "Maximum script runtime in seconds before it is stopped and marked as "
+                        f"failed: {SEKUNDEN_KLEINSTE}-{SEKUNDEN_GROESSTE}. Omit to use the "
+                        "standard command limit. Increase for longer tasks such as backups. "
+                        "Applies only to a 'script' entry."
                     ),
                 },
                 "stop_when_reached": {
@@ -555,16 +547,12 @@ def _zeit_pruefen(zeit: Any, zeitzone: str | None) -> str:
             f"'time' {fehler}.", schluessel="cronjob_refusal.time_unreadable"
         ) from fehler
     try:
-        terminplan.abstand_pruefen(zeit)
+        terminplan.check_ever_due(zeit)
     except terminplan.TerminplanFehler as fehler:
-        # Readable, but it never comes due, or more often than the loop
-        # can notice — two different things to go and change.
-        grund = (
-            "cronjob_refusal.time_never_due"
-            if fehler.__cause__ is not None
-            else "cronjob_refusal.time_too_often"
-        )
-        raise CronjobVerboten(f"'time' {fehler}.", schluessel=grund) from fehler
+        # Readable, but it never comes due.
+        raise CronjobVerboten(
+            f"'time' {fehler}.", schluessel="cronjob_refusal.time_never_due"
+        ) from fehler
     if _sorte(zeit) == terminplan.SORTE_ZEITPUNKT:
         _zeitpunkt_pruefen(zeit, zeitzone)
     return zeit
@@ -577,11 +565,11 @@ def _datum_pruefen(datum: Any, zeit: str, zeitzone: str | None) -> str:
     confirmed and never firing (nothing after it is ever due again)."""
     datum = str(datum or "").strip()
     if not _DATUM_MUSTER.match(datum):
-        raise CronjobVerboten("'date' must be 'YYYY-MM-DD'.", schluessel="cronjob_refusal.date_format")
+        raise CronjobVerboten("'date' must use the 'YYYY-MM-DD' format.", schluessel="cronjob_refusal.date_format")
     try:
         tag = _Datum.fromisoformat(datum)
     except ValueError as fehler:
-        raise CronjobVerboten("'date' must be 'YYYY-MM-DD'.", schluessel="cronjob_refusal.date_format") from fehler
+        raise CronjobVerboten("'date' must use the 'YYYY-MM-DD' format.", schluessel="cronjob_refusal.date_format") from fehler
     stunde, minute = (int(teil) for teil in zeit.split(":"))
     if _Datetime(tag.year, tag.month, tag.day, stunde, minute) < _jetzt(zeitzone):
         raise CronjobVerboten("'date' is in the past.", schluessel="cronjob_refusal.date_past")
@@ -608,13 +596,26 @@ def _zielsatz(eintrag) -> str:
     if not eintrag.ziel:
         return ""
     schluss = " and stops" if eintrag.ziel_stilllegen else ""
-    return f", reports only when reached{schluss}: {eintrag.ziel!r}"
+    return f", reports only when the goal is reached{schluss}: {eintrag.ziel!r}"
 
 
 def _zeitpunkt(eintrag) -> str:
     """The full due moment for a message — just the time for a daily entry
     or a dateless one-off, date and time together once 'date' pins it down."""
     return f"{eintrag.datum} {eintrag.zeitplan}" if eintrag.datum else eintrag.zeitplan
+
+
+def announce_change(cronjob_id: str) -> None:
+    """Says that a schedule was written, once, after the write took.
+
+    Every window showing schedules learns of it from here, whoever made the
+    change. The tool calls it for what goes through the tool (a chat, an
+    agent, the settings page's make and change); the routes that write
+    without the tool (pause, resume, delete) call it themselves. Called only
+    past the last refusal, so a change that was turned away announces
+    nothing.
+    """
+    bus.veroeffentlichen_ohne_warten(Ereignisse.CRON_CHANGED, cronjob_id=cronjob_id)
 
 
 def _holen_erlaubt(cronjob_id: Any, repo, herkunft: str, agent: Any | None):
@@ -637,7 +638,7 @@ def _holen_erlaubt(cronjob_id: Any, repo, herkunft: str, agent: Any | None):
         and eintrag.agent == agent.name
     )
     if eintrag is None or not eigenes:
-        raise CronjobVerboten(f"No entry '{cronjob_id}'.", schluessel="fehler.cronjob_not_found")
+        raise CronjobVerboten(f"Entry '{cronjob_id}' does not exist.", schluessel="fehler.cronjob_not_found")
     return eintrag
 
 
@@ -661,7 +662,7 @@ def _erstellen(argumente: dict[str, Any], repo, agenten_orte, herkunft: str, age
             raise CronjobVerboten(_REMINDER_ALONE, schluessel="cronjob_refusal.reminder_alone")
         aufgabe = _aufgabe_bereinigt(argumente.get("task"))
         if not aufgabe:
-            raise CronjobVerboten("'task' is empty — nothing to run.", schluessel="cronjob_refusal.task_empty")
+            raise CronjobVerboten("'task' is empty; there is no task to run.", schluessel="cronjob_refusal.task_empty")
         agentname: str | None = reminder.REMINDER_AGENT
         ziel, stilllegen = None, False
     elif skript is None:
@@ -669,14 +670,15 @@ def _erstellen(argumente: dict[str, Any], repo, agenten_orte, herkunft: str, age
             raise CronjobVerboten(_SEKUNDEN_NUR_MIT_SKRIPT, schluessel="cronjob_refusal.seconds_only_script")
         aufgabe = _aufgabe_bereinigt(argumente.get("task"))
         if not aufgabe:
-            raise CronjobVerboten("'task' is empty — nothing to run.", schluessel="cronjob_refusal.task_empty")
+            raise CronjobVerboten("'task' is empty; there is no task to run.", schluessel="cronjob_refusal.task_empty")
 
         # Read from disk only where an answer actually depends on it — a call
         # that names no agent has nothing to look up, and loading every agent
         # file for it would be a disk read per call.
         if herkunft == "agent":
             if agent is None:
-                raise CronjobVerboten("No agent context for an agent-originated call.")
+                raise CronjobVerboten("No agent context is available for this "
+                                      "agent-originated call.")
             agentname = agent.name
         else:
             gewuenscht = str(argumente.get("agent") or "").strip() or None
@@ -698,7 +700,7 @@ def _erstellen(argumente: dict[str, Any], repo, agenten_orte, herkunft: str, age
                         },
                     )
             else:
-                agentname = ohne_agent.NAME
+                agentname = no_agent.NAME
 
         ziel = _ziel_pruefen(argumente.get("goal"))
         stilllegen = bool(argumente.get("stop_when_reached"))
@@ -746,12 +748,13 @@ def _erstellen(argumente: dict[str, Any], repo, agenten_orte, herkunft: str, age
         deliver=deliver, einmalig=einmalig, datum=datum, fehlergrenze=grenze,
         ziel=ziel, ziel_stilllegen=stilllegen, skript=skript, zeitgrenze=sekunden,
     )
+    announce_change(eintrag.id)
     haeufigkeit = _haeufigkeit(eintrag.zeitplan, eintrag.einmalig)
     # With a goal set, ``deliver`` no longer decides anything about an
     # ordinary run (app/cronablauf.py) — saying "announces on end" there
     # would promise the very flood the goal was set to stop.
     meldung = (
-        ", announces on end" if deliver == DELIVER_ANSAGE and not ziel else ""
+        ", notifies on completion" if deliver == DELIVER_ANSAGE and not ziel else ""
     )
     # Said back only when it was asked for: the default needs no mention,
     # and a number the caller chose does.
@@ -761,7 +764,7 @@ def _erstellen(argumente: dict[str, Any], repo, agenten_orte, herkunft: str, age
     # cases, so a caller relaying the answer does not have to know which kind
     # of entry it just made.
     wer = f"script {eintrag.skript}" if eintrag.skript else eintrag.agent
-    sekundensatz = f", stopped after {sekunden}s" if sekunden is not None else ""
+    sekundensatz = f", stops after {sekunden}s" if sekunden is not None else ""
     return f"Created — id {eintrag.id}, {wer} at {_zeitpunkt(eintrag)} {haeufigkeit}{meldung}{grenzsatz}{sekundensatz}{zielsatz}."
 
 
@@ -769,7 +772,8 @@ def _auflisten(repo, herkunft: str, agent: Any | None) -> str:
     eintraege = repo.auflisten()
     if herkunft == "agent":
         if agent is None:
-            raise CronjobVerboten("No agent context for an agent-originated call.")
+            raise CronjobVerboten("No agent context is available for this agent-originated "
+                                  "call.")
         eintraege = [e for e in eintraege if e.agent == agent.name]
     if not eintraege:
         return "No scheduled runs."
@@ -787,12 +791,14 @@ def _auflisten(repo, herkunft: str, agent: Any | None) -> str:
 def _entfernen(argumente: dict[str, Any], repo, herkunft: str, agent: Any | None) -> str:
     eintrag = _holen_erlaubt(argumente.get("id"), repo, herkunft, agent)
     repo.loeschen(eintrag.id)
-    return f"Removed — id {eintrag.id}."
+    announce_change(eintrag.id)
+    return f"Removed — ID {eintrag.id}."
 
 
 def _umschalten(argumente: dict[str, Any], repo, herkunft: str, agent: Any | None, *, aktiv: bool) -> str:
     eintrag = _holen_erlaubt(argumente.get("id"), repo, herkunft, agent)
     repo.aktiv_setzen(eintrag.id, aktiv)
+    announce_change(eintrag.id)
     return f"{'Resumed' if aktiv else 'Paused'} — id {eintrag.id}."
 
 
@@ -856,7 +862,7 @@ def _aktualisieren(argumente: dict[str, Any], repo, agenten_orte, herkunft: str,
     if datum_arg is not None:
         if datum_loeschen:
             raise CronjobVerboten(
-                "'date' and turning 'once' off in the same call contradict each other.",
+                "'date' cannot be specified while disabling 'once' in the same call.",
                 schluessel="cronjob_refusal.date_and_not_once",
             )
         # The schema's rule (datum only ever together with einmalig) has to
@@ -866,7 +872,7 @@ def _aktualisieren(argumente: dict[str, Any], repo, agenten_orte, herkunft: str,
         wird_einmalig = eintrag.einmalig if einmalig is None else einmalig
         if not wird_einmalig:
             raise CronjobVerboten(
-                "'date' only applies to a 'once' entry — this one fires daily.",
+                "'date' only applies to a 'once' entry; this entry runs daily.",
                 schluessel="cronjob_refusal.date_only_once",
             )
         wirksame_zeit = zeit if zeit is not None else eintrag.zeitplan
@@ -878,27 +884,36 @@ def _aktualisieren(argumente: dict[str, Any], repo, agenten_orte, herkunft: str,
     if aufgabe is not None:
         aufgabe = _aufgabe_bereinigt(aufgabe)
         if not aufgabe:
-            raise CronjobVerboten("'task' is empty — nothing to run.", schluessel="cronjob_refusal.task_empty")
+            raise CronjobVerboten("'task' is empty; there is no task to run.", schluessel="cronjob_refusal.task_empty")
 
     neuer_agent = argumente.get("agent")
     # Same as in ``_erstellen``: from disk only where it is actually needed.
     if neuer_agent is not None:
         if herkunft == "agent":
-            raise CronjobVerboten("An agent's own call cannot reassign 'agent'.")
-        # Same rule as on create, and it is the same rule: an entry moved to
-        # `Recherche` lands on the one agent, not beside it.
-        vorhandene = agenten_laden(*agenten_orte)
-        aufgeloest = vorhandene.echter_name(neuer_agent)
-        if aufgeloest is None:
-            raise CronjobVerboten(
-                agentenname.unbekannt_text(neuer_agent, vorhandene),
-                schluessel="fehler.agent_nicht_gefunden_beim_start",
-                werte={
-                    "name": str(neuer_agent).strip(),
-                    "verfuegbar": agentenname.namen_satz(vorhandene),
-                },
-            )
-        neuer_agent = aufgeloest
+            raise CronjobVerboten("An agent cannot reassign 'agent' through its own call.")
+        if neuer_agent == no_agent.NAME:
+            # The way back to "no agent", where the entry runs with the main
+            # model — the answer a creation without an agent gets. Any entry
+            # may take it, among them an old one whose agent file is gone and
+            # so can never be named again. Only the marker itself says it: an
+            # empty word is not a wish to drop the agent, and is refused as
+            # an unknown name like any other.
+            pass
+        else:
+            # Same rule as on create, and it is the same rule: an entry moved
+            # to `Recherche` lands on the one agent, not beside it.
+            vorhandene = agenten_laden(*agenten_orte)
+            aufgeloest = vorhandene.echter_name(neuer_agent)
+            if aufgeloest is None:
+                raise CronjobVerboten(
+                    agentenname.unbekannt_text(neuer_agent, vorhandene),
+                    schluessel="fehler.agent_nicht_gefunden_beim_start",
+                    werte={
+                        "name": str(neuer_agent).strip(),
+                        "verfuegbar": agentenname.namen_satz(vorhandene),
+                    },
+                )
+            neuer_agent = aufgeloest
 
     notify = argumente.get("notify")
     deliver = None
@@ -927,6 +942,7 @@ def _aktualisieren(argumente: dict[str, Any], repo, agenten_orte, herkunft: str,
         fehlergrenze=grenze, ziel=ziel or None, ziel_loeschen=ziel_loeschen,
         ziel_stilllegen=stilllegen, skript=skript, zeitgrenze=sekunden,
     )
+    announce_change(eintrag.id)
     haeufigkeit = _haeufigkeit(eintrag.zeitplan, eintrag.einmalig)
     # A fired one-off deactivates itself (app/cronablauf.py) rather than
     # being deleted — moving its date forward changes what it says, not
@@ -939,14 +955,14 @@ def _aktualisieren(argumente: dict[str, Any], repo, agenten_orte, herkunft: str,
     # at 'resume' there would advise lifting it.
     gefeuerter_einmaltermin = eintrag.einmalig and not eintrag.basisaufgabe
     hinweis = (
-        " — still paused, call resume to arm it"
+        " — still paused; call resume to activate it"
         if not eintrag.aktiv and gefeuerter_einmaltermin
         else ""
     )
     grenzsatz = f", stops after {grenze} failed runs" if grenze is not None else ""
     skriptsatz = f", runs {eintrag.skript}" if skript is not None else ""
-    sekundensatz = f", stopped after {sekunden}s" if sekunden is not None else ""
-    zielsatz = " — goal removed, reports after every run" if ziel_loeschen else _zielsatz(eintrag)
+    sekundensatz = f", stops after {sekunden}s" if sekunden is not None else ""
+    zielsatz = " — goal removed; reports after every run" if ziel_loeschen else _zielsatz(eintrag)
     return f"Updated — id {eintrag.id}, now {haeufigkeit}{grenzsatz}{skriptsatz}{sekundensatz}{zielsatz}{hinweis}."
 
 

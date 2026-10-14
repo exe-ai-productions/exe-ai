@@ -105,7 +105,7 @@ async def test_die_ausfallkette_bucht_ihr_ende_auf_den_ursprung(
     # (``melde_wenn_faellig``). The origin, one failed run into three, is
     # silent — and that is the sentence this list pins down.
     await _until(lambda: gemeldet)
-    assert gemeldet == [(cronmeldung.mit_grund(AUFGABE, "anbieter_ausfall"), False)]
+    assert gemeldet == [(cronmeldung.mit_grund(AUFGABE, "anbieter_ausfall", "de"), False)]
 
 
 async def test_ein_dauerhaft_toter_anbieter_wird_genau_einmal_gemeldet(
@@ -136,9 +136,11 @@ async def test_ein_dauerhaft_toter_anbieter_wird_genau_einmal_gemeldet(
     # ending with nothing behind it and rightly announces its own — that is
     # what ``melde_wenn_faellig`` says it does, and it is not what this test
     # is about.
-    await _until(lambda: any("stopped after" in t for t, _ in gemeldet))
-    assert [t for t, _ in gemeldet if "stopped after" in t] == [
-        f"{AUFGABE} — stopped after 2 failed runs"
+    await _until(lambda: any("fehlgeschlagenen Durchläufen gestoppt" in t for t, _ in gemeldet))
+    # The limit's sentence, and behind it why the chain's last run failed:
+    # the origin speaks, and the reason is the run's.
+    assert [t for t, _ in gemeldet if "fehlgeschlagenen Durchläufen gestoppt" in t] == [
+        f"{AUFGABE} — nach 2 fehlgeschlagenen Durchläufen gestoppt — Modell antwortet nicht mehr"
     ]
 
 
@@ -158,7 +160,7 @@ async def test_der_ursprung_meldet_nicht_noch_einmal(
 
     def grenzsaetze():
         # As above: the chain's own ending is not what "once" is about here.
-        return [t for t, _ in gemeldet if "stopped after" in t]
+        return [t for t, _ in gemeldet if "fehlgeschlagenen Durchläufen gestoppt" in t]
 
     await lauf_starten(client, config, ursprung.id)
     await lauf_starten(client, config, kette_von_neuester(repos, ursprung.id))

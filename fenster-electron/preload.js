@@ -28,6 +28,11 @@
   and opens its window on that colour the next time, before any page is
   there to paint one.
 
+  And the terminal in the window (terminal.js): the page asks the shell for
+  the terminal client running against the shell's own service, sends what
+  was typed and every new size, and hears the output and the end. The
+  process is the shell's; the page only draws it.
+
   Nothing else goes over this bridge: every other function only hears from
   the shell, or tells it a word for its menu or a colour for its window.
 */
@@ -51,10 +56,28 @@ contextBridge.exposeInMainWorld('exeHuelle', {
     ipcRenderer.on('vorlesen', hoerer)
     return () => ipcRenderer.removeListener('vorlesen', hoerer)
   },
+  /* Calls back whenever Escape is pressed while the focus is inside the PDF
+     viewer: that key arrives at the viewer and never at the page. The page
+     closes the reader with it, as it does for Escape anywhere else. Hands
+     back the way to stop listening. */
+  aufBetrachterEscape(rueckruf) {
+    if (typeof rueckruf !== 'function') return undefined
+    const hoerer = () => rueckruf()
+    ipcRenderer.on('betrachter-escape', hoerer)
+    return () => ipcRenderer.removeListener('betrachter-escape', hoerer)
+  },
   /* The entry's word in the page's language; until it is sent — or while
      it is sent empty — the menu has no entry for it. */
   vorlesenBeschriftung(wort) {
     ipcRenderer.send('vorlesen-beschriftung', String(wort ?? ''))
+  },
+  /* The words of the menu entries the shell names by itself — for a link,
+     for a picture — in the page's language. Until they are sent, and for
+     every word left out, the shell shows its English ones. */
+  menuWords(words) {
+    const sent = {}
+    for (const [name, word] of Object.entries(words ?? {})) sent[name] = String(word ?? '')
+    ipcRenderer.send('menu-words', sent)
   },
   /* The solid tone of the frame of the look the page shows, as `#rrggbb`.
      The shell keeps it for the ground of its next start. */
@@ -92,6 +115,31 @@ contextBridge.exposeInMainWorld('exeHuelle', {
       const listener = (event, state) => callback(state)
       ipcRenderer.on('updates-state', listener)
       return () => ipcRenderer.removeListener('updates-state', listener)
+    },
+  },
+  /* The terminal in the window (terminal.js). `start` asks for the client
+     with the drawing's size (`cols`, `rows`), the look and the language the
+     page shows and the chat it has open, and answers with the process id —
+     or with an `error` where no client could start. `write` sends what was
+     typed, `resize` the new size, `stop` ends the client. `onData` and
+     `onExit` call back with the output and with the end, and hand back the
+     way to stop listening. */
+  terminal: {
+    start: (request) => ipcRenderer.invoke('terminal-start', request ?? {}),
+    write: (data) => ipcRenderer.send('terminal-write', String(data ?? '')),
+    resize: (cols, rows) => ipcRenderer.send('terminal-resize', Number(cols) || 0, Number(rows) || 0),
+    stop: () => ipcRenderer.send('terminal-stop'),
+    onData(callback) {
+      if (typeof callback !== 'function') return undefined
+      const listener = (event, data) => callback(String(data ?? ''))
+      ipcRenderer.on('terminal-data', listener)
+      return () => ipcRenderer.removeListener('terminal-data', listener)
+    },
+    onExit(callback) {
+      if (typeof callback !== 'function') return undefined
+      const listener = (event, code) => callback(Number(code))
+      ipcRenderer.on('terminal-exit', listener)
+      return () => ipcRenderer.removeListener('terminal-exit', listener)
     },
   },
 })

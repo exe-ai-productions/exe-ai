@@ -388,6 +388,11 @@ def _play(steps: str) -> dict:
         "        } else if (ereignis.typ === 'tool_call_laeuft') {",
         "        } else if (ereignis.typ === 'tool_result') {",
     )
+    result = _cut(
+        app,
+        "        } else if (ereignis.typ === 'tool_result') {",
+        "        } else if (ereignis.typ === 'ziel') {",
+    )
     script = (
         textwrap.dedent(
             """
@@ -396,10 +401,21 @@ def _play(steps: str) -> dict:
             const runter = () => { scrolled += 1 }
             let werkzeugOffen = false
             let drawing = false
-            const werkzeugSagen = () => {}
+            /* What the notice was told, call by call: path, values, kind,
+               permanence, clock and the server. */
+            const gesagt = []
+            const werkzeugSagen = (...angaben) => { gesagt.push(angaben) }
             const taetigkeitSetzen = () => {}
+            const drawingDone = () => {}
+            const sharedByModel = () => {}
+            const werkzeugMeldungen = new Map()
+            const werkzeugToast = 'werkzeug:c'
+            const werkzeugFertigDauer = () => 1500
+            const WERKZEUG_FEHLER_MS = 5000
+            const schliesseMeldung = () => {}
             const lesungenLeeren = () => {}
             const drawingStarted = () => {}
+            const isDrawingTool = (name) => name === 'draw_image' || name === 'draw_video'
             const melden = () => {}
             const schreibendeMeldungSchliessen = () => {}
             const zielChat = 'c'
@@ -408,6 +424,7 @@ def _play(steps: str) -> dict:
             %s
             const handle = (ereignis) => {
               if (false) {
+            %s
             %s
             %s
               }
@@ -425,11 +442,16 @@ def _play(steps: str) -> dict:
               handle({ typ: 'tool_call_laeuft', index, name, zeichen, zeitpunkt_ms: 1000 + zeichen })
             const complete = (aufruf_id, name, argumente = {}) =>
               handle({ typ: 'tool_call', aufruf_id, name, server: 'own', argumente, zeitpunkt_ms: 9000 })
+            const finished = (aufruf_id, name, fehlgeschlagen = false) =>
+              handle({
+                typ: 'tool_result', aufruf_id, name, fehlgeschlagen, text: 'ok',
+                zeitpunkt_ms: 9500,
+              })
             const runEnds = () => dropRowsNeverBegun()
             void [werkzeugOffen, drawing]
             """
         )
-        % (helpers, questions, calls)
+        % (helpers, questions, calls, result)
         + textwrap.dedent(steps)
     )
     with _pruefordner() as folder:
@@ -699,10 +721,234 @@ def test_the_answer_draws_the_written_call_as_a_running_tool_row():
     assert "font-variant-numeric: tabular-nums" in count
     assert "font-family: var(--schrift-fest)" in count
     bundle = _cut(message, "{#if eintrag.art === 'buendel'}", "{#if offen}")
-    assert "laufenderAufruf(eintrag.eintraege.filter(({ teil }) => !teil.werkzeug?.unbegun))" in bundle
+    assert "openCall(\n            eintrag.eintraege.filter(({ teil }) => !teil.werkzeug?.unbegun),\n" in bundle
+    assert "            wartetAufNutzer,\n" in bundle
     assert "{#if written}\n                {@render beingWritten(written)}" in bundle
     # The sentence is the one the notice over the input says, in both languages.
     for language in ("de", "en"):
         catalogue = json.loads((WURZEL / "app" / "locales" / f"{language}.json").read_text(encoding="utf-8"))
         sentence = catalogue["werkzeug"]["schreibt"]
         assert "{name}" in sentence and "{zeichen}" in sentence, sentence
+
+
+# --- The bundle row does not say "running" for a call that waits ------------
+
+BUENDEL = FRONTEND / "src" / "lib" / "werkzeugbuendel.js"
+
+
+def _bundle_run(js: str) -> dict:
+    """Run a piece of JS against the shipped bundle module and read its report."""
+    with _pruefordner() as ordner:
+        treiber = ordner / "pruefung.mjs"
+        treiber.write_text(
+            f"import * as b from {BUENDEL.as_uri()!r}\n{js}\n"
+            "console.log('---BERICHT---' + JSON.stringify(report))\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["node", treiber.name], cwd=ordner, capture_output=True, text=True, timeout=120
+        )
+    assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]
+    return json.loads(result.stdout.split("---BERICHT---", 1)[1].strip())
+
+
+_BUNDLE_ENTRIES = """
+const call = (id, name, result = null) => ({
+  teil: { art: 'werkzeug', werkzeug: { aufruf_id: id, name, ergebnis: result, fehlgeschlagen: false } },
+})
+"""
+
+
+@node_da
+def test_a_call_that_waits_for_the_reader_is_named_without_running():
+    report = _bundle_run(_BUNDLE_ENTRIES + """
+    const entries = [call('a', 'read_file', 'ok'), call('b', 'run_command')]
+    const report = { open: b.openCall(entries, (id) => id === 'b') }
+    """)
+
+    assert report["open"] == {"name": "run_command", "going": False, "background": False}
+
+
+@node_da
+def test_silence_a_call_that_goes_is_running_and_so_is_one_that_was_answered():
+    report = _bundle_run(_BUNDLE_ENTRIES + """
+    const entries = [call('a', 'read_file', 'ok'), call('b', 'run_command')]
+    const report = {
+      none: b.openCall(entries, () => false),
+      other: b.openCall(entries, (id) => id === 'a'),
+    }
+    """)
+
+    assert report["none"] == {"name": "run_command", "going": True, "background": False}
+    # A question standing for another call does not touch this one.
+    assert report["other"] == {"name": "run_command", "going": True, "background": False}
+
+
+@node_da
+def test_silence_a_bundle_where_everything_is_done_names_nothing():
+    report = _bundle_run(_BUNDLE_ENTRIES + """
+    const entries = [call('a', 'read_file', 'ok'), call('b', 'run_command', 'ok')]
+    const report = { open: b.openCall(entries, () => true) }
+    """)
+
+    assert report["open"] is None
+
+
+def test_the_row_says_running_only_for_a_call_that_goes():
+    """Source guard of ``Nachricht.svelte``: the word stands inside the
+    ``going`` branch, the name beside it stands either way."""
+    message = MESSAGE.read_text(encoding="utf-8")
+    bundle = _cut(message, "{#if eintrag.art === 'buendel'}", "{#if offen}")
+
+    assert '<span class="wz-vorschau werkzeugname">{open.name}</span>\n' in bundle
+    assert (
+        "{#if open.going}\n"
+        "                  <span class=\"wz-rechts\"><span class=\"wz-dauer\">"
+        "{t(open.background ? 'werkzeug.hintergrund_laeuft' : 'werkzeug.buendel_laeuft')}</span></span>\n"
+        "                {/if}"
+    ) in bundle
+
+
+@node_da
+def test_a_command_that_runs_in_the_background_is_named_and_goes_while_its_run_does():
+    """The defect: a call that already has its result (the run's number) is
+    no open call, so the closed row said nothing of the run behind it. The
+    row now names the newest call whose run still goes, and says so with the
+    background word — the run is asked by the caller, which reads the
+    terminal's list."""
+    report = _bundle_run(_BUNDLE_ENTRIES + """
+    const entries = [call('a', 'read_file', 'ok'), call('b', 'run_command', 'job 3 started')]
+    const goes = (werkzeug) => werkzeug.aufruf_id === 'b'
+    const report = { open: b.openCall(entries, () => false, goes) }
+    """)
+
+    assert report["open"] == {"name": "run_command", "going": True, "background": True}
+
+
+@node_da
+def test_silence_the_run_that_has_ended_leaves_no_hint_and_an_open_call_goes_first():
+    report = _bundle_run(_BUNDLE_ENTRIES + """
+    const finished = [call('a', 'read_file', 'ok'), call('b', 'run_command', 'job 3 started')]
+    const withOpen = [...finished, call('c', 'web_search')]
+    const goes = (werkzeug) => werkzeug.aufruf_id === 'b'
+    const report = {
+      ended: b.openCall(finished, () => false, () => false),
+      noQuestion: b.openCall(finished, () => false),
+      open: b.openCall(withOpen, () => false, goes),
+    }
+    """)
+
+    assert report["ended"] is None
+    # The third argument is optional: callers that know no runs get what they got.
+    assert report["noQuestion"] is None
+    # A call being made right now is the one the row names; the run behind it waits.
+    assert report["open"] == {"name": "web_search", "going": True, "background": False}
+
+
+def test_the_row_asks_the_run_through_the_state_every_other_row_reads():
+    """One reading of "goes": the bundle asks ``hintergrundStand`` like the
+    single row and its dot do, so the three cannot disagree."""
+    message = MESSAGE.read_text(encoding="utf-8")
+    bundle = _cut(message, "{#if eintrag.art === 'buendel'}", "{#if offen}")
+    assert "(werkzeug) => Boolean(hintergrundStand(werkzeug)?.laeuft)," in bundle
+    for language in ("de", "en"):
+        catalogue = json.loads((WURZEL / "app" / "locales" / f"{language}.json").read_text(encoding="utf-8"))
+        assert "{" not in catalogue["werkzeug"]["hintergrund_laeuft"]
+
+
+# --- The mark of a server's tool on the notice -----------------------------
+
+
+@node_da
+def test_a_notice_carries_the_server_of_its_tool_through_every_rewrite():
+    """The mark of a server's tool is picked by its server; a notice that
+    knew only the tool's name drew the grey fallback for every server the
+    catalogue has no name for. The server stands beside the name, moves with
+    it, and is left alone by a rewrite that names none."""
+    js = """
+    const id = m.melde('x', 'werkzeug', { dauerhaft: true, werkzeug: 'todoist_status', server: 'todoist' })
+    const erst = m.meldungen.liste.find((x) => x.id === id).server
+    m.aktualisiereMeldung(id, { text: 'y', art: 'werkzeug', dauerhaft: true, werkzeug: 'todoist_status' })
+    const unbenannt = m.meldungen.liste.find((x) => x.id === id).server
+    m.aktualisiereMeldung(id, { text: 'z', art: 'erfolg', werkzeug: 'run_command', server: '' })
+    const geleert = m.meldungen.liste.find((x) => x.id === id).server
+    const ohne = m.melde('w', 'werkzeug', { werkzeug: 'run_command' })
+    const leer = m.meldungen.liste.find((x) => x.id === ohne).server
+    console.log('---BERICHT---' + JSON.stringify({ erst, unbenannt, geleert, leer }))
+    """
+    bericht = _lauf(js)
+    assert bericht["erst"] == "todoist"
+    # A rewrite that only changes the words keeps the server of its call.
+    assert bericht["unbenannt"] == "todoist"
+    # One that moves to the next tool names its own — here a built-in one.
+    assert bericht["geleert"] == ""
+    # A notice of a built-in tool carries none.
+    assert bericht["leer"] == ""
+
+
+@node_da
+def test_the_chat_hands_the_server_of_a_call_to_the_notice_from_start_to_result():
+    """Through the chat's own helper and the real module: the call being
+    written has no server, the call that runs names it, the result brings it
+    back — also into a notice that was pushed out in between."""
+    app = APP.read_text(encoding="utf-8")
+    helper = _cut(
+        app,
+        "    const werkzeugSagen = (pfad, werte, art, dauerhaft, dauer = 0, server = '') => {",
+        "    const abbruch = new AbortController()",
+    )
+    js = (
+        """
+    const werkzeugMeldungen = new Map()
+    const werkzeugToast = 'werkzeug:c'
+    const { aktualisiereMeldung, meldeText } = m
+    const t = (pfad, werte) => pfad + ':' + (werte.name ?? '')
+    """
+        + helper
+        + """
+    const stand = () => m.meldungen.liste.map((x) => ({ werkzeug: x.werkzeug, server: x.server }))
+    const bilanz = []
+    werkzeugSagen('werkzeug.schreibt', { name: 'todoist_status', zeichen: 4 }, 'werkzeug', true)
+    bilanz.push(stand())
+    werkzeugSagen('werkzeug.laeuft', { name: 'todoist_status' }, 'werkzeug', true, 0, 'todoist')
+    bilanz.push(stand())
+    // Pushed out by newer notices, then the result: a fresh one, same mark.
+    for (let i = 0; i < 4; i += 1) m.melde('andere ' + i, 'hinweis', { dauerhaft: true })
+    werkzeugSagen('werkzeug.fertig', { name: 'todoist_status' }, 'erfolg', false, 1500, 'todoist')
+    bilanz.push(stand().filter((x) => x.werkzeug))
+    // The next tool of the answer is a built-in one: no server stays behind.
+    werkzeugSagen('werkzeug.schreibt', { name: 'run_command', zeichen: 2 }, 'werkzeug', true)
+    werkzeugSagen('werkzeug.laeuft', { name: 'run_command' }, 'werkzeug', true, 0, '')
+    bilanz.push(stand().filter((x) => x.werkzeug))
+    console.log('---BERICHT---' + JSON.stringify({ bilanz }))
+    """
+    )
+    bericht = _lauf(js)
+    geschrieben, laeuft, fertig, naechstes = bericht["bilanz"]
+    assert geschrieben == [{"werkzeug": "todoist_status", "server": ""}]
+    assert laeuft == [{"werkzeug": "todoist_status", "server": "todoist"}]
+    assert fertig == [{"werkzeug": "todoist_status", "server": "todoist"}]
+    assert naechstes == [{"werkzeug": "run_command", "server": ""}]
+
+
+def test_the_call_and_the_result_name_the_server_to_the_notice():
+    """The events themselves, through the handler's own branches: the call
+    that runs hands over `ereignis.server`, the result the server of the
+    entry the call filed, the call being written none."""
+    report = _play(
+        """
+        writing(0, 'todoist_status', 12)
+        complete('c1', 'todoist_status')
+        finished('c1', 'todoist_status')
+        handle({ typ: 'tool_result', aufruf_id: 'n1', name: 'ask_user', fehlgeschlagen: false,
+                 text: 'x', zeitpunkt_ms: 9600 })
+        console.log('---BERICHT---' + JSON.stringify({ gesagt }))
+        """
+    )
+    schreibt, laeuft, fertig, ohne_ruf = report["gesagt"]
+    # Path, values, kind, permanence, clock, server.
+    assert schreibt[0] == "werkzeug.schreibt" and len(schreibt) == 4
+    assert laeuft[0] == "werkzeug.laeuft" and laeuft[-1] == "own"
+    assert fertig[0] == "werkzeug.fertig" and fertig[-1] == "own"
+    # A result with no call before it has an entry without a server: none.
+    assert ohne_ruf[0] == "werkzeug.fertig" and ohne_ruf[-1] == ""

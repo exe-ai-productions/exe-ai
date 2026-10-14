@@ -402,6 +402,52 @@ def test_the_field_grows_with_the_mirror_and_stops_at_two_fifths_of_the_window()
     ) == {"height": "200px", "overflowY": "hidden"}
 
 
+def test_the_field_does_not_shrink_below_the_height_it_had_in_this_dictation():
+    """A reading that needs three lines, the next one two: the field stays at
+    three. The grey end changes its length with every pass, and a field that
+    follows it down makes the history above it jump."""
+
+    def size(field: int, window: int, mirror: int, floor: int | None = None) -> dict:
+        boden = "" if floor is None else f", floorHeight: {floor}"
+        return _node(
+            f"console.log(JSON.stringify(fieldSize({{ fieldHeight: {field},"
+            f" mirrorHeight: {mirror}, windowHeight: {window}{boden} }})))"
+        )
+
+    three_lines, two_lines = 84, 56
+    first = size(28, 800, three_lines)
+    assert first == {"height": "84px", "overflowY": "hidden"}
+    # The next reading is shorter; the floor is what the field had.
+    assert size(28, 800, two_lines, floor=84) == {"height": "84px", "overflowY": "hidden"}
+    # A longer one still grows it.
+    assert size(28, 800, 120, floor=84) == {"height": "120px", "overflowY": "hidden"}
+    # The cap of two fifths of the window wins over the floor: a smaller
+    # window takes the field with it.
+    assert size(28, 200, two_lines, floor=300) == {"height": "80px", "overflowY": "auto"}
+    assert size(28, 800, 900, floor=84) == {"height": "320px", "overflowY": "auto"}
+
+
+def test_without_a_floor_the_field_measures_as_it_always_did():
+    """Silence: no mirror, no floor — the field shrinks when text is deleted,
+    exactly as before; a floor of nothing changes nothing."""
+    for floor in ("", ", floorHeight: 0", ", floorHeight: undefined"):
+        assert _node(
+            "console.log(JSON.stringify(fieldSize({ fieldHeight: 56, mirrorHeight: 0,"
+            f" windowHeight: 800{floor} }})))"
+        ) == {"height": "56px", "overflowY": "hidden"}
+
+
+def test_the_bar_hands_the_floor_only_while_a_mirror_stands():
+    """The wiring: the height of this dictation is carried while the mirror
+    stands and is forgotten with it, so the field measures itself on its own
+    text again once the words are in."""
+    bar = (
+        Path(__file__).resolve().parent.parent / "frontend/src/teile/Eingabeleiste.svelte"
+    ).read_text(encoding="utf-8")
+    assert "floorHeight: spiegel ? diktatHoehe : 0," in bar
+    assert "diktatHoehe = spiegel ? parseInt(groesse.height, 10) : 0" in bar
+
+
 def test_a_missing_mirror_and_read_back_positions_are_taken_as_they_come():
     """The field's own state is `null` whenever nobody dictates, and the two
     positions of a spot can come back as text. Both count as they are: the
@@ -447,5 +493,5 @@ def test_escape_throws_away_a_transcription_that_never_answers():
 
     app = (FRONTEND / "App.svelte").read_text(encoding="utf-8")
     escape = app[app.index("ereignis.key === 'Escape'") :]
-    escape = escape[: escape.index("else if (laufVon(zustand.aktiverChat)) abbrechen()")]
+    escape = escape[: escape.index("else if (laufVon(zustand.aktiverChat) || anspruchWarten.has(")]
     assert "else if (eingabe?.transcribing?.()) eingabe.cancelTranscription()" in escape

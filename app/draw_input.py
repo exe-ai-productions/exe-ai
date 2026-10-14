@@ -115,7 +115,7 @@ def _smaller_copy(
             return picture
         folder.mkdir(parents=True, exist_ok=True)
         if not model_image.scaled_copy(picture, part, *size) or not part.is_file():
-            raise OSError("the copy was not written")
+            raise OSError("The copy was not written.")
         atomic_file.rename_onto(part, copy)
         log.info(
             "Picture %s goes to the painter at %dx%d instead of %dx%d",

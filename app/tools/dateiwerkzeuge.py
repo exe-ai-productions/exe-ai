@@ -9,6 +9,8 @@ Each module carries its own tool; this file only says which ones there are.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -18,6 +20,7 @@ from app.tools import (
     datei_lesen,
     datei_schreiben,
     datei_suchen,
+    grenzen,
     ordner_lesen,
 )
 from app.tools.mcp_client import MCPWerkzeug
@@ -53,9 +56,22 @@ def aussenpfad(name: str, argumente: dict[str, Any], ordner: list[str]) -> str |
     return eintrag.aussenpfad(argumente, ordner) if eintrag else None
 
 
+def private_target(
+    name: str, argumente: dict[str, Any], ordner: list[str], private: Callable[[Path], bool]
+) -> str | None:
+    """The private place of the program this call names, or None. Every tool
+    of the group names its path as ``path``."""
+    eintrag = modul(name)
+    # ``create_folder`` makes no folder in the data folder at all and says
+    # so in its own words (``create_folder.ausfuehren``).
+    if eintrag is None or eintrag is create_folder:
+        return None
+    return grenzen.private_target(argumente, ordner, private)
+
+
 async def ausfuehren(
     name: str, argumente: dict[str, Any], ordner: list[str], modellbild=None, share=None,
-    data_dir=None,
+    data_dir=None, private: Callable[[Path], bool] | None = None,
 ) -> str:
     """Runs one of these tools. The caller has already checked it is one.
 
@@ -80,6 +96,9 @@ async def ausfuehren(
         )
     if eintrag is create_folder:
         return await create_folder.ausfuehren(argumente, ordner, share, data_dir)
+    if eintrag is datei_suchen:
+        # The walk goes past a private place of the program.
+        return await datei_suchen.ausfuehren(argumente, ordner, data_dir=data_dir, private=private)
     if eintrag is datei_schreiben:
         # The one tool here with no refusal for a missing path: it makes the file.
         return await datei_schreiben.ausfuehren(argumente, ordner, data_dir=data_dir)

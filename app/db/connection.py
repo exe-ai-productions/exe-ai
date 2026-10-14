@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
 
+from app.db.folding import register_fold_function
+
 log = logging.getLogger(__name__)
 
 # The last stamp handed out, and the lock that keeps two threads from
@@ -22,13 +24,13 @@ _letzter_stempel = ""
 _stempel_sperre = threading.Lock()
 
 SCHEMA_DATEI = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 40
+SCHEMA_VERSION = 42
 
 # What a locked database at startup means to a person, not to SQLite: the raw
 # "database is locked" names no cause anybody could act on, while this does.
 DATENBANK_GESPERRT_MELDUNG = (
-    "Another Exe AI service is already using this data folder. Stop it, "
-    "then start again."
+    "Another Exe AI service is already using this data folder. Stop that service and try "
+    "again."
 )
 
 # Schema changes for databases that already exist.
@@ -743,6 +745,36 @@ MIGRATIONEN: list[tuple[int, list[str]]] = [
             "ALTER TABLE documents ADD COLUMN job TEXT",
         ],
     ),
+    (
+        41,
+        [
+            # The permission mode exists once, in the global scope: it
+            # rewrites the one rule file every chat and every model is
+            # judged by. An earlier version stored it at a chat or a model
+            # as well; such a row is read by nothing, and the settings route
+            # refuses every write of these two keys outside the global
+            # scope, the write that would take it back included. So the rows
+            # go here. The global value and every other setting stay.
+            """
+            DELETE FROM einstellungen
+            WHERE schluessel IN ('berechtigungsmodus_chat', 'berechtigungsmodus_agent')
+              AND bereich != 'global'
+            """,
+        ],
+    ),
+    (
+        42,
+        [
+            # The answer a "regenerate" attempt is to replace, written on the
+            # attempt's row for as long as it runs. A stop by hand deletes
+            # the attempt and the old answer stands; a service that ended
+            # hard left the attempt on 'laeuft', and the startup cleanup
+            # could only mark it stopped — two answers to one question. With
+            # the old answer named, the cleanup does what the stop does.
+            # Every row that exists names none.
+            "ALTER TABLE messages ADD COLUMN replaces_id TEXT",
+        ],
+    ),
 ]
 
 
@@ -800,6 +832,7 @@ class Database:
             self.pfad, check_same_thread=False, isolation_level=None
         )
         verbindung.row_factory = sqlite3.Row
+        register_fold_function(verbindung)
         verbindung.execute("PRAGMA foreign_keys = ON")
         if str(self.pfad) != ":memory:":
             verbindung.execute("PRAGMA journal_mode = WAL")
@@ -983,7 +1016,7 @@ class Database:
             # between sees columns that exist but were never filled in.
             #
             # Every statement in this list is an ALTER, CREATE, DROP,
-            # INSERT or UPDATE, and SQLite rolls all of those back,
+            # INSERT, UPDATE or DELETE, and SQLite rolls all of those back,
             # schema changes included. A failing statement does not by
             # itself end the transaction either, which is what lets the
             # "nothing to do" cases below carry on inside it.

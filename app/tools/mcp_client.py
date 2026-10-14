@@ -29,6 +29,12 @@ log = logging.getLogger(__name__)
 
 PROTOKOLL_VERSION = "2025-06-18"
 
+# How long a server may take to answer ``initialize`` and ``tools/list``.
+START_TIMEOUT = 30.0
+
+# How long one tool call may take unless the server's entry says otherwise.
+CALL_TIMEOUT = 300.0
+
 
 class MCPFehler(Exception):
     """Error while talking to an MCP server."""
@@ -43,12 +49,14 @@ class MCPWerkzeug:
     schema: dict[str, Any] = field(default_factory=dict)
     server: str = ""
 
-    def als_openai_werkzeug(self) -> dict[str, Any]:
-        """Translates into the format the models understand."""
+    def als_openai_werkzeug(self, name: str | None = None) -> dict[str, Any]:
+        """Translates into the format the models understand. ``name`` is
+        what the model calls the tool by (``app/tools/mcp_names.py``);
+        without it, the name the server gave it."""
         return {
             "type": "function",
             "function": {
-                "name": self.name,
+                "name": name or self.name,
                 "description": self.beschreibung,
                 "parameters": self.schema or {"type": "object", "properties": {}},
             },
@@ -66,6 +74,14 @@ def werkzeuge_aus_antwort(ergebnis: dict[str, Any], server: str) -> list[MCPWerk
         )
         for eintrag in ergebnis.get("tools", [])
     ]
+
+
+def time_limit_sentence(server: str, tool: str, seconds: float) -> str:
+    """What the model is told where a call ran out of time."""
+    return (
+        f"MCP server '{server}' did not answer the call to '{tool}' within "
+        f"{seconds:g} seconds."
+    )
 
 
 def ergebnis_zu_text(ergebnis: dict[str, Any], quelle: str, bild_senke=None) -> str:
@@ -124,13 +140,14 @@ class MCPStdioClient:
         args: list[str] | None = None,
         env: dict[str, str] | None = None,
         arbeitsverzeichnis: str | None = None,
-        timeout: float = 30.0,
+        timeout: float = CALL_TIMEOUT,
     ) -> None:
         self.name = name
         self.command = command
         self.args = args or []
         self.env = env or {}
         self.arbeitsverzeichnis = arbeitsverzeichnis
+        # What one tool call may take. The start keeps ``START_TIMEOUT``.
         self.timeout = timeout
 
         self._prozess: asyncio.subprocess.Process | None = None
@@ -194,14 +211,14 @@ class MCPStdioClient:
 
     async def _senden(self, nachricht: dict[str, Any]) -> None:
         if self._prozess is None or self._prozess.stdin is None:
-            raise MCPFehler(f"MCP server '{self.name}' is not running")
+            raise MCPFehler(f"MCP server '{self.name}' is not running.")
         zeile = json.dumps(nachricht, ensure_ascii=False) + "\n"
         self._prozess.stdin.write(zeile.encode("utf-8"))
         await self._prozess.stdin.drain()
 
     async def _zeile_lesen(self) -> dict[str, Any]:
         if self._prozess is None or self._prozess.stdout is None:
-            raise MCPFehler(f"MCP server '{self.name}' is not running")
+            raise MCPFehler(f"MCP server '{self.name}' is not running.")
         while True:
             rohzeile = await self._prozess.stdout.readline()
             if not rohzeile:
@@ -222,7 +239,12 @@ class MCPStdioClient:
                 # Some servers write log lines to standard output.
                 log.debug("MCP '%s' — not a JSON line: %r", self.name, text[:200])
 
-    async def _aufrufen(self, methode: str, parameter: dict[str, Any]) -> dict[str, Any]:
+    async def _aufrufen(
+        self, methode: str, parameter: dict[str, Any], limit: float = START_TIMEOUT
+    ) -> dict[str, Any]:
+        """One request and its answer. ``limit`` is how long the answer may
+        take, as a whole — lines of other messages in between do not start
+        it over."""
         async with self._schreibsperre:
             self._zaehler += 1
             kennung = self._zaehler
@@ -230,8 +252,10 @@ class MCPStdioClient:
                 {"jsonrpc": "2.0", "id": kennung, "method": methode, "params": parameter}
             )
 
+            deadline = asyncio.get_running_loop().time() + limit
             while True:
-                antwort = await asyncio.wait_for(self._zeile_lesen(), timeout=self.timeout)
+                rest = deadline - asyncio.get_running_loop().time()
+                antwort = await asyncio.wait_for(self._zeile_lesen(), timeout=max(rest, 0.0))
                 if antwort.get("id") != kennung:
                     continue  # notification or answer to something else
                 if "error" in antwort:
@@ -257,7 +281,10 @@ class MCPStdioClient:
         self, name: str, argumente: dict[str, Any], bild_senke=None
     ) -> str:
         """Executes a tool and returns the result as text."""
-        ergebnis = await self._aufrufen(
-            "tools/call", {"name": name, "arguments": argumente}
-        )
+        try:
+            ergebnis = await self._aufrufen(
+                "tools/call", {"name": name, "arguments": argumente}, self.timeout
+            )
+        except asyncio.TimeoutError:
+            raise MCPFehler(time_limit_sentence(self.name, name, self.timeout)) from None
         return ergebnis_zu_text(ergebnis, f"{self.name}/{name}", bild_senke)

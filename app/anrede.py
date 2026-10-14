@@ -78,8 +78,7 @@ def anhaengen(system_prompt: str, stand: dict[str, Any]) -> str:
     if not (stand.get("an") and name):
         return system_prompt
     zeile = (
-        f'The user goes by "{name}". '
-        "Address them by name when it feels natural."
+        f'The user\'s name is "{name}". Address them by name when appropriate.'
     )
     if not system_prompt:
         return zeile

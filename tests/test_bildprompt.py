@@ -20,7 +20,7 @@ from app.bildprompt import (
     nachricht,
     verbessern,
 )
-from app import bildaufbereitung, faltversuche, generationen, image_families
+from app import bildaufbereitung, faltversuche, generationen, image_families, sprachwahl
 from app.i18n import t
 from app.providers import ProviderFehler
 from app.providers.base import Stueck
@@ -57,6 +57,34 @@ def test_zu_langer_prompt_erreicht_das_modell_nicht(client: TestClient):
         "/api/v1/bild/prompt", json={"prompt": "a" * (MAX_EINGABE + 1), "familie": "sdxl"}
     )
     assert antwort.status_code == 502
+
+
+def test_a_style_addition_past_the_limit_is_refused_with_the_word_of_the_field(
+    client: TestClient,
+):
+    """The refusal names the field the way the catalogue does everywhere
+    else — one word, ``Stilzusatz`` — and a model is never asked."""
+    merker = _Merker()
+    provider_setzen(client, merker)
+    body = {"prompt": "x", "familie": "sdxl", "stil": "a" * (MAX_EINGABE + 1)}
+    antwort = client.post(
+        "/api/v1/bild/prompt", json=body, headers={sprachwahl.HEADER_UI: "de"}
+    )
+    assert antwort.status_code == 422
+    assert antwort.json()["detail"] == "Der Stilzusatz ist zu lang."
+    assert merker.anfragen == []
+    # The other language words it for itself.
+    englisch = client.post(
+        "/api/v1/bild/prompt", json=body, headers={sprachwahl.HEADER_UI: "en"}
+    )
+    assert englisch.json()["detail"] == "The style addition is too long."
+    # Silence probe: a style addition at the limit goes through to the model.
+    ok = client.post(
+        "/api/v1/bild/prompt",
+        json={"prompt": "x", "familie": "sdxl", "stil": "a" * MAX_EINGABE},
+    )
+    assert ok.status_code == 200
+    assert merker.anfragen
 
 
 def test_modellfehler_wird_als_502_gemeldet(client: TestClient):
@@ -398,7 +426,7 @@ def test_at_cfg_1_no_negative_prompt_comes_back(client: TestClient):
     assert antwort.json()["negativ"] == ""
     # One request only: the negative was not written over at all.
     assert len(merker.anfragen) == 1
-    assert "ignores a negative prompt" in merker.gesehen.nachrichten[1].content
+    assert "ignores negative prompts" in merker.gesehen.nachrichten[1].content
 
 
 def test_above_cfg_1_the_negative_is_tidied_on_its_own(client: TestClient):
@@ -507,7 +535,7 @@ def test_a_model_without_a_family_writes_with_the_entry_for_such_models(client: 
     merker = _vorbereiten(client, modell="own-model.safetensors")
     system, nutzer = merker.gesehen.nachrichten
     assert system.content == ANWEISUNGEN[NO_FAMILY]
-    assert "own-model.safetensors (family not known)" in nutzer.content
+    assert "own-model.safetensors (unknown model family)" in nutzer.content
     # A request that names no model at all has no family either.
     assert _vorbereiten(client).gesehen.nachrichten[0].content == ANWEISUNGEN[NO_FAMILY]
     # The silence check: a family of the table keeps its own instruction,
@@ -562,7 +590,7 @@ def test_with_the_reading_switched_off_the_header_s_family_is_not_taken(
                  json={"wert": {"flux.gguf": {"family_detection": False}}})
     unread = _vorbereiten(client, modell="flux.gguf")
     assert unread.gesehen.nachrichten[0].content == ANWEISUNGEN[NO_FAMILY]
-    assert "flux.gguf (family not known)" in unread.gesehen.nachrichten[1].content
+    assert "flux.gguf (unknown model family)" in unread.gesehen.nachrichten[1].content
     # A family the window states still wins.
     stated = _vorbereiten(client, modell="flux.gguf", familie="sdxl")
     assert stated.gesehen.nachrichten[0].content == ANWEISUNGEN["sdxl"]

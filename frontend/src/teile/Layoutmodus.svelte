@@ -85,10 +85,10 @@
   {/each}
 
   <div class="fuss">
-    <button class="knopf leise" onclick={standard}>{t('einstellungen.blase_standard')}</button>
+    <button class="button leise" onclick={standard}>{t('einstellungen.blase_standard')}</button>
     <span class="luecke"></span>
-    <button class="knopf" onclick={schliessen}>{t('app.abbrechen')}</button>
-    <button class="knopf voll" onclick={sichern}>{t('app.sichern')}</button>
+    <button class="button" onclick={schliessen}>{t('app.abbrechen')}</button>
+    <button class="button primary" onclick={sichern}>{t('app.sichern')}</button>
   </div>
 </div>
 
@@ -164,6 +164,7 @@
     justify-content: flex-end;
     border-radius: 9px;
     background: var(--bg-hoch);
+    box-shadow: inset 0 0 0 1px var(--feldstrich);
     font-size: 14px;
     font-variant-numeric: tabular-nums;
     color: var(--text);
@@ -177,29 +178,10 @@
   .luecke {
     flex: 1;
   }
-  .knopf {
-    height: 36px;
-    padding: 0 16px;
-    border: none;
-    border-radius: 9px;
-    background: var(--bg-hoch);
-    font: inherit;
-    font-size: 13.5px;
-    font-weight: 500;
-    color: var(--text);
-    cursor: pointer;
-  }
-  .knopf.leise {
+  /* "Default" is the quiet word beside the two glass buttons: the house
+     button's size, no ground and no edge. */
+  .button.leise {
     background: none;
-  }
-  /* The main button is button glass with its fine edge, as every main
-     button of a window is; only sending stays filled. */
-  .knopf.voll {
-    background: var(--glass-button);
-    color: var(--text);
-    box-shadow: inset 0 0 0 1px var(--glass-button-edge);
-  }
-  .knopf.voll:hover {
-    background: color-mix(in srgb, var(--text) 6%, var(--glass-button));
+    box-shadow: none;
   }
 </style>

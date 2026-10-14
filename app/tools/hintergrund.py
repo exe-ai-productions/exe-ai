@@ -163,7 +163,7 @@ class Lauf:
         weg = len(self.zeilen) - len(kopf) - len(fuss)
         if weg <= 0:
             return
-        self.zeilen = [*kopf, f"… [{weg} lines cut out of the middle]", *fuss]
+        self.zeilen = [*kopf, f"… [{weg} lines omitted from the middle]", *fuss]
         self._zeichen = sum(len(z) + 1 for z in self.zeilen)
 
 

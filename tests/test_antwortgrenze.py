@@ -778,6 +778,75 @@ def test_schweigeprobe_text_items_zaehlen_nicht_doppelt():
     assert antwortgrenze.eingabe_schaetzen([mit_text]) == antwortgrenze.eingabe_schaetzen([ohne])
 
 
+# --- Thinking blocks handed back on the Anthropic wire -----------------------
+
+THINKING_TEXT = "Let me look at the folder before I touch anything. " * 80
+
+
+def _round(blocks):
+    return ChatNachricht(
+        role="assistant",
+        content="I looked.",
+        werkzeugaufrufe=[Werkzeugaufruf(id="toolu_1", name="read_file", argumente={"path": "a"})],
+        anthropic_blocks=blocks,
+    )
+
+
+def test_the_thinking_text_of_a_round_weighs():
+    """The round's thinking goes back with its tool results, so its text
+    claims room in the next request."""
+    without = _round([])
+    with_thinking = _round([{"type": "thinking", "thinking": THINKING_TEXT, "signature": "sig"}])
+    two = _round([
+        {"type": "thinking", "thinking": THINKING_TEXT, "signature": "a"},
+        {"type": "thinking", "thinking": THINKING_TEXT, "signature": "b"},
+    ])
+
+    base = antwortgrenze.eingabe_schaetzen([without])
+    one = antwortgrenze.eingabe_schaetzen([with_thinking]) - base
+    assert one == tokenmass_tokens(THINKING_TEXT)
+    assert antwortgrenze.eingabe_schaetzen([two]) - base == 2 * one
+
+
+def test_silence_the_seals_and_the_markers_add_nothing():
+    """A signature and the data of a redacted block are the provider's seal;
+    the text and tool_use blocks only mark their place."""
+    without = antwortgrenze.eingabe_schaetzen([_round([])])
+    blocks = [
+        {"type": "thinking", "thinking": "", "signature": "s" * 100_000},
+        {"type": "redacted_thinking", "data": "d" * 100_000},
+        {"type": "text", "text": "I looked."},
+        {"type": "tool_use", "id": "toolu_1", "name": "read_file", "input": {"path": "a"}},
+    ]
+
+    assert antwortgrenze.eingabe_schaetzen([_round(blocks)]) == without
+
+
+def test_silence_a_message_without_blocks_weighs_what_it_weighed():
+    message = ChatNachricht(role="assistant", content="Answer")
+
+    assert antwortgrenze.eingabe_schaetzen([message]) == tokenmass_tokens("Answer")
+
+
+def test_the_blocks_are_weighed_without_being_serialized(monkeypatch):
+    calls: list[object] = []
+    real = json.dumps
+
+    def counting(obj, *args, **kwargs):
+        calls.append(obj)
+        return real(obj, *args, **kwargs)
+
+    monkeypatch.setattr(antwortgrenze.json, "dumps", counting)
+    antwortgrenze.eingabe_schaetzen(
+        [ChatNachricht(
+            role="assistant", content="Answer",
+            anthropic_blocks=[{"type": "thinking", "thinking": THINKING_TEXT, "signature": "s"}],
+        )]
+    )
+
+    assert calls == []
+
+
 # --- DashScope's two wordings of a stated output limit -----------------------
 
 # Both are read: the upper bound of the range is the limit, and so is the

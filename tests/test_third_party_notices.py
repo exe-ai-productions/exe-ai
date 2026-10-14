@@ -258,3 +258,40 @@ def test_die_hinweise_liegen_im_electron_paket():
     eintraege = paket["build"]["extraResources"]
     assert {"from": "../THIRD_PARTY_NOTICES.md", "to": "THIRD_PARTY_NOTICES.md"} in eintraege
     assert not (WURZEL / "static/DRITTANBIETER.md").exists(), "the notices live in one file"
+
+
+SHELL_DIST = SHELL / "node_modules/electron/dist"
+
+
+def test_the_mac_package_carries_the_licences_of_electron_and_chromium():
+    """The packer deletes both files from the Mac app; they come back through
+    the package's own resources, under the names the Windows package keeps
+    them under."""
+    paket = json.loads((SHELL / "package.json").read_text(encoding="utf-8"))
+    mac = paket["build"]["mac"]["extraResources"]
+    assert {
+        "from": "node_modules/electron/dist/LICENSE",
+        "to": "LICENSE.electron.txt",
+    } in mac
+    assert {
+        "from": "node_modules/electron/dist/LICENSES.chromium.html",
+        "to": "LICENSES.chromium.html",
+    } in mac
+
+
+@pytest.mark.skipif(not SHELL_INSTALLED, reason=NOT_INSTALLED)
+def test_both_licence_sources_lie_in_the_electron_distribution():
+    assert (SHELL_DIST / "LICENSE").is_file()
+    assert (SHELL_DIST / "LICENSES.chromium.html").is_file()
+
+
+def test_silence_the_other_resources_of_the_packages_stay():
+    """The service and the notices stay in the shared list, the command line
+    tool stays in the Mac entry, and nothing was added to the Windows part."""
+    paket = json.loads((SHELL / "package.json").read_text(encoding="utf-8"))
+    gemeinsam = paket["build"]["extraResources"]
+    assert {"from": "../THIRD_PARTY_NOTICES.md", "to": "THIRD_PARTY_NOTICES.md"} in gemeinsam
+    assert {"from": "../dist/Exe AI", "to": "exe-ai-terminal"} in gemeinsam
+    assert {"from": "../deploy/exe", "to": "bin/exe"} in paket["build"]["mac"]["extraResources"]
+    assert "LICENSE.electron.txt" not in json.dumps(paket["build"].get("win", {}))
+    assert "LICENSE.electron.txt" not in json.dumps(gemeinsam)

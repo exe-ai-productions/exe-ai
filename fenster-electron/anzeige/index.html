@@ -18,8 +18,11 @@
      greeting: the splash and the page that follows read as one picture. */
   svg { display: block; margin: 0 auto 14px; opacity: 0.5; }
   p { margin: 0; opacity: 0.55; font-size: 13px; }
+  /* No service, so no catalogue to ask for the language: both sentences,
+     one under the other. */
   [data-zustand="fehlgeschlagen"] p::after {
-    content: "The service did not answer — check the log files.";
+    content: "The service did not respond. Check the log files.\A Der Dienst hat nicht geantwortet. Prüfe die Protokolldateien.";
+    white-space: pre-line;
     display: block; margin-top: 6px; color: #e5484d; opacity: 1;
   }
 </style>

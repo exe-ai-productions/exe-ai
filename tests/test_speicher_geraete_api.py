@@ -194,3 +194,72 @@ def test_only_a_set_named_for_it_is_stored_as_the_check_leaves_it(client: TestCl
     # Not a set under that key: judged like every other value, nothing is cleared.
     assert _patch(client, switches=None).status_code == 400
     assert _stored(client)["switches"] == {"fa": True}
+
+
+# --- The time limit ----------------------------------------------------------
+
+
+def test_die_zeitgrenze_ist_ab_werk_leer_und_wird_gehalten(client: TestClient):
+    """Empty from the factory: no limit. A number of seconds is kept for
+    every chat, and clearing the field keeps nothing again."""
+    from app import bildgeraete
+
+    repositories = client.app.state.repositories
+    assert bildgeraete.lesen(repositories).zeitgrenze is None
+
+    assert _patch(client, zeitgrenze=600).status_code == 200
+    assert _stored(client)["zeitgrenze"] == 600
+    assert bildgeraete.lesen(repositories).zeitgrenze == 600
+
+    # The field emptied goes out as null and is kept as empty.
+    assert _patch(client, zeitgrenze=None).status_code == 200
+    assert _stored(client)["zeitgrenze"] is None
+    assert bildgeraete.lesen(repositories).zeitgrenze is None
+
+
+@pytest.mark.parametrize("wert", [0, -5, "abc", 2.5, True, "600"])
+def test_eine_zeitgrenze_die_der_dienst_nicht_haelt_bleibt_leer(client: TestClient, wert):
+    """Zero, a negative number, a text or a fraction is no limit: it is
+    held as empty, and so is what the page shows after the write."""
+    from app import bildgeraete
+
+    _geraete(client, zeitgrenze=wert)
+
+    assert _stored(client).get("zeitgrenze") is None
+    assert bildgeraete.lesen(client.app.state.repositories).zeitgrenze is None
+
+
+def test_die_zeitgrenze_nimmt_die_anderen_felder_nicht_mit(client: TestClient):
+    """Silence probe: setting the limit leaves the other values of the
+    machine as they are, and setting them leaves the limit."""
+    _geraete(client, threads=8, vram_limit="6", zeitgrenze=120)
+
+    assert _patch(client, zeitgrenze=300).status_code == 200
+    stand = _stored(client)
+    assert (stand["threads"], stand["vram_limit"], stand["zeitgrenze"]) == (8, "6", 300)
+
+    assert _patch(client, threads=4).status_code == 200
+    stand = _stored(client)
+    assert (stand["threads"], stand["zeitgrenze"]) == (4, 300)
+
+
+def test_die_zeitgrenze_kommt_aus_dem_bildserver_in_den_auftrag(wunsch_senden, client: TestClient):
+    """Empty from the factory: the picture is drawn without a limit. The
+    seconds set on the picture server page reach the Auftrag of every
+    picture, whatever a chat is."""
+    assert wunsch_senden().zeitgrenze is None
+
+    _geraete(client, zeitgrenze=600)
+    assert wunsch_senden().zeitgrenze == 600
+
+    _geraete(client, zeitgrenze=None)
+    assert wunsch_senden().zeitgrenze is None
+
+
+def test_ein_video_traegt_die_zeitgrenze_nicht(wunsch_senden, client: TestClient):
+    """A video has no limit of its own: it ends on a stop, however long it
+    takes — the machine's limit stays with the pictures."""
+    _geraete(client, zeitgrenze=600)
+
+    assert wunsch_senden(video=True).zeitgrenze is None
+    assert wunsch_senden().zeitgrenze == 600

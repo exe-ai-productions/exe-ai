@@ -65,6 +65,23 @@ class Ereignisse:
     # (app/cronablauf.py). The entry's own row changed with it, which is
     # what the schedules panel wants to know.
     TERMIN_GEFEUERT = "cron_fired"
+    # A schedule was made, changed, paused, resumed or removed, by whoever
+    # did it: a chat or an agent through the cron tool
+    # (app/tools/cronjob.py), the settings page, the command line, a second
+    # window. Fired once per change that took, with the entry's id and
+    # nothing else — a refused change, a listing and a start by hand write
+    # nothing and say nothing. Every window that shows the schedules (the
+    # calendar, the list, the sidebar count) learns of it here instead of
+    # waiting for something else to make it look again.
+    CRON_CHANGED = "cron_changed"
+    # One of the two switches of the model choice was written — which models
+    # appear in the quick picker (``modelle_aus``) or which of a catalogue
+    # the user picked (``katalog_wahl``) — by whichever window or device did
+    # it (app/api/v1/einstellungen.py). Fired once per write that was
+    # stored, with the key and nothing else: a refused write, a read and a
+    # write of any other setting say nothing. Every window that shows the
+    # choice learns of it here and reads the setting itself.
+    MODEL_SWITCHES_CHANGED = "model_switches_changed"
     # The model server came up, went away, or the truth about how it is
     # running became known (app/modellrunner.py). Only the chat runner
     # announces it: the embedding, speech and vision servers have no readout
@@ -72,6 +89,15 @@ class Ereignisse:
     # and look" — there is no list behind them, and a window that had to
     # fetch them would be back to asking.
     MODELLSERVER_ZUSTAND = "model_server_state"
+    # The server behind ONE model, in one of three words: `active` while an
+    # answer is being written on it, `idle` while it is reachable and quiet,
+    # `offline` while it is not reachable (app/server_state.py). Computed
+    # once in the service, from the running answers and the discovery's
+    # reachability, and announced for the one endpoint whose word may have
+    # changed — an answer started or ended there, its reachability turned.
+    # Carries the answer itself (endpoint_id, server_state), like the model
+    # server's announcement above: there is no list behind it.
+    SERVER_STATE = "server_state"
     # A chat is being compacted right now (app/chatverdichtung.py): the
     # summarizing request is out, and the answer the user is waiting for
     # cannot start until it is back. Fired before the request goes out,

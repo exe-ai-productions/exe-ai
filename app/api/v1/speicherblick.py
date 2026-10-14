@@ -35,7 +35,7 @@ class SpeicherblickAntwort(BaseModel):
 @router.get(
     "/system/speicher",
     response_model=SpeicherblickAntwort,
-    summary="How much of the machine's memory is in use",
+    summary="Current memory usage",
 )
 async def speicherblick() -> SpeicherblickAntwort:
     # The readout runs a subprocess; off the event loop, so a slow shell

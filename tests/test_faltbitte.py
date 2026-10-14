@@ -134,10 +134,10 @@ def test_ueber_dem_deckel_geht_die_mitte_mit_vermerk():
     assert gedeckelt.endswith("Z" * 1_000)
     # What the note claims is what is missing, so the model reads the seam
     # for what it is instead of reading two halves as one history.
-    vermerk = re.search(r"\n\n…\[summary input truncated.*?\]…\n\n", gedeckelt, re.S)
+    vermerk = re.search(r"\n\n…\[Summary input truncated.*?\]…\n\n", gedeckelt, re.S)
     assert vermerk is not None
     genannt = int(
-        re.search(r"omitted ([\d,]+) chars", vermerk.group(0)).group(1).replace(",", "")
+        re.search(r"([\d,]+) characters were omitted", vermerk.group(0)).group(1).replace(",", "")
     )
     assert genannt == len(text) - (len(gedeckelt) - len(vermerk.group(0)))
 
@@ -162,7 +162,7 @@ def test_eine_zu_grosse_bitte_wird_eine_nachricht_vor_der_bitte():
     assert gedeckelt[0].role == "user"
     assert len(gedeckelt[0].content) <= faltbitte.BITTE_MAX
     assert gedeckelt[0].content.startswith("[USER]: A")
-    assert "summary input truncated" in gedeckelt[0].content
+    assert "Summary input truncated" in gedeckelt[0].content
 
 
 def test_die_bilder_ueberleben_den_deckel():
@@ -260,10 +260,10 @@ def test_der_vermerk_nennt_die_am_fenster_wirklich_ausgelassene_zahl():
 
     inhalt = faltbitte.gedeckelt(nachrichten, 16_384)[0].content
 
-    vermerk = re.search(r"\n\n…\[summary input truncated.*?\]…\n\n", inhalt, re.S)
+    vermerk = re.search(r"\n\n…\[Summary input truncated.*?\]…\n\n", inhalt, re.S)
     assert vermerk is not None
     genannt = int(
-        re.search(r"omitted ([\d,]+) chars", vermerk.group(0)).group(1).replace(",", "")
+        re.search(r"([\d,]+) characters were omitted", vermerk.group(0)).group(1).replace(",", "")
     )
     assert genannt == len(ganz) - (len(inhalt) - len(vermerk.group(0)))
     assert genannt > len(ganz) - faltbitte.BITTE_MAX

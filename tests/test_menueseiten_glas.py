@@ -99,3 +99,30 @@ def test_fixed_surfaces_stay():
     fenster = _rule("Erststart.svelte", ".fenster")
     assert "var(--bg-erhoben)" in fenster
     assert "--kachel-eingabe" in _style("Eingabeleiste.svelte")
+
+
+# The fields and quiet buttons on the light looks' near-white ground: they
+# stand on `--bg-hoch` and wear the field outline as an inner ring, so the
+# ring adds no height and the fill stays.
+FIELDS_WITH_OUTLINE = [
+    ("Ankreuzliste.svelte", ".suche"), ("BildGeraete.svelte", ".eingabe"),
+    ("Bildmodellwerte.svelte", ".eingabe"), ("Layoutmodus.svelte", ".zahl"),
+    ("Parametertafel.svelte", ".zahl"), ("Modellwahl.svelte", ".search"),
+    ("Startordnerpillen.svelte", ".pfadfeld"), ("Updatekarte.svelte", ".choice.quiet"),
+    ("FolderChip.svelte", ".small"),
+]
+
+
+@pytest.mark.parametrize(("name", "selector"), FIELDS_WITH_OUTLINE)
+def test_a_field_or_quiet_button_on_the_raised_ground_wears_the_field_outline(name, selector):
+    rule = _rule(name, selector)
+    assert "var(--bg-hoch)" in rule, (name, selector)
+    assert "box-shadow: inset 0 0 0 1px var(--feldstrich)" in rule, (name, selector)
+
+
+def test_the_outline_is_defined_by_every_look_and_the_icon_button_stays_without_it():
+    """Silence: the value of the outline is the look's own (six definitions in
+    the global stylesheet), and the icon button of the log head carries none."""
+    css = (FRONTEND / "stil" / "global.css").read_text(encoding="utf-8")
+    assert len(re.findall(r"^\s*--feldstrich:", css, re.M)) >= 6
+    assert "--feldstrich" not in _rule("Serverlogkopf.svelte", ".aus")

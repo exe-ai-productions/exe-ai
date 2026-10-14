@@ -1,4 +1,4 @@
-# PyInstaller build description — one file on macOS, one folder on Windows.
+# PyInstaller build description — one folder, on every system.
 #
 # Run from the project root:
 #
@@ -69,6 +69,10 @@ mitgeliefert = [
     # what its own server gives away, which for a cloud provider is nothing.
     *_gefiltert(WURZEL / "app" / "daten", "app/daten"),
     (str(WURZEL / "app" / "db" / "schema.sql"), "app/db"),
+    # The version, as a file: the terminal client reads it from here rather
+    # than importing the service (cli/main.py), and packaged, a module is
+    # no file any more — this copy is the one it finds.
+    (str(WURZEL / "app" / "__init__.py"), "app"),
     *_gefiltert(WURZEL / "skills", "skills"),
     # Shipped agents, the same two-layer rule as the skills: this folder is
     # replaced by every update, the user's prompts/agenten/ never is, and a
@@ -79,9 +83,8 @@ mitgeliefert = [
     # the user's own agents and skills) is written into the user's OWN data
     # folder, never read from here (app/config.py's ``pfad()``), and every
     # piece the program needs on a first start creates itself there: the
-    # reminder agent (app/erinnerungsagent.py:37), the memory and system
-    # prompt files (app/config.py:375, :387), both on demand. Shipping this
-    # folder was pure risk for no reader on the other end (Schritt 6).
+    # memory and system prompt files (app/config.py:490, :500), on demand.
+    # Shipping this folder was pure risk for no reader on the other end.
     (str(WURZEL / "config.example.yaml"), "."),
     # The EXAMPLE, never the real one: the server list holds addresses, keys
     # and machines of whoever built this, and a package carries it to
@@ -114,6 +117,10 @@ versteckt = [
     "tzlocal.win32",
     "tzlocal.windows_tz",
     "tzlocal.unix",
+    # The terminal client (start.py, ``--cli``): imported only once asked
+    # for, and everything it draws with — prompt_toolkit, rich — rides in
+    # behind it.
+    "cli.main",
 ]
 
 # The IANA time-zone database ships as data files that zoneinfo reads at
@@ -137,27 +144,28 @@ analyse = Analysis(
 
 pyz = PYZ(analyse.pure)
 
-# One file on macOS, where the bundle below wraps it; a FOLDER on Windows.
-# The one-file build there runs as two processes and unpacks itself into
-# %TEMP%\_MEIxxxxxx on every start — measured in a Windows VM: 2.6 seconds,
-# and 66 MB left behind after every hard end — while the folder build runs as
-# one process and unpacks nothing. The Electron shell ships that folder beside
-# itself and starts the exe inside it (fenster-electron/main.js, dienstpfad).
-ONE_FILE = sys.platform != "win32"
-
+# A FOLDER, never one file. A one-file build runs as two processes and
+# unpacks itself into the system's temporary folder on every start —
+# measured in a Windows VM: 2.6 seconds, and 66 MB left behind after every
+# hard end. On macOS the system empties those folders at night once they
+# are a few days old, and a service that runs for longer loses its files
+# while it runs. The folder build runs as one process and unpacks nothing.
+# The Electron shell ships that folder beside itself and starts the program
+# inside it (fenster-electron/main.js, dienstpfad).
 exe = EXE(
     pyz,
     analyse.scripts,
-    # In the one-file build everything rides inside the exe; in the folder
-    # build COLLECT below lays it out beside the exe instead.
-    analyse.binaries if ONE_FILE else [],
-    analyse.datas if ONE_FILE else [],
+    # Nothing rides inside the program itself: COLLECT below lays binaries
+    # and data out beside it.
     [],
-    exclude_binaries=not ONE_FILE,
-    # The name the service binary carries. On Windows this is what the Task
-    # Manager and the process list read — it follows the product name, not the
-    # old one. On macOS the binary hides inside the .app below and this name
-    # never shows; the user's data folder is a fixed string in
+    [],
+    [],
+    exclude_binaries=True,
+    # The name the service binary carries. It is what the Task Manager and
+    # the process list read — it follows the product name, not the old one —
+    # and it is the file the shell, the command on the path and `exe install`
+    # address inside the folder (fenster-electron/main.js, deploy/exe,
+    # cli/install.py). The user's data folder is a fixed string in
     # app/paketierung.py and does NOT ride on this, so renaming here cannot
     # strand it.
     name="Exe AI",
@@ -180,27 +188,59 @@ exe = EXE(
     entitlements_file=None,
 )
 
-# The folder build: the exe above, and beside it everything it needs. Its name
+# The folder: the program above, and beside it everything it needs. Its name
 # is the folder's name, and with it the path the shell starts — dist/Exe AI/
-# Exe AI.exe (the shell's dienstpfad()).
-if not ONE_FILE:
-    coll = COLLECT(
-        exe,
-        analyse.binaries,
-        analyse.datas,
+# Exe AI, with .exe on Windows (the shell's dienstpfad()).
+programs = [exe]
+
+# On Windows a second exe in the same folder: the command on the path. The
+# same program under its own name, WITH a console — the service's exe above
+# has none, while the client draws into the terminal it was started from,
+# and a program without a console has no terminal to draw into. One
+# analysis, one folder: both share every file laid out beside them. The name
+# is also the switch (start.py): the Store's alias starts the program by
+# name and cannot add one. On macOS the command is the small script
+# deploy/exe, which hands over to the one program with --cli.
+if sys.platform == "win32":
+    cli_exe = EXE(
+        pyz,
+        analyse.scripts,
+        [],
+        [],
+        [],
+        exclude_binaries=True,
+        name="exe",
+        debug=False,
+        bootloader_ignore_signals=False,
         strip=False,
         upx=False,
-        name="Exe AI",
+        console=True,
+        icon=str(WURZEL / "deploy" / "icon.ico"),
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
     )
+    programs.append(cli_exe)
 
-# macOS gets a real application folder around the same file: an icon, a
+coll = COLLECT(
+    *programs,
+    analyse.binaries,
+    analyse.datas,
+    strip=False,
+    upx=False,
+    name="Exe AI",
+)
+
+# macOS gets a real application folder around the same folder: an icon, a
 # name, and a double click that opens no terminal window. The service has
 # no window of its own, so the bundle stays out of the Dock — the browser
 # is the window, and a dockless background program cannot sit there
 # bouncing forever.
 if sys.platform == "darwin":
     app = BUNDLE(
-        exe,
+        coll,
         name="Exe AI Terminal.app",
         icon=str(WURZEL / "deploy" / "icon.icns"),
         bundle_identifier="net.exe-hq.exe-ai-terminal",

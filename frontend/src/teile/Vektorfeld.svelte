@@ -1,7 +1,7 @@
 <script>
   /* One drawing as the first layer of a surface — behind everything the
      surface carries, clipped by the surface's own corner, deaf to
-     clicks. The one path for every drawing of every look that carries
+     clicks. The one path for every drawing of the look that carries
      drawings.
 
      The sheets are inlined rather than loaded through `<img>` or
@@ -11,53 +11,15 @@
   import huegel from '../stil/moune/02_huegel.svg?raw'
   import farn from '../stil/moune/03_farn.svg?raw'
   import pusteblume from '../stil/moune/05_pusteblume.svg?raw'
-  import dunes from '../stil/pearl/01_dunes.svg?raw'
-  import waves from '../stil/pearl/02_waves.svg?raw'
-  import shell from '../stil/pearl/03_shell.svg?raw'
-  import oyster from '../stil/pearl/04_oyster.svg?raw'
-  import clouds from '../stil/heaven/01_clouds.svg?raw'
-  import balloons from '../stil/heaven/02_balloons.svg?raw'
-  import birds from '../stil/heaven/03_birds.svg?raw'
-  import paperPlane from '../stil/heaven/04_paper_plane.svg?raw'
-  import wuerfel from '../stil/exe/01_wuerfel.svg?raw'
-  import sternnetz from '../stil/darkmatter/01_sternnetz.svg?raw'
 
   /* Moune's four drawings with the weight the design gave each one
-     (strength 100 % × weight × 0.34, walked to in the design); Pearl and
-     Heaven take the same weights on the same surfaces, so the three looks
-     with drawings read alike. */
+     (strength 100 % × weight × 0.34, walked to in the design). Moune is the
+     one look that carries drawings. */
   const ZEICHNUNGEN = {
     gras: { roh: gras, deckkraft: 0.34 },
     huegel: { roh: huegel, deckkraft: 0.289 },
     farn: { roh: farn, deckkraft: 0.34 },
     pusteblume: { roh: pusteblume, deckkraft: 0.374 },
-    /* Pearl's shore: dune grass along the foot of the frame, wave lines
-       in the right column below its head, a nautilus and a fan shell
-       standing at the foot of the chat, an open oyster whose pearls drift
-       along the input bar. */
-    dunes: { roh: dunes, deckkraft: 0.34 },
-    waves: { roh: waves, deckkraft: 0.289 },
-    shell: { roh: shell, deckkraft: 0.34 },
-    oyster: { roh: oyster, deckkraft: 0.374 },
-    /* Heaven's sky: a bank of clouds along the foot of the frame, hot-air
-       balloons in the right column — clear of its head and of the clouds
-       at its foot —, a flock of birds rising across the chat, a paper
-       plane on its dotted path in the input bar. */
-    clouds: { roh: clouds, deckkraft: 0.34 },
-    balloons: { roh: balloons, deckkraft: 0.289 },
-    birds: { roh: birds, deckkraft: 0.34 },
-    'paper-plane': { roh: paperPlane, deckkraft: 0.374 },
-    /* Exe's one drawing, on the frame alone: stairs of cubes at both feet
-       of the window, under the side rails, rising and fading to nothing.
-       Faint — a texture of the ground, not a picture — at the weight the
-       design set (18 % of the ink). Drawn by a script, so every cube is
-       the same solid: its faces carry the frame's colour and hide what
-       stands behind them. */
-    wuerfel: { roh: wuerfel, deckkraft: 0.18 },
-    /* Dark Matter's one drawing, on the frame alone, at the same weight: a
-       net of lines with a four-pointed star at every knot, over the whole
-       frame — a sky, showing faintly through the chat's glass. */
-    sternnetz: { roh: sternnetz, deckkraft: 0.18 },
   }
 
   let { art } = $props()

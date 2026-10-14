@@ -98,17 +98,17 @@ def _system(request) -> str:
 async def test_a_run_the_chat_sent_off_reads_the_chats_access(client, config, tmp_path):
     request, _folder = await _request(client, config, tmp_path, ask_in_chat=True)
     text = _system(request)
-    assert "outside them they ask the user first" in text
+    assert "outside them, they ask the user first" in text
     assert "put to them in the chat this job was started from" in text
-    assert "refused outright rather than put to anyone" not in text
+    assert "rejected outright" not in text
 
 
 async def test_a_run_started_by_hand_reads_the_agents_access(client, config, tmp_path):
     """The silence probe: nobody is asked, and the prompt says so."""
     request, _folder = await _request(client, config, tmp_path, ask_in_chat=False)
     text = _system(request)
-    assert "outside them they are refused" in text
-    assert "refused outright rather than put to anyone" in text
+    assert "outside them, they are refused" in text
+    assert "rejected outright" in text
     assert "put to them in the chat" not in text
 
 
@@ -120,7 +120,7 @@ async def test_the_dock_is_not_named_a_share(client, config, tmp_path):
     dock = str(speicherorte.ort(config, agentendock.ORT_NAME))
     shared = content.split("The user has shared these working folders with you:\n\n")[1]
     assert shared.split("\n\n")[0] == f"- {folder}"
-    assert "The dock folder is where finished files are handed over" in " ".join(content.split())
+    assert "The dock folder holds finished files delivered to the user" in " ".join(content.split())
     assert f"- {dock}" in content
 
 
@@ -133,7 +133,7 @@ async def test_a_run_with_only_the_dock_has_no_note_duty(client, config, tmp_pat
     text = _system(request)
     assert "The user has shared" not in text
     assert "Keeping each `exe.md` current" not in text
-    assert "The dock folder is where finished files are handed over" in text
+    assert "The dock folder holds finished files delivered to the user" in text
 
 
 async def test_a_shared_folder_keeps_the_note_duty(client, config, tmp_path):

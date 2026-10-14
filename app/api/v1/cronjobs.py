@@ -16,7 +16,8 @@ and its own storage.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
+from itertools import islice
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
@@ -25,14 +26,15 @@ from app import (
     agentenname,
     cronablauf,
     helper,
-    ohne_agent,
+    no_agent,
     reminder,
     schedule_calendar,
     skriptlauf,
+    sprachwahl,
     terminplan,
     wecker,
 )
-from app.agenten import agenten_laden
+from app.agenten import agent_lookup, agenten_laden
 from app.api.abhaengigkeiten import (
     Repositories,
     hole_benutzer_id,
@@ -54,19 +56,40 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/cronjobs", tags=["cronjobs"])
 
 
-def _agentennamen(request: Request) -> set[str]:
-    """The agent files there are, read once per answer."""
-    return set(agenten_laden(*request.app.state.config.agentenverzeichnisse))
+def _agent_folders(request: Request):
+    """The folders agent files are read from, shipped first, the user's last."""
+    return request.app.state.config.agentenverzeichnisse
 
 
-def _agent_fehlt(eintrag: Cronjob, agenten: set[str] | None) -> bool:
-    """An agent entry naming a file that is not there. A marker (script,
-    reminder, no agent) and the helper name no file."""
-    if agenten is None or reminder.kind_of(eintrag.agent, eintrag.skript) != reminder.KIND_AGENT:
-        return False
-    if helper.is_helper(eintrag.agent) or ohne_agent.is_no_agent(eintrag.agent):
-        return False
-    return eintrag.agent not in agenten
+def _agent_state(
+    entry: Cronjob, folders, directory=None
+) -> tuple[bool, bool, int | None]:
+    """Whether the agent this entry names stops it from starting: ``(missing,
+    broken, line)`` — no file under that name, or a file that cannot be read,
+    with the line of the file the reader names where it names one. The row
+    says it in one short sentence; the reader's own message, three lines of
+    it, is not for a row.
+
+    Only an entry that is switched on has a live state (``CronjobAntwort.aus``),
+    and only an agent entry names a file: a marker (script, reminder, no
+    agent) and the helper name none. The name is looked up the way the tick
+    looks an agent up — capitals do not count — and an entry alone reads only
+    its own agent's file. ``directory`` is the agents a list has read once;
+    an entry it holds needs no further look."""
+    if not entry.aktiv:
+        return False, False, None
+    if reminder.kind_of(entry.agent, entry.skript) != reminder.KIND_AGENT:
+        return False, False, None
+    if helper.is_helper(entry.agent) or no_agent.is_no_agent(entry.agent):
+        return False, False, None
+    if directory is not None and entry.agent in directory:
+        return False, False, None
+    agent, broken = agent_lookup(entry.agent, *folders)
+    if agent is not None:
+        return False, False, None
+    if broken is not None:
+        return False, True, broken.line
+    return True, False, None
 
 
 def _jetzt(request: Request) -> datetime:
@@ -141,7 +164,15 @@ class CronjobAntwort(BaseModel):
     # version of a script that cannot be started. Read off the folder when
     # the row is built, so it shows the moment the file is deleted, not
     # only once a due time has come and gone.
-    agent_fehlt: bool = False
+    #
+    # Only ever set for an entry that is switched on — see ``aus`` below.
+    agent_missing: bool = False
+    # The file is there and cannot be read. "Missing" would send the person
+    # looking for a file that stands in the folder. The line is the one the
+    # reader names, so the row can say where to look without the reader's
+    # own message; ``None`` where it names none.
+    agent_broken: bool = False
+    agent_broken_line: int | None = None
     # When this entry comes due next, ``None`` for one that never does again
     # (``cronablauf.naechste_faelligkeit``). The list showed what an entry
     # runs, how it is doing and when it last fired, and the one question a
@@ -163,7 +194,8 @@ class CronjobAntwort(BaseModel):
         letzter_ausgang: str | None = None,
         jetzt: datetime,
         sprache: str | None = None,
-        agenten: set[str] | None = None,
+        agent_folders=(),
+        agenten=None,
     ) -> "CronjobAntwort":
         # Both live states belong to an entry that is switched ON, and to no
         # other. They answer "why is this entry not running right now", and
@@ -185,6 +217,9 @@ class CronjobAntwort(BaseModel):
         # entry on?" has exactly one answer, and it is in hand right here.
         laeuft = eintrag.aktiv
         faellig = cronablauf.naechste_faelligkeit(eintrag, jetzt)
+        agent_missing, agent_broken, agent_broken_line = _agent_state(
+            eintrag, agent_folders, agenten
+        )
         return cls(
             id=eintrag.id,
             agent=eintrag.agent,
@@ -208,12 +243,23 @@ class CronjobAntwort(BaseModel):
             skript_nicht_startbar=(
                 cronablauf.skript_nicht_startbar(eintrag.id, sprache) if laeuft else None
             ),
-            agent_fehlt=_agent_fehlt(eintrag, agenten),
+            agent_missing=agent_missing,
+            agent_broken=agent_broken,
+            agent_broken_line=agent_broken_line,
             naechste_faelligkeit=faellig.isoformat() if faellig else None,
             kind=reminder.kind_of(eintrag.agent, eintrag.skript),
             einmalig=eintrag.einmalig,
             datum=eintrag.datum,
         )
+
+
+class HandStartResponse(CronjobAntwort):
+    """The answer to a start by hand: the entry, and what to tell the person
+    pressing the button where the run does not begin this second."""
+
+    # The sentence, in the language of the request, where the model was still
+    # coming up and the run follows by itself; ``None`` where the run started.
+    notice: str | None = None
 
 
 class CronjobLaufAntwort(BaseModel):
@@ -238,12 +284,17 @@ class CronjobLaufAntwort(BaseModel):
     # Agent, script or reminder, so a reminder's run is not shown by the
     # marker its agent column carries.
     kind: str = reminder.KIND_AGENT
+    # How many ended runs this run's schedule has altogether — the answer
+    # carries at most five of them per schedule, and the page's counter
+    # reads "shown/total" off this number.
+    total: int = 0
 
     @classmethod
-    def aus(cls, lauf: Auftrag, eintrag=None) -> "CronjobLaufAntwort":
+    def aus(cls, lauf: Auftrag, eintrag=None, total: int = 0) -> "CronjobLaufAntwort":
         status = CRONJOB_AUSGAENGE[lauf.zustand]
         return cls(
             id=lauf.id,
+            total=total,
             wann=lauf.created_at,
             status=status,
             task=lauf.auftrag,
@@ -358,11 +409,11 @@ async def anlegen(
     # in flight.
     neueste = max(repositories.cronjobs.auflisten(), key=lambda e: e.created_at)
     return CronjobAntwort.aus(
-        neueste, jetzt=_jetzt(request), sprache=sprache, agenten=_agentennamen(request)
+        neueste, jetzt=_jetzt(request), sprache=sprache, agent_folders=_agent_folders(request)
     )
 
 
-@router.patch("/{cronjob_id}", response_model=CronjobAntwort, summary="Change a schedule")
+@router.patch("/{cronjob_id}", response_model=CronjobAntwort, summary="Update a schedule")
 async def change(
     cronjob_id: str,
     fields: CronjobChange,
@@ -380,7 +431,9 @@ async def change(
     for key, value in (
         ("time", fields.zeitplan),
         ("task", fields.task),
-        ("agent", fields.agent),
+        # The form sends "no agent" as an empty word; the tool takes the
+        # marker, so nothing else can be mistaken for the wish.
+        ("agent", no_agent.NAME if fields.agent == "" else fields.agent),
         ("script", fields.skript),
         ("once", fields.einmalig),
         ("date", fields.datum),
@@ -396,7 +449,7 @@ async def change(
     outcomes = repositories.auftraege.letzte_auslaeufe()
     return CronjobAntwort.aus(
         entry,
-        agenten=_agentennamen(request),
+        agent_folders=_agent_folders(request),
         letzter_ausgang=outcomes.get(cronjob_id),
         jetzt=_jetzt(request),
         sprache=language,
@@ -421,7 +474,7 @@ class CalendarRow(BaseModel):
 @router.get(
     "/calendar",
     response_model=dict[str, list[CalendarRow]],
-    summary="Calendar: what ran and what is planned, per day",
+    summary="Calendar: completed and scheduled runs by day",
 )
 def calendar(
     first: date,
@@ -447,7 +500,8 @@ def calendar(
 PREVIEW_RUNS = 3
 
 
-@router.get("/preview", response_model=list[str], summary="The next runs of a typed schedule")
+@router.get("/preview", response_model=list[str], summary="Upcoming runs for the entered "
+                                                          "schedule")
 def preview(
     zeitplan: str,
     request: Request,
@@ -456,15 +510,15 @@ def preview(
     """The next few due moments of a schedule not yet stored — the line
     under a typed cron expression that says what it means. Read by the same
     module the tick fires by (app/terminplan.py), on the same clock."""
-    moments: list[str] = []
     try:
-        moment = terminplan.naechster_termin(zeitplan, _jetzt(request))
-        while len(moments) < PREVIEW_RUNS:
-            moments.append(moment.isoformat())
-            following = terminplan.naechster_termin(zeitplan, moment + timedelta(minutes=1))
-            if following <= moment:
-                break
-            moment = following
+        # Counted in moments, not on the wall clock: the repeated hour of
+        # the autumn day names each of its times twice.
+        moments = [
+            moment.isoformat()
+            for moment in islice(
+                terminplan.upcoming(zeitplan, _jetzt(request)), PREVIEW_RUNS
+            )
+        ]
     except ValueError:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, t("cronjob_refusal.time_unreadable", language)
@@ -480,13 +534,17 @@ def liste(
 ) -> list[CronjobAntwort]:
     auslaeufe = repositories.auftraege.letzte_auslaeufe()
     jetzt = _jetzt(request)
-    agenten = _agentennamen(request)
+    # The whole directory is read here and nowhere else: one look for the
+    # list, where an entry alone asks only for its own agent's file.
+    folders = _agent_folders(request)
+    agenten = agenten_laden(*folders)
     return [
         CronjobAntwort.aus(
             eintrag,
             letzter_ausgang=auslaeufe.get(eintrag.id),
             jetzt=jetzt,
             sprache=sprache,
+            agent_folders=folders,
             agenten=agenten,
         )
         for eintrag in repositories.cronjobs.auflisten()
@@ -501,7 +559,9 @@ def liste(
 def alle_laeufe(
     repositories: Repositories = Depends(hole_repositories),
 ) -> list[CronjobLaufAntwort]:
-    """The whole history in ONE answer, entries gone or not.
+    """The recent history in ONE answer, entries gone or not: the newest runs
+    of every schedule — five each — and at most 100 together, newest first.
+    Each run says how many ended runs its schedule has altogether (``total``).
 
     The window used to ask per entry, which cost a request each and — worse —
     lost every run whose schedule had since been deleted. The runs are the
@@ -510,8 +570,8 @@ def alle_laeufe(
     """
     eintraege = {termin.id: termin for termin in repositories.cronjobs.auflisten()}
     return [
-        CronjobLaufAntwort.aus(lauf, eintraege.get(lauf.cronjob_id or ""))
-        for lauf in repositories.auftraege.alle_cronlaeufe()
+        CronjobLaufAntwort.aus(lauf, eintraege.get(lauf.cronjob_id or ""), total)
+        for lauf, total in repositories.auftraege.alle_cronlaeufe()
     ]
 
 
@@ -525,9 +585,10 @@ def pausieren(
     eintrag = repositories.cronjobs.aktiv_setzen(cronjob_id, False)
     if eintrag is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, t("fehler.cronjob_not_found", sprache))
+    cronjob_werkzeug.announce_change(cronjob_id)
     return CronjobAntwort.aus(
         eintrag,
-        agenten=_agentennamen(request),
+        agent_folders=_agent_folders(request),
         letzter_ausgang=repositories.auftraege.letzter_auslauf(eintrag.id),
         jetzt=_jetzt(request),
         sprache=sprache,
@@ -544,9 +605,10 @@ def fortsetzen(
     eintrag = repositories.cronjobs.aktiv_setzen(cronjob_id, True)
     if eintrag is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, t("fehler.cronjob_not_found", sprache))
+    cronjob_werkzeug.announce_change(cronjob_id)
     return CronjobAntwort.aus(
         eintrag,
-        agenten=_agentennamen(request),
+        agent_folders=_agent_folders(request),
         letzter_ausgang=repositories.auftraege.letzter_auslauf(eintrag.id),
         jetzt=_jetzt(request),
         sprache=sprache,
@@ -554,7 +616,7 @@ def fortsetzen(
 
 
 @router.post(
-    "/{cronjob_id}/run", response_model=CronjobAntwort, summary="Start a schedule now"
+    "/{cronjob_id}/run", response_model=HandStartResponse, summary="Run a scheduled task now"
 )
 async def sofort_starten(
     cronjob_id: str,
@@ -563,8 +625,7 @@ async def sofort_starten(
     discovery: Discovery = Depends(hole_discovery),
     generierungen: Generierungsverwaltung = Depends(hole_generierungen),
     user_id: str = Depends(hole_benutzer_id),
-    sprache: str = Depends(hole_sprache),
-) -> CronjobAntwort:
+) -> HandStartResponse:
     """Runs this entry now, without waiting for its next due time.
 
     The same run the tick would start, down to the ``cronjob_id`` on the job
@@ -583,12 +644,22 @@ async def sofort_starten(
     * a run of this entry that is still going (409). The tick skips such a
       due time; a hand start has no due time to skip, so it says so.
     * a script that is not where it has to be (400), a missing agent file
-      (404), no model answering (whatever the start refuses with). The tick
-      leaves these open and tries again — a person pressing a button is
-      told instead. That is why the start goes through
-      ``auftrag_anstossen`` rather than ``termin_ausloesen``, which turns
-      every refusal into a silent ``None``.
+      (404), no model answering and no server the program could bring up
+      (whatever the start refuses with). The tick leaves these open and
+      tries again — a person pressing a button is told instead. That is why
+      the start goes through ``auftrag_anstossen`` rather than
+      ``termin_ausloesen``, which turns every refusal into a silent ``None``.
+
+    A model that is not answering YET is no refusal: the program wakes the
+    server the way the tick does (``cronablauf.wake_model``), the answer
+    carries the sentence that says so, and the tick starts the run once the
+    model answers — once, with no second press.
     """
+    # The language the tick takes for the same entry (app/wecker.py): the one
+    # chosen for the interface. The request's own language does not count, or
+    # one entry would speak two languages, depending on who starts it.
+    config = request.app.state.config
+    sprache = sprachwahl.interface_language(repositories, config.app.language) or config.app.language
     eintrag = repositories.cronjobs.holen(cronjob_id)
     if eintrag is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, t("fehler.cronjob_not_found", sprache))
@@ -596,6 +667,7 @@ async def sofort_starten(
         raise HTTPException(status.HTTP_409_CONFLICT, t("fehler.cronjob_pausiert", sprache))
 
     jetzt = _jetzt(request)
+    notice: str | None = None
     if reminder.is_reminder(eintrag):
         # Started by hand, a reminder shows itself now — it has nothing
         # else to start.
@@ -638,44 +710,66 @@ async def sofort_starten(
                     verfuegbar=agentenname.namen_satz(agenten),
                 ),
             )
-        auftrag_anstossen(
-            config=request.app.state.config,
-            repositories=repositories,
-            discovery=discovery,
-            generierungen=generierungen,
-            registry=getattr(request.app.state, "werkzeuge", None),
-            agent=agent,
-            task=cronablauf.auftragstext(eintrag),
-            endpoint_id=None,
-            user_id=user_id,
-            sprache=sprache,
-            cronjob_id=eintrag.id,
+        # The way the tick goes to the model: asked of the same function, so
+        # a hand start and a due time can never disagree about whether there
+        # is a model to run on.
+        model = await cronablauf.wake_model(
+            request.app, agent, hat_ziel=bool(eintrag.ziel)
         )
-        cronablauf.start_verbuchen(repositories, eintrag, jetzt.isoformat())
-        # The same line the tick writes when it starts one, so the log reads
-        # as one story: a start by hand is a start of this entry, and a
-        # reader looking for why a run exists finds it where the others are.
-        log.info(
-            "Cronjob: '%s' started by hand",
-            eintrag.agent,
-            extra={
-                "ereignis": "cronjob_handstart",
-                "cronjob": eintrag.id,
-                "agent": eintrag.agent,
-            },
-        )
+        if model == cronablauf.MODEL_STARTING:
+            cronablauf.want_hand_start(eintrag.id)
+            notice = t("cronjobs.run_now_model_starting", sprache)
+            log.info(
+                "Cronjob: '%s' started by hand — the model is starting, the run follows",
+                eintrag.agent,
+                extra={
+                    "ereignis": "cronjob_hand_start_waiting",
+                    "cronjob": eintrag.id,
+                    "agent": eintrag.agent,
+                },
+            )
+        else:
+            auftrag_anstossen(
+                config=request.app.state.config,
+                repositories=repositories,
+                discovery=discovery,
+                generierungen=generierungen,
+                registry=getattr(request.app.state, "werkzeuge", None),
+                agent=agent,
+                task=cronablauf.auftragstext(eintrag),
+                endpoint_id=None,
+                user_id=user_id,
+                sprache=sprache,
+                cronjob_id=eintrag.id,
+            )
+            cronablauf.start_verbuchen(repositories, eintrag, jetzt.isoformat())
+            # The same line the tick writes when it starts one, so the log
+            # reads as one story: a start by hand is a start of this entry,
+            # and a reader looking for why a run exists finds it where the
+            # others are.
+            log.info(
+                "Cronjob: '%s' started by hand",
+                eintrag.agent,
+                extra={
+                    "ereignis": "cronjob_handstart",
+                    "cronjob": eintrag.id,
+                    "agent": eintrag.agent,
+                },
+            )
 
     # Read back rather than reused: starting may have switched a one-off off
     # and has moved the clock, and the row this answers with is what the mask
     # puts straight onto the list.
     frisch = repositories.cronjobs.holen(cronjob_id) or eintrag
-    return CronjobAntwort.aus(
+    antwort = HandStartResponse.aus(
         frisch,
-        agenten=_agentennamen(request),
+        agent_folders=_agent_folders(request),
         letzter_ausgang=repositories.auftraege.letzter_auslauf(frisch.id),
         jetzt=jetzt,
         sprache=sprache,
     )
+    antwort.notice = notice
+    return antwort
 
 
 @router.delete(
@@ -688,4 +782,5 @@ def loeschen(
 ) -> Response:
     if not repositories.cronjobs.loeschen(cronjob_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, t("fehler.cronjob_not_found", sprache))
+    cronjob_werkzeug.announce_change(cronjob_id)
     return Response(status_code=204)

@@ -57,7 +57,7 @@ export const VORGABE_DARSTELLUNG = {
 export const VORGABE_LAYOUT = {
   leiste_offen: false,
   leiste_modul: 'terminal',
-  leiste_breite: 314,
+  leiste_breite: 364,
   seitenleiste_zu: true,
   seitenleiste_breite: 314,
 }
@@ -157,12 +157,39 @@ export function modusSpeichern(modus) {
   merken('modus', { modus })
 }
 
-export function modellSpeichern(id) {
+/* The model chosen last as it is stored: its id and its name — the one it
+   was chosen under, or the one the service has listed it under since
+   (zustand's `modelleLaden`). The service names a model for as long as its
+   server answers; the name kept here is what is left to show of it when
+   the server does not. */
+let keptModel = null
+
+export function modellSpeichern(id, name) {
+  keptModel = name ? { id, name } : { id }
   if (!geladen) {
-    frueh.modell_zuletzt = { id }
+    frueh.modell_zuletzt = keptModel
     return
   }
-  merken('modell_zuletzt', { id })
+  merken('modell_zuletzt', keptModel)
+}
+
+/* The id of the model the service holds as the chosen one right now — read
+   anew, not taken from this window's copy: a second window on the same
+   service may have chosen another model since this one read its own. Empty
+   where nothing is stored or the service does not answer. */
+export async function storedModelId() {
+  try {
+    const read = await api.einstellungAufgeloestViele(['modell_zuletzt'])
+    return read.modell_zuletzt?.wert?.id || ''
+  } catch {
+    return ''
+  }
+}
+
+/* The name stored with the choice of this model — empty where another model
+   is the stored one, or where it was stored without a name. */
+export function keptModelName(id) {
+  return (keptModel?.id === id && keptModel.name) || ''
 }
 
 /**
@@ -193,7 +220,9 @@ export async function anzeigeLaden() {
   const layout = { ...VORGABE_LAYOUT, ...(daten.layout?.wert || {}), ...frueh.layout }
   const modus = frueh.modus?.modus || daten.modus?.wert?.modus || VORGABE_MODUS
   modusVormerken(modus)
-  const modell = frueh.modell_zuletzt?.id || daten.modell_zuletzt?.wert?.id || ''
+  const stored = daten.modell_zuletzt?.wert
+  keptModel = frueh.modell_zuletzt || (stored?.id ? stored : null)
+  const modell = keptModel?.id || ''
 
   /* Seed the base for later partial writes, or the first change would write
      the defaults over everything the service just handed out. */

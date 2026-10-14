@@ -135,19 +135,71 @@ function codeRahmen(roh, sprache, offen) {
 
 /* ---------- Markdown ---------- */
 
+/* A markdown image, as far as the program draws one.
+
+   Only what the page may load anyway (the content policy lists `'self'`,
+   `data:` and `blob:` for images): a path of the program's own service
+   (`/…`, never `//…`), a full address of its own origin, or an inline
+   `data:image/`. Any other `http(s)` address becomes a link, the way every
+   other address in the answer does — the alt text is its text, the address
+   itself when there is none. Everything else stays text.
+
+   `adresse` and `alt` arrive masked (`maskieren`), so they go into the
+   attributes as they are. */
+function bildAdresseErlaubt(adresse) {
+  if (/^\/(?!\/)/.test(adresse)) return true;
+  if (/^data:image\/[a-z0-9.+-]+[;,]/i.test(adresse)) return true;
+  const eigene = typeof location !== 'undefined' && location.origin ? location.origin : '';
+  return Boolean(eigene) && adresse.startsWith(eigene + '/');
+}
+
+// One attribute, its value already masked (`maskieren`).
+const attribut = (name, wert) => name + '="' + wert + '"';
+
+function bildOderLink(alt, adresse) {
+  if (bildAdresseErlaubt(adresse)) {
+    return '<img ' + [
+      attribut('class', 'md-bild'), attribut('src', adresse), attribut('alt', alt),
+      attribut('loading', 'lazy'),
+    ].join(' ') + '>';
+  }
+  if (/^https?:/.test(adresse)) {
+    return '<a href="' + adresse + '" target="_blank" rel="noopener noreferrer">' +
+      (alt || adresse) + '</a>';
+  }
+  return null;
+}
+
 function inline(text) {
   // Emphasis is done with asterisks only. Underscores are left alone on
   // purpose: this program is full of file paths, and app/__init__.py or
   // my_file_name would otherwise turn half a path bold or italic and break
   // the click-and-copy the path is there for. Standard Markdown allows both
   // markers; for a terminal that talks in paths, one of them is a liability.
+  //
+  // A finished image is set aside and put back at the very end: its
+  // attributes must not be read by the emphasis and link rules below, which
+  // would write markup into them.
+  const bilder = [];
   return text
+    // A code span is skipped whole, so an image written in backticks stays
+    // the text it was written as. Before the code rule below, so that an
+    // alt text with backticks in it is not already markup when it is read.
+    .replace(/(`[^`]+`)|!\[([^\]]*)\]\(([^)\s]+)\)/g,
+      (alles, code, alt, adresse) => {
+        if (code) return code;
+        const html = bildOderLink(alt, adresse);
+        if (html === null) return alles;
+        bilder.push(html);
+        return '\x02' + (bilder.length - 1) + '\x02';
+      })
     .replace(/`([^`]+)`/g, (_, c) => '<code>' + c + '</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
     .replace(/~~([^~]+)~~/g, '<del>$1</del>')
     .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/\x02(\d+)\x02/g, (_, i) => bilder[i]);
 }
 
 function tabelle(zeilen) {
@@ -205,12 +257,12 @@ function dateiMarke(nummer) { return '\x01datei' + nummer + '\x01'; }
    closing fence stricter than the opening it belongs to would swallow
    blocks that draw correctly today.
 
-   ONE constant, because `rendern` and `dateienAus` both read it and MUST
-   agree — they were two hand-written copies once, only one of them learned
+   ONE constant, because `rendern`, `dateienAus` and `openFile` all read it
+   and MUST agree — they were two hand-written copies once, only one of them learned
    that a fence inside a blockquote is a fence, and a document written in a
    callout vanished from the answer without a trace. Nothing left to drift.
-   Sharing the object is safe because both uses are `String.replace`, which
-   resets `lastIndex` itself; an `.exec` or `.test` on it would not be.
+   The readers go through `zaeuneErsetzen`, which works on a copy of this
+   pattern, so no caller's `lastIndex` is ever shared.
 
    The OPENING fence may also stand in the middle of a line. Small models
    write "Here is the fix: ```python" and put the code on the next line all
@@ -221,7 +273,81 @@ function dateiMarke(nummer) { return '\x01datei' + nummer + '\x01'; }
    but its info word and a line break, which is what a fence is and an
    inline span never has. The CLOSING fence stays a line of its own — that
    half is what protects command output, and it is unchanged. */
-const ZAUN_PAAR = /(?:^[ \t]*(>[ \t]?)?|(?<=\S)[ \t]*(?=`{3,}[\w+-]*\n))(`{3,})([\w+-]*)\n?([\s\S]*?)^[ \t]*(?:>[ \t]?)?\2`*[ \t]*$/gm;
+const ZAUN_PAAR = /(?:^[ \t]*(>[ \t]?)?|(?<=\S)[ \t]*(?=`{3,}[\w+-]*\n))(`{3,})([\w+-]*)\n?([\s\S]*?)^[ \t]*(?:>[ \t]?)?\2`*[ \t]*$/gmd;
+
+/* A line that is a fence and nothing else but its language: the marks, the
+   word behind them, the end of the line. The quote marker may stand in
+   front, as it may in ZAUN_PAAR. */
+const ZAUN_ZEILE = /^[ \t]*(?:>[ \t]?)?(`{3,})([\w+-]*)[ \t]*$/;
+
+/* Whether a document's content opens a block of its own: a fence line with a
+   language, at least as long as the document's own fence. CommonMark closes
+   a block at the first bare fence and knows no document inside it; this is
+   the one place the reader departs from it, and only INSIDE a document —
+   its source would otherwise run on into the answer as raw text. */
+function hatInnerenBlock(code, laenge) {
+  return code.split('\n').some((zeile) => {
+    const treffer = ZAUN_ZEILE.exec(zeile);
+    return Boolean(treffer && treffer[2] && treffer[1].length >= laenge);
+  });
+}
+
+/* Where a document really ends, read from the start of its content: the
+   first bare fence line that does not close a block of its own. A fence with
+   a language opens such a block, and its closing fence is the first bare one
+   at least as long as the block's opening; inside it a language fence is
+   plain content. `null` while no closing fence of the document has come
+   yet — the document is still being written. */
+function dokumentEnde(text, ab, laenge) {
+  let innen = 0;
+  let pos = ab;
+  for (;;) {
+    const umbruch = text.indexOf('\n', pos);
+    const zeileEnde = umbruch === -1 ? text.length : umbruch;
+    const treffer = ZAUN_ZEILE.exec(text.slice(pos, zeileEnde));
+    if (treffer && treffer[1].length >= laenge) {
+      if (treffer[2]) {
+        if (!innen) innen = treffer[1].length;
+      } else if (innen) {
+        if (treffer[1].length >= innen) innen = 0;
+      } else {
+        return { inhaltEnde: pos, ende: zeileEnde };
+      }
+    }
+    if (umbruch === -1) return null;
+    pos = umbruch + 1;
+  }
+}
+
+/* `text.replace(ZAUN_PAAR, ersatz)` with the one departure above: a
+   document whose content opens an inner block ends at ITS closing fence, not
+   at the inner block's. `rendern`, `dateienAus` and `openFile` all read
+   fences through here, so what is a document is decided once. A document
+   that has not closed yet is left in the text as it stands, together with
+   everything behind it — it is still being written, and OPEN_FENCE takes it
+   from its first fence on. */
+function zaeuneErsetzen(text, ersatz) {
+  const paar = new RegExp(ZAUN_PAAR.source, ZAUN_PAAR.flags);
+  let aus = '';
+  let stand = 0;
+  let treffer;
+  while ((treffer = paar.exec(text)) !== null) {
+    let [alles, zitat, zaun, sprache, code] = treffer;
+    let ende = treffer.index + alles.length;
+    if (dateiart(sprache) && hatInnerenBlock(code, zaun.length)) {
+      const echt = dokumentEnde(text, treffer.indices[4][0], zaun.length);
+      if (echt === null) break;
+      code = text.slice(treffer.indices[4][0], echt.inhaltEnde);
+      ende = echt.ende;
+      alles = text.slice(treffer.index, ende);
+    }
+    aus += text.slice(stand, treffer.index) + ersatz(alles, zitat, zaun, sprache, code);
+    stand = ende;
+    paar.lastIndex = ende;
+  }
+  return aus + text.slice(stand);
+}
+
 
 /* An opening fence with NO closing partner yet — the answer is still being
    written, and everything from the fence to the end of the text is already
@@ -267,8 +393,8 @@ function rendern(quelltext) {
   // Take out the code blocks before anything else happens. What counts as
   // one is written down at ZAUN_PAAR above, once, for this function and for
   // dateienAus() alike.
-  let text = String(quelltext || '').replace(
-    ZAUN_PAAR,
+  let text = zaeuneErsetzen(
+    String(quelltext || ''),
     function (_, zitat, zaun, sprache, code) {
       /* A fence inside a blockquote is a fence — CommonMark says so, and a
          model writing a callout ("> **Note:** run this:") writes one every
@@ -410,16 +536,16 @@ function rendern(quelltext) {
 function dateienAus(quelltext, versatz = 0) {
   const gefunden = [];
   let dateien = versatz;
-  String(quelltext || '').replace(
-    // The SAME pattern `rendern` uses — literally the same object now, not
-    // a second copy of it. The comment above says one function and not two
-    // that drift apart, and they did: teaching only `rendern` that a fence
-    // inside a blockquote is a fence left this one counting differently, so
-    // a document written in a callout vanished from the answer without a
-    // trace — and where a second document followed, its card took the
-    // missing one's place. Two copies is how that happened; one is why it
-    // cannot happen again.
-    ZAUN_PAAR,
+  zaeuneErsetzen(
+    String(quelltext || ''),
+    // The SAME reading `rendern` uses — literally the same function now,
+    // not a second copy of it. The comment above says one function and not
+    // two that drift apart, and they did: teaching only `rendern` that a
+    // fence inside a blockquote is a fence left this one counting
+    // differently, so a document written in a callout vanished from the
+    // answer without a trace — and where a second document followed, its
+    // card took the missing one's place. Two copies is how that happened;
+    // one is why it cannot happen again.
     function (_, zitat, zaun, sprache, code) {
       const art = dateiart(sprache);
       if (art) {
@@ -450,8 +576,8 @@ function dateienAus(quelltext, versatz = 0) {
 */
 function openFile(quelltext, versatz = 0) {
   let closed = 0
-  const rest = String(quelltext || '').replace(
-    ZAUN_PAAR,
+  const rest = zaeuneErsetzen(
+    String(quelltext || ''),
     function (_, zitat, zaun, sprache) {
       if (dateiart(sprache)) closed++
       // Something that is no blank stays in its place, as in `rendern`: what
@@ -570,6 +696,47 @@ function dateienZahl(text) {
   return zahl
 }
 
+/* How many files one row of a chat carries, for the numbering that runs
+   across the whole chat: the rows of the person take no number, and neither
+   does a finished background command's report — the card of its call
+   already carries what it says. Counted with `dateienZahl`, memoised, so a
+   long chat pays a lookup per message. */
+function dateienInNachricht(nachricht) {
+  return nachricht.role === 'assistant' && nachricht.art !== 'werkzeugmeldung' && nachricht.content
+    ? dateienZahl(nachricht.content)
+    : 0
+}
+
+/* How many files the answers BEFORE a message carry — what its own count
+   goes on from, so that file names run across the whole chat and two
+   answers never both hand out "markdown-1.md" (and so share one tab).
+   `bis` is the message itself, or its id. */
+function dateienDavor(nachrichten, bis) {
+  const kennung = bis && typeof bis === 'object' ? bis.id : bis
+  let summe = 0
+  for (const n of nachrichten || []) {
+    if (n === bis || (kennung != null && n.id === kennung)) break
+    summe += dateienInNachricht(n)
+  }
+  return summe
+}
+
+/* The same number for every message at once, by id: one pass over the chat
+   instead of one per message. The LAST message is the one that may still be
+   growing and nobody stands after it, so it is not counted — scanning the
+   answer that is being written on every piece would be quadratic work for a
+   number nothing reads. */
+function dateienVorherJeNachricht(nachrichten) {
+  const karte = new Map()
+  const liste = nachrichten || []
+  let bisher = 0
+  for (let i = 0; i < liste.length; i++) {
+    karte.set(liste[i].id, bisher)
+    if (i < liste.length - 1) bisher += dateienInNachricht(liste[i])
+  }
+  return karte
+}
+
 /* The click half of the copy button rendern() draws on every code block.
    The button only exists at runtime, so views listen on their container
    and hand the event here — ONE handler for every view, because the two
@@ -587,7 +754,40 @@ function codeKopierKlick(ereignis, fertig) {
   navigator.clipboard.writeText(text).then(fertig)
 }
 
+/* The own message is plain text, not markup — only an address with `http://`
+   or `https://` in it stands as a link, like a link in an answer. Cut into
+   pieces, not into HTML: every piece is text the page draws itself, so
+   nothing a person typed is ever read as markup. The pieces, put together,
+   are the message character for character.
+
+   A sentence mark behind the address is not part of it: `.` `,` `;` `:`
+   `!` `?` and quotes, and a closing bracket unless the address itself has
+   the opening one (a wiki address ending in `_(film)`). */
+function adressTeile(inhalt) {
+  const text = String(inhalt ?? '')
+  const teile = []
+  let ab = 0
+  const zaehle = (s, zeichen) => s.split(zeichen).length - 1
+  for (const treffer of text.matchAll(/https?:\/\/[^\s<>"'`]+/gi)) {
+    let adresse = treffer[0]
+    while (adresse) {
+      const letztes = adresse.at(-1)
+      if (!'.,;:!?)]}'.includes(letztes)) break
+      if (letztes === ')' && zaehle(adresse, '(') >= zaehle(adresse, ')')) break
+      if (letztes === ']' && zaehle(adresse, '[') >= zaehle(adresse, ']')) break
+      if (letztes === '}' && zaehle(adresse, '{') >= zaehle(adresse, '}')) break
+      adresse = adresse.slice(0, -1)
+    }
+    if (/^https?:\/\/$/i.test(adresse)) continue
+    if (treffer.index > ab) teile.push({ text: text.slice(ab, treffer.index) })
+    teile.push({ text: adresse, href: adresse })
+    ab = treffer.index + adresse.length
+  }
+  if (ab < text.length) teile.push({ text: text.slice(ab) })
+  return teile
+}
+
 export {
-  rendern, hervorheben, maskieren, dateienAus, openFile, endsInFence, nummernspalte, dateiTeile,
-  dateienZahl, codeKopierKlick, KOPIER_ZEICHEN,
+  rendern, hervorheben, maskieren, dateienAus, adressTeile, openFile, endsInFence, nummernspalte, dateiTeile,
+  dateienZahl, dateienDavor, dateienVorherJeNachricht, codeKopierKlick, KOPIER_ZEICHEN,
 }

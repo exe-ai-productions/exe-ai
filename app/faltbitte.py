@@ -85,8 +85,8 @@ KOPFANTEIL = 0.45
 ARGUMENTE_VERMERK = "…[truncated]"
 ERGEBNIS_VERMERK = "\n…[truncated]…\n"
 BITTE_VERMERK = (
-    "\n\n…[summary input truncated: omitted {ausgelassen:,} chars from the "
-    "middle to keep this request bounded]…\n\n"
+    "\n\n…[Summary input truncated: {ausgelassen} characters were omitted from the middle to "
+    "limit the request size.]…\n\n"
 )
 
 # The line above an answer's tool block. Read from here by the ordinary
@@ -94,7 +94,7 @@ BITTE_VERMERK = (
 # ``_werkzeuge_als_text``) rather than spelled twice: the block means the
 # same thing in both, and a model that has learned to read one reads the
 # other.
-KOPFZEILE = "[Tool calls made while writing this answer, with what came back]"
+KOPFZEILE = "[Tool calls made while composing this response and their results]"
 
 # What stands where a call returned nothing at all — an empty result is a
 # result, and a bare arrow reads like a call that never finished.

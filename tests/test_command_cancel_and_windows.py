@@ -283,15 +283,19 @@ async def test_on_windows_the_line_goes_to_the_processor_as_one_string(monkeypat
     monkeypatch.setenv("COMSPEC", r"C:\Windows\system32\cmd.exe")
     seen: dict = {}
 
-    async def fake_shell(command, **kwargs):
+    async def fake_line(command, **kwargs):
         seen["command"], seen["kwargs"] = command, kwargs
         return "process"
 
     async def no_exec(*args, **kwargs):
         raise AssertionError("the Windows line must not go through an argument list")
 
-    monkeypatch.setattr(shell.asyncio, "create_subprocess_shell", fake_shell)
+    async def no_shell(*args, **kwargs):
+        raise AssertionError("the Windows line must not be wrapped in a second shell")
+
+    monkeypatch.setattr(shell, "_process_from_line", fake_line)
     monkeypatch.setattr(shell.asyncio, "create_subprocess_exec", no_exec)
+    monkeypatch.setattr(shell.asyncio, "create_subprocess_shell", no_shell)
     assert await shell._starten('echo "a b"', tmp_path) == "process"
     line = shell._mit_ordnermarke('echo "a b"')
     assert seen["command"] == f'C:\\Windows\\system32\\cmd.exe /v:on /c "{line}"'

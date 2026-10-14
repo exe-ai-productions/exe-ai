@@ -31,7 +31,7 @@ def test_anhaengen_aus_oder_leer_aendert_nichts():
 
 def test_anhaengen_ohne_grundprompt():
     ergebnis = anrede.anhaengen("", {"name": "Max", "an": True})
-    assert ergebnis.startswith('The user goes by "Max".')
+    assert ergebnis.startswith('The user\'s name is "Max".')
     # The program is not only a terminal; it also answers on a phone.
     assert "terminal" not in ergebnis
 

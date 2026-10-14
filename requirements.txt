@@ -40,3 +40,9 @@ tzdata==2025.2
 # (app/wecker.py zone_name): read from /etc/localtime on macOS and Linux and
 # from the registry on Windows, where neither TZ nor /etc/localtime exists.
 tzlocal==5.4.4
+
+# The terminal client (cli/): prompt_toolkit keeps the input field fixed at
+# the bottom of the terminal and reads the keys; rich renders the history
+# above it and writes a recording of it as HTML.
+prompt_toolkit==3.0.53
+rich==15.0.0

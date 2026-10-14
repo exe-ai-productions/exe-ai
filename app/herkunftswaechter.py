@@ -38,6 +38,6 @@ class Herkunftswaechter(BaseHTTPMiddleware):
                 wirt = request.headers.get("host", "")
                 if urlsplit(herkunft).netloc.lower() != wirt.lower():
                     return JSONResponse(
-                        {"detail": "cross-origin write rejected"}, status_code=403
+                        {"detail": "Cross-origin write rejected"}, status_code=403
                     )
         return await call_next(request)

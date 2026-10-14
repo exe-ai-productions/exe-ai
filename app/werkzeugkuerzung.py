@@ -47,6 +47,7 @@ has to.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import PurePath
 
@@ -66,7 +67,7 @@ MINDESTZEICHEN = 200
 # Both are far shorter than MINDESTZEICHEN, which is what makes a second pass
 # over an already shortened list a no-op: nothing has to remember what it
 # already did, because what it did is under the floor.
-PLATZHALTER = "[Old tool output cleared to save context space]"
+PLATZHALTER = "[Old tool output removed to free context space]"
 DOPPELT = "[Duplicate tool output — same content as a more recent call]"
 
 # The two kinds, by the name a ROW remembers them under. A run that cleared
@@ -120,18 +121,68 @@ def zeichen(nachrichten: list[ChatNachricht]) -> int:
     )
 
 
-# How many pictures a tool read stay in the request, counted from the newest.
-# Three are what a model still refers back to, and every one before them
-# costs a full picture's worth of window for a round nobody is looking at
-# any more.
-WERKZEUGBILDER_BEHALTEN = 3
+# What stays of the pictures a request carries. They all stay until there are
+# more than ``OUTBOUND_IMAGE_LIMIT`` of them or they weigh more than
+# ``OUTBOUND_IMAGE_BUDGET_BYTES`` as they are sent; then the oldest pictures
+# a tool read leave, ``IMAGE_EVICTION_BATCH`` at a time and as many batches as
+# it takes to get under both. A picture that leaves in the middle of the
+# history makes the server read everything behind it anew, so the pictures
+# go in steps rather than one with every new picture: between two steps the
+# start of each request is the same bytes, and the server reads it from its
+# cache. The newest ``OUTBOUND_IMAGE_FLOOR`` pictures never leave. A picture
+# the user attached counts and is never touched.
+OUTBOUND_IMAGE_LIMIT = 20
+OUTBOUND_IMAGE_BUDGET_BYTES = 24_000_000
+IMAGE_EVICTION_BATCH = 8
+OUTBOUND_IMAGE_FLOOR = 3
+
+
+def retired_positions(
+    may_leave: Sequence[bool], size_of: Callable[[int], int]
+) -> list[int]:
+    """The positions of the pictures that leave a request, oldest first.
+
+    ``may_leave`` has one entry per picture of the request, oldest first:
+    ``True`` for a picture a tool read, ``False`` for one the user attached
+    (it counts towards the limit and the budget and never leaves).
+    ``size_of`` answers what the picture at a position weighs as it is sent.
+    It is only asked for the pictures that would stay, and for each once, so
+    a history with hundreds of old pictures is not read through to decide.
+
+    The ONE rule for the request a run sends (``thin_pictures``) and for the
+    history the next message rebuilds from its rows
+    (``app/verlaufsbau.py``): both ask this function with the same pictures,
+    so the next request starts with the very bytes the last one ended with.
+    """
+    total = len(may_leave)
+    protected_from = total - OUTBOUND_IMAGE_FLOOR
+    candidates = [i for i, free in enumerate(may_leave) if free and i < protected_from]
+    weights: dict[int, int] = {}
+
+    def weight(position: int) -> int:
+        if position not in weights:
+            weights[position] = max(0, size_of(position))
+        return weights[position]
+
+    leaving = 0
+    while True:
+        gone = set(candidates[:leaving])
+        staying = [i for i in range(total) if i not in gone]
+        if (
+            len(staying) <= OUTBOUND_IMAGE_LIMIT
+            and sum(weight(i) for i in staying) <= OUTBOUND_IMAGE_BUDGET_BYTES
+        ):
+            return candidates[:leaving]
+        if leaving >= len(candidates):
+            return candidates[:leaving]
+        leaving = min(leaving + IMAGE_EVICTION_BATCH, len(candidates))
 
 # What stands where a picture was. The sentence after it is the note a
 # document too large to travel already carries (``app/dokumentablage.py``,
 # ``nachlesehinweis``), so there is one way of saying "it is still there,
 # read it again".
 BILD_ENTFERNT = (
-    "[An image this tool read was removed here to save context space.]"
+    "[An image read by this tool was removed to free context space.]"
 )
 
 
@@ -225,32 +276,86 @@ def kuerzen(
         neu[stelle] = replace(neu[stelle], content=PLATZHALTER)
         anzahl += 1
 
-    # The pictures a tool read, oldest first — everything before the newest
-    # ``WERKZEUGBILDER_BEHALTEN`` of them, counted per PICTURE rather than per
-    # message: a round that reads several into one message must not let that
+    anzahl += _thin_pictures(nachrichten, neu)
+
+    if not anzahl:
+        return nachrichten, 0
+    return neu, anzahl
+
+
+def retire_pictures(nachricht: ChatNachricht, indices: set[int]) -> ChatNachricht:
+    """One round's picture message with the pictures at ``indices`` retired.
+
+    A message loses only its retired pictures — the ones a round left beside
+    it keep their introduction (``EINLEITUNG``) by the short name the result
+    itself was read under (a path's own last part — the same name
+    ``app/tools/datei_lesen.py`` hands to ``modellbild`` beside the full
+    path). Retiring the last one is the special case already covered by
+    ``_ohne_bild``, kept as is rather than folded in: an empty picture list
+    is not "a shorter version of the sentence", it is the sentence that
+    names no picture at all.
+
+    The one form of a retired picture. The run reaches it by thinning its
+    request (``_thin_pictures``); a history rebuilt from stored rows reaches
+    it here (``app/verlaufsbau.py``), so the next request begins with the
+    very same bytes the run last sent.
+    """
+    behalten = [i for i in range(len(nachricht.werkzeugbilder)) if i not in indices]
+    if not behalten:
+        return _ohne_bild(nachricht)
+    hinweise = "".join(
+        dokumentablage.nachlesehinweis(nachricht.werkzeugbilder[i]) for i in sorted(indices)
+    )
+    einleitung = werkzeugbild.EINLEITUNG.format(
+        namen=", ".join(PurePath(nachricht.werkzeugbilder[i]).name for i in behalten)
+    )
+    return replace(
+        nachricht,
+        bild_url=None,
+        bild_urls=[nachricht.bild_urls[i] for i in behalten],
+        werkzeugbilder=[nachricht.werkzeugbilder[i] for i in behalten],
+        content=f"{einleitung}{BILD_ENTFERNT}{hinweise}",
+    )
+
+
+def _thin_pictures(nachrichten: list[ChatNachricht], neu: list[ChatNachricht]) -> int:
+    """Retires the tool pictures ``retired_positions`` names for the pictures
+    of ``neu`` — a copy of ``nachrichten`` that may already carry the text
+    passes of :func:`kuerzen` — and returns how many pictures went.
+
+    Both lists are given because the results that announced a picture are
+    recognised in the INPUT (``nachrichten``): a text pass that already
+    shortened a result would hide it from ``gelesener_bildpfad``. Only
+    ``neu`` is changed.
+    """
+    anzahl = 0
+    # Every picture of the request, oldest first — those a tool read and
+    # those the user attached, counted per PICTURE rather than per message:
+    # a round that reads several into one message must not let that
     # message's single position hide them all from the cut. On the request
     # only, never on a row. The protected end does not apply here — a
     # picture ten rounds old is old wherever it sits, and what replaces it
     # says where to read it again.
-    bildinstanzen = [
-        (stelle, index)
-        for stelle, n in enumerate(neu)
-        if _bildnachricht(n)
-        for index in range(len(n.werkzeugbilder))
-    ]
+    bildinstanzen: list[tuple[int, int | None, int]] = []
+    for stelle, n in enumerate(neu):
+        if _bildnachricht(n):
+            for index in range(len(n.werkzeugbilder)):
+                url = n.bild_urls[index] if index < len(n.bild_urls) else ""
+                bildinstanzen.append((stelle, index, len(url)))
+        else:
+            bildinstanzen.extend((stelle, None, len(url)) for url in n.alle_bild_urls())
+    gone = retired_positions(
+        [index is not None for _, index, _ in bildinstanzen],
+        lambda position: bildinstanzen[position][2],
+    )
     ausgemustert_je_nachricht: dict[int, set[int]] = {}
-    for stelle, index in bildinstanzen[: max(0, len(bildinstanzen) - WERKZEUGBILDER_BEHALTEN)]:
+    for position in gone:
+        stelle, index, _ = bildinstanzen[position]
+        if index is None:
+            continue
         ausgemustert_je_nachricht.setdefault(stelle, set()).add(index)
         anzahl += 1
 
-    # A message loses only its retired pictures — the ones a round left
-    # beside it keep their introduction (``EINLEITUNG``), by the short name
-    # the result itself was read under (a path's own last part — the same
-    # name ``app/tools/datei_lesen.py`` hands to ``modellbild`` beside the
-    # full path). Retiring the last one is the special case already covered by
-    # ``_ohne_bild``, kept as is rather than folded in here: an empty picture
-    # list is not "a shorter version of the sentence", it is the sentence
-    # that names no picture at all.
     ausgemusterte_ergebnisse: set[int] = set()
     for stelle, indices in ausgemustert_je_nachricht.items():
         nachricht = neu[stelle]
@@ -286,23 +391,7 @@ def kuerzen(
                     ausgemusterte_ergebnisse.add(ergebnis_stellen[index])
             break
 
-        behalten = [i for i in range(len(nachricht.werkzeugbilder)) if i not in indices]
-        if not behalten:
-            neu[stelle] = _ohne_bild(nachricht)
-            continue
-        hinweise = "".join(
-            dokumentablage.nachlesehinweis(nachricht.werkzeugbilder[i]) for i in sorted(indices)
-        )
-        einleitung = werkzeugbild.EINLEITUNG.format(
-            namen=", ".join(PurePath(nachricht.werkzeugbilder[i]).name for i in behalten)
-        )
-        neu[stelle] = replace(
-            nachricht,
-            bild_url=None,
-            bild_urls=[nachricht.bild_urls[i] for i in behalten],
-            werkzeugbilder=[nachricht.werkzeugbilder[i] for i in behalten],
-            content=f"{einleitung}{BILD_ENTFERNT}{hinweise}",
-        )
+        neu[stelle] = retire_pictures(nachricht, indices)
 
     # A picture that leaves the request takes the promise out of its own
     # result. The message says the picture was removed while the result next
@@ -310,13 +399,29 @@ def kuerzen(
     # sentences about one picture in one request, and the promise is the
     # false one. What goes in is the bare placeholder, not another copy of
     # the note — the path already stands in the message beside it
-    # (``_ohne_bild`` or the partial replacement above, ``BILD_ENTFERNT`` plus
-    # the note). A round with no such message — ``verlaufsbau.py`` rebuilding
-    # a history from stored rows, never this pass — is the one place the note
-    # belongs on the result itself, and keeps it there untouched.
+    # (``retire_pictures``: ``BILD_ENTFERNT`` plus the note). A history
+    # rebuilt from stored rows writes the same placeholder and the same
+    # message for such a picture (``app/verlaufsbau.py``).
     for stelle in ausgemusterte_ergebnisse:
         neu[stelle] = replace(neu[stelle], content=werkzeugbild.NICHT_MEHR_DABEI)
 
+    return anzahl
+
+
+def thin_pictures(
+    nachrichten: list[ChatNachricht],
+) -> tuple[list[ChatNachricht], int]:
+    """``(nachrichten, count)`` with the tool pictures retired that
+    :func:`retired_positions` names — the picture rule of :func:`kuerzen`
+    alone, so a caller can apply it to EVERY request: the rule does not wait
+    for the window to fill (it is about how many pictures a request carries
+    and how much they weigh, not about room), and the text passes keep their
+    threshold.
+
+    The INPUT list comes back unchanged with ``0`` where no picture went.
+    """
+    neu = list(nachrichten)
+    anzahl = _thin_pictures(nachrichten, neu)
     if not anzahl:
         return nachrichten, 0
     return neu, anzahl

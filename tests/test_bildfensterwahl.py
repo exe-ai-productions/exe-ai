@@ -172,6 +172,7 @@ CHAT_A = {
     "hires_steps": 12,
     "hires_denoise": 0.45,
     "hires_upscaler": "RealESRGAN",
+    "upscale_model": "RealESRGAN_x4.pth",
     "hires_breite": "",
     "hires_hoehe": 1536,
     "slg_scale": 2.5,
@@ -287,6 +288,14 @@ def test_draw_request_carries_switches_but_no_picture():
         {"switches": {"timestep_shift": 250, "ip_adapter_image": "a" * 32 + ".png"}},
     )
     assert request["switches"] == {"timestep_shift": 250}
+
+
+def test_the_upscale_model_is_kept_per_chat_but_not_drawn_with():
+    """The file "Upscale" enlarges with is a choice of the chat, kept like
+    the highres upscaler; a drawing does not carry it."""
+    kept = bildfensterwahl.wahl_pruefen({"upscale_model": "4x.pth", "hires_upscaler": "RealESRGAN"})
+    assert kept == {"upscale_model": "4x.pth", "hires_upscaler": "RealESRGAN"}
+    assert "upscale_model" not in bildfensterwahl.draw_request(kept)
 
 
 def test_a_stored_infinite_switch_value_is_dropped_alone():

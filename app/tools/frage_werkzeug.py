@@ -58,21 +58,23 @@ def werkzeug_beschreibung() -> MCPWerkzeug:
             "properties": {
                 "question": {
                     "type": "string",
-                    "description": "The question, in the user's language, short and answerable.",
+                    "description": "A brief, answerable question in the user's language.",
                 },
                 "options": {
                     "type": "array",
-                    "description": f"Up to {MAX_OPTIONEN} choices, best one first.",
+                    "description": f"Up to {MAX_OPTIONEN} choices, with the recommended option "
+                                   "first.",
                     "items": {
                         "type": "object",
                         "properties": {
                             "label": {
                                 "type": "string",
-                                "description": "The words on the button — a few, not a sentence.",
+                                "description": "A brief button label, not a full sentence.",
                             },
                             "description": {
                                 "type": "string",
-                                "description": "One line on what this choice means.",
+                                "description": "One line explaining the implications of this "
+                                               "choice.",
                             },
                         },
                         "required": ["label"],
@@ -93,24 +95,24 @@ def gepruefte_frage(argumente: dict[str, Any]) -> tuple[str, list[dict[str, str]
     """
     frage = str(argumente.get("question") or "").strip()
     if not frage:
-        raise FrageUngueltig("No question given.")
+        raise FrageUngueltig("No question provided.")
 
     roh = argumente.get("options") or []
     if not isinstance(roh, list):
-        raise FrageUngueltig("options has to be a list.")
+        raise FrageUngueltig("options must be a list.")
     if len(roh) > MAX_OPTIONEN:
         raise FrageUngueltig(
-            f"{len(roh)} options is more than the {MAX_OPTIONEN} that fit. "
-            "Ask a narrower question, or leave the choice open."
+            f"{len(roh)} options exceed the limit of {MAX_OPTIONEN}. Narrow the question or "
+            "allow a free-text answer."
         )
 
     optionen: list[dict[str, str]] = []
     for eintrag in roh:
         if not isinstance(eintrag, dict):
-            raise FrageUngueltig("Every option has to be an object with a label.")
+            raise FrageUngueltig("Every option must be an object with a label.")
         beschriftung = str(eintrag.get("label") or "").strip()
         if not beschriftung:
-            raise FrageUngueltig("An option without a label cannot be shown.")
+            raise FrageUngueltig("An option without a label cannot be displayed.")
         optionen.append(
             {
                 "label": beschriftung,
@@ -123,8 +125,8 @@ def gepruefte_frage(argumente: dict[str, Any]) -> tuple[str, list[dict[str, str]
 # What the model is told when nobody answered — the run went on without the
 # decision, and it has to know that it is still missing.
 OHNE_ANTWORT = (
-    "The user did not answer. Do not ask again; carry on with the most "
-    "sensible assumption and say which one you made."
+    "The user did not answer. Do not repeat the question. Continue with the most reasonable "
+    "assumption and state it explicitly."
 )
 
 # What the model reads when the user stopped the run while the question was

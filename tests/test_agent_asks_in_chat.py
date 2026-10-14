@@ -190,7 +190,7 @@ async def test_silent_a_run_started_by_hand_or_schedule_is_judged_as_before(
     )
 
     assert not [e for e in events if e["typ"] == "tool_confirm"]
-    assert "nobody can answer in an unattended run" in _tool_result(request)
+    assert "unavailable during an unattended run" in _tool_result(request)
     assert job.zustand == "fertig"
 
 

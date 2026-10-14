@@ -143,13 +143,6 @@ def start_parts(holder: object, video_parts: object, prefix: str = "") -> tuple[
     return (*(getattr(holder, prefix + name) for name in START_PARTS), video_parts)
 
 
-# The ceiling for one picture once the model is up: the same fifteen minutes
-# the sd-cli path allows (app/bildrunner.py ZEITGRENZE). A large highres
-# picture on a Mac genuinely takes six or seven, and both paths must give it
-# the same generous room — the limit only guards against a truly stuck
-# server, it must never cut off a slow but honest draw.
-ZEICHENFRIST = 900.0
-
 # How often a job is asked for its state while it draws. The step bar on the
 # server's stdout already feeds the progress frame, so this only has to
 # notice the end: a quarter second is below what anybody sees against a
@@ -355,6 +348,9 @@ class Bildturbo:
         # The whole start call of the running server, kept so the server can
         # step aside for one sd-cli picture and come back exactly as it was.
         self._start_values: tuple[tuple, dict] | None = None
+        # The label of the control whose value sent the picture the server
+        # stepped aside for to sd-cli; set only while the server is paused.
+        self._paused_for: str | None = None
         self._schloss = threading.Lock()
         self._pid_datei = self._datenordner / pid_dateiname(app_port)
         # The running picture's honest step counter, fed by the stdout reader.
@@ -873,6 +869,7 @@ class Bildturbo:
             self._extra_start = tuple(extra_start)
             self._ad_extra = ad_extra if ad_modell is not None else ""
             self._start_values = start_values
+            self._paused_for = None
             self._pid_merken(self._prozess.pid)
             return True
 
@@ -991,16 +988,28 @@ class Bildturbo:
             return None
         return rss_gb(process.pid)
 
-    def pause(self) -> bool:
+    def pause(self, control: str | None = None) -> bool:
         """End the server for a while and keep how it was started. True when
-        one was running. ``resume`` brings the same server back."""
+        one was running. ``resume`` brings the same server back. ``control``
+        names what the picture it steps aside for needs sd-cli for, while
+        the pause lasts (``paused_for``)."""
         with self._schloss:
             if not self.laeuft():
                 return False
             values = self._start_values
             self._stoppen_intern()
             self._start_values = values
+            self._paused_for = control
             return True
+
+    def paused_for(self) -> str | None:
+        """What the server is paused for, or None when it is not paused —
+        a server that runs, was stopped or never started is not. Read
+        without the lock: the state poll must not wait for a pause that is
+        still ending the process."""
+        if self._prozess is not None or self._start_values is None:
+            return None
+        return self._paused_for
 
     def resume(self) -> bool:
         """Start the server again exactly as it ran before ``pause`` —
@@ -1009,6 +1018,9 @@ class Bildturbo:
         the stop holds. A server stopped while the program ends does not
         come back behind it. True when it was started."""
         values = self._start_values
+        # The pause is over once the server is asked to come back, whether
+        # it does or not: a server that stays down is off, not paused.
+        self._paused_for = None
         if values is None or self.laeuft():
             return False
         args, kwargs = values
@@ -1032,6 +1044,7 @@ class Bildturbo:
         self._war_bereit = False
         self._weights_loaded = False
         self._start_values = None
+        self._paused_for = None
         self._embd_ordner = None
         self._diffusion_model = None
         self._t5xxl = None
@@ -1180,7 +1193,7 @@ class Bildturbo:
 
     def zeichnen(
         self, auftrag: dict, *, paesse: int = 0, video: bool = False,
-        stopped: Callable[[], bool] | None = None,
+        stopped: Callable[[], bool] | None = None, zeitgrenze: float | None = None,
     ) -> bytes:
         """Draw one picture over the running server and return its bytes.
 
@@ -1199,6 +1212,11 @@ class Bildturbo:
         wait below, once more as the draw takes over, and at every look for
         the job's state after that; a stop that reaches the draw itself is
         ``abbrechen``'s.
+
+        ``zeitgrenze`` is how many seconds the picture may take once the job
+        is handed in; after it the job is ended and the draw reports that
+        the limit has passed. None draws without a limit, and a video has
+        none whatever is given.
         """
         if not self.laeuft():
             raise BildturboFehler("bild.turbo_aus")
@@ -1232,7 +1250,9 @@ class Bildturbo:
             log.info("Image server: picture handed in over %s as job %s", route, job_id)
             if stopped_early:
                 self._end_job(job_id)
-            deadline = time.monotonic() + ZEICHENFRIST
+            deadline = (
+                time.monotonic() + zeitgrenze if zeitgrenze and not video else None
+            )
             while True:
                 poll = httpx.get(f"{base_url}/jobs/{job_id}", timeout=30.0)
                 poll.raise_for_status()
@@ -1254,12 +1274,12 @@ class Bildturbo:
                 if status_name not in ("queued", "generating"):
                     reason = (job.get("error") or {}).get("message") or status_name
                     raise BildturboFehler("bild.gescheitert", reason)
-                if time.monotonic() > deadline:
-                    # The same ceiling the sd-cli path has; the job is ended
+                if deadline is not None and time.monotonic() > deadline:
+                    # The same limit the sd-cli path has; the job is ended
                     # with it, so nothing keeps drawing for nobody and the
                     # next picture does not queue behind it.
                     self._end_job(job_id)
-                    raise BildturboFehler("bild.gescheitert")
+                    raise BildturboFehler("bild.zeit_abgelaufen")
                 if stopped is not None and not self._abgebrochen and stopped():
                     # A stop that fell between the look above and this
                     # draw's own flag: taken up here like any stop of a
@@ -1289,12 +1309,17 @@ class Bildturbo:
         """The upscaler folder the running server was started with."""
         return self._upscaler_ordner if self.laeuft() else None
 
-    def upscale(self, picture_b64: str, upscaler: str, output_format: str = "png") -> bytes:
+    def upscale(
+        self, picture_b64: str, upscaler: str, output_format: str = "png",
+        zeitgrenze: float | None = None,
+    ) -> bytes:
         """Upscale one finished picture over the server's own route
         ``/sdcpp/v1/upscale`` — no model, no sampling. ``upscaler`` is a
         model's name without its ending, as the server lists it from its
         upscaler folder; ``output_format`` is ``png``, ``jpeg`` or ``webp``. The route
-        answers at once with the picture."""
+        answers at once with the picture. ``zeitgrenze`` is how many seconds
+        the call waits for it — the route cannot be broken off, so the server
+        draws on to its end; None waits without a limit."""
         if not self.laeuft():
             raise BildturboFehler("bild.turbo_aus")
         # Marked as drawing before the wait, so a stop pressed while the
@@ -1311,7 +1336,7 @@ class Bildturbo:
             response = httpx.post(
                 f"http://127.0.0.1:{self._port}/sdcpp/v1/upscale",
                 json={"image": picture_b64, "upscaler": upscaler, "output_format": output_format},
-                timeout=ZEICHENFRIST,
+                timeout=zeitgrenze or None,
             )
             response.raise_for_status()
             # The route answers in one go and cannot be broken off; a stop
@@ -1328,6 +1353,8 @@ class Bildturbo:
             # answer then went wrong.
             if self._abgebrochen:
                 raise BildturboFehler("bild.abgebrochen") from error
+            if isinstance(error, httpx.TimeoutException):
+                raise BildturboFehler("bild.zeit_abgelaufen") from error
             server_words = _serverwort(error) if isinstance(error, httpx.HTTPError) else None
             raise BildturboFehler("bild.gescheitert", server_words) from error
         finally:

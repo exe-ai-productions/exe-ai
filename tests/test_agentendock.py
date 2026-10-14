@@ -192,9 +192,9 @@ def test_ein_kaputtes_verzeichnis_wird_nicht_ueberschrieben(tmp_path):
     kaputt = "[{halb geschrieben"
     dock.pfad.write_text(kaputt, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="cannot be read"):
+    with pytest.raises(ValueError, match="could not be read"):
         dock.ablegen("neu.md", b"x")
-    with pytest.raises(ValueError, match="cannot be read"):
+    with pytest.raises(ValueError, match="could not be read"):
         dock.entfernen("egal")
 
     assert dock.pfad.read_text(encoding="utf-8") == kaputt
@@ -351,6 +351,88 @@ async def test_werkzeug_liefert_text_ab(tmp_path):
     assert pfad.read_text(encoding="utf-8") == "# Report"
 
 
+_KEIN_TEXT = (
+    "'{name}' is not a text format, but 'content' is always stored as plain text, so the "
+    "file would not open. Write the file first, for example a PDF with write_file, then "
+    "call deliver_file again with its 'path' instead of 'content'."
+)
+
+
+@pytest.mark.parametrize("name", ["bericht.pdf", "bild.png", "Tabelle.XLSX"])
+async def test_content_under_a_name_that_is_no_text_format_is_refused(tmp_path, name):
+    """`content` is stored as plain text whatever the name says: under a
+    .pdf or a .png it would open as nonsense. The call is refused with the
+    way that works and nothing is written."""
+    dock = AgentenDock(tmp_path)
+    with pytest.raises(AblageVerboten) as fehler:
+        await werkzeug.ausfuehren(
+            {"name": name, "content": "plain words"},
+            dock, [], herkunft="agent", agent=AGENT,
+        )
+    assert str(fehler.value) == _KEIN_TEXT.format(name=name)
+    assert dock.alle() == []
+
+
+async def test_a_chat_call_with_content_under_such_a_name_stores_nothing(tmp_path):
+    gespeichert = []
+
+    def ablage(**felder):
+        gespeichert.append(felder)
+
+    with pytest.raises(AblageVerboten, match="not a text format"):
+        await werkzeug.ausfuehren(
+            {"name": "bericht.pdf", "content": "plain words"},
+            AgentenDock(tmp_path), [], herkunft="chat", chat_delivery=ablage, chat="c1", answer="a1",
+        )
+    assert gespeichert == []
+
+
+@pytest.mark.parametrize("name", ["bericht.md", "daten.csv", "README"])
+async def test_silence_content_under_a_text_name_or_none_goes_through(tmp_path, name):
+    dock = AgentenDock(tmp_path)
+    await werkzeug.ausfuehren(
+        {"name": name, "content": "plain words"}, dock, [], herkunft="agent", agent=AGENT,
+    )
+    (eintrag,) = dock.alle()
+    _, pfad = dock.holen(eintrag["id"])
+    assert pfad.read_text(encoding="utf-8") == "plain words"
+
+
+async def test_silence_a_path_to_a_real_pdf_goes_through(tmp_path):
+    dock = AgentenDock(tmp_path / "daten")
+    freigabe = tmp_path / "arbeit"
+    freigabe.mkdir()
+    (freigabe / "bericht.pdf").write_bytes(b"%PDF-1.4 ...")
+
+    await werkzeug.ausfuehren(
+        {"name": "bericht.pdf", "path": "bericht.pdf"},
+        dock, [str(freigabe)], herkunft="agent", agent=AGENT,
+    )
+    (eintrag,) = dock.alle()
+    _, pfad = dock.holen(eintrag["id"])
+    assert pfad.read_bytes() == b"%PDF-1.4 ..."
+
+
+def test_the_tool_list_names_both_places_the_file_lands():
+    import json
+    from pathlib import Path
+
+    katalog = Path(__file__).resolve().parents[1] / "app" / "locales"
+    satz = {
+        sprache: json.loads((katalog / f"{sprache}.json").read_text(encoding="utf-8"))
+        ["werkzeuge"]["eingebaut_satz"]["deliver_file"]
+        for sprache in ("en", "de")
+    }
+    assert satz["en"] == (
+        "Hands you a finished file: in a chat it appears in the response, from a task it "
+        "lands in the doc folder."
+    )
+    assert satz["de"] == (
+        "Übergibt dir eine fertige Datei: im Chat erscheint sie in der Antwort, aus einer "
+        "Aufgabe landet sie im Doc-Ordner."
+    )
+
+
 async def test_werkzeug_kopiert_datei_aus_der_freigabe(tmp_path):
     dock = AgentenDock(tmp_path / "daten")
     freigabe = tmp_path / "arbeit"
@@ -405,11 +487,11 @@ async def test_a_chat_call_with_no_chat_to_keep_the_file_in_is_refused(tmp_path)
     no chat named, or no way to store it — the call is refused in words
     and the shelf, which is the jobs', stays empty."""
     dock = AgentenDock(tmp_path)
-    with pytest.raises(AblageVerboten, match="no conversation to deliver into"):
+    with pytest.raises(AblageVerboten, match="no conversation to deliver to"):
         await werkzeug.ausfuehren(
             {"name": "x.md", "content": "x"}, dock, [], herkunft="chat", agent=None,
         )
-    with pytest.raises(AblageVerboten, match="no conversation to deliver into"):
+    with pytest.raises(AblageVerboten, match="no conversation to deliver to"):
         await werkzeug.ausfuehren(
             {"name": "x.md", "content": "x"}, dock, [], herkunft="chat", agent=None,
             chat_delivery=lambda **_given: None,
@@ -718,6 +800,137 @@ async def test_a_chat_delivers_a_file_of_its_folders_and_none_from_outside(
     assert repositories.messages.holen(answer.id).dokument_ids() == [document.id]
 
 
+def _file_in_chat_folder(client, chat_id, relative, data=b"\xff\xd8\xff"):
+    """A file the model wrote into the chat's own folder — in a subfolder
+    where ``relative`` has one — the way ``run_command`` leaves it."""
+    from app import dokumentablage
+
+    folder = dokumentablage.chatordner(client.app.state.config.datenverzeichnis, chat_id)
+    file = folder / relative
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_bytes(data)
+    return folder, file
+
+
+def _files_below(folder):
+    return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*") if p.is_file())
+
+
+async def test_a_file_that_lies_in_the_chat_folder_is_delivered_where_it_lies(client, chat_id):
+    """No copy into the folder's root: the row points at the file, the folder
+    holds one file and the wall shows one tile for it."""
+    repositories = client.app.state.repositories
+    folder, file = _file_in_chat_folder(client, chat_id, "dogs/dog-1.jpg")
+    answer = _answer_row(client, chat_id)
+
+    result = await _chat_registry(client).ausfuehren(
+        werkzeug.WERKZEUG_NAME,
+        {"name": "dog-1.jpg", "path": "dogs/dog-1.jpg"},
+        ordner=[str(folder)],
+        chat_id=chat_id,
+        antwort_id=answer.id,
+    )
+
+    [document] = repositories.documents.auflisten(chat_id=chat_id)
+    assert document.pfad == str(file.resolve())
+    assert document.mime_type == "image/jpeg"
+    assert _files_below(folder) == ["dogs/dog-1.jpg"]
+    assert repositories.messages.holen(answer.id).dokument_ids() == [document.id]
+    assert document.pfad in result
+    wall = client.get("/api/v1/doc-folder", params={"chat": chat_id}).json()
+    assert len(wall) == 1
+
+
+async def test_a_job_started_from_a_chat_delivers_a_file_of_its_folder_where_it_lies(
+    client, chat_id
+):
+    repositories = client.app.state.repositories
+    folder, file = _file_in_chat_folder(client, chat_id, "dogs/dog-2.jpg")
+    job = repositories.auftraege.erstellen(
+        user_id="lokal", agent=AGENT.name, auftrag="deliver", chat_id=chat_id
+    )
+
+    await _chat_registry(client).ausfuehren(
+        werkzeug.WERKZEUG_NAME,
+        {"name": "dog-2.jpg", "path": "dogs/dog-2.jpg"},
+        herkunft="agent",
+        agent=AGENT,
+        ordner=[str(folder)],
+        chat_id=job.id,
+    )
+
+    [document] = repositories.documents.auflisten(chat_id=chat_id)
+    assert document.pfad == str(file.resolve())
+    assert document.job == job.id
+    assert _files_below(folder) == ["dogs/dog-2.jpg"]
+    assert len(client.get("/api/v1/doc-folder", params={"chat": chat_id}).json()) == 1
+
+
+async def test_a_file_from_another_folder_is_still_copied_into_the_chat_folder(
+    client, chat_id, tmp_path
+):
+    """The silence check: only what already lies in the chat's own folder is
+    kept in place. A file of a shared folder of the user's is copied, and
+    the original is left as it is."""
+    repositories = client.app.state.repositories
+    folder, _ = _file_in_chat_folder(client, chat_id, "dogs/dog-3.jpg")
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "dog-4.jpg").write_bytes(b"\xff\xd8\xfe")
+    answer = _answer_row(client, chat_id)
+
+    await _chat_registry(client).ausfuehren(
+        werkzeug.WERKZEUG_NAME,
+        {"name": "dog-4.jpg", "path": "dog-4.jpg"},
+        ordner=[str(shared), str(folder)],
+        chat_id=chat_id,
+        antwort_id=answer.id,
+    )
+
+    [document] = repositories.documents.auflisten(chat_id=chat_id)
+    assert document.pfad == str((folder / "dog-4.jpg").resolve())
+    assert _files_below(folder) == ["dog-4.jpg", "dogs/dog-3.jpg"]
+    assert (shared / "dog-4.jpg").read_bytes() == b"\xff\xd8\xfe"
+
+
+async def test_content_is_still_written_into_the_chat_folder(client, chat_id):
+    repositories = client.app.state.repositories
+    folder, _ = _file_in_chat_folder(client, chat_id, "dogs/dog-5.jpg")
+    answer = _answer_row(client, chat_id)
+
+    await _chat_registry(client).ausfuehren(
+        werkzeug.WERKZEUG_NAME,
+        {"name": "notes.md", "content": "# Notes"},
+        ordner=[str(folder)],
+        chat_id=chat_id,
+        antwort_id=answer.id,
+    )
+
+    [document] = repositories.documents.auflisten(chat_id=chat_id)
+    assert document.pfad == str((folder / "notes.md").resolve())
+    assert _files_below(folder) == ["dogs/dog-5.jpg", "notes.md"]
+
+
+async def test_the_same_file_of_the_chat_folder_twice_in_one_answer_is_one_card(client, chat_id):
+    repositories = client.app.state.repositories
+    folder, _ = _file_in_chat_folder(client, chat_id, "dogs/dog-6.jpg")
+    answer = _answer_row(client, chat_id)
+    registry = _chat_registry(client)
+
+    for _ in range(2):
+        await registry.ausfuehren(
+            werkzeug.WERKZEUG_NAME,
+            {"name": "dog-6.jpg", "path": "dogs/dog-6.jpg"},
+            ordner=[str(folder)],
+            chat_id=chat_id,
+            antwort_id=answer.id,
+        )
+
+    assert len(repositories.messages.holen(answer.id).dokument_ids()) == 1
+    assert len(repositories.documents.auflisten(chat_id=chat_id)) == 1
+    assert _files_below(folder) == ["dogs/dog-6.jpg"]
+
+
 async def test_a_job_without_a_chat_still_delivers_onto_the_dock(client):
     """The silence check for the jobs' side: nothing about a job's delivery
     moved. Without a chat behind it the file lands on the shelf, with the
@@ -823,7 +1036,7 @@ def test_a_chats_answer_carries_the_file_its_model_delivered(client, chat_id):
     assert "card in your answer" in offered[werkzeug.WERKZEUG_NAME]["description"]
     # And the prompt's overview names the same place, not the jobs' folder.
     system = " ".join(str(provider.alle_anfragen[0].nachrichten[0].content).split())
-    assert "hand finished files to the user as cards in the answer" in system
+    assert "deliver completed files to the user as cards in the response" in system
     assert "into the Doc folder" not in system
 
     result = next(e for e in events if e["typ"] == "tool_result")
@@ -878,6 +1091,63 @@ def test_api_liste_datei_und_entfernen(client):
     assert client.delete(f"/api/v1/agentendock/{eintrag['id']}").status_code == 204
     assert client.get("/api/v1/agentendock/alle").json() == []
     assert client.get(f"/api/v1/agentendock/{eintrag['id']}").status_code == 404
+
+
+def test_ein_pdf_vom_dock_wird_an_ort_und_stelle_gezeigt_alles_andere_gespeichert(client):
+    """The reader's frame draws a PDF's pages only for an answer that says
+    "inline", the way the routes of a chat's documents say it. Every other
+    type stays "attachment": a page of the shelf is never served in place."""
+    dock = dock_fuer(client.app.state.config)
+    offered = {
+        "scan.pdf": ("application/pdf", b"%PDF-1.4"),
+        "seite.html": ("text/html", b"<p>x</p>"),
+        "bild.png": ("image/png", b"\x89PNG"),
+        "notiz.md": ("text/markdown", b"# x"),
+    }
+    ids = {name: dock.ablegen(name, daten, typ=typ)["id"] for name, (typ, daten) in offered.items()}
+
+    heads = {
+        name: client.get(f"/api/v1/agentendock/{kennung}").headers["content-disposition"]
+        for name, kennung in ids.items()
+    }
+
+    assert heads["scan.pdf"].startswith("inline")
+    for name in ("seite.html", "bild.png", "notiz.md"):
+        assert heads[name].startswith("attachment"), name
+
+
+def _abgelegt(client, name, typ, chat=""):
+    """A file dropped through the route, with the type header as given."""
+    abfrage = f"name={name}" + (f"&chat={chat}" if chat else "")
+    kopf = {"Content-Type": typ} if typ else {}
+    antwort = client.post(f"/api/v1/agentendock?{abfrage}", content=b"\xff\xd8\xff", headers=kopf)
+    assert antwort.status_code == 201, antwort.text
+    return antwort.json()
+
+
+def test_eine_abgelegte_datei_ohne_brauchbaren_typ_bekommt_ihn_aus_dem_namen(client):
+    """The browser leaves the type empty where it does not know the ending,
+    and the page then sends octet-stream. A picture dropped that way has to
+    stand as a picture: the name decides, as for every delivery."""
+    assert _abgelegt(client, "foto.jpg", "application/octet-stream")["typ"] == "image/jpeg"
+    # A header with parameters is the same word; the name still decides.
+    assert (
+        _abgelegt(client, "foto.png", "application/octet-stream; charset=binary")["typ"]
+        == "image/png"
+    )
+    # A drop into a chat is a document of the chat, under the same type.
+    chat = client.post("/api/v1/chats", json={"title": "Drop"}).json()["id"]
+    in_chat = _abgelegt(client, "foto.jpg", "application/octet-stream", chat)
+    assert in_chat["typ"] == "image/jpeg"
+
+
+def test_ein_mitgegebener_typ_und_ein_unbekannter_name_bleiben_wie_sie_waren(client):
+    # A type that came with the file stays, whatever the name says.
+    assert _abgelegt(client, "foto.jpg", "image/png")["typ"] == "image/png"
+    assert _abgelegt(client, "notiz.txt", "text/plain; charset=utf-8")["typ"].startswith("text/plain")
+    # No ending, nothing to read off: no picture type, as before.
+    assert _abgelegt(client, "ohne", "application/octet-stream")["typ"] == ""
+    assert _abgelegt(client, "archiv.jpg.gz", "application/octet-stream")["typ"] == ""
 
 
 def test_alter_eintrag_ohne_typ_bleibt_bedienbar(client):
@@ -1075,7 +1345,7 @@ def test_eine_nachgeholte_ablage_zaehlt(config, monkeypatch):
 
 def test_von_drei_ablagen_reicht_die_mittlere(config, monkeypatch):
     """The whole case: a report that lands, a table that
-    is refused, a picture that lands. The flag read the picture's success as
+    is refused, a note that lands. The flag read the note's success as
     the run's verdict and the run ended "fertig" — with the table gone and
     one line of the step log the only place saying so.
 
@@ -1088,7 +1358,7 @@ def test_von_drei_ablagen_reicht_die_mittlere(config, monkeypatch):
         [
             _ablage_ruf("a", 4, name="bericht.md"),
             _ablage_ruf("b", 40, name="daten.csv"),
-            _ablage_ruf("c", 4, name="bild.png"),
+            _ablage_ruf("c", 4, name="notiz.txt"),
         ],
     )
 
@@ -1097,7 +1367,7 @@ def test_von_drei_ablagen_reicht_die_mittlere(config, monkeypatch):
     # And the two that did arrive really are on the shelf — the ending says
     # a file is missing, not that the run delivered nothing.
     dock = dock_fuer(config)
-    assert {e["name"] for e in dock.alle()} == {"bericht.md", "bild.png"}
+    assert {e["name"] for e in dock.alle()} == {"bericht.md", "notiz.txt"}
 
 
 # --- And the loss survives a handoff -----------------------------------------

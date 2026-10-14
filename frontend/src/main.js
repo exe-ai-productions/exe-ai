@@ -1,5 +1,6 @@
-import { mount } from 'svelte'
+import { mount, unmount } from 'svelte'
 import App from './App.svelte'
+import Anmeldung from './teile/Anmeldung.svelte'
 import { bootMessage } from './lib/api.js'
 import { texteLaden } from './lib/texte.svelte.js'
 // DIAGNOSIS — see lib/geometriewache.js.
@@ -25,8 +26,29 @@ import './stil/berichttext.css'
    text is more helpful than an empty window. The sentence around it comes
    with the page (app/main.py), in the language the service knows for the
    interface; this file writes none of its own. */
+/* A service beyond the loopback address hands its key out only against
+   the password (app/anmeldung.py): its page comes without a key, and the
+   sign-in stands alone on it until it has one. Before the catalogue, which
+   is itself behind the key — so the sign-in's words come with the page
+   (`window.__TEXTE__`). Resolves once the key is kept (lib/api.js). */
+function signIn(wurzel) {
+  return new Promise((resolve) => {
+    const mask = mount(Anmeldung, {
+      target: wurzel,
+      props: {
+        texts: window.__TEXTE__ ?? {},
+        done: () => {
+          unmount(mask)
+          resolve()
+        },
+      },
+    })
+  })
+}
+
 async function starten() {
   const wurzel = document.getElementById('wurzel')
+  if (window.__ANMELDUNG__ && !window.__SITZUNGSSCHLUESSEL__) await signIn(wurzel)
   try {
     await texteLaden()
   } catch (fehler) {

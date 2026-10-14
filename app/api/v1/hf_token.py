@@ -39,7 +39,7 @@ def token() -> str | None:
     return wert or None
 
 
-@router.get("/token", response_model=TokenStand, summary="Whether a token is set")
+@router.get("/token", response_model=TokenStand, summary="Whether a token has been configured")
 def stand() -> TokenStand:
     wert = token()
     return TokenStand(gesetzt=wert is not None, ende=wert[-4:] if wert else None)

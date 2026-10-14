@@ -46,13 +46,14 @@ def werkzeug_beschreibung() -> MCPWerkzeug:
                 "path": {
                     "type": "string",
                     "description": (
-                        "The folder to list. Default: the first shared folder, "
-                        "or the private working folder when none is shared."
+                        "Folder to list. Defaults to the first shared folder, or the private "
+                        "working folder if none is shared."
                     ),
                 },
                 "depth": {
                     "type": "integer",
-                    "description": f"How many levels to go down, 1 to {MAX_TIEFE}. Default: 1.",
+                    "description": "Number of directory levels to include, from 1 to "
+                                   f"{MAX_TIEFE}. Default: 1.",
                 },
             },
         },
@@ -117,7 +118,7 @@ async def ausfuehren(argumente: dict[str, Any], ordner: list[str], data_dir=None
     if not ziel.exists():
         raise grenzen.GrenzeVerletzt(grenzen.missing(ziel, ordner, data_dir))
     if not ziel.is_dir():
-        raise grenzen.GrenzeVerletzt(f"'{ziel}' is a file — use read_file for that.")
+        raise grenzen.GrenzeVerletzt(f"'{ziel}' is a file. Use read_file to read it.")
 
     try:
         tiefe = int(argumente.get("depth") or 1)

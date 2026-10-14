@@ -2,8 +2,8 @@
 
 ``lib/arbeitsleiste.svelte.js`` keeps whether the column is open and which
 tool it shows — one at a time. A click on a sign shows that tool and opens a
-folded column on it; the sign of the tool already showing does nothing; the
-head's button and ⌘J fold the column and keep the tool. The module is
+folded column on it; the sign of the tool already showing folds the column,
+like the head's button and ⌘J, and the tool stays. The module is
 compiled with the Svelte compiler (it uses runes), its imports are bent to
 stand-ins, and the calls go in the way the buttons make them.
 """
@@ -101,21 +101,57 @@ def _fahren(szenario: str) -> dict:
     return json.loads(lauf.stdout.split(marke, 1)[1].strip())
 
 
-def test_a_click_shows_the_tool_and_the_shown_tools_sign_stays_quiet():
+def test_a_click_shows_the_tool_and_a_second_click_on_the_shown_tool_folds_the_column():
     bericht = _fahren("""
     const schritte = []
     await m.modulWaehlen('terminal'); schritte.push(stand())
+    await m.modulWaehlen('bilder'); schritte.push(stand())
     await m.modulWaehlen('bilder'); schritte.push(stand())
     await m.modulWaehlen('bilder'); schritte.push(stand())
     return schritte
 """)
     assert bericht == [
         {"offen": True, "modul": "terminal"},
+        # Another sign swaps the tool; the column stays open.
         {"offen": True, "modul": "bilder"},
-        # The sign of the tool showing does nothing: folding is the head's
-        # button. Before, this click closed the tool.
+        # The sign of the tool showing folds the column, the tool stays ...
+        {"offen": False, "modul": "bilder"},
+        # ... and the same sign on the folded bar opens it on that tool.
         {"offen": True, "modul": "bilder"},
     ]
+
+
+def test_the_second_click_folds_like_the_head_button_and_the_tool_does_not_push_back_in():
+    """One way in, one way out: the fold by the sign is the head's fold, so
+    the tool that was folded on is not offered back at once."""
+    bericht = _fahren("""
+    await m.modulWaehlen('cli')
+    await m.modulWaehlen('cli')
+    const durchZeichen = { ...stand(), aufgedraengt: m.leiste.nichtAufdraengen }
+    m.anbieten('cli')
+    const nachAngebot = stand()
+    await m.modulWaehlen('cli')
+    return { durchZeichen, nachAngebot, danach: { ...stand(), aufgedraengt: m.leiste.nichtAufdraengen } }
+""")
+    assert bericht["durchZeichen"] == {"offen": False, "modul": "cli", "aufgedraengt": "cli"}
+    assert bericht["nachAngebot"] == {"offen": False, "modul": "cli"}
+    assert bericht["danach"] == {"offen": True, "modul": "cli", "aufgedraengt": ""}
+
+
+def test_a_tool_lying_under_something_else_is_brought_forward_not_folded():
+    """The picture studio's details lie over the tool in the column: its sign
+    then shows the tool instead of folding the column."""
+    bericht = _fahren("""
+    await m.modulWaehlen('cli')
+    await m.modulWaehlen('cli', true)
+    const verdeckt = stand()
+    await m.modulWaehlen('cli', false)
+    return { verdeckt, danach: stand(), gezaehlt: m.leiste.gewaehlt }
+""")
+    assert bericht["verdeckt"] == {"offen": True, "modul": "cli"}
+    assert bericht["danach"] == {"offen": False, "modul": "cli"}
+    # Every click is a tool asked for: the studio reads it to swap its details.
+    assert bericht["gezaehlt"] == 3
 
 
 def test_folding_keeps_the_tool():
@@ -153,33 +189,55 @@ def test_an_offer_shows_its_tool():
     assert bericht["hatReiter"] is False
 
 
-def test_das_cli_ist_kein_werkzeug_mehr():
-    """Schweigeprobe: the CLI's button is gone, a click on it does nothing,
-    and a layout remembered on it opens the terminal."""
+def test_das_cli_ist_wieder_ein_werkzeug_neben_dem_terminal():
+    """The CLI is a tool of its own again: a click on its sign opens the
+    column on it, a layout remembered on it opens it, and the terminal —
+    the log of the chat's tool calls — stays a tool beside it."""
     bericht = _fahren("""
     await m.modulWaehlen('cli')
     const klick = stand()
     m.leisteAnwenden({ leiste_offen: true, leiste_modul: 'cli', leiste_breite: 300 })
-    return { klick, geladen: stand(), liste: m.MODULE }
+    const geladen = stand()
+    m.leisteAnwenden({ leiste_offen: true, leiste_modul: 'terminal', leiste_breite: 300 })
+    return { klick, geladen, terminal: stand(), liste: m.MODULE, mindestens: m.BREITE_MIN }
 """)
-    assert bericht["klick"] == {"offen": False, "modul": "terminal"}
-    assert bericht["geladen"] == {"offen": True, "modul": "terminal"}
-    assert "cli" not in bericht["liste"]
+    assert bericht["klick"] == {"offen": True, "modul": "cli"}
+    assert bericht["geladen"] == {"offen": True, "modul": "cli"}
+    assert bericht["terminal"] == {"offen": True, "modul": "terminal"}
+    assert "cli" in bericht["liste"] and "terminal" in bericht["liste"]
+    # Seven signs of 40 px, six gaps of 10 px, 12 px either side.
+    assert bericht["mindestens"] == 7 * 40 + 6 * 10 + 2 * 12
 
 
 def test_a_tool_folded_by_hand_does_not_push_back_in():
     """Folded by hand on a tool, the column does not open itself again when
     that tool has something new; another tool's news does open it."""
     bericht = _fahren("""
-    await m.modulWaehlen('terminal')
+    await m.modulWaehlen('vorschau')
     await m.schliessen()
-    m.anbieten('terminal')
-    const geschlossen = stand()
     m.anbieten('vorschau')
+    const geschlossen = stand()
+    m.anbieten('agenten')
     return { geschlossen, offen: stand() }
 """)
-    assert bericht["geschlossen"] == {"offen": False, "modul": "terminal"}
-    assert bericht["offen"] == {"offen": True, "modul": "vorschau"}
+    assert bericht["geschlossen"] == {"offen": False, "modul": "vorschau"}
+    assert bericht["offen"] == {"offen": True, "modul": "agenten"}
+
+
+def test_the_preview_and_the_agents_still_come_forward_by_themselves():
+    """Silence probe for the terminal no longer offering itself: the other
+    tools that offer still open a shut column and take their place."""
+    bericht = _fahren("""
+    await m.modulWaehlen('terminal')
+    await m.schliessen()
+    m.anbieten('vorschau')
+    const vorschau = stand()
+    await m.schliessen()
+    m.anbieten('agenten')
+    return { vorschau, agenten: stand() }
+""")
+    assert bericht["vorschau"] == {"offen": True, "modul": "vorschau"}
+    assert bericht["agenten"] == {"offen": True, "modul": "agenten"}
 
 
 def test_der_doc_ordner_ist_ein_werkzeug_neben_den_bildern():
@@ -221,15 +279,15 @@ def test_agenten_und_zeitplaene_sind_zwei_werkzeuge():
 SIGNS = FRONTEND / "src/teile/ToolSigns.svelte"
 
 
-def test_die_sechs_knoepfe_tragen_je_ihre_eigene_farbe():
-    """Six signs stand in the column's row: browser, agents, schedules,
-    terminal, pictures, doc folder. The agents and the schedules no longer
-    share a sign, so no sign wears "the more urgent of two": each shows
-    exactly its own ampel's colour."""
+def test_die_sieben_knoepfe_tragen_je_ihre_eigene_farbe():
+    """Seven signs stand in the column's row: browser, agents, schedules,
+    terminal, CLI, pictures, doc folder. The agents and the schedules no
+    longer share a sign, so no sign wears "the more urgent of two": each
+    shows exactly its own ampel's colour."""
     quelle = SIGNS.read_text(encoding="utf-8")
     liste = re.search(r"export const ORDER = \[(.*?)\]", quelle, re.S).group(1)
     namen = re.findall(r"'(\w+)'", liste)
-    assert namen == ["vorschau", "agenten", "cronjobs", "terminal", "bilder", "docfolder"]
+    assert namen == ["vorschau", "agenten", "cronjobs", "terminal", "cli", "bilder", "docfolder"]
     # Silence probe: the old rule that mixed the two colours is gone.
     assert "dringender" not in quelle
     assert "if (name === 'agenten' || name === 'cronjobs') return eigeneFarbe(name)" in quelle

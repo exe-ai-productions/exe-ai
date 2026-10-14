@@ -105,7 +105,9 @@ def test_aktualisierung_route_ohne_installation_ist_nicht_verfuegbar(
     a fresh installation, so this route stays quiet rather than asking
     GitHub for nothing."""
     antwort = client.get("/api/v1/bild/programm/aktualisierung")
-    assert antwort.json() == {"verfuegbar": False, "bau": None, "aktuell": False}
+    assert antwort.json() == {
+        "verfuegbar": False, "bau": None, "aktuell": False, "unreadable": False,
+    }
 
 
 def test_aktualisierung_route_meldet_eine_neuere_fassung(
@@ -120,6 +122,7 @@ def test_aktualisierung_route_meldet_eine_neuere_fassung(
     antwort = client.get("/api/v1/bild/programm/aktualisierung")
     assert antwort.json() == {
         "verfuegbar": True, "bau": f"master-{10**6}-abc1234", "aktuell": False,
+        "unreadable": False,
     }
 
 
@@ -129,20 +132,25 @@ def test_aktualisierung_route_ohne_neuere_fassung(config: Config, client: TestCl
     (ordner / sddownload.program_name()).write_bytes(b"x")
     monkeypatch.setattr(sddownload, "neueste_veroeffentlichung", lambda: _veroeffentlichung(1))
     antwort = client.get("/api/v1/bild/programm/aktualisierung")
-    assert antwort.json() == {"verfuegbar": False, "bau": None, "aktuell": True}
+    assert antwort.json() == {
+        "verfuegbar": False, "bau": None, "aktuell": True, "unreadable": False,
+    }
 
 
 def test_aktualisierung_route_ohne_erreichbare_fassung_ist_nicht_aktuell(
     config: Config, client: TestClient, monkeypatch
 ):
     """A release page that cannot be read compares nothing — not up to date,
-    and nothing on offer either."""
+    nothing on offer, and the answer says the list was not readable, so the
+    window can tell the user instead of showing nothing."""
     ordner = config.datenverzeichnis / sddownload.ORDNER / sddownload.BAU
     ordner.mkdir(parents=True)
     (ordner / sddownload.program_name()).write_bytes(b"x")
     monkeypatch.setattr(sddownload, "neueste_veroeffentlichung", lambda: None)
     antwort = client.get("/api/v1/bild/programm/aktualisierung")
-    assert antwort.json() == {"verfuegbar": False, "bau": None, "aktuell": False}
+    assert antwort.json() == {
+        "verfuegbar": False, "bau": None, "aktuell": False, "unreadable": True,
+    }
 
 
 def _installation(config: Config, variante: str | None = None) -> None:

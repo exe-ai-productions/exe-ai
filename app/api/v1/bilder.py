@@ -13,7 +13,7 @@ itself — nothing from the client reaches the filesystem.
 
 from __future__ import annotations
 
-import uuid
+import hashlib
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
@@ -130,7 +130,7 @@ class BilderListe(BaseModel):
     bilder: list[str]
 
 
-@router.get("/bilder", response_model=BilderListe, summary="List saved pictures")
+@router.get("/bilder", response_model=BilderListe, summary="List saved images")
 def bilder_auflisten(
     chat: str | None = None,
     projekt: str | None = None,
@@ -164,7 +164,7 @@ def bilder_auflisten(
     "/images",
     response_model=BildAntwort,
     status_code=status.HTTP_201_CREATED,
-    summary="Upload a picture for a message (raw bytes)",
+    summary="Upload an image for a message (raw bytes)",
 )
 async def bild_hochladen(
     request: Request,
@@ -188,7 +188,6 @@ async def bild_hochladen(
     if not daten:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, t("fehler.bild_typ", sprache))
 
-    name = uuid.uuid4().hex + ERLAUBTE_TYPEN[typ]
     verzeichnis = scratch_pictures_dir(config) if scratch else bilder_verzeichnis(config)
     verzeichnis.mkdir(parents=True, exist_ok=True)
     # An uploaded photo can carry EXIF — camera, time, place — and it would
@@ -196,11 +195,20 @@ async def bild_hochladen(
     # is on, on the one path every upload takes to disk.
     if putzen_an(request.app.state.repositories):
         daten = metadaten_entfernen(daten)
-    (verzeichnis / name).write_bytes(daten)
+    # The name comes from the bytes as they are stored: the same picture
+    # sent again — a message the service refused, sent once more — is the
+    # same file, not a second one beside it. 16 bytes of digest are the 32
+    # hex digits a stored picture's name has always had.
+    name = hashlib.blake2b(daten, digest_size=16).hexdigest() + ERLAUBTE_TYPEN[typ]
+    ziel = verzeichnis / name
+    # A file of the same name and the same size is the same picture; a
+    # shorter one is what a cut-off write left behind and is written again.
+    if not (ziel.is_file() and ziel.stat().st_size == len(daten)):
+        ziel.write_bytes(daten)
     return BildAntwort(bild=name)
 
 
-@router.get("/images/{name}", summary="Serve an uploaded picture")
+@router.get("/images/{name}", summary="Serve an uploaded image")
 def bild_holen(
     name: str,
     config: Config = Depends(hole_config),

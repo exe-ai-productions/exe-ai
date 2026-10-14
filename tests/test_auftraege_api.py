@@ -567,7 +567,7 @@ def test_ohne_ask_user_in_der_liste_sagt_der_prompt_nichts_vom_fragen(
     namen = {w["function"]["name"] for w in provider.letzte_anfrage.werkzeuge}
     assert "ask_user" not in namen
     system = provider.letzte_anfrage.nachrichten[0].content
-    assert "there is no way to ask one" in system
+    assert "There is no way to ask the user for clarification" in system
     assert "ask_user stops the run" not in system
 
 
@@ -585,7 +585,7 @@ def test_mit_ask_user_sagt_der_prompt_dass_gefragt_werden_darf(
 
     system = provider.letzte_anfrage.nachrichten[0].content
     assert "ask_user stops the run" in system
-    assert "there is no way to ask one" not in system
+    assert "There is no way to ask the user for clarification" not in system
 
 
 # --- Provider outage: retry with backoff (app/wiederversuch.py) -----------
@@ -934,19 +934,24 @@ async def test_404_model_not_found_beendet_sofort_ohne_wiederversuch(config, cli
 
 
 async def test_404_mit_anderem_text_laeuft_weiter_in_den_wiederversuch(config, client, monkeypatch):
-    """Schweigeprobe: a 404 matching none of the patterns is still an
-    ordinary outage, retried exactly as before."""
+    """A 404 matching none of the patterns is retried exactly as before; the
+    server answered it every time, so after the fifth attempt the run ends
+    with the error named, not as an outage."""
     monkeypatch.setattr(wiederversuch, "abstand", lambda versuch: 0)
     repositories = client.app.state.repositories
     provider, auftrag = _404_lauf_starten(config, client, repositories, "internal routing error")
     beendet = await _bis_beendet(repositories, auftrag.id)
 
-    assert beendet.ende_grund == "anbieter_ausfall"
     assert provider.aufrufe == wiederversuch.VERSUCHE
+    assert beendet.zustand == "gescheitert"
+    assert beendet.ende_grund.startswith("fehler:")
+    assert "404" in beendet.ergebnis.splitlines()[-1]
 
 
 async def test_503_laeuft_weiter_in_den_wiederversuch(config, client, monkeypatch):
-    """Schweigeprobe: a 503 (already an outage status) is untouched too."""
+    """A 503 is retried as before; after the fifth attempt the server's
+    answer ends the run with the error named — it did answer, so this is no
+    outage a later run has to wait out."""
     monkeypatch.setattr(wiederversuch, "abstand", lambda versuch: 0)
     agent_schreiben(config)
     repositories = client.app.state.repositories
@@ -977,7 +982,9 @@ async def test_503_laeuft_weiter_in_den_wiederversuch(config, client, monkeypatc
     )
     beendet = await _bis_beendet(repositories, auftrag.id)
 
-    assert beendet.ende_grund == "anbieter_ausfall"
+    assert beendet.zustand == "gescheitert"
+    assert beendet.ende_grund.startswith("fehler:")
+    assert "503" in beendet.ergebnis.splitlines()[-1]
 
 
 def test_voller_kontext_endet_sauber_mit_bericht(config, client):
@@ -2092,7 +2099,7 @@ def test_ueber_der_schwelle_verdichtet_bei_jedem_erreichen(config, client):
     ]
     assert len(versuche) == 2
     status_schritte = [s["inhalt"] for s in daten["schritte"] if s["typ"] == "status"]
-    assert status_schritte.count("Compacted the history to keep the context from filling up.") == 2
+    assert status_schritte.count("Der Verlauf wurde komprimiert, damit der Kontext nicht vollständig belegt wird.") == 2
 
 
 class UeberDerSchwelleOhneErsparnis(MockProvider):
@@ -2169,7 +2176,7 @@ def test_eine_verdichtung_ohne_ersparnis_wird_nicht_wiederholt(config, client):
     ]
     assert len(versuche) == 1
     status_schritte = [s["inhalt"] for s in daten["schritte"] if s["typ"] == "status"]
-    assert any("did not" in s and "shrink" in s for s in status_schritte)
+    assert any("nicht verkürzt" in s for s in status_schritte)
 
 
 # --- The fold trigger counts what a round's own reading cannot yet know
@@ -2458,7 +2465,7 @@ async def test_ein_faelliger_cronjob_meldet_sich_am_ende(config, client, monkeyp
 
     erfolge = []
 
-    def _pruefe_und_merke(text, *, erfolgreich):
+    def _pruefe_und_merke(text, *, erfolgreich, sprache=None):
         aufrufe.append(text)
         erfolge.append(erfolgreich)
         # The announcement used to sit BEFORE the run's
@@ -2523,7 +2530,7 @@ async def test_ein_gescheiterter_cronjob_meldet_sich_genau_einmal(
     aufrufe = []
     erfolge = []
 
-    def _pruefe_und_merke(text, *, erfolgreich):
+    def _pruefe_und_merke(text, *, erfolgreich, sprache=None):
         aufrufe.append(text)
         erfolge.append(erfolgreich)
 
@@ -2586,7 +2593,7 @@ async def test_ein_gescheiterter_cronjob_meldet_sich_genau_einmal(
     # in the same breath it became unreachable. It rides in this same
     # notification now (app/cronmeldung.mit_grund), which is what keeps it at
     # one message rather than two.
-    assert aufrufe == ["Water the plants — the model stopped answering"]
+    assert aufrufe == ["Water the plants — Modell antwortet nicht mehr"]
     assert erfolge == [False]
 
     # --- And once at the failure limit too, which this did not reach -----
@@ -2621,7 +2628,10 @@ async def test_ein_gescheiterter_cronjob_meldet_sich_genau_einmal(
     assert repositories.cronjobs.holen(eigener.id).aktiv is False
     # ONE notification, and it is the limit's: it carries the fact the other
     # does not — this schedule has stopped and will not run again by itself.
-    assert aufrufe == ["Post holen — stopped after 1 failed runs"]
+    # What the other one carried stands behind it: why the run failed.
+    assert aufrufe == [
+        "Post holen — nach 1 fehlgeschlagenen Durchläufen gestoppt — Modell antwortet nicht mehr"
+    ]
     assert erfolge == [False]
 
 
@@ -2630,7 +2640,7 @@ async def test_ein_abgebrochener_lauf_meldet_sich_nicht(config, client, monkeypa
     it gets no announcement, contradicting what they just did."""
     aufrufe = []
     monkeypatch.setattr(
-        cronmeldung, "melden", lambda text, *, erfolgreich: aufrufe.append(text)
+        cronmeldung, "melden", lambda text, *, erfolgreich, sprache=None: aufrufe.append(text)
     )
     agent_schreiben(config)
     provider_setzen(
@@ -2669,7 +2679,7 @@ async def test_ein_cronjob_auf_log_meldet_sich_nicht(config, client, monkeypatch
     notification."""
     aufrufe = []
     monkeypatch.setattr(
-        cronmeldung, "melden", lambda text, *, erfolgreich: aufrufe.append(text)
+        cronmeldung, "melden", lambda text, *, erfolgreich, sprache=None: aufrufe.append(text)
     )
     agent_schreiben(config)
     provider_setzen(client, MockProvider(mock_endpunkt("test"), haeppchen=["Erledigt."]))
@@ -2766,7 +2776,7 @@ def test_fehlende_berichtsdatei_wird_gemeldet(config, mcp_client_echt, tmp_path)
 
     assert daten["state"] == "fertig"
     status_schritte = [s["inhalt"] for s in daten["schritte"] if s["typ"] == "status"]
-    assert any("This run wrote no file" in s for s in status_schritte)
+    assert any("Dieser Durchlauf hat keine Datei geschrieben" in s for s in status_schritte)
 
 
 def test_geschriebene_berichtsdatei_wird_nicht_gemeldet(config, mcp_client_echt, tmp_path):
@@ -2797,7 +2807,7 @@ def test_geschriebene_berichtsdatei_wird_nicht_gemeldet(config, mcp_client_echt,
 
     assert daten["state"] == "fertig"
     status_schritte = [s["inhalt"] for s in daten["schritte"] if s["typ"] == "status"]
-    assert not any("This run wrote no file" in s for s in status_schritte)
+    assert not any("Dieser Durchlauf hat keine Datei geschrieben" in s for s in status_schritte)
 
 
 def test_ohne_schreibwerkzeug_wird_nichts_gemeldet(config, mcp_client_echt, tmp_path):
@@ -2818,7 +2828,7 @@ def test_ohne_schreibwerkzeug_wird_nichts_gemeldet(config, mcp_client_echt, tmp_
 
     assert daten["state"] == "fertig"
     status_schritte = [s["inhalt"] for s in daten["schritte"] if s["typ"] == "status"]
-    assert not any("This run wrote no file" in s for s in status_schritte)
+    assert not any("Dieser Durchlauf hat keine Datei geschrieben" in s for s in status_schritte)
 
 
 def test_auftrag_ohne_einstellung_bekommt_auto(config, client):
@@ -3115,6 +3125,40 @@ def test_maske_eine_anzahl_beginnt_bei_eins():
     # into "unset" could never run.
     assert "maxRunden > 0" not in quelle
     assert "maxMinuten > 0" not in quelle
+
+
+def test_the_mask_reports_the_sentence_of_a_broken_file_and_gives_way():
+    """The success branch of the load reads ``kaputt`` before it reads the
+    prompt: the sentence is reported and the mask gives way to the list,
+    where the fields would otherwise open empty over the list's old values."""
+    source = AGENTENMASKE.read_text(encoding="utf-8")
+    branch = source[source.index(".then((datei) =>") : source.index(".catch((fehler)")]
+    assert "datei.kaputt" in branch
+    assert branch.index("datei.kaputt") < branch.index("felderSetzen(agent")
+    reported = branch[branch.index("datei.kaputt") : branch.index("felderSetzen(agent")]
+    assert "melde(datei.kaputt, 'fehler')" in reported
+    assert "onabbrechen?.()" in reported and "return" in reported
+    # Silence: the stale answer is still thrown away first, and the 422 branch
+    # of the load is untouched.
+    assert branch.index("if (verworfen) return") < branch.index("datei.kaputt")
+    assert "fehler?.status && fehler.message" in source
+
+
+def test_the_route_answers_200_with_the_sentence_for_a_broken_head(config, client):
+    """What the mask reads: a file with a broken head answers 200 with the
+    sentence in ``kaputt`` and ``prompt`` null; a healthy file has no
+    ``kaputt`` and carries its instruction."""
+    agent_schreiben(config)
+    healthy = client.get("/api/v1/agents/recherche")
+    assert healthy.status_code == 200
+    assert healthy.json()["kaputt"] is None
+    assert healthy.json()["prompt"]
+    file = Path(config.app.agenten_verzeichnis) / "recherche.md"
+    file.write_text("---\nname: [kaputt\n---\nText\n", encoding="utf-8")
+    broken = client.get("/api/v1/agents/recherche")
+    assert broken.status_code == 200
+    assert broken.json()["kaputt"]
+    assert broken.json()["prompt"] is None
 
 
 def test_felder_route_speichert_ein_leeres_feld_als_auto(config, client):
@@ -3559,6 +3603,119 @@ def test_a_start_window_pick_stays_the_runs_folders(config, client, tmp_path, mo
     assert parts.get("own_folder") is None
 
 
+def _sending_chat(chat_id: str, shared: list[str] | None = None):
+    """What ``chat_run_folders`` reads of a chat: its id and its shares."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(id=chat_id, working_dirs=list(shared or []))
+
+
+def test_an_agent_with_folders_of_its_own_gets_the_chats_folder_behind_them(tmp_path):
+    """A chat that shares nothing sends an agent off whose file names its
+    own folders: the chat's uploads lie in the chat's folder, and the run's
+    delivery goes there — it has to reach it. The agent's folders stay in
+    front, so a relative path lands where the agent's file says."""
+    from types import SimpleNamespace
+
+    from app import dokumentablage
+    from app.api.v1.auftraege import chat_run_folders, run_folders
+
+    agents_own = tmp_path / "agents-own"
+    agents_own.mkdir()
+    agent = SimpleNamespace(ordner=[str(agents_own)])
+    chat_folder = dokumentablage.chatordner(tmp_path, "c1")
+    chat_folder.mkdir(parents=True)
+
+    folders, own_folder = chat_run_folders(tmp_path, _sending_chat("c1"), agent)
+
+    assert folders == [str(agents_own), str(chat_folder)]
+    assert own_folder == str(chat_folder)
+    assert run_folders(folders, agent) == folders
+
+
+def test_the_prompt_names_the_chats_folder_as_the_chats_own_beside_the_agents(tmp_path):
+    from types import SimpleNamespace
+
+    from app import dokumentablage, grundprompt
+    from app.api.v1.auftraege import chat_run_folders
+    from app.own_folder_line import own_folder_line
+
+    agents_own = tmp_path / "agents-own"
+    agents_own.mkdir()
+    chat_folder = dokumentablage.chatordner(tmp_path, "c1")
+    chat_folder.mkdir(parents=True)
+    folders, own_folder = chat_run_folders(
+        tmp_path, _sending_chat("c1"), SimpleNamespace(ordner=[str(agents_own)])
+    )
+
+    text = grundprompt.bauen(
+        werkzeuge=True, ordner=folders, own_folder=own_folder, dateiwerkzeuge=["read_file"]
+    )
+    paragraph = own_folder_line(folders, own_folder, None, None)
+
+    # The agent's folder is the share a relative path starts from; the chat's
+    # folder is named apart, as the chat's own, in the paragraph that closes
+    # the system message.
+    assert f"- {agents_own}" in text
+    assert "Relative paths resolve against the first one." in text
+    assert f"- {chat_folder}" not in text
+    assert "This conversation also has a folder of its own" in paragraph
+    assert f"- {chat_folder}" in paragraph
+
+
+def test_silence_a_chat_folder_that_is_not_there_yet_is_not_put_into_the_list(tmp_path):
+    from types import SimpleNamespace
+
+    from app.api.v1.auftraege import chat_run_folders, run_folders
+
+    agents_own = tmp_path / "agents-own"
+    agents_own.mkdir()
+    agent = SimpleNamespace(ordner=[str(agents_own)])
+
+    folders, own_folder = chat_run_folders(tmp_path, _sending_chat("c1"), agent)
+
+    assert (folders, own_folder) == (None, None)
+    assert run_folders(folders, agent) == [str(agents_own)]
+
+
+def test_silence_a_chat_that_shares_a_folder_gives_the_run_that_folder(tmp_path):
+    """The chat's shares come first and win over the agent's own, as they
+    did; the chat's folder follows once it exists."""
+    from types import SimpleNamespace
+
+    from app import dokumentablage
+    from app.api.v1.auftraege import chat_run_folders
+
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    agents_own = tmp_path / "agents-own"
+    agents_own.mkdir()
+    chat_folder = dokumentablage.chatordner(tmp_path, "c1")
+    chat_folder.mkdir(parents=True)
+
+    folders, own_folder = chat_run_folders(
+        tmp_path, _sending_chat("c1", [str(shared)]), SimpleNamespace(ordner=[str(agents_own)])
+    )
+
+    assert folders == [str(shared), str(chat_folder)]
+    assert own_folder == str(chat_folder)
+
+
+def test_silence_an_agent_without_folders_begins_in_the_chats_folder(tmp_path):
+    from types import SimpleNamespace
+
+    from app import dokumentablage
+    from app.api.v1.auftraege import chat_run_folders
+
+    folders, own_folder = chat_run_folders(
+        tmp_path, _sending_chat("c1"), SimpleNamespace(ordner=[])
+    )
+
+    chat_folder = str(dokumentablage.chatordner(tmp_path, "c1"))
+    assert folders == [chat_folder]
+    assert own_folder == chat_folder
+
+
 def test_agent_ungenanntes_werkzeug_wird_im_auftrag_abgelehnt(config, mcp_client_echt, tmp_path):
     """Hole B, through the real jobs route: a tool the agent did not name in
     tools: must be refused at execution time, not only left unoffered."""
@@ -3588,7 +3745,7 @@ def test_agent_ungenanntes_werkzeug_wird_im_auftrag_abgelehnt(config, mcp_client
     ergebnisse = _tool_ergebnisse(daten)
     assert ergebnisse, "no tool_result in the log"
     assert ergebnisse[0]["fehlgeschlagen"] is True
-    assert "not in this agent's tools list" in ergebnisse[0]["text"]
+    assert "not in this agent's tool list" in ergebnisse[0]["text"]
 
 
 # --- The loop guard, end to end (app/schleifenwaechter.py) -----------------
@@ -3859,11 +4016,11 @@ def test_ein_weit_unterschrittener_lauf_hinterlaesst_einen_hinweis(config, clien
 
     assert daten["state"] == "fertig"
     hinweise = [s["inhalt"] for s in daten["schritte"] if s["typ"] == "status"]
-    treffer = [h for h in hinweise if "far under budget" in h]
+    treffer = [h for h in hinweise if "deutlich unter dem üblichen Rahmen" in h]
     assert len(treffer) == 1
     # The numbers ARE the hint — a single round used against 400 allowed,
     # not the off-by-one "0 of 400" a shifted counter would produce.
-    assert "1 of 400 allowed rounds" in treffer[0]
+    assert "1 von 400 erlaubten Runden" in treffer[0]
 
 
 def test_ein_abgebrochener_lauf_bekommt_keinen_kurzlauf_hinweis(config, client):
@@ -3883,7 +4040,7 @@ def test_ein_abgebrochener_lauf_bekommt_keinen_kurzlauf_hinweis(config, client):
 
     assert daten["state"] == "abgebrochen"
     hinweise = [s["inhalt"] for s in daten["schritte"] if s["typ"] == "status"]
-    assert not any("far under budget" in h for h in hinweise)
+    assert not any("deutlich unter dem üblichen Rahmen" in h for h in hinweise)
 
 
 def test_ein_normal_ausgelaufener_lauf_bekommt_keinen_hinweis(config, mcp_client):
@@ -3905,7 +4062,7 @@ def test_ein_normal_ausgelaufener_lauf_bekommt_keinen_hinweis(config, mcp_client
 
     assert daten["state"] == "fertig"
     hinweise = [s["inhalt"] for s in daten["schritte"] if s["typ"] == "status"]
-    assert not any("far under budget" in h for h in hinweise)
+    assert not any("deutlich unter dem üblichen Rahmen" in h for h in hinweise)
 
 
 # --- The shelf is shared with every run -------------------------------------
@@ -3975,7 +4132,7 @@ def test_ueber_dem_dockordner_bleibt_zu(config, mcp_client_echt):
     ergebnisse = _tool_ergebnisse(daten)
     assert ergebnisse, "no tool_result in the log"
     assert ergebnisse[0]["fehlgeschlagen"] is True
-    assert "outside the shared folders" in ergebnisse[0]["text"]
+    assert "private place" in ergebnisse[0]["text"]
 
 
 def test_die_ablage_bekommt_keine_ordnernotiz(config, mcp_client_echt):
@@ -4499,9 +4656,9 @@ async def test_ein_abgeschaltetes_werkzeug_gilt_nicht_als_fehlend(
     """A tool switched off on purpose is a configuration, not a missing one.
 
     Every run widens its own list with the clock (app/api/v1/auftraege.py),
-    and the notice must not turn that into "Werkzeuge nicht verfügbar:
-    get_current_time" on every start — the user switched it off, and no
-    agent file ever named it. The same holds for a name the start itself
+    and the notice must not turn that into a "tools not available" line
+    naming get_current_time on every start — the user switched it off, and
+    no agent file ever named it. The same holds for a name the start itself
     adds, like the shelf.
     """
     schritte, angeboten, fehlend = await _lauf_mit_bildfenster(
@@ -4680,5 +4837,352 @@ def test_a_job_reads_the_image_folder_and_its_prompt_names_it(config, mcp_client
     assert results[0]["fehlgeschlagen"] is False, results[0]["text"]
     assert "a cat on a roof" in results[0]["text"]
     system_text = provider.letzte_anfrage.nachrichten[0].content
-    assert "The image folder is where" in system_text
+    assert "The image folder contains all images" in system_text
     assert f"- {images}" in system_text
+
+
+# --- A 400 the server answers five times: a report that names it ------------
+
+
+class Answers400(MockProvider):
+    """The server answers with an error status (400 by default) and its own
+    sentence to the first ``failures`` attempts (all of them by default),
+    then answers."""
+
+    def __init__(
+        self, *args, failures: int | None = None, status: int = 400,
+        sentence: str = "unsupported value for 'temperature'", **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.failures = failures
+        self.status = status
+        self.sentence = sentence
+        self.calls = 0
+
+    async def streamen(self, anfrage):
+        self.calls += 1
+        if self.failures is None or self.calls <= self.failures:
+            raise ProviderFehler(
+                f"test answered with {self.status}: {self.sentence}",
+                status=self.status,
+                rohtext=self.sentence,
+            )
+        async for stueck in super().streamen(anfrage):
+            yield stueck
+
+
+def _start_in_chat(config, client, repositories, chat_id):
+    agent_schreiben(config)
+    agent = agenten_laden(Path(config.app.agenten_verzeichnis))["recherche"]
+    return auftrag_anstossen(
+        config=client.app.state.config,
+        repositories=repositories,
+        discovery=client.app.state.discovery,
+        generierungen=client.app.state.generierungen,
+        registry=getattr(client.app.state, "werkzeuge", None),
+        agent=agent,
+        task="Los",
+        endpoint_id=None,
+        user_id="standard",
+        sprache="de",
+        chat_id=chat_id,
+    )
+
+
+def _report_row(repositories, chat_id):
+    rows = [r for r in repositories.messages.auflisten(chat_id=chat_id) if r.art == "werkzeugmeldung"]
+    return rows[0] if rows else None
+
+
+async def test_five_400s_end_the_run_with_a_report_that_names_the_error(
+    config, client, chat_id, monkeypatch
+):
+    """The server answered every attempt and said the request is wrong. The
+    five attempts stay; after the fifth the run ends — not handed on as
+    'unterbrochen' — and the chat gets a report whose last line is the code
+    and the server's own sentence."""
+    monkeypatch.setattr(wiederversuch, "abstand", lambda versuch: 0)
+    repositories = client.app.state.repositories
+    provider = provider_setzen(client, Answers400(mock_endpunkt("test")))
+    auftrag = _start_in_chat(config, client, repositories, chat_id)
+    beendet = await _bis_beendet(repositories, auftrag.id)
+
+    assert provider.calls == wiederversuch.VERSUCHE
+    assert beendet.zustand == "gescheitert"
+    assert beendet.ende_grund.startswith("fehler:")
+    assert repositories.cronjobs.auflisten() == []
+    last_line = beendet.ergebnis.splitlines()[-1]
+    assert "400" in last_line and "unsupported value for 'temperature'" in last_line
+
+    deadline = time.monotonic() + 5
+    while _report_row(repositories, chat_id) is None and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    report = _report_row(repositories, chat_id)
+    assert report is not None, "the chat got no report"
+    assert report.content.startswith("[Agent 'recherche' failed")
+    final = report.content.splitlines()[-1]
+    assert "400" in final and "unsupported value for 'temperature'" in final
+
+
+async def test_a_400_that_goes_away_leaves_no_error_line(config, client, chat_id, monkeypatch):
+    """The silence probe: a 400 on the first attempt, an answer on the
+    second — the run ends as it always did, with no error line."""
+    monkeypatch.setattr(wiederversuch, "abstand", lambda versuch: 0)
+    repositories = client.app.state.repositories
+    provider = provider_setzen(
+        client, Answers400(mock_endpunkt("test"), failures=1, haeppchen=["fertig"])
+    )
+    auftrag = _start_in_chat(config, client, repositories, chat_id)
+    beendet = await _bis_beendet(repositories, auftrag.id)
+
+    assert provider.calls == 2
+    assert beendet.zustand == "fertig"
+    assert "400" not in (beendet.ergebnis or "")
+
+
+async def test_a_400_names_nothing_for_a_server_that_does_not_answer(
+    config, client, chat_id, monkeypatch
+):
+    """The silence probe the other way round: no status at all is still the
+    outage it was — handed on, no error line in a report."""
+    monkeypatch.setattr(wiederversuch, "abstand", lambda versuch: 0)
+    repositories = client.app.state.repositories
+    provider_setzen(client, MockProvider(mock_endpunkt("test"), fehler="Kabelbrand"))
+    auftrag = _start_in_chat(config, client, repositories, chat_id)
+    beendet = await _bis_beendet(repositories, auftrag.id)
+
+    assert beendet.zustand == "unterbrochen"
+    assert beendet.ende_grund == "anbieter_ausfall"
+
+
+async def test_five_500s_end_the_run_with_a_report_that_names_the_error(
+    config, client, chat_id, monkeypatch
+):
+    """Any error the server answers five times ends the run the way 400 does:
+    not handed on as 'unterbrochen', and the chat gets a report whose last
+    line is the code and the server's own sentence."""
+    monkeypatch.setattr(wiederversuch, "abstand", lambda versuch: 0)
+    repositories = client.app.state.repositories
+    provider = provider_setzen(
+        client,
+        Answers400(mock_endpunkt("test"), status=500, sentence="the backend is overloaded"),
+    )
+    auftrag = _start_in_chat(config, client, repositories, chat_id)
+    beendet = await _bis_beendet(repositories, auftrag.id)
+
+    assert provider.calls == wiederversuch.VERSUCHE
+    assert beendet.zustand == "gescheitert"
+    assert beendet.ende_grund.startswith("fehler:")
+    assert repositories.cronjobs.auflisten() == []
+    last_line = beendet.ergebnis.splitlines()[-1]
+    assert "500" in last_line and "the backend is overloaded" in last_line
+
+    deadline = time.monotonic() + 5
+    while _report_row(repositories, chat_id) is None and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    report = _report_row(repositories, chat_id)
+    assert report is not None, "the chat got no report"
+    assert report.content.startswith("[Agent 'recherche' failed")
+    final = report.content.splitlines()[-1]
+    assert "500" in final and "the backend is overloaded" in final
+
+
+async def test_a_500_that_goes_away_leaves_no_error_line(config, client, chat_id, monkeypatch):
+    """The silence probe: a 500 on the first attempt, an answer on the second
+    — the run ends as it always did, with no error line."""
+    monkeypatch.setattr(wiederversuch, "abstand", lambda versuch: 0)
+    repositories = client.app.state.repositories
+    provider = provider_setzen(
+        client,
+        Answers400(
+            mock_endpunkt("test"), failures=1, status=500, sentence="try again",
+            haeppchen=["fertig"],
+        ),
+    )
+    auftrag = _start_in_chat(config, client, repositories, chat_id)
+    beendet = await _bis_beendet(repositories, auftrag.id)
+
+    assert provider.calls == 2
+    assert beendet.zustand == "fertig"
+    assert "500" not in (beendet.ergebnis or "")
+
+
+# --- A run another run started starts no run --------------------------------
+
+
+class StartsAJobEveryRun(MockProvider):
+    """Every run's first round calls start_job; once a tool result is back,
+    the run answers. So a run asked for by a run calls it as well."""
+
+    async def streamen(self, anfrage):
+        self.letzte_anfrage = anfrage
+        self.alle_anfragen.append(anfrage)
+        self.durchlaeufe += 1
+        if any(n.role == "tool" for n in anfrage.nachrichten):
+            yield Stueck("content", text="fertig")
+            return
+        yield Stueck(
+            "tool_call",
+            werkzeugaufrufe=[
+                Werkzeugaufruf(
+                    id=f"w{self.durchlaeufe}",
+                    name="start_job",
+                    argumente={"agent": "schreiber", "task": "Schreib eine Notiz."},
+                )
+            ],
+        )
+
+
+def _child_chain(config, client):
+    """A parent whose model calls start_job, and a child whose model calls it
+    again: the call every run's first round makes."""
+    agent_schreiben(config, kopf="model: test\ntools:\n  - start_job\nmax_rounds: 3")
+    agent_schreiben(config, name="schreiber", kopf="model: test\nmax_rounds: 3")
+    provider = provider_setzen(client, StartsAJobEveryRun(mock_endpunkt("test")))
+    parent = client.post(
+        "/api/v1/jobs", json={"agent": "recherche", "task": "gib etwas ab"}
+    ).json()["id"]
+    auf_ende_warten(client, parent)
+    return provider, parent
+
+
+def test_a_run_under_a_run_starts_no_further_run(config, mcp_client_echt):
+    """The chain stops at the child: its own call is refused with a sentence
+    to the model, and no grandchild exists."""
+    from app import run_chain
+
+    _, parent = _child_chain(config, mcp_client_echt)
+    (child,) = [
+        a for a in mcp_client_echt.get("/api/v1/jobs").json() if a["parent_id"] == parent
+    ]
+    daten = auf_ende_warten(mcp_client_echt, child["id"])
+
+    assert len(mcp_client_echt.get("/api/v1/jobs").json()) == 2
+    results = _tool_ergebnisse(daten)
+    assert results and results[0]["fehlgeschlagen"] is True
+    assert results[0]["text"] == run_chain.NO_RUN_UNDER_A_RUN
+
+
+def test_a_run_under_a_run_is_not_offered_start_job(config, mcp_client_echt):
+    """The offer leaves the tool out; the chat's own run keeps it."""
+    provider, parent = _child_chain(config, mcp_client_echt)
+    (child,) = [
+        a for a in mcp_client_echt.get("/api/v1/jobs").json() if a["parent_id"] == parent
+    ]
+    auf_ende_warten(mcp_client_echt, child["id"])
+
+    def offered(request) -> set[str]:
+        return {w["function"]["name"] for w in request.werkzeuge}
+
+    parent_requests = [
+        r for r in provider.alle_anfragen if "gib etwas ab" in str(r.nachrichten[1].content)
+    ]
+    child_requests = [
+        r for r in provider.alle_anfragen if "Schreib eine Notiz." in str(r.nachrichten[1].content)
+    ]
+    assert parent_requests and child_requests
+    assert all("start_job" in offered(r) for r in parent_requests)
+    assert all("start_job" not in offered(r) for r in child_requests)
+
+
+def test_a_run_without_a_parent_starts_a_run_as_before(config, mcp_client_echt):
+    """The silence probe: the first level — a run nobody's run started —
+    starts its child exactly as it did."""
+    _, parent = _child_chain(config, mcp_client_echt)
+    children = [
+        a for a in mcp_client_echt.get("/api/v1/jobs").json() if a["parent_id"] == parent
+    ]
+    assert len(children) == 1
+    assert children[0]["agent"] == "schreiber"
+
+
+class CreatesAScheduleBelowTheFirstRun(MockProvider):
+    """The first run starts a child; the child's model reaches for
+    ``cronjob`` in its first round. Once a tool result is back, a run
+    answers."""
+
+    async def streamen(self, anfrage):
+        self.letzte_anfrage = anfrage
+        self.alle_anfragen.append(anfrage)
+        self.durchlaeufe += 1
+        if any(n.role == "tool" for n in anfrage.nachrichten):
+            yield Stueck("content", text="fertig")
+            return
+        if "Schreib eine Notiz." in str(anfrage.nachrichten[1].content):
+            aufruf = Werkzeugaufruf(
+                id=f"w{self.durchlaeufe}",
+                name="cronjob",
+                argumente={"action": "create", "time": "08:00", "task": "Notiz schreiben"},
+            )
+        else:
+            aufruf = Werkzeugaufruf(
+                id=f"w{self.durchlaeufe}",
+                name="start_job",
+                argumente={"agent": "schreiber", "task": "Schreib eine Notiz."},
+            )
+        yield Stueck("tool_call", werkzeugaufrufe=[aufruf])
+
+
+def _schedule_chain(config, client):
+    agent_schreiben(config, kopf="model: test\ntools:\n  - start_job\n  - cronjob\nmax_rounds: 3")
+    agent_schreiben(config, name="schreiber", kopf="model: test\nmax_rounds: 3")
+    provider = provider_setzen(client, CreatesAScheduleBelowTheFirstRun(mock_endpunkt("test")))
+    parent = client.post(
+        "/api/v1/jobs", json={"agent": "recherche", "task": "gib etwas ab"}
+    ).json()["id"]
+    auf_ende_warten(client, parent)
+    return provider, parent
+
+
+def test_a_run_under_a_run_creates_no_schedule(config, mcp_client_echt):
+    """The call is refused with a sentence to the model, and no schedule
+    exists afterwards."""
+    from app import run_chain
+
+    _, parent = _schedule_chain(config, mcp_client_echt)
+    (child,) = [
+        a for a in mcp_client_echt.get("/api/v1/jobs").json() if a["parent_id"] == parent
+    ]
+    daten = auf_ende_warten(mcp_client_echt, child["id"])
+
+    results = _tool_ergebnisse(daten)
+    assert results and results[0]["fehlgeschlagen"] is True
+    assert results[0]["text"] == run_chain.NO_SCHEDULE_UNDER_A_RUN
+    assert mcp_client_echt.app.state.repositories.cronjobs.auflisten() == []
+
+
+def test_a_run_under_a_run_is_not_offered_cronjob(config, mcp_client_echt):
+    """The offer leaves the tool out; the first run keeps it."""
+    provider, parent = _schedule_chain(config, mcp_client_echt)
+    (child,) = [
+        a for a in mcp_client_echt.get("/api/v1/jobs").json() if a["parent_id"] == parent
+    ]
+    auf_ende_warten(mcp_client_echt, child["id"])
+
+    def offered(request) -> set[str]:
+        return {w["function"]["name"] for w in request.werkzeuge}
+
+    parent_requests = [
+        r for r in provider.alle_anfragen if "gib etwas ab" in str(r.nachrichten[1].content)
+    ]
+    child_requests = [
+        r for r in provider.alle_anfragen if "Schreib eine Notiz." in str(r.nachrichten[1].content)
+    ]
+    assert parent_requests and child_requests
+    assert all("cronjob" in offered(r) for r in parent_requests)
+    assert all("cronjob" not in offered(r) for r in child_requests)
+
+
+def test_a_run_without_a_parent_creates_a_schedule_as_before(config, mcp_client_echt):
+    """The silence probe: a run nobody's run started keeps ``cronjob`` and
+    its call creates the schedule."""
+    agent_schreiben(config, name="schreiber", kopf="model: test\nmax_rounds: 3")
+    provider_setzen(mcp_client_echt, CreatesAScheduleBelowTheFirstRun(mock_endpunkt("test")))
+    run = mcp_client_echt.post(
+        "/api/v1/jobs", json={"agent": "schreiber", "task": "Schreib eine Notiz."}
+    ).json()["id"]
+    daten = auf_ende_warten(mcp_client_echt, run)
+
+    results = _tool_ergebnisse(daten)
+    assert results and results[0]["fehlgeschlagen"] is False
+    assert len(mcp_client_echt.app.state.repositories.cronjobs.auflisten()) == 1

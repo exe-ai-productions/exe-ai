@@ -36,15 +36,15 @@ def werkzeug_beschreibung() -> MCPWerkzeug:
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "The file to change, e.g. \"notes/todo.md\".",
+                    "description": 'File to edit, e.g. "notes/todo.md".',
                 },
                 "old_text": {
                     "type": "string",
-                    "description": "The passage as it stands in the file right now.",
+                    "description": "The exact passage currently in the file.",
                 },
                 "new_text": {
                     "type": "string",
-                    "description": "What it should say instead. An empty text deletes the passage.",
+                    "description": "Replacement text. An empty value deletes the passage.",
                 },
             },
             "required": ["path", "old_text", "new_text"],
@@ -77,10 +77,10 @@ def braucht_bestaetigung(argumente: dict[str, Any], ordner: list[str]) -> bool:
 async def ausfuehren(argumente: dict[str, Any], ordner: list[str], data_dir=None) -> str:
     roh = str(argumente.get("path") or "").strip()
     if not roh:
-        raise grenzen.GrenzeVerletzt("No path given.")
+        raise grenzen.GrenzeVerletzt("No path provided.")
     alt = argumente.get("old_text")
     if not alt:
-        raise grenzen.GrenzeVerletzt("No old_text given — there is nothing to look for.")
+        raise grenzen.GrenzeVerletzt("No old_text provided; there is nothing to search for.")
     alt = str(alt)
     neu = str(argumente.get("new_text") or "")
 
@@ -108,13 +108,13 @@ async def ausfuehren(argumente: dict[str, Any], ordner: list[str], data_dir=None
     treffer = text.count(alt)
     if treffer == 0:
         raise grenzen.GrenzeVerletzt(
-            f"old_text was not found in '{ziel}'. Read the file and copy the "
-            "passage as it stands there, whitespace included."
+            f"old_text was not found in '{ziel}'. Read the file and copy the passage exactly, "
+            "including whitespace."
         )
     if treffer > 1:
         raise grenzen.GrenzeVerletzt(
-            f"old_text appears {treffer} times in '{ziel}'. Give more of the "
-            "surrounding lines so it points at exactly one place."
+            f"old_text occurs {treffer} times in '{ziel}'. Include more surrounding lines to "
+            "identify a unique match."
         )
 
     zeile = text[: text.index(alt)].count("\n") + 1

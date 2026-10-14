@@ -19,6 +19,7 @@ from app import agentenfelder, agentenname, dokumentablage, grundprompt, helper
 from app.agenten import Agentenverzeichnis, agent_aus_text
 from app.api.v1 import auftraege
 from app.api.v1.auftraege import _kind_starten, auftrag_anstossen
+from app.i18n import t
 from app.providers import MockProvider, Stueck, mock_endpunkt
 from app.providers.base import Werkzeugaufruf
 from app.tools import auftrag_werkzeug
@@ -130,7 +131,9 @@ def test_a_helper_over_the_limit_is_refused(client, chat_id):
     result = _result(_chat_starts(client, chat_id, {"task": "Collect the notes."}))
 
     assert result["fehlgeschlagen"]
-    assert "at most 1 may run at the same time" in result["text"]
+    # The window's copy, in the language the test service is set to.
+    language = client.app.state.config.app.language
+    assert t("jobs.helper_limit", language, running=1, limit=1) in result["text"]
     assert len(client.get("/api/v1/jobs").json()) == 1
 
 
@@ -147,7 +150,7 @@ def test_the_chat_model_reads_what_each_agent_is_for():
 
     field = chat.schema["properties"]["agent"]["description"]
     assert "\n- bote: Delivers parcels, letters and notes.\n- leser (answers only, no tools)." in field
-    assert "Leave it out for a helper." in field
+    assert "Omit it to start a helper." in field
     assert chat.schema["required"] == ["task"]
     assert "Leave out agent to start a helper" in chat.beschreibung
     # A job may not start a helper, and is not told it could.
@@ -210,7 +213,7 @@ def test_no_agent_file_may_take_the_helpers_name(client):
     (folder / "helper.md").write_text("---\n---\n\nGo.\n", encoding="utf-8")
     assert "helper" not in [a["name"] for a in client.get("/api/v1/agents").json()]
     listed = {e["name"]: e["kaputt"] for e in client.get("/api/v1/agent-files").json()}
-    assert "kann keinen Agenten benennen" in listed["helper"]
+    assert "kann nicht als Agentenname verwendet werden" in listed["helper"]
 
 
 def test_a_helper_starts_nothing_and_a_run_starts_no_helper(client):
@@ -311,7 +314,7 @@ def test_a_helper_that_asks_is_told_to_report_instead(config, client, chat_id):
     assert job is not None and job["agent"] == "helper"
     assert job["state"] == "fertig", job
     assert job["question"] is None
-    assert job["result"].startswith("Told: A helper cannot ask the user.")
+    assert job["result"].startswith("Told: A helper cannot ask the user questions.")
 
 
 def test_a_chat_is_offered_helpers_and_a_job_is_not(config):
@@ -439,6 +442,21 @@ def run_prompts(monkeypatch):
     return seen.calls
 
 
+def _run_system_message(client) -> str:
+    """The system message of the run the chat sent off: the request whose
+    message carries the run's own section, not the chat's."""
+    head = grundprompt.AGENTENLAUF.split("{")[0].strip()
+    provider = client.app.state.discovery.zustaende["test"].provider
+    texts = [
+        m.content
+        for request in provider.alle_anfragen
+        for m in request.nachrichten
+        if m.role == "system" and head in m.content
+    ]
+    assert texts, "no request of the run reached the model"
+    return texts[-1]
+
+
 def _places(client, chat_id):
     """The chat's own folder, the dock and the picture folder."""
     config = client.app.state.config
@@ -465,7 +483,7 @@ def _fixed_agent_with_folder(config, folder):
     )
 
 
-def test_a_helper_of_a_chat_that_shares_nothing_works_in_the_chats_own_folder(
+async def test_a_helper_of_a_chat_that_shares_nothing_works_in_the_chats_own_folder(
     client, chat_id, run_prompts,
 ):
     """The chat's own folder first, the dock behind it — so a relative path
@@ -474,20 +492,28 @@ def test_a_helper_of_a_chat_that_shares_nothing_works_in_the_chats_own_folder(
     own, dock, pictures = _places(client, chat_id)
 
     result = _result(_chat_starts(client, chat_id, {"task": "Write the note."}))
+    await _runs_at_rest(client)
 
     assert not result["fehlgeschlagen"], result["text"]
     (prompt,) = run_prompts
     assert prompt["ordner"] == [own, dock, pictures]
     assert prompt["own_folder"] == own
     assert prompt["dock"] == dock
-    assert f"This conversation has a folder of its own, where its uploads are kept and \
-where you work while nothing is shared:\n\n- {own}" in prompt["text"]
-    assert "shared these folders" not in prompt["text"].split(own)[0][-400:]
+    # The base prompt leaves the paragraph out; the run's system message ends
+    # on it, behind everything that is the same for every run.
+    assert "has a folder of its own" not in prompt["text"]
+    system = _run_system_message(client)
+    assert system.endswith(
+        f"This conversation has a folder of its own, where its uploads are kept and \
+where you work while nothing is shared:\n\n- {own}\n\n"
+        "Relative paths resolve against this folder."
+    )
+    assert "shared these folders" not in system
     assert not Path(own).exists()
     assert prompt["ordnerwissen_pflegen"] is False
 
 
-def test_a_helper_of_a_chat_with_shared_folders_gets_them_first(
+async def test_a_helper_of_a_chat_with_shared_folders_gets_them_first(
     client, chat_id, run_prompts, tmp_path,
 ):
     """The shared folders, then the chat's own once it exists, the dock
@@ -500,13 +526,17 @@ def test_a_helper_of_a_chat_with_shared_folders_gets_them_first(
     Path(own).mkdir(parents=True)
 
     result = _result(_chat_starts(client, chat_id, {"task": "Write the note."}))
+    await _runs_at_rest(client)
 
     assert not result["fehlgeschlagen"], result["text"]
     (prompt,) = run_prompts
     assert prompt["ordner"] == [str(shared.resolve()), own, dock, pictures]
     assert prompt["own_folder"] == own
-    assert f"This conversation also has a folder of its own, where its uploads are kept:\
-\n\n- {own}" in prompt["text"]
+    assert "also has a folder of its own" not in prompt["text"]
+    assert _run_system_message(client).endswith(
+        f"This conversation also has a folder of its own, where its uploads are kept:\
+\n\n- {own}"
+    )
     assert not (Path(own) / "exe.md").exists()
     assert (shared / "exe.md").exists()
 

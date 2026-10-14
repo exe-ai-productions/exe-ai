@@ -6,11 +6,12 @@
      it. Folded, it is a bar of signs as wide as the left one, with the
      same heights.
 
-     Head says which tool and, where there is one worth knowing from
-     outside, one detail about it — how many runs.
+     Head says which tool it is and nothing more: sign, name, fold button.
 
      The column is one component and the tools are files beside it; adding
-     one is a sign in the row and a file of its own, not a rebuild. */
+     one is a sign in the row and a file of its own, not a rebuild. The
+     terminal and the CLI are two tools: the log of the chat's tool calls,
+     and the terminal client running in the window. */
   import Modulzeichen from './Modulzeichen.svelte'
   import ModulBilder from './ModulBilder.svelte'
   import DocFolder from './DocFolder.svelte'
@@ -18,6 +19,7 @@
   import ModulCronjobs from './ModulCronjobs.svelte'
   import Agentenmarke from './Agentenmarke.svelte'
   import ModulTerminal from './ModulTerminal.svelte'
+  import Terminal from './Terminal.svelte'
   import ModulVorschau from './ModulVorschau.svelte'
   import Vektorfeld from './Vektorfeld.svelte'
   import ToolSigns from './ToolSigns.svelte'
@@ -29,7 +31,6 @@
     leiste, oeffnen, schliessen,
   } from '../lib/arbeitsleiste.svelte.js'
   import { t } from '../lib/texte.svelte.js'
-  import { terminal } from '../lib/terminalfenster.svelte.js'
   import { eineSeiteOffen } from '../lib/zustand.svelte.js'
   import { flaeche } from '../lib/flaeche.svelte.js'
 
@@ -37,20 +38,9 @@
      surface knows which drawing belongs to it. */
   let { vektoren = false } = $props()
 
-  /* The one line of detail in the head. Each module answers for itself what
-     is worth knowing about it from outside. The preview has none: the name
-     of its file stands on its tab and in its address line, and a third time
-     up here it only repeated itself. */
-  const detail = $derived.by(() => {
-    if (leiste.modul === 'terminal') {
-      const anzahl = terminal.laeufe.length
-      return anzahl ? t('terminal.laeufe', { n: anzahl }) : ''
-    }
-    return ''
-  })
-
   const MODULE = [
     ['terminal', 'terminal.titel'],
+    ['cli', 'cli.titel'],
     ['vorschau', 'vorschau.titel'],
     ['bilder', 'bilder.titel'],
     ['docfolder', 'docfolder.title'],
@@ -100,17 +90,17 @@
       {#if feinheitenAn}
         <span class="kopfzeichen"><Fensterzeichen name="feinheiten" groesse={24} /></span>
         <span class="modulname">{t('studio.feinheiten')}</span>
-        <span class="detail"></span>
+        <span class="spacer"></span>
       {:else if studioAn}
         <div class="umschalter" role="group" aria-label={t('studio.titel')}>
           <button aria-pressed="false" onclick={() => (studio.rechts = 'feinheiten')}>{t('studio.feinheiten')}</button>
           <button class="an" aria-pressed="true">{titel}</button>
         </div>
-        <span class="detail"></span>
+        <span class="spacer"></span>
       {:else}
         <span class="kopfzeichen">{@render zeichenVon(leiste.modul, 24)}</span>
         <span class="modulname">{titel}</span>
-        <span class="detail">{detail}</span>
+        <span class="spacer"></span>
       {/if}
       <!-- Folds the column to its bar of signs: the sidebar's own button,
            mirrored, as the column is. -->
@@ -131,6 +121,8 @@
         <StudioDetails />
       {:else if leiste.modul === 'terminal'}
         <ModulTerminal />
+      {:else if leiste.modul === 'cli'}
+        <Terminal />
       {:else if leiste.modul === 'vorschau'}
         <ModulVorschau />
       {:else if leiste.modul === 'bilder'}
@@ -296,14 +288,9 @@
     white-space: nowrap;
   }
   /* Takes the free room of the head, so the fold button stands at its end. */
-  .detail {
+  .spacer {
     flex: 1;
     min-width: 0;
-    font-size: 13px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-still);
   }
 
   /* The tool reaches down to the row of signs in full strength: no fade

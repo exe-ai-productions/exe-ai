@@ -126,11 +126,12 @@
     free ? Object.keys(TEILE) : bausatz ? ['vae', ...eintrag.encoders, ...eintrag.parts] : ['vae'],
   )
   /* What the model cannot start without: its diffusion model, every text
-     encoder its family reads and, where the family decodes with a VAE of
-     its own, the VAE (app/bildbausatz.py ``fehlendes_teil``). */
+     encoder its family reads and, where the family needs a VAE (its kit
+     names one, or it decodes with one of its own), the VAE
+     (app/bildbausatz.py ``fehlendes_teil``). */
   const noetig = $derived(
     bausatz && !free
-      ? [...eintrag.encoders, ...(eintrag.vae_channels != null ? ['vae'] : [])] : [],
+      ? [...eintrag.encoders, ...(eintrag.needs_vae ? ['vae'] : [])] : [],
   )
   const da = $derived(noetig.filter((teil) => w?.[teil]).length)
   const mitFlowShift = $derived(eintrag?.start?.flow_shift != null)
@@ -445,6 +446,7 @@
     border: none;
     border-radius: 9px;
     background: var(--bg-hoch);
+    box-shadow: inset 0 0 0 1px var(--feldstrich);
     color: var(--text);
     font: 400 13px/18px var(--schrift);
     padding: 0 12px;

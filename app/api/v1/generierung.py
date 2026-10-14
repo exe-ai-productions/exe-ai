@@ -53,13 +53,18 @@ from app.discovery import Discovery
 from app.events import Ereignisse, bus
 from app.generationen import Generierung, Generierungsverwaltung
 from app.answer_sections import SectionLog
+from app import answer_redo, answer_replay, replay_as_question
+from app.cache_over_rounds import cache_over_rounds
+from app.own_folder_line import with_own_folder_last
+from app.tempo_without_text import without_tempo
 from app.i18n import t
-from app import ablehnungslernen, antwortende, antwortgrenze, denkablehnung, denkschalter
+from app import ablehnungslernen, antwortende, antwortgrenze, denkablehnung, denkschalter, sent_stage
 from app import denkenwahl, denkstufen
 from app import reasoning
 from app import helper, parameter
 from app.speicherorte import ort
 from app.providers import ChatNachricht, Generierungsanfrage, ProviderFehler, openai_responses
+from app.providers.anthropic import THINKING_BLOCKS
 # The two floors a speed has to clear before it means anything — the
 # smallest number of tokens it may be computed from, and the shortest
 # stretch of time it may be divided by. Shared rather than repeated: the
@@ -242,6 +247,7 @@ def _runde_im_protokoll(
     text: list[str],
     denkteile: list[dict] | None = None,
     textteile: list[dict] | None = None,
+    blocks: list[dict] | None = None,
 ) -> dict:
     """What a later request needs to rebuild this call's round as it went
     out (``app/verlaufsbau.py``, ``_werkzeugzuege``): the number of the
@@ -257,6 +263,13 @@ def _runde_im_protokoll(
     route never has any, and two empty lists beside every call would name
     nothing.
 
+    The same holds on Anthropic's wire for a round that thought: its content
+    blocks (the thinking blocks whole, the rest as markers of their place)
+    are stored beside the text, under ``blocks``, so that a failed answer
+    asked again hands them back as the API wants them within a tool turn
+    (``app/verlaufsbau.py``, ``app/providers/anthropic.py``). Left out where
+    the round did not think.
+
     Stored with the call rather than in a place of its own: the tool log is
     the row's record of the run, and a second list beside it would have to
     be kept in step with this one for no gain.
@@ -268,10 +281,12 @@ def _runde_im_protokoll(
             kennung["denkteile"] = denkteile
         if textteile:
             kennung["textteile"] = textteile
+        if blocks:
+            kennung["blocks"] = blocks
     return kennung
 
 
-def _messwerte_mergen(alt: dict | None, neu: dict) -> dict:
+def _messwerte_mergen(alt: dict | None, neu: dict, wrote_text: bool = True) -> dict:
     """Sum metrics across tool rounds.
 
     Each round delivers its own numbers — until now the last one simply won,
@@ -288,7 +303,14 @@ def _messwerte_mergen(alt: dict | None, neu: dict) -> dict:
     Separately, but as a PAIR: only the tokens of a round that also brought
     a generation time go into the speed's numerator. See ``tempo_tokens``
     below — summing the two fields independently was its own defect.
+
+    A round that wrote no answer text (``wrote_text`` False: it only called a
+    tool) is no part of the speed at all — see ``without_tempo``. The cache
+    share is the cached tokens over all tokens read, over every round
+    (``cache_over_rounds``); the waiting time stays the first round's.
     """
+    if not wrote_text:
+        neu = without_tempo(neu)
     if not alt:
         return neu
     dauer = round((alt.get("dauer_sekunden") or 0) + (neu.get("dauer_sekunden") or 0), 3)
@@ -399,6 +421,7 @@ def _messwerte_mergen(alt: dict | None, neu: dict) -> dict:
         tempo_wert, tempo_quelle = None, schwaechste
     return {
         **neu,
+        **cache_over_rounds(alt, neu),
         "dauer_sekunden": dauer,
         "haeppchen": haeppchen,
         "erzeugte_tokens": tokens or None,
@@ -523,6 +546,15 @@ def _ganzer_stand(daten: dict) -> int | None:
 # between, we check at intervals whether anyone is still listening at all.
 BESTAETIGUNG_WARTEZEIT = 300.0
 BESTAETIGUNG_PRUEFTAKT = 0.5
+
+
+def _display_name(registry: Any, name: str) -> str:
+    """The name a window and a transcript show for a call: what the server
+    calls its tool (the server stands beside it), any other tool as it is
+    called. The model-facing name stays the one the gates and the history
+    read."""
+    display_name = getattr(registry, "display_name", None)
+    return display_name(name) if display_name is not None else name
 
 
 async def _werkzeug_ausfuehren(
@@ -826,8 +858,8 @@ def ordner_umzug_vergessen(chat_id: str) -> None:
 
 def _move_sentence(alt: str, neu: str) -> str:
     return (
-        f"The shared folder '{alt}' now lives at '{neu}' — read paths under "
-        "the old location at the new one."
+        f"The shared folder '{alt}' has moved to '{neu}'. Resolve paths under the old location "
+        "against the new location."
     )
 
 
@@ -1131,6 +1163,8 @@ def _system_bauen(
             )
         ]
 
+    dock_named = dock_folder if dock_folder not in (chat.working_dirs or []) else None
+    images_named = image_folder if image_folder not in (chat.working_dirs or []) else None
     grund = grundprompt.bauen(
         werkzeuge=werkzeuge_da,
         zugriff=zugriff,
@@ -1145,8 +1179,8 @@ def _system_bauen(
         # This chat's own folder, when it is in that list: named to the
         # model as the chat's own, not as something the user shared.
         own_folder=own_folder,
-        dock=dock_folder if dock_folder not in (chat.working_dirs or []) else None,
-        images=image_folder if image_folder not in (chat.working_dirs or []) else None,
+        dock=dock_named,
+        images=images_named,
         skills=skill_katalog,
         dateiwerkzeuge=dateiwerkzeuge_da,
         befehle=befehle_da,
@@ -1180,11 +1214,15 @@ def _system_bauen(
     )
     if umzug_satz:
         text = f"{text}\n\n{umzug_satz}"
+    # The one paragraph that differs in every new chat goes behind all the
+    # rest, so that everything before it is the same for each of them and the
+    # model server keeps it in its cache.
+    text = with_own_folder_last(text, ordner_offen, own_folder, dock_named, images_named)
     _system_messages[chat.id] = (fingerprint, text)
     return text
 
 
-@router.post("/completions", summary="Generate an answer (Server-Sent Events)")
+@router.post("/completions", summary="Generate a response (Server-Sent Events)")
 async def completions(
     daten: GenerierungAnfrage,
     request: Request,
@@ -1467,6 +1505,29 @@ async def _antwort_aufsetzen(
         dokument = repositories.documents.holen(dokument_id)
         if dokument is None or dokument.chat_id != chat.id:
             raise HTTPException(404, t("fehler.dokument_fehlt", sprache))
+
+    # The answer this request names instead of bringing a turn of its own
+    # (app/answer_redo.py). Asked before anything is stored: a request naming
+    # an answer the chat does not end in — or one that is still being
+    # written, or a failed one, which is asked again where it stands — is
+    # turned away with the chat untouched.
+    replaced = None
+    if daten.replaces:
+        replaced = answer_redo.named_answer(repositories, chat.id, daten.replaces)
+        if replaced is None or not answer_redo.replaceable(replaced):
+            raise HTTPException(404, t("fehler.nachricht_nicht_gefunden", sprache))
+    # The failed answer whose model call this request asks again, and what
+    # that run had already done (app/answer_replay.py). The run goes on in
+    # this very row; nothing is deleted and no call of it is made again.
+    retried = None
+    kept: answer_replay.Kept | None = None
+    if daten.retries:
+        retried = answer_redo.named_answer(repositories, chat.id, daten.retries)
+        if retried is None or answer_redo.run_state(retried) != answer_redo.FAILED:
+            raise HTTPException(404, t("fehler.nachricht_nicht_gefunden", sprache))
+        kept = answer_replay.kept(retried)
+    # The one row a request of either kind names, if it names one.
+    named = replaced or retried
 
     # The row this request's own turn becomes — kept here, because the clock
     # sentence it goes out with is written back onto it a few lines below.
@@ -1829,7 +1890,7 @@ async def _antwort_aufsetzen(
                 # do. Measured through `tokens(str(...))` it priced the
                 # DIGITS of the number — twenty tool rounds of two thousand
                 # characters counted as forty tokens instead of ten thousand.
-                + werkzeuggewicht(z) // tokenmass.ZEICHEN_JE_TOKEN_ROH
+                + werkzeuggewicht(z, bool(angebot)) // tokenmass.ZEICHEN_JE_TOKEN_ROH
                 for z in zeilen_vorab
             )
             # The tool definitions, which travel with every request and were
@@ -1965,6 +2026,19 @@ async def _antwort_aufsetzen(
         # The same reading of the documents the request will carry, so the
         # fold weighs the prompt that really goes out.
         dokumentplan=dokumentplan,
+        # And the same rows: the answer a new one is about to replace is in
+        # no request, and a failed answer asked again closes the request as
+        # its own turns, not as a row — neither is weighed or folded here.
+        without=named.id if named is not None else None,
+        # Whether the request offers tools: the rows are weighed in the
+        # shape their tool calls will have in it.
+        offers_tools=bool(angebot),
+        # The claim carries the stop button's signal until the run exists:
+        # pressed while the summary is being written, the fold request is
+        # closed on the spot (app/faltversuche.py).
+        stopp=generierungen.anspruch(chat.id),
+        # Where the pictures lie, so a picture weighs what it is sent at.
+        config=app.state.config,
     )
     if verdichtet_zu:
         # The fold is where what the model wrote meanwhile — the memory, an
@@ -1997,8 +2071,18 @@ async def _antwort_aufsetzen(
     if (anspruch := generierungen.anspruch(chat.id)) is not None and anspruch.is_set():
         return None
     anhang_namen = sorted(set(repositories.messages.bildanhaenge(chat_id=chat.id)))
-    if anhang_namen and zustand.kann("vision"):
-        await asyncio.to_thread(verlaufsbau.bilder_vorbereiten, app.state.config, anhang_namen)
+    # The pictures earlier tool reads attached, by the note their rows carry
+    # (app/werkzeugbild.py ``READ_IMAGE_PATH``): at most the newest
+    # ``OUTBOUND_IMAGE_LIMIT`` ride again in this request
+    # (app/verlaufsbau.py), and their copies are made here.
+    tool_picture_paths = repositories.messages.tool_entry_values(
+        chat_id=chat.id,
+        key=werkzeugbild.READ_IMAGE_PATH,
+        newest=werkzeugkuerzung.OUTBOUND_IMAGE_LIMIT,
+    )
+    if (anhang_namen or tool_picture_paths) and zustand.kann("vision"):
+        await asyncio.to_thread(verlaufsbau.bilder_vorbereiten, app.state.config,
+                                anhang_namen, tool_picture_paths)
 
     # The stop button, pressed while the fold or the picture warm-up was
     # running. The claim this
@@ -2038,6 +2122,23 @@ async def _antwort_aufsetzen(
     # the read" and "report in the request" are one fact here.
     gelesene_laeufe = hintergrund.laeufe.abgeschlossene(chat.id)
     zeilen = repositories.messages.fuer_das_modell(chat_id=chat.id)
+    if replaced is not None:
+        # The new answer is written on the history without the one it
+        # replaces. Only the request leaves that row out: the row itself
+        # stays stored until the new answer is finished (the closing write).
+        zeilen = [z for z in zeilen if z.id != replaced.id]
+    if retried is not None:
+        # The request the failed call carried: everything written before
+        # the answer's row, by the rule a fold inside an answer reads its
+        # rows by — nothing from the row on. A report that landed behind
+        # the failed answer was in no request of this run and is in none
+        # now; it stays unread, and no run is counted as read for it.
+        row_ids = [z.id for z in zeilen]
+        if retried.id in row_ids:
+            zeilen = zeilen[: row_ids.index(retried.id)]
+        else:
+            zeilen = [z for z in zeilen if z.created_at < retried.created_at]
+        gelesene_laeufe = []
 
     # The date block in front of this turn — but only when the request would
     # otherwise carry no reading of today at all. Read HERE, after the fold
@@ -2072,6 +2173,20 @@ async def _antwort_aufsetzen(
     # feeds earlier tool calls back as calls only when the model can call
     # tools NOW (see `_verlauf_bauen`).
 
+    # What the failed call carried of its own answer, behind the rows: its
+    # finished tool rounds (app/answer_replay.py). Its pictures count with
+    # the rows' for the rule of the newest few, the way the run counted them
+    # in its own request — one plan for both, so the answer's pictures and
+    # the history's are retired from one list.
+    carried_answer = (
+        answer_replay.carried(retried, kept) if retried is not None and kept is not None else None
+    )
+    tool_plan = verlaufsbau.tool_picture_plan(
+        [*zeilen, carried_answer] if carried_answer is not None else zeilen,
+        app.state.config,
+        zustand.kann("vision"),
+        bool(angebot),
+    )
     nachrichten = _verlauf_bauen(
         chat,
         repositories,
@@ -2085,7 +2200,20 @@ async def _antwort_aufsetzen(
         # against this model's window.
         dokumentplan=dokumentplan,
         gespraechsanweisung=turn_prefix,
+        tool_plan=tool_plan,
     )
+    if carried_answer is not None and kept is not None:
+        # Behind the rows, what this run had done before it failed: its
+        # finished tool rounds as calls and results, as the failed call
+        # carried them. The model is asked again from exactly there — and
+        # the request ends on a turn the model answers, never on one of its
+        # own (app/replay_as_question.py).
+        nachrichten[:] = replay_as_question.fold_into_question(
+            nachrichten,
+            verlaufsbau.answer_turns(
+                carried_answer, kept.content, werkzeuge=bool(angebot), tool_plan=tool_plan
+            ),
+        )
 
     # Whether this request carries the block at all — settled once, with the
     # request itself, and asked again before every send below. A request that
@@ -2173,8 +2301,21 @@ async def _antwort_aufsetzen(
     #
     # Saved with no await between the history read above and here: this
     # row's place in the chat is what says which reports the prompt saw.
-    platzhalter = repositories.messages.speichern(
-        chat_id=chat.id, role="assistant", content="", zustand="laeuft"
+    #
+    # A failed answer asked again has its row already, and the run goes on
+    # in it: only its state changes here. What it holds stays as it is until
+    # the repeated call has brought something (`went_on` below).
+    platzhalter = (
+        repositories.messages.run_again(retried.id) if retried is not None else None
+    ) or repositories.messages.speichern(
+        chat_id=chat.id,
+        role="assistant",
+        content="",
+        zustand="laeuft",
+        # A new answer that takes another one's place names it, so a hard
+        # end of the service leaves the chat the way a stop by hand does
+        # (app/db/repositories/messages.py, `beim_start_aufraeumen`).
+        replaces_id=replaced.id if replaced is not None else None,
     )
 
     # The generator stays what it was — a sequence of events. What's new is
@@ -2205,7 +2346,11 @@ async def _antwort_aufsetzen(
         # Calls refused the moment they began, by id: the reason is what the
         # model gets back as the call's result (see `tool_call_laeuft` below).
         fruehe_absagen: dict[str, str] = {}
-        antwort_text: list[str] = []
+        # A failed answer asked again starts with what it had already done
+        # (app/answer_replay.py): the text and the thinking of its finished
+        # rounds, their calls, and what belongs to them. Every other answer
+        # starts empty.
+        antwort_text: list[str] = [kept.content] if kept is not None and kept.content else []
         # The text of the round that is running, and nothing before it.
         # `antwort_text` above is the whole answer — what the window shows and
         # the row stores — and it is NOT what the model's history wants. An
@@ -2216,13 +2361,16 @@ async def _antwort_aufsetzen(
         # again — measured: one row with its own first paragraph thirteen
         # times, 112k prompt tokens on a chat with two questions.
         runden_text: list[str] = []
-        gedanke_text: list[str] = []
+        gedanke_text: list[str] = (
+            [kept.reasoning] if kept is not None and kept.reasoning else []
+        )
+        kept_stats = (retried.stats or {}) if retried is not None else {}
         # Which of this answer's tool results the clearing replaced in the
         # request, and as which of the two sentences. It goes into the row at
         # the closing write and comes back in the NEXT request's rebuild, so
         # the run and the request after it read the same text
         # (app/verlaufsbau.py).
-        geraeumte_ergebnisse: dict[str, str] = {}
+        geraeumte_ergebnisse: dict[str, str] = dict(kept_stats.get("geraeumt") or {})
         # The summary a fold INSIDE this answer produced, as it stands in the
         # request. It is written down as a row at the closing write, so the
         # next message continues folded instead of folding the same stretch
@@ -2237,13 +2385,25 @@ async def _antwort_aufsetzen(
         # always that list's tail.
         runden_gedanke: list[str] = []
         messwerte: dict = {}
-        werkzeugprotokoll: list[dict] = []
+        werkzeugprotokoll: list[dict] = (
+            [dict(call) for call in kept.calls] if kept is not None else []
+        )
         # The report of a reached goal, if the `goal` tool was called
         # (app/tools/ziel_werkzeug.py). Kept alongside the tool log rather
         # than merged into the metrics as it happens: the metrics are still
         # being summed across rounds, and the one write in the `finally`
         # is where everything about this answer becomes final.
-        ziel_bericht: str | None = None
+        ziel_bericht: str | None = kept_stats.get("ziel") if kept is not None else None
+        # How much of the three the run started with. A repeated call that
+        # has added to none of them has brought nothing yet, and until it
+        # does the row is left as the failed answer it was.
+        started_with = (len(antwort_text), len(gedanke_text), len(werkzeugprotokoll))
+
+        def went_on() -> bool:
+            return (
+                len(antwort_text), len(gedanke_text), len(werkzeugprotokoll)
+            ) != started_with
+
         abgebrochen = False
         fehlertext: str | None = None
         # Set when the provider answered that the request did not fit the
@@ -2296,7 +2456,7 @@ async def _antwort_aufsetzen(
             if endung is None:
                 # Unknown kind: better the short note than a file that
                 # would be delivered with a wrong declaration.
-                raise ValueError(f"unbekannter Bildtyp {mime}")
+                raise ValueError(f"Unknown image type: {mime}")
             name = uuid4().hex + endung
             verzeichnis = ort(app.state.config, "images")
             verzeichnis.mkdir(parents=True, exist_ok=True)
@@ -2324,6 +2484,11 @@ async def _antwort_aufsetzen(
             """
             nonlocal letzter_zwischenstand
             if not (antwort_text or gedanke_text or werkzeugprotokoll):
+                return
+            # A failed answer asked again keeps everything it held — what
+            # its failed call had begun to write included — until the
+            # repeated call brings something to put in its place.
+            if retried is not None and not went_on():
                 return
             jetzt = time.monotonic()
             if not erzwungen and jetzt - letzter_zwischenstand < ZWISCHENSTAND_TAKT:
@@ -2386,6 +2551,14 @@ async def _antwort_aufsetzen(
             chat_id=chat.id,
             endpoint_id=endpoint_id,
         )
+        if kept is not None:
+            # A failed answer asked again: what its run had done, said again
+            # as the events it was first said in. The window empties the row
+            # at `start` and draws it from these, the answer's order is
+            # counted from them (`sections`), and a window attaching later
+            # finds them in the run's buffer.
+            for event in answer_replay.events(kept, goal=ziel_bericht):
+                yield _sse(event.pop("typ"), **event)
 
         # Once per chat and folder, decided by `melden` itself — a warning
         # that repeats at every sentence is not a warning. A file over the
@@ -2405,6 +2578,11 @@ async def _antwort_aufsetzen(
         # round's retries. Never on the endpoint state another chat, job or
         # fold at the same address reads (app/antwortgrenze.py `Zug`).
         zug = antwortgrenze.Zug()
+        # What the request that went out last carried of the thinking stage:
+        # its fields and the stage word. A refusal is read against these, not
+        # against what was picked — a lowered ceiling can send "off" where a
+        # stage was picked (app/sent_stage.py).
+        last_sent: dict[str, Any] = {}
 
         async def faltend_streamen(runde: int) -> AsyncGenerator:
             """One round of this answer, sent again for as long as the
@@ -2514,6 +2692,7 @@ async def _antwort_aufsetzen(
                             erzwungen=True,
                             einstellungen=repositories.einstellungen,
                             endpoint_id=refusal_id,
+                            stopp=generierung.signal,
                         )
                     except Exception:  # noqa: BLE001 - a failed fold ends in the card, not a crash
                         log.warning(
@@ -2579,6 +2758,9 @@ async def _antwort_aufsetzen(
                             zeilen=gesendet,
                             budget=kontextvoll.faltbudget(grundbudget, faltungen),
                             dokumentplan=dokumentplan,
+                            offers_tools=bool(angebot),
+                            stopp=generierung.signal,
+                            config=app.state.config,
                         )
                     except Exception:  # noqa: BLE001 - a failed fold ends in the card, not a crash
                         log.warning("Chat %s: forced fold failed", chat.id, exc_info=True)
@@ -2607,6 +2789,10 @@ async def _antwort_aufsetzen(
                     gesendet = frisch[: kennungen.index(platzhalter.id)]
                 else:
                     gesendet = [z for z in frisch if z.created_at < platzhalter.created_at]
+                if replaced is not None:
+                    # Still without the answer this one replaces, as the
+                    # first read left it out.
+                    gesendet = [z for z in gesendet if z.id != replaced.id]
                 # The block before this request is built, and on the row: the
                 # fold just swallowed the row that carried it, so the newest
                 # user row left — the question being answered — is the one the
@@ -2727,13 +2913,19 @@ async def _antwort_aufsetzen(
                 # Every send of this answer goes out with no more than the
                 # ceiling a refusal brought it down to: the retry, a send
                 # after a fold, and every round after it.
-                innen = zustand.provider.streamen(
-                    kontextvoll.mit_grenze(
-                        anfrage,
-                        antwortgrenze.forced_ceiling(anfrage.max_tokens, zug),
-                        zustand,
-                    )
+                out_request = kontextvoll.mit_grenze(
+                    anfrage,
+                    antwortgrenze.forced_ceiling(anfrage.max_tokens, zug),
+                    zustand,
                 )
+                last_sent["zusatz"] = out_request.zusatz
+                last_sent["stufe"] = sent_stage.sent_stage(
+                    denkstufe,
+                    anfrage.zusatz,
+                    out_request.zusatz,
+                    denkschalter.aus_wort(zustand, modell=anfrage.modell),
+                )
+                innen = zustand.provider.streamen(out_request)
                 angekommen = False
                 try:
                     async for stueck in innen:
@@ -2754,7 +2946,7 @@ async def _antwort_aufsetzen(
                         and not retried_without_thinking
                         and denkablehnung.lernen(
                             repositories.einstellungen, refusal_id, fehler,
-                            anfrage.zusatz, denkstufe, route=think_route,
+                            last_sent["zusatz"], last_sent["stufe"], route=think_route,
                         )
                     ):
                         retried_without_thinking = True
@@ -2787,10 +2979,18 @@ async def _antwort_aufsetzen(
                         repositories, zustand, fehler, zug
                     ):
                         raise
+                    # What the request weighs: the one refusal that names the
+                    # ceiling and the window without the input is answered
+                    # from it (kontextvoll.abhilfe), and a fold below is
+                    # measured against it.
+                    estimated_input = antwortgrenze.eingabe_schaetzen(
+                        anfrage.nachrichten, anfrage.werkzeuge
+                    )
                     weg, frei = kontextvoll.abhilfe(
                         fehler,
                         eingestellte_grenze=eingestellte_grenze,
                         fenster=zustand.context_tokens,
+                        input_tokens=estimated_input,
                     )
                     if weg == kontextvoll.LIMIT_TOO_LARGE:
                         # The answer length somebody set is as large as the
@@ -2844,9 +3044,7 @@ async def _antwort_aufsetzen(
                         "Chat %s: provider called the request too long, folding",
                         chat.id,
                     )
-                    vor_der_faltung = antwortgrenze.eingabe_schaetzen(
-                        anfrage.nachrichten, anfrage.werkzeuge
-                    )
+                    vor_der_faltung = estimated_input
                     gefaltet = await falten()
                     if generierung.soll_abbrechen:
                         abgebrochen = True
@@ -2887,7 +3085,15 @@ async def _antwort_aufsetzen(
             # One pass per tool round: the model requests, we execute, the
             # result goes back, the model keeps writing. Bounded so that a
             # model doesn't go in circles.
+            #
+            # The bound counts the rounds of this request, as it does for
+            # every request. A failed answer asked again goes on behind the
+            # rounds it had finished: their numbers stay taken in the log
+            # (`stored_round`), and the request carries them, so a fold of
+            # it happens in memory like any round past the first.
+            first_round = kept.next_round if kept is not None else 0
             for runde in range(max_werkzeug_runden + 1):
+                stored_round = first_round + runde
                 aufrufe: list = []
                 runden_text = []
                 runden_gedanke = []
@@ -2942,7 +3148,7 @@ async def _antwort_aufsetzen(
                 # Every round may fold or lower its ceiling and go out again
                 # (see above) — the round number only decides whether that
                 # fold is written onto rows or happens in memory.
-                quelle = faltend_streamen(runde)
+                quelle = faltend_streamen(stored_round)
 
                 while True:
                     # Not a plain ``async for``: a server that has gone
@@ -2983,7 +3189,9 @@ async def _antwort_aufsetzen(
                         yield _sse("reasoning", text=stueck.text)
                     elif stueck.sorte == "stats":
                         folded_after_reading = False
-                        messwerte = _messwerte_mergen(messwerte, stueck.daten)
+                        messwerte = _messwerte_mergen(
+                            messwerte, stueck.daten, wrote_text=round_wrote_visible
+                        )
                         # The round is over, and its own numbers are the
                         # best there will ever be for it. Whatever estimate
                         # was reported while it ran gets replaced here, and
@@ -3003,10 +3211,17 @@ async def _antwort_aufsetzen(
                             else _kontextstand(
                                 {
                                     "prompt_tokens": stueck.daten.get("prompt_tokens"),
-                                    "prompt_genau": False,
+                                    # Whole where the provider read both
+                                    # halves of the prompt, as it does live;
+                                    # a floor where it named one.
+                                    "prompt_genau": bool(stueck.daten.get("prompt_genau")),
+                                    # Everything the model produced, thinking
+                                    # included, not the answer's pieces the
+                                    # speed is counted from.
                                     "erzeugte_tokens": stueck.daten.get(
-                                        "erzeugte_tokens"
-                                    ),
+                                        "kontext_erzeugte_tokens"
+                                    )
+                                    or stueck.daten.get("erzeugte_tokens"),
                                 },
                                 letzter_gesamtstand,
                             )
@@ -3102,6 +3317,15 @@ async def _antwort_aufsetzen(
                 # `runden_text` above). The earlier rounds already stand in
                 # the history, each in its own turn, followed by its results.
                 denkteile, textteile = openai_responses.rundenteile(runden_teile)
+                # The round's blocks on Anthropic's wire, for the log: only
+                # where it thought, and then all of them in the order they
+                # came — a thinking block is handed back whole and in its
+                # place, the markers of text and calls say where it was.
+                stored_blocks = (
+                    list(round_blocks)
+                    if any(b.get("type") in THINKING_BLOCKS for b in round_blocks)
+                    else []
+                )
                 anfrage.nachrichten.append(
                     ChatNachricht(
                         role="assistant",
@@ -3178,7 +3402,7 @@ async def _antwort_aufsetzen(
                         # stands in the window's language (`sprache` below).
                         yield _sse(
                             "tool_confirm",
-                            name=aufruf.name,
+                            name=_display_name(registry, aufruf.name),
                             argumente=aufruf.argumente,
                             grund=(
                                 t(anlass[0], sprache, **{anlass[1]: anlass[2]})
@@ -3198,14 +3422,20 @@ async def _antwort_aufsetzen(
                                 abgebrochen = True
                                 break
                             abgelehnt = t(
-                                "fehler.werkzeug_unbeantwortet", sprache, name=aufruf.name
+                                "fehler.werkzeug_unbeantwortet",
+                                sprache,
+                                name=_display_name(registry, aufruf.name),
                             )
                             abgelehnt_modell = t(
                                 "fehler.werkzeug_unbeantwortet", "en", name=aufruf.name
                             )
                         elif entscheidung is False:
                             log.info("Tool '%s' was declined", aufruf.name)
-                            abgelehnt = t("fehler.werkzeug_abgelehnt", sprache, name=aufruf.name)
+                            abgelehnt = t(
+                                "fehler.werkzeug_abgelehnt",
+                                sprache,
+                                name=_display_name(registry, aufruf.name),
+                            )
                             abgelehnt_modell = t(
                                 "fehler.werkzeug_abgelehnt", "en", name=aufruf.name
                             )
@@ -3219,7 +3449,7 @@ async def _antwort_aufsetzen(
                             abgelehnt = t(
                                 "fehler.tool_declined_with_words",
                                 sprache,
-                                name=aufruf.name,
+                                name=_display_name(registry, aufruf.name),
                                 text=entscheidung,
                             )
                             abgelehnt_modell = t(
@@ -3262,6 +3492,10 @@ async def _antwort_aufsetzen(
                         # the call's own duration: the call asked, the person
                         # took their time.
                         waited = 0.0
+                        # Set only when the person pressed stop while the
+                        # question stood: the result then says so, and a
+                        # window does not report it as a call that failed.
+                        stopped_by_person = False
                         try:
                             frage_text, optionen = frage_werkzeug.gepruefte_frage(
                                 aufruf.argumente
@@ -3329,6 +3563,7 @@ async def _antwort_aufsetzen(
                                 ergebnis_modell = frage_werkzeug.CANCELLED
                                 fehlgeschlagen = True
                                 abgebrochen = True
+                                stopped_by_person = True
                             else:
                                 ergebnis = (
                                     antwort
@@ -3345,7 +3580,7 @@ async def _antwort_aufsetzen(
                         dauer = max(0.0, round(time.monotonic() - aufruf_beginn - waited, 3))
                         werkzeugprotokoll.append(
                             {
-                                "name": aufruf.name,
+                                "name": _display_name(registry, aufruf.name),
                                 "server": registry.server_von(aufruf.name) if registry else "",
                                 "argumente": aufruf.argumente,
                                 "fehlgeschlagen": fehlgeschlagen,
@@ -3356,21 +3591,23 @@ async def _antwort_aufsetzen(
                                 **_modellfassung(ergebnis, ergebnis_modell),
                                 **_runde_im_protokoll(
                                     werkzeugprotokoll,
-                                    runde,
+                                    stored_round,
                                     runden_text,
                                     denkteile,
                                     textteile,
+                                    blocks=stored_blocks,
                                 ),
                             }
                         )
                         yield _sse(
                             "tool_result",
-                            name=aufruf.name,
+                            name=_display_name(registry, aufruf.name),
                             aufruf_id=aufruf.id,
                             fehlgeschlagen=fehlgeschlagen,
                             text=ergebnis,
                             bild=None,
                             dauer_sekunden=dauer,
+                            **({"stopped": True} if stopped_by_person else {}),
                         )
                         anfrage.nachrichten.append(
                             ChatNachricht(
@@ -3402,7 +3639,7 @@ async def _antwort_aufsetzen(
                         # window draws its card from it.
                         yield _sse(
                             "tool_call",
-                            name=aufruf.name,
+                            name=_display_name(registry, aufruf.name),
                             server=registry.server_von(aufruf.name) if registry else "",
                             argumente=aufruf.argumente,
                             aufruf_id=aufruf.id,
@@ -3418,10 +3655,8 @@ async def _antwort_aufsetzen(
                                 raise auftrag_werkzeug.AuftragVerboten(str(fehler)) from fehler
                             if not agent_name or helper.is_helper(agent_name):
                                 # No agent named: a helper takes the work
-                                # (app/helper.py), if one more may run.
-                                reason = helper.refusal(repositories)
-                                if reason:
-                                    raise auftrag_werkzeug.AuftragVerboten(reason)
+                                # (app/helper.py). Whether one more may run
+                                # is asked where the run is made, below.
                                 agent_name = helper.HELPER_NAME
                                 agent_objekt = helper.helper_agent(repositories, registry)
                             else:
@@ -3431,8 +3666,8 @@ async def _antwort_aufsetzen(
                                 agent_objekt = agenten.get(agent_name)
                                 if agent_objekt is None:
                                     raise auftrag_werkzeug.AuftragVerboten(
-                                        f"No agent named '{agent_name}'. Available: "
-                                        f"{', '.join(sorted(agenten)) or 'none'}."
+                                        f"No agent named '{agent_name}' was found. Available "
+                                        f"agents: {', '.join(sorted(agenten)) or 'none'}."
                                     )
                         except auftrag_werkzeug.AuftragVerboten as fehler:
                             ergebnis, fehlgeschlagen = str(fehler), True
@@ -3505,15 +3740,15 @@ async def _antwort_aufsetzen(
                                     images=images,
                                 )
                             except HTTPException as fehler:
-                                ergebnis = job_could_not_start(fehler.detail)
-                                # A refusal of this route carries the
-                                # model's English copy (Refusal): the
-                                # window keeps the sentence above, the
-                                # model reads its own.
-                                ergebnis_modell = (
-                                    job_could_not_start(fehler.model)
-                                    if isinstance(fehler, Refusal)
-                                    else ergebnis
+                                # The window reads the frame in the user's
+                                # language, the model in English. A refusal
+                                # of this route carries the model's English
+                                # copy of what stands behind the frame
+                                # (Refusal); any other has only the
+                                # sentence it was raised with.
+                                ergebnis = job_could_not_start(fehler.detail, sprache)
+                                ergebnis_modell = job_could_not_start(
+                                    fehler.model if isinstance(fehler, Refusal) else fehler.detail
                                 )
                                 fehlgeschlagen = True
                             else:
@@ -3529,11 +3764,10 @@ async def _antwort_aufsetzen(
                                         extra={"ereignis": "helper_started", "chat": chat.id},
                                     )
                                 ergebnis = (
-                                    f"Job started: agent '{agent_name}', id "
-                                    f"{auftrag.id}. It runs on its own. When "
-                                    "it is done, its report comes back into "
-                                    "this chat and you will be asked to sum "
-                                    "it up for the user."
+                                    f"Job started: agent '{agent_name}', ID {auftrag.id}. It "
+                                    "runs independently. When it finishes, its report will "
+                                    "return to this chat, and you will be asked to summarize "
+                                    "it for the user."
                                 )
                                 # One string for both readers here: what
                                 # this tool answers is the program's own
@@ -3551,7 +3785,7 @@ async def _antwort_aufsetzen(
                         dauer = max(0.0, round(time.monotonic() - aufruf_beginn, 3))
                         werkzeugprotokoll.append(
                             {
-                                "name": aufruf.name,
+                                "name": _display_name(registry, aufruf.name),
                                 "server": registry.server_von(aufruf.name) if registry else "",
                                 "argumente": aufruf.argumente,
                                 "fehlgeschlagen": fehlgeschlagen,
@@ -3565,16 +3799,17 @@ async def _antwort_aufsetzen(
                                 "kennung": aufruf.id,
                                 **_runde_im_protokoll(
                                     werkzeugprotokoll,
-                                    runde,
+                                    stored_round,
                                     runden_text,
                                     denkteile,
                                     textteile,
+                                    blocks=stored_blocks,
                                 ),
                             }
                         )
                         yield _sse(
                             "tool_result",
-                            name=aufruf.name,
+                            name=_display_name(registry, aufruf.name),
                             aufruf_id=aufruf.id,
                             fehlgeschlagen=fehlgeschlagen,
                             text=ergebnis,
@@ -3600,7 +3835,7 @@ async def _antwort_aufsetzen(
                     # in the configuration and cannot be guessed wrong.
                     yield _sse(
                         "tool_call",
-                        name=aufruf.name,
+                        name=_display_name(registry, aufruf.name),
                         server=registry.server_von(aufruf.name) if registry else "",
                         argumente=aufruf.argumente,
                         aufruf_id=aufruf.id,
@@ -3620,6 +3855,7 @@ async def _antwort_aufsetzen(
                         refused = frueh_grund is not None
                     else:
                         bilder_vorher = len(werkzeug_bilder)
+                        read_before = len(gelesene_bildpfade)
                         # The third value, whether the call was refused, is
                         # the loop guard's, which watches unattended job
                         # runs, not the live chat — a person is right there
@@ -3662,6 +3898,16 @@ async def _antwort_aufsetzen(
                     neues_bild = (
                         werkzeug_bilder[-1]
                         if abgelehnt is None and len(werkzeug_bilder) > bilder_vorher
+                        else None
+                    )
+                    # Did THIS call hand the model a picture to look at? The
+                    # row remembers which file, so a later request that
+                    # rebuilds the history can attach it again — by this
+                    # note and not by the result's words, which a file's own
+                    # text could imitate (app/werkzeugbild.py).
+                    read_picture = (
+                        gelesene_bildpfade[read_before]
+                        if abgelehnt is None and len(gelesene_bildpfade) > read_before
                         else None
                     )
                     # A drawing call: this answer's run row as it stands now
@@ -3740,7 +3986,7 @@ async def _antwort_aufsetzen(
                             gestartet.antwort_id = platzhalter.id
                     werkzeugprotokoll.append(
                         {
-                            "name": aufruf.name,
+                            "name": _display_name(registry, aufruf.name),
                             # Stored alongside, so a reloaded history shows the
                             # same mark as the live run did.
                             "server": registry.server_von(aufruf.name) if registry else "",
@@ -3757,21 +4003,27 @@ async def _antwort_aufsetzen(
                             # hand the model the window's own language again.
                             **_modellfassung(ergebnis, ergebnis_modell),
                             "bild": neues_bild,
+                            **(
+                                {werkzeugbild.READ_IMAGE_PATH: read_picture}
+                                if read_picture
+                                else {}
+                            ),
                             "dauer_sekunden": dauer,
                             "kennung": aufruf.id,
                             **_runde_im_protokoll(
                                 werkzeugprotokoll,
-                                runde,
+                                stored_round,
                                 runden_text,
                                 denkteile,
                                 textteile,
+                                blocks=stored_blocks,
                             ),
                             **({"lauf_nummer": lauf_nummer} if lauf_nummer is not None else {}),
                         }
                     )
                     yield _sse(
                         "tool_result",
-                        name=aufruf.name,
+                        name=_display_name(registry, aufruf.name),
                         aufruf_id=aufruf.id,
                         fehlgeschlagen=fehlgeschlagen,
                         text=ergebnis,
@@ -3868,6 +4120,7 @@ async def _antwort_aufsetzen(
                     key=chat.id,
                     settings=repositories.einstellungen,
                     endpoint_id=refusal_id,
+                    stop=generierung.signal,
                 ):
                     if isinstance(schritt, kontextverbrauch.Kontextstand):
                         # An estimate, so the row gets it at the live pace.
@@ -3985,7 +4238,8 @@ async def _antwort_aufsetzen(
             # out is blamed, "off" included in its older yes/no form, and a
             # spoken turn's "off" follows it the same way.
             if denkablehnung.lernen(
-                repositories.einstellungen, refusal_id, fehler, anfrage.zusatz, denkstufe,
+                repositories.einstellungen, refusal_id, fehler,
+                last_sent.get("zusatz", anfrage.zusatz), last_sent.get("stufe", denkstufe),
                 route=think_route,
             ):
                 fehlertext = getattr(fehler, "rohtext", None) or fehlertext
@@ -4160,6 +4414,18 @@ async def _antwort_aufsetzen(
             # A picture the model DREW is not among them: it stands in this
             # answer's own run since the moment it was finished, written by
             # the picture route itself (see `bild_senke` above).
+
+            # Whether the chat is still there, asked once before anything
+            # below writes. Deleting a chat waits for its run, so this is
+            # not expected to be false; it is the same check the ask_user
+            # path makes (`frage_setzen`) for a chat that was removed some
+            # other way. The summary row's insert would fail its foreign key
+            # and the run would never deregister. Nothing between this and
+            # the last write awaits, so the answer holds up to there.
+            chat_gone = repositories.chats.holen(chat.id) is None
+            if chat_gone:
+                log.info("Chat %s is gone, its run stops", chat.id)
+
             # A fold inside this answer is written down here, BEFORE the
             # answer's own row: the summary takes its place in the seam
             # between the rows it speaks for and this answer, and the row
@@ -4167,7 +4433,14 @@ async def _antwort_aufsetzen(
             # (app/chatverdichtung.py, the recording the row path uses). A
             # fold that lasted only for this answer made the next message
             # fold the same stretch again.
-            if gefaltete_mitte:
+            #
+            # A new answer that took another one's place and did not finish
+            # leaves nothing in the chat (below), so its fold is not written
+            # down either. One that did finish writes it without the answer
+            # it replaces: that row was in no request of this run, and the
+            # summary does not speak for it.
+            discarded = replaced is not None and schluss_zustand != "fertig"
+            if gefaltete_mitte and not discarded and not chat_gone:
                 geschrieben = chatverdichtung.faltung_nachtragen(
                     chat=chat,
                     repositories=repositories,
@@ -4176,6 +4449,7 @@ async def _antwort_aufsetzen(
                         zustand.context_tokens, schwelle
                     ),
                     ausser_id=platzhalter.id,
+                    without=replaced.id if replaced is not None else None,
                 )
                 # Only where the row path wrote nothing: its summary is the
                 # older one of the two, and the window only asks whether a
@@ -4194,8 +4468,7 @@ async def _antwort_aufsetzen(
                 final=True,
                 promoted=bool(messwerte.get("denktext_als_antwort")),
             )
-            repositories.messages.inhalt_aktualisieren(
-                platzhalter.id,
+            closing_write: dict[str, Any] = dict(
                 content=antwort_inhalt,
                 reasoning=gedanke_inhalt or None,
                 stats={**messwerte, "sections": order} if order else messwerte,
@@ -4212,7 +4485,46 @@ async def _antwort_aufsetzen(
                 # written yet — the column must not end behind the stream.
                 gesamt_tokens=gesamt_tokens if gesamt_tokens is not None else gemeldeter_stand,
             )
-            repositories.chats.zeitstempel_auffrischen(chat.id)
+            # A failed answer asked again whose repeated call brought
+            # nothing — it failed again at once, or was stopped before it
+            # wrote: the answer stands as it stood before the press, what
+            # its failed call had begun to write included. A new failure
+            # leaves its own reason; a stop leaves the old one.
+            #
+            # Read as it stands NOW, not as it was read at the start: this
+            # run wrote nothing into it, but the ending of a background
+            # command of the earlier run may have been written onto its tool
+            # log meanwhile (app/hintergrundmeldung.py).
+            if retried is not None and schluss_zustand != "fertig" and not went_on():
+                standing = repositories.messages.holen(retried.id) or retried
+                schluss_zustand = answer_redo.FAILED
+                closing_write = dict(
+                    content=standing.content,
+                    reasoning=standing.reasoning,
+                    stats={**standing.stats, "fehler": fehlertext}
+                    if fehlertext
+                    else standing.stats,
+                    zustand=schluss_zustand,
+                )
+            if chat_gone:
+                # The rows went with the chat; there is nothing to write.
+                pass
+            elif discarded:
+                # The new answer failed or was stopped: the one it was to
+                # replace stands as it was, and of the attempt no row is
+                # left. Why it ended goes out as the stream's `error` below,
+                # in the sentence a failed answer carries.
+                repositories.messages.loeschen(platzhalter.id)
+            elif replaced is not None:
+                # Finished: stored, and the replaced answer deleted in the
+                # same step — never both in the chat, never neither.
+                repositories.messages.finish_in_place_of(
+                    platzhalter.id, replaced.id, **closing_write
+                )
+            else:
+                repositories.messages.inhalt_aktualisieren(platzhalter.id, **closing_write)
+            if not chat_gone:
+                repositories.chats.zeitstempel_auffrischen(chat.id)
             generierungen.abmelden(generierung.id)
 
             await bus.veroeffentlichen(
@@ -4261,6 +4573,14 @@ async def _antwort_aufsetzen(
         # window is never told; without this it keeps drawing the folded
         # stretch as ordinary live context until the chat is reopened, and
         # nothing says the model stopped seeing it.
+        #
+        # A new answer written in another one's place says which of the two
+        # rows is gone: the replaced one where it finished, its own where it
+        # did not. The window takes that row down without reading the chat
+        # again. Every other answer sends neither field.
+        redo: dict[str, Any] = {}
+        if replaced is not None:
+            redo = {"discarded": True} if discarded else {"replaced": replaced.id}
         yield _sse(
             "done",
             message_id=platzhalter.id,
@@ -4268,6 +4588,7 @@ async def _antwort_aufsetzen(
             zustand=schluss_zustand,
             verdichtet=verdichtet_zu,
             **closing_pair,
+            **redo,
             # What the answer carried of each document, by the id of the row
             # it wrote it onto, so the cards of that row say it without the
             # chat being opened again — those rows already hold the same
@@ -4316,15 +4637,20 @@ async def _antwort_aufsetzen(
     return lauf
 
 
+def _get_registry(request: Request) -> WerkzeugRegistry | None:
+    return getattr(request.app.state, "werkzeuge", None)
+
+
 @router.post(
     "/confirm",
     response_model=BestaetigungAntwort,
-    summary="Answer the question asked before a tool runs",
+    summary="Answer the question preceding a tool call",
 )
 def bestaetigen(
     daten: BestaetigungAnfrage,
     generierungen: Generierungsverwaltung = Depends(hole_generierungen),
     config: Config = Depends(hole_config),
+    registry: WerkzeugRegistry | None = Depends(_get_registry),
 ) -> BestaetigungAntwort:
     """No error if nobody is waiting.
 
@@ -4339,7 +4665,9 @@ def bestaetigen(
     The rule is written only for a genuine match — a call for
     ``daten.name`` really is the one waiting on ``aufruf_id``. Without
     this, ``dauerhaft`` alone could write a rule for any name at all,
-    whether or not it belongs to what is actually up on screen.
+    whether or not it belongs to what is actually up on screen. The window
+    names a server's tool as the server does (``_display_name``); the rule is
+    kept under the name the model calls it by, which is what the gate reads.
 
     A waiting ``ask_user`` is a question, not a permission: its only answer
     is a text. A bare yes or no is not delivered to it, and "always allow"
@@ -4350,8 +4678,14 @@ def bestaetigen(
     if wartend == frage_werkzeug.WERKZEUG_NAME:
         if daten.antwort is None:
             return BestaetigungAntwort(zugestellt=False)
-    elif daten.dauerhaft and daten.erlaubt and daten.name and wartend == daten.name:
-        immererlauben.setzen(config.pfad(config.app.berechtigungen_datei), daten.name)
+    elif (
+        daten.dauerhaft
+        and daten.erlaubt
+        and daten.name
+        and wartend is not None
+        and daten.name in (wartend, _display_name(registry, wartend))
+    ):
+        immererlauben.setzen(config.pfad(config.app.berechtigungen_datei), wartend)
     return BestaetigungAntwort(
         zugestellt=generierungen.bestaetigen(
             daten.generation_id, daten.aufruf_id, daten.erlaubt, daten.antwort
@@ -4361,7 +4695,7 @@ def bestaetigen(
 
 @router.get(
     "/stream/{generation_id}",
-    summary="Watch a running generation (Server-Sent Events)",
+    summary="Monitor an ongoing generation (Server-Sent Events)",
 )
 async def zusehen(
     generation_id: str,
@@ -4394,7 +4728,7 @@ async def zusehen(
     )
 
 
-@router.post("/stop", response_model=AbbruchAntwort, summary="Cancel the running answer")
+@router.post("/stop", response_model=AbbruchAntwort, summary="Cancel response generation")
 def stoppen(
     daten: AbbruchAnfrage,
     generierungen: Generierungsverwaltung = Depends(hole_generierungen),

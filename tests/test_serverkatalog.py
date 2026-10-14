@@ -39,6 +39,7 @@ needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="no node on
 # by hand is the only way in.
 SHIPPED = {
     "websuche": ("Exe Web Search", None, "keine"),
+    "searxng": ("SearXNG", None, "keine"),
     "recraft": ("Recraft", "https://mcp.recraft.ai/mcp", "oauth"),
     "notion": ("Notion", "https://mcp.notion.com/mcp", "oauth"),
     "github": ("GitHub", "https://api.githubcopilot.com/mcp/", "schluessel"),
@@ -61,9 +62,6 @@ SHIPPED = {
 }
 # The marks that come in one colour and take the colour of the text.
 MONOCHROME = ("github", "vercel", "sentry")
-# Known by name without being offered: no entry of the catalogue, but a
-# proper name and a line for whoever registered it.
-NAMED_ONLY = {"searxng": "SearXNG"}
 # The line of the last card, the way to a server of one's own.
 OWN_SERVER = "eigener"
 
@@ -73,7 +71,7 @@ def _modules() -> dict:
     """The catalogue and the logos as the gallery imports them."""
     script = (
         "const [k, l] = await Promise.all([import(process.argv[1]), import(process.argv[2])]);"
-        "console.log(JSON.stringify({catalogue: k.SERVERKATALOG, logos: l.LOGOS, named: k.NAMED_ONLY,"
+        "console.log(JSON.stringify({catalogue: k.SERVERKATALOG, logos: l.LOGOS,"
         " titles: Object.fromEntries(['canva', 'calendar', 'searxng', 'nobody', 'constructor']"
         ".map((n) => [n, k.serverTitel(n)]))}))"
     )
@@ -122,6 +120,22 @@ def test_the_catalogue_ships_exactly_these_servers():
 
 
 @needs_node
+def test_the_self_run_search_is_a_card_that_asks_for_its_address():
+    """SearXNG has no address of ours to ship. Its card is in the catalogue
+    like Exe Web Search — no sign-in, no key — and names the program that
+    starts here and the variable that program reads the address from; by
+    that variable the sheet knows to ask. Nothing about the instance
+    (limits, tool lists) is written for it."""
+    entry = next(e for e in _modules()["catalogue"] if e["name"] == "searxng")
+    assert entry["url"] is None and entry["anmeldung"] == "keine"
+    assert entry["command"] == ".venv/bin/python" and entry["args"] == ["mcp/searxng_server.py"]
+    assert entry["address_env"] == "SEARXNG_URL" and entry["vorauswahl"] is None
+    # Only this one asks; the other shipped server that runs here does not.
+    assert [e["name"] for e in _modules()["catalogue"] if "address_env" in e] == ["searxng"]
+    assert "NAMED_ONLY" not in CATALOGUE.read_text(encoding="utf-8")
+
+
+@needs_node
 def test_every_server_names_a_sign_in_the_sheet_knows():
     """The sheet draws one row per kind of sign-in and nothing for a kind it
     has never heard of. A browser sign-in needs an address to go to and no
@@ -139,10 +153,9 @@ def test_every_server_names_a_sign_in_the_sheet_knows():
 @needs_node
 def test_the_tools_window_gets_the_proper_name():
     """The second reader of the catalogue: `canva` is what the file calls it,
-    `Canva` is what it is called. A server known by name only reads its
-    proper name too, and one nobody knows keeps its id — also when that id
-    is a word every object answers to."""
-    assert _modules()["named"] == NAMED_ONLY
+    `Canva` is what it is called. One nobody knows keeps its id — also when
+    that id is a word every object answers to."""
+    assert "named" not in _modules()
     assert _modules()["titles"] == {
         "canva": "Canva", "calendar": "Google Calendar", "searxng": "SearXNG", "nobody": "nobody",
         "constructor": "constructor",
@@ -155,7 +168,7 @@ def test_the_tools_window_gets_the_proper_name():
 @needs_node
 def test_every_shipped_server_has_a_logo():
     logos = _modules()["logos"]
-    for name in [*SHIPPED, *NAMED_ONLY]:
+    for name in SHIPPED:
         assert name in logos, f"{name} has no logo — its card would wear the plug"
         assert re.fullmatch(r"-?[\d.]+ -?[\d.]+ [\d.]+ [\d.]+", logos[name]["vb"]), name
         assert logos[name]["html"].strip(), name
@@ -207,7 +220,7 @@ def test_the_monochrome_marks_follow_the_text_colour():
 @pytest.mark.parametrize("language", ["de", "en"])
 def test_both_catalogues_carry_one_line_per_server(language):
     purposes = _purposes(language)
-    assert set(purposes) == set(SHIPPED) | set(NAMED_ONLY) | {OWN_SERVER}
+    assert set(purposes) == set(SHIPPED) | {OWN_SERVER}
     for name, line in purposes.items():
         assert line.strip() and line.endswith("."), f"{language}: {name}"
 
@@ -225,7 +238,7 @@ def test_the_gallery_draws_a_card_with_line_and_foot():
     card = _card()
     # Who it is: the logo at forty, the name beside it.
     assert 'width="40" height="40"' in card and "{titelVon(k)}" in card
-    assert "const titelVon = (k) => serverTitel(nameVon(k))" in source
+    assert "const titelVon = (k) => (istKatalogName(k) ? serverTitel(nameVon(k)) : nameVon(k))" in source
     # What it is for.
     assert '<p class="purpose">{purposeOf(name)}</p>' in card
     # What to do with it: the sheet for a server still to be connected …
@@ -243,10 +256,10 @@ def test_a_server_without_a_logo_wears_the_plug():
     the table's own entries only, it has no logo and gets the plug like any
     other server nobody drew a mark for."""
     source = _gallery()
-    assert "Object.hasOwn(LOGOS, serverName) ? LOGOS[serverName] : null" in source
+    assert "Object.hasOwn(LOGOS, nameVon(k)) ? LOGOS[nameVon(k)] : null" in source
     # Card and menu both draw from that one answer, never from the table itself.
     assert "LOGOS[name]" not in source
-    assert source.count("{#if logo}") == 2 and source.count("{@const logo = logoOf(name)}") == 2
+    assert source.count("{#if logo}") == 2 and source.count("{@const logo = logoVon(k)}") == 2
 
 
 def test_the_status_dot_in_the_corner_is_gone():
@@ -261,9 +274,9 @@ def test_a_purpose_line_only_where_the_catalogue_has_one():
     """A server nobody shipped has no line. Asking the text catalogue for it
     anyway would print the key itself on the card."""
     source = _gallery()
-    known = re.search(r"const withPurpose = new Set\(\[(.*?)\]\)", source, re.S)
+    known = re.search(r"const withPurpose = new Set\((.*)\)\n", source)
     assert known and "KATALOG.map((k) => k.name)" in known.group(1)
-    assert "Object.keys(NAMED_ONLY)" in known.group(1)
+    assert "NAMED_ONLY" not in source
     line = re.search(r"const purposeOf = \(serverName\) =>(.*?)\n\n", source, re.S)
     assert line and "withPurpose.has(serverName)" in line.group(1) and ": ''" in line.group(1)
 
@@ -326,15 +339,19 @@ def test_a_server_that_lost_its_sign_in_says_so_beside_the_button():
     assert "stand === 'getrennt' || stand === 'schluessel_fehlt' ? 'rot'" in source
     words = _rule(".lost")
     assert "color: var(--rot)" in words and "background" not in words and "border" not in words
-    # One line, shared half and half; the words are as high as the button
-    # beside them, which the line stretches them to.
+    # One line: the words take the width they need, the button the rest; the
+    # button alone fills the foot. The words are as high as the button beside
+    # them, which the line stretches them to.
     line = _rule(".foot")
     assert "display: grid" in line and "grid-auto-flow: column" in line
     assert "grid-auto-columns: minmax(0, 1fr)" in line and "gap: 8px" in line
     assert "align-items" not in line and "height" not in words
-    # Never cut short: in a narrow card the words break inside that height.
+    beside = _rule(".foot:has(.lost)")
+    assert "grid-auto-columns: auto minmax(0, 1fr)" in beside
+    # Never cut short and never broken, in a narrow card too.
     whole = _rule(".lost .statetext")
-    assert "white-space: normal" in whole and "line-height: 1.2" in whole
+    assert "white-space: nowrap" in whole and "line-height: 1.2" in whole
+    assert "white-space: normal" not in whole and "ellipsis" not in whole
 
 
 def test_a_server_on_file_that_needs_nothing_keeps_its_state_and_arrow():
@@ -355,7 +372,7 @@ def test_a_server_on_file_that_needs_nothing_keeps_its_state_and_arrow():
 
 INTRO = {
     "de": ("Deine Apps, direkt im Chat.", "Verbinde Exe mit den Anwendungen, die du täglich nutzt."),
-    "en": ("Your apps, right here.", "Connect the apps you use every day and put them to work in Exe."),
+    "en": ("Your apps, directly in the chat.", "Connect Exe to the applications you use every day."),
 }
 
 
@@ -368,17 +385,14 @@ def test_two_lines_stand_above_the_grid(language):
     assert 'class="introhead"' in above and 'class="introhint"' in above
 
 
-def test_the_second_line_is_the_hint_of_the_settings_pages():
-    """Bold at the size of a section heading, and under it the quiet hint the
-    settings pages write under a field — no size and no colour of its own."""
+def test_the_second_line_is_a_quiet_hint():
+    """Bold at the size of a section heading, and under it a quiet hint: the
+    size of a hint and the still text colour, no size and no colour of its own."""
     head, hint = _rule(".introhead"), _rule(".introhint")
     assert "font-weight: 600" in head and "font-size: var(--schrift-abschnitt)" in head
     assert "color" not in head
-    settings = (SOURCE / "teile" / "SystemPrompt.svelte").read_text(encoding="utf-8")
-    theirs = re.search(r"\n  \.hinweis \{(.*?)\}", settings, re.S)
-    assert theirs, "the settings pages no longer carry their hint rule"
     for declaration in ("font-size: var(--schrift-hinweis)", "color: var(--text-still)"):
-        assert declaration in hint and declaration in theirs.group(1)
+        assert declaration in hint
 
 
 def test_all_cards_stand_in_one_grid_the_connected_first():
@@ -387,7 +401,7 @@ def test_all_cards_stand_in_one_grid_the_connected_first():
     source = _gallery()
     page = source.split('<div class="rollbereich"', 1)[1].split("<style>", 1)[0]
     assert page.count('<div class="galerie">') == 1
-    assert "{#each cards as k (nameVon(k))}{@render card(k)}{/each}" in page
+    assert "{#each cards as k (schluesselVon(k))}{@render card(k)}{/each}" in page
     assert "Schriftzug" not in source and ".bereich" not in source and 'class="bereich"' not in source
     assert "const isConnected = (k) => ['verbunden', 'wartet'].includes(zustand(k))" in source
     order = re.search(r"const cards = \$derived\(\[(.*?)\]\)", source, re.S)

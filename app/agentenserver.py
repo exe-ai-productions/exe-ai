@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import logging
 
-from app import agentenmodellwahl
+from app import agentenmodellwahl, runnerzustand
 from app.config import EndpointConfig
 from app.modellrunner import Modellrunner, RunnerFehler
 
@@ -126,6 +126,7 @@ def runner_bauen(modellordner, programm: str | None, port: int | None = None) ->
         # It samples and it is handed no tools: the sampling lore of the
         # model family applies, the tool template does not matter.
         sampling_flags=True,
+        zustand_callback=runnerzustand.melder(runnerzustand.AGENT),
     )
 
 

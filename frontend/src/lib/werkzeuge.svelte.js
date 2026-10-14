@@ -28,6 +28,7 @@
 */
 
 import { api } from './api.js'
+import { modelName } from './mcpWerkzeuge.js'
 import { serverTitel } from './serverkatalog.js'
 
 /* What is switched OFF. Same key the server checks — app/werkzeugwahl.py. */
@@ -204,6 +205,7 @@ export function quellen() {
         if (!ohneServer.has(werkzeug.server)) ohneServer.set(werkzeug.server, [])
         ohneServer.get(werkzeug.server).push({
           name: werkzeug.name,
+          anzeige: werkzeug.anzeige ?? werkzeug.name,
           beschreibung: werkzeug.beschreibung,
           quelle: werkzeug.server,
           builtin: false,
@@ -261,7 +263,10 @@ export function quellen() {
       werkzeuge: alle
         .filter((w) => istGewaehlt(server, w.name))
         .map((w) => ({
-          name: w.name,
+          /* The name the model is offered it by — the switch and the
+             lists write that — and the server's own word for the row. */
+          name: modelName(server.name, w.name),
+          anzeige: w.name,
           beschreibung: w.beschreibung,
           quelle: server.name,
           /* Its own row is the server's, and a `source` name alone does not
@@ -269,7 +274,7 @@ export function quellen() {
              name of a built-in source. Read by the window to pick the
              right row for an opened tool. */
           builtin: false,
-          needs_confirmation: freigabe(w.name)?.needs_confirmation ?? false,
+          needs_confirmation: freigabe(modelName(server.name, w.name))?.needs_confirmation ?? false,
         })),
     })
   }
@@ -300,6 +305,20 @@ export function anzahlAn(liste = quellen()) {
   return liste
     .filter((q) => q.laeuft)
     .reduce((summe, q) => summe + q.werkzeuge.filter((w) => istAn(w.name)).length, 0)
+}
+
+/** Every tool the sources hold, switched on or not — the second number of
+ *  the settings list's row, beside ``anzahlAn``. */
+export function anzahlAlle(liste = quellen()) {
+  return liste.reduce((summe, q) => summe + q.werkzeuge.length, 0)
+}
+
+/** The servers that are running, and all that are set up. */
+export function serverStand() {
+  return {
+    aktiv: werkzeugwahl.server.filter((s) => s.laeuft).length,
+    alle: werkzeugwahl.server.length,
+  }
 }
 
 /** The count line's two numbers — the tools that reach the model and the

@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app import faltbitte
+from app import dokumentablage, faltbitte, kontextdruck
 from app.config import EndpointConfig
 from app.providers import ChatNachricht
 from app.providers.anthropic import AnthropicProvider
@@ -27,8 +27,12 @@ from app.providers.openai_kompatibel import OpenAIKompatiblerProvider
 from app.verlaufsbau import (
     VERLAUF_ERGEBNIS_ZEICHEN,
     _verlauf_bauen,
+    _werkzeuge_als_text,
+    picture_weight,
     werkzeuge_fuer_die_faltung,
     werkzeuggewicht,
+    row_weight,
+    zeilentext,
 )
 
 WURZEL = Path(__file__).resolve().parents[1]
@@ -472,3 +476,195 @@ def test_ein_gefuelltes_ergebnis_wiegt_wie_vorher(client, chat_id):
 
     assert gesendet.content == "ok"
     assert werkzeuggewicht(zeile) == len('{"command": "true"}') + len("ok")
+
+
+# --- A fold weighs what the request sends -------------------------------
+
+
+def test_a_tool_list_of_the_wrong_shape_does_not_break_the_row(client, chat_id):
+    """A row somebody wrote by hand — the messages route takes any ``stats`` —
+    is read without an exception, like by its four sibling readers."""
+    repositories = client.app.state.repositories
+    for nummer, werkzeuge in enumerate(
+        ("run_command", ["run_command"], [1, None, "x"], {"name": "ask_user"})
+    ):
+        zeile = repositories.messages.speichern(
+            chat_id=chat_id, role="assistant", content=f"Antwort {nummer}",
+            stats={"werkzeuge": werkzeuge},
+        )
+        assert zeilentext(zeile, repositories) == f"Antwort {nummer}"
+
+
+def test_a_question_with_arguments_of_the_wrong_shape_is_passed_over(client, chat_id):
+    repositories = client.app.state.repositories
+    zeile = repositories.messages.speichern(
+        chat_id=chat_id, role="assistant", content="Gut.",
+        stats={"werkzeuge": [{"name": "ask_user", "argumente": "Wirklich?", "ergebnis": "ja"}]},
+    )
+    assert zeilentext(zeile, repositories) == "[You asked:  — the user answered: ja]\nGut."
+
+
+def test_silence_a_valid_question_stands_as_before(client, chat_id):
+    repositories = client.app.state.repositories
+    zeile = repositories.messages.speichern(
+        chat_id=chat_id, role="assistant", content="Gut.",
+        stats={"werkzeuge": [
+            {"name": "ask_user", "argumente": {"question": "Wirklich?"}, "ergebnis": "ja"}
+        ]},
+    )
+    assert zeilentext(zeile, repositories) == (
+        "[You asked: Wirklich? — the user answered: ja]\nGut."
+    )
+
+
+def test_without_a_tool_offer_the_row_weighs_the_whole_block(client, chat_id):
+    """Without the offer the calls go back as a text block over the answer:
+    its header and the labels of its lines are in what the request carries,
+    and in the weight."""
+    repositories, _chat = _chat_mit_werkzeugantwort(client, chat_id, werkzeuge=[
+        {"name": "run_command", "argumente": {"command": "ls"}, "ergebnis": "file.txt\n",
+         "fehlgeschlagen": False},
+    ])
+    zeile = repositories.messages.auflisten(chat_id=chat_id)[-1]
+
+    mit_angebot = werkzeuggewicht(zeile)
+    ohne_angebot = werkzeuggewicht(zeile, offers_tools=False)
+
+    assert mit_angebot == len('{"command": "ls"}') + len("file.txt\n")
+    block = _werkzeuge_als_text(zeile, "Erledigt.")
+    # What the block adds to the words, separator included.
+    assert ohne_angebot == len(block) - len("Erledigt.")
+    assert ohne_angebot > mit_angebot + len(faltbitte.KOPFZEILE)
+
+
+def test_silence_the_weight_with_an_offer_stays_as_it_was(client, chat_id):
+    repositories, chat = _chat_mit_werkzeugantwort(client, chat_id)
+    zeile = repositories.messages.auflisten(chat_id=chat_id)[-1]
+    verlauf = _verlauf_bauen(chat, repositories, "SYS")
+    gesendet = [n for n in verlauf if n.role == "tool"]
+
+    assert werkzeuggewicht(zeile) == (
+        len('{"path": "a.py"}') + len('{"command": "ls"}') + sum(len(n.content) for n in gesendet)
+    )
+
+
+def test_a_row_with_its_own_picture_weighs_no_tool_log(client, chat_id):
+    """The request sends such an answer as a sentence and nothing of its tool
+    log; the weight says the same."""
+    repositories = client.app.state.repositories
+    zeile = repositories.messages.speichern(
+        chat_id=chat_id, role="assistant", content="", bild="cat.png",
+        stats={"werkzeuge": [
+            {"name": "draw_image", "argumente": {"prompt": "a cat"}, "ergebnis": "saved cat.png"}
+        ]},
+    )
+    chat = repositories.chats.holen(chat_id)
+    assert werkzeuggewicht(zeile) == 0
+    assert werkzeuggewicht(zeile, offers_tools=False) == 0
+    # …and the request really carries nothing of it.
+    verlauf = _verlauf_bauen(chat, repositories, "SYS")
+    assert not any(n.werkzeugaufrufe or n.role == "tool" for n in verlauf)
+
+
+def test_silence_the_same_row_without_its_own_picture_weighs_as_before(client, chat_id):
+    repositories = client.app.state.repositories
+    zeile = repositories.messages.speichern(
+        chat_id=chat_id, role="assistant", content="Fertig.",
+        stats={"werkzeuge": [
+            {"name": "draw_image", "argumente": {"prompt": "a cat"}, "ergebnis": "saved cat.png"}
+        ]},
+    )
+    assert werkzeuggewicht(zeile) == len('{"prompt": "a cat"}') + len("saved cat.png")
+
+
+def test_a_user_row_with_a_picture_weighs_the_picture_price_or_the_sentence(client, chat_id):
+    repositories = client.app.state.repositories
+    zeile = repositories.messages.speichern(
+        chat_id=chat_id, role="user", content="", anhaenge=["foto.png"],
+    )
+
+    sieht = row_weight(zeile, repositories, vision=True)
+    blind = row_weight(zeile, repositories, vision=False)
+
+    # The picture carries the row: no sentence besides it.
+    assert sieht == kontextdruck.bild_zeichen(1)
+    # No picture travels; the sentence that goes instead does.
+    assert blind == len("[An image was attached here that this model cannot see.]")
+    assert picture_weight(zeile, "", vision=True) == kontextdruck.bild_zeichen(1)
+
+
+def test_silence_a_text_row_weighs_its_text_and_two_pictures_weigh_double(client, chat_id):
+    repositories = client.app.state.repositories
+    text = repositories.messages.speichern(chat_id=chat_id, role="user", content="Hallo Welt")
+    zwei = repositories.messages.speichern(
+        chat_id=chat_id, role="user", content="Sieh", anhaenge=["a.png", "b.png"],
+    )
+
+    assert row_weight(text, repositories) == len("Hallo Welt")
+    assert row_weight(zwei, repositories, vision=True) == len("Sieh") + kontextdruck.bild_zeichen(2)
+    assert row_weight(zwei, repositories, vision=False) == (
+        len("Sieh") + 1 + len("[2 images were attached here that this model cannot see.]")
+    )
+
+
+def test_a_returning_tool_picture_weighs_its_price_too(client, chat_id):
+    """The picture a tool read rides again in the request: the weight
+    carries its price, once, for the entries the request names."""
+    from app import werkzeugbild
+    from app.verlaufsbau import tool_pictures_of_rows
+
+    repositories = client.app.state.repositories
+    eintrag = {
+        "name": "read_file", "argumente": {"path": "foto.png"}, "kennung": "c1", "runde": 0,
+        "ergebnis": werkzeugbild.bildsatz("/ordner/foto.png", 10),
+        werkzeugbild.READ_IMAGE_PATH: "/ordner/foto.png",
+    }
+    repositories.messages.speichern(
+        chat_id=chat_id, role="assistant", content="Gesehen.", stats={"werkzeuge": [eintrag]}
+    )
+    zeilen = repositories.messages.auflisten(chat_id=chat_id)
+    zeile = zeilen[-1]
+
+    bilder = tool_pictures_of_rows(zeilen)
+    ohne = werkzeuggewicht(zeile)
+    mit = werkzeuggewicht(zeile, True, bilder)
+
+    assert len(bilder) == 1
+    # The note with the path is replaced by the sentence the call returned,
+    # and the picture's price is added.
+    assert mit - ohne == (
+        len(werkzeugbild.bildsatz("/ordner/foto.png", 10))
+        - len(
+            werkzeugbild.NICHT_MEHR_DABEI + dokumentablage.nachlesehinweis("/ordner/foto.png")
+        )
+        + kontextdruck.bild_zeichen(1)
+    )
+
+
+def test_a_long_result_weighs_the_length_the_turns_send(client, chat_id):
+    """A row that stored its rounds goes back whole, and weighs whole: a
+    result of twenty thousand characters weighed five hundred while the
+    request carried all of it."""
+    repositories, chat = _chat_mit_werkzeugantwort(client, chat_id, content="Fertig.", werkzeuge=[
+        {"name": "run_command", "argumente": {"command": "cat log"}, "ergebnis": "x" * 20_000,
+         "fehlgeschlagen": False, "runde": 0, "kennung": "call_1", "text": ""},
+    ])
+    zeile = repositories.messages.auflisten(chat_id=chat_id)[-1]
+    verlauf = _verlauf_bauen(chat, repositories, "SYS")
+    gesendet = next(n for n in verlauf if n.role == "tool")
+
+    assert len(gesendet.content) == 20_000
+    assert werkzeuggewicht(zeile) == len('{"command": "cat log"}') + 20_000
+
+
+def test_silence_a_row_without_a_round_mark_weighs_the_cut_value(client, chat_id):
+    repositories, chat = _chat_mit_werkzeugantwort(client, chat_id, content="Fertig.", werkzeuge=[
+        {"name": "run_command", "argumente": {"command": "cat log"}, "ergebnis": "x" * 20_000,
+         "fehlgeschlagen": False},
+    ])
+    zeile = repositories.messages.auflisten(chat_id=chat_id)[-1]
+    verlauf = _verlauf_bauen(chat, repositories, "SYS")
+    gesendet = next(n for n in verlauf if n.role == "tool")
+
+    assert len(gesendet.content) < 20_000
+    assert werkzeuggewicht(zeile) == len('{"command": "cat log"}') + len(gesendet.content)

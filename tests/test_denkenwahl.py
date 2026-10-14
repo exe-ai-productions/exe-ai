@@ -132,3 +132,66 @@ def test_a_word_off_the_ladder_takes_the_default():
     assert aufgeloest({"stufe": "high"}, profile) == "high"
     assert aufgeloest({"stufe": "on"}, profile) == "max"
 
+
+
+# --- The list names the stage that goes out --------------------------------
+
+
+def _list_with_profile(client, monkeypatch, profile):
+    """The model list of the test service, every model answering with this
+    profile. Returns the id of the first entry and a reader for its field."""
+    zustaende = client.app.state.discovery.alle()
+    assert zustaende, "the test configuration lists no endpoint"
+    monkeypatch.setattr(
+        type(zustaende[0]), "denkprofil", lambda self, modell=None, abgelehnt=(): profile
+    )
+
+    def gesendet(kennung: str) -> str | None:
+        entries = client.get("/api/v1/models", params={"alle": "true"}).json()
+        return next(e for e in entries if e["id"] == kennung)["thinking_sent"]
+
+    first = client.get("/api/v1/models", params={"alle": "true"}).json()[0]["id"]
+    return first, gesendet
+
+
+def test_the_model_list_names_the_nearest_weaker_stage_for_a_dropped_one(client, monkeypatch):
+    """Stored `xhigh`, offered low/medium/high with `medium` as the default:
+    a request sends `high`, so the list says `high` and not the default."""
+    profile = denkstufen.Denkprofil(
+        stufen=["low", "medium", "high"], standard="medium", art="stufen", quelle="katalog"
+    )
+    kennung, gesendet = _list_with_profile(client, monkeypatch, profile)
+    client.put(f"/api/v1/settings/modell:{kennung}/denken", json={"wert": {"stufe": "xhigh"}})
+
+    assert gesendet(kennung) == "high"
+
+
+def test_the_model_list_keeps_what_it_always_said_where_nothing_is_dropped(client, monkeypatch):
+    """Silence probe: a stage still offered, nothing stored, the older
+    yes-form, a word off the scale and a stored off the model does not
+    offer."""
+    profile = denkstufen.Denkprofil(
+        stufen=["low", "medium", "high"], standard="medium", art="stufen", quelle="katalog"
+    )
+    kennung, gesendet = _list_with_profile(client, monkeypatch, profile)
+    bereich = f"/api/v1/settings/modell:{kennung}/denken"
+
+    assert gesendet(kennung) == "medium"
+    client.put(bereich, json={"wert": {"stufe": "high"}})
+    assert gesendet(kennung) == "high"
+    client.put(bereich, json={"wert": {"an": True}})
+    assert gesendet(kennung) == "medium"
+    client.put(bereich, json={"wert": {"stufe": "turbo"}})
+    assert gesendet(kennung) == "medium"
+    client.put(bereich, json={"wert": {"stufe": "off"}})
+    assert gesendet(kennung) == "low"
+
+
+def test_the_model_list_names_no_stage_for_a_model_that_cannot_be_set(client, monkeypatch):
+    profile = denkstufen.Denkprofil(stufen=[], standard=None, art="nie", quelle="unbekannt")
+    kennung, gesendet = _list_with_profile(client, monkeypatch, profile)
+    client.put(
+        f"/api/v1/settings/modell:{kennung}/denken", json={"wert": {"stufe": "high"}}
+    )
+
+    assert gesendet(kennung) is None

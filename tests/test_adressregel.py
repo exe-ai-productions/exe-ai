@@ -26,6 +26,7 @@ PAKET = WURZEL / "fenster-electron" / "package.json"
 
 SKRIPT = """
 const rules = require(%(modul)s)
+const PDF = 'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/34b3c741'
 const own = (a) => rules.istEigeneSeite(a, 8090)
 console.log(JSON.stringify({
   eigene_seite: {
@@ -36,29 +37,29 @@ console.log(JSON.stringify({
     https: own('https://127.0.0.1:8090/app/'),
     fremder_wirt: own('http://exe-hq.net:8090/app/'),
     fremder_wirt_im_pfad: own('http://boese.example/127.0.0.1:8090/app/'),
-    wirt_als_nutzername: own('http://127.0.0.1:8090@boese.example/'),
-    ohne_port: own('http://127.0.0.1/app/'),
+    host_as_username: own('http://127.0.0.1:8090@boese.example/'),
+    no_port: own('http://127.0.0.1/app/'),
     datei: own('file:///etc/passwd'),
-    kein_text: own(''),
-    nichts: own(null),
+    empty_text: own(''),
+    nothing: own(null),
     unfug: own('not even an address'),
   },
   standardport: {
-    ohne_angabe: rules.istEigeneSeite('http://127.0.0.1/app/', 80),
+    unspecified: rules.istEigeneSeite('http://127.0.0.1/app/', 80),
     ausgeschrieben: rules.istEigeneSeite('http://127.0.0.1:80/app/', 80),
     localhost: rules.istEigeneSeite('http://localhost/app/', 80),
     anderer_port: rules.istEigeneSeite('http://127.0.0.1:8090/app/', 80),
-    https_ohne_angabe: rules.istEigeneSeite('https://127.0.0.1/app/', 443),
+    https_unspecified: rules.istEigeneSeite('https://127.0.0.1/app/', 443),
   },
-  nach_draussen: {
+  to_outside: {
     http: rules.darfNachDraussen('http://exe-hq.net/'),
     https: rules.darfNachDraussen('https://exe-hq.net/'),
     datei: rules.darfNachDraussen('file:///etc/passwd'),
     javascript: rules.darfNachDraussen('javascript:alert(1)'),
     daten: rules.darfNachDraussen('data:text/html,<h1>hi'),
-    unbekannt: rules.darfNachDraussen('irgendwas:tu-das'),
+    unbekannt: rules.darfNachDraussen('someprotocol:run-it'),
     leer: rules.darfNachDraussen(''),
-    nichts: rules.darfNachDraussen(null),
+    nothing: rules.darfNachDraussen(null),
   },
   navigation: (() => {
     const verdict = (address, kind) => rules.navigationVerdict(address, 8090, kind)
@@ -116,6 +117,45 @@ console.log(JSON.stringify({
       redirect_foreign: verdict('https://exe-hq.net/', { mainFrame: true, redirect: true }),
       redirect_own: verdict('http://127.0.0.1:8090/app/', { mainFrame: true, redirect: true }),
       no_options: verdict('https://exe-hq.net/'),
+      pdf_sub_foreign: verdict('https://exe-hq.net/', { mainFrame: false, initiator: PDF }),
+      pdf_main_foreign: verdict('https://exe-hq.net/', { mainFrame: true, initiator: PDF }),
+      pdf_http: verdict('http://exe-hq.net/', { mainFrame: false, initiator: PDF }),
+      pdf_javascript: verdict('javascript:alert(1)', { mainFrame: false, initiator: PDF }),
+      pdf_file: verdict('file:///etc/passwd', { mainFrame: true, initiator: PDF }),
+      pdf_redirect: verdict('https://exe-hq.net/', { mainFrame: true, redirect: true, initiator: PDF }),
+      pdf_own: verdict('http://127.0.0.1:8090/app/', { mainFrame: false, initiator: PDF }),
+      srcdoc_foreign: verdict('https://exe-hq.net/', { mainFrame: false, initiator: 'about:srcdoc' }),
+      extension_foreign: verdict(
+        'https://exe-hq.net/', { mainFrame: false, initiator: 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/x' },
+      ),
+      own_page_foreign: verdict(
+        'https://exe-hq.net/', { mainFrame: true, initiator: 'http://127.0.0.1:8090/app/' },
+      ),
+      pdf_tools_foreign: verdict('https://exe-hq.net/', { mainFrame: false, tools: true, initiator: PDF }),
+      browser_main_foreign: verdict('https://exe-hq.net/', { mainFrame: true, byBrowser: true }),
+      browser_sub_foreign: verdict('https://exe-hq.net/', { mainFrame: false, byBrowser: true }),
+      browser_file: verdict('file:///etc/passwd', { mainFrame: true, byBrowser: true }),
+      browser_javascript: verdict('javascript:alert(1)', { mainFrame: true, byBrowser: true }),
+      browser_redirect: verdict('https://exe-hq.net/', { mainFrame: true, redirect: true, byBrowser: true }),
+      browser_tools: verdict('https://exe-hq.net/', { mainFrame: true, tools: true, byBrowser: true }),
+    }
+  })(),
+  link: (() => {
+    const verdict = (address, kind) => rules.linkVerdict(address, 8090, kind)
+    return {
+      https: verdict('https://exe-hq.net/hilfe'),
+      http: verdict('http://exe-hq.net/'),
+      own: verdict('http://127.0.0.1:8090/app/'),
+      own_localhost: verdict('http://localhost:8090/hilfe/'),
+      other_port_on_loopback: verdict('http://127.0.0.1:8091/app/'),
+      javascript: verdict('javascript:alert(1)'),
+      file: verdict('file:///etc/passwd'),
+      data: verdict('data:text/html,<h1>hi'),
+      unknown_scheme: verdict('someprotocol:run-it'),
+      empty: verdict(''),
+      nothing: verdict(null),
+      tools_foreign: verdict('https://exe-hq.net/', { tools: true }),
+      tools_own: verdict('http://127.0.0.1:8090/app/', { tools: true }),
     }
   })(),
   log: {
@@ -158,11 +198,11 @@ def test_nur_die_eigene_seite_darf_ins_fenster(antwort):
         "https",
         "fremder_wirt",
         "fremder_wirt_im_pfad",
-        "wirt_als_nutzername",
-        "ohne_port",
+        "host_as_username",
+        "no_port",
         "datei",
-        "kein_text",
-        "nichts",
+        "empty_text",
+        "nothing",
         "unfug",
     ):
         assert fall[name] is False, name
@@ -171,10 +211,10 @@ def test_nur_die_eigene_seite_darf_ins_fenster(antwort):
 def test_nur_http_und_https_verlassen_das_programm(antwort):
     """Everything else would hand the address to whatever program claims the
     scheme — the guard would become a way of starting programs from a page."""
-    fall = antwort["nach_draussen"]
+    fall = antwort["to_outside"]
     assert fall["http"] is True
     assert fall["https"] is True
-    for name in ("datei", "javascript", "daten", "unbekannt", "leer", "nichts"):
+    for name in ("datei", "javascript", "daten", "unbekannt", "leer", "nothing"):
         assert fall[name] is False, name
 
 
@@ -213,11 +253,11 @@ def test_ein_weggelassener_standardport_ist_der_eigene(antwort):
     """The URL parser drops `:80`; a shell on port 80 still knows its own
     page — and one on another port or https still does not."""
     assert antwort["standardport"] == {
-        "ohne_angabe": True,
+        "unspecified": True,
         "ausgeschrieben": True,
         "localhost": True,
         "anderer_port": False,
-        "https_ohne_angabe": False,
+        "https_unspecified": False,
     }
 
 
@@ -248,14 +288,16 @@ def test_beide_filter_des_fensters_fragen_dieselbe_regel():
     assert "on('will-navigate'" not in quelle
     # A new window: a foreign address is sent out and denied.
     assert re.search(
-        r"function fensterweiche\(\{ url \}\) \{\s*if \(!istEigeneSeite\(url\)\) \{"
-        r"\s*nachDraussen\(url\)\s*return \{ action: 'deny' \}",
+        r"function fensterweiche\(\{ url \}, inhalt\) \{\s*if \(!istEigeneSeite\(url\)\) \{"
+        r"(?:\s*//[^\n]*)*\s*const haupt = istHauptfenster\(inhalt\)"
+        r"\s*console\.log\([^\n]*\)\s*if \(haupt\) nachDraussen\(url\)"
+        r"\s*return \{ action: 'deny' \}",
         quelle,
     ), "fensterweiche does not deny foreign addresses through istEigeneSeite"
     # Both, for every page at any depth.
     haken = re.search(r"app\.on\(['\"]web-contents-created['\"].*?\n\}\)", quelle, re.S)
     assert haken, "web-contents-created hook not found"
-    assert "setWindowOpenHandler(fensterweiche)" in haken.group(0)
+    assert "setWindowOpenHandler((angaben) => fensterweiche(angaben, inhalt))" in haken.group(0)
     assert "navigationSperren(inhalt)" in haken.group(0)
     assert "tools: toolsPages.has(contents)" in body
     # No second spelling of the own address beside the rule — in code, that
@@ -269,14 +311,16 @@ def test_beide_filter_des_fensters_fragen_dieselbe_regel():
 
 
 def test_a_navigation_stays_goes_out_or_is_stopped(antwort):
-    """In a program window only a main frame a click moved goes to the
-    browser, and only over http(s); a subframe or a server redirect to a
-    foreign page is stopped without opening anything. In the developer tools
-    (`tools`) nothing goes to the browser: their main frame stays on the
-    frontend shipped with the program, their frames keep their own kinds of
-    documents, and a foreign page is stopped."""
+    """In a program window a navigation to a foreign page is stopped and
+    opens nothing: a script that sets `location`, a form posting out or a
+    redirect cannot start a browser tab. The one navigation that goes to the
+    browser is the one no frame started — the PDF viewer's, for a link inside
+    a PDF — or one the viewer's own frames started, and only over http(s). In the developer tools (`tools`) nothing goes to the
+    browser: their main frame stays on the frontend shipped with the
+    program, their frames keep their own kinds of documents, and a foreign
+    page is stopped."""
     assert antwort["navigation"] == {
-        "main_foreign_https": "outside",
+        "main_foreign_https": "block",
         "main_file": "block",
         "main_javascript": "block",
         "main_own": "allow",
@@ -329,6 +373,23 @@ def test_a_navigation_stays_goes_out_or_is_stopped(antwort):
         "redirect_foreign": "block",
         "redirect_own": "allow",
         "no_options": "block",
+        "pdf_sub_foreign": "outside",
+        "pdf_main_foreign": "outside",
+        "pdf_http": "outside",
+        "pdf_javascript": "block",
+        "pdf_file": "block",
+        "pdf_redirect": "block",
+        "pdf_own": "allow",
+        "srcdoc_foreign": "block",
+        "extension_foreign": "block",
+        "own_page_foreign": "block",
+        "pdf_tools_foreign": "block",
+        "browser_main_foreign": "outside",
+        "browser_sub_foreign": "outside",
+        "browser_file": "block",
+        "browser_javascript": "block",
+        "browser_redirect": "block",
+        "browser_tools": "block",
     }
 
 
@@ -341,3 +402,57 @@ def test_the_log_names_the_place_and_nothing_more(antwort):
         "file": "file:",
         "garbage": "(not an address)",
     }
+
+
+def test_a_clicked_link_leaves_only_as_a_foreign_http_address(antwort):
+    """What the shell does with a click linkclicks.js reported: a foreign
+    http(s) address opens the browser, one of our own pages is left alone,
+    and anything else — or anything the developer tools ask for — opens
+    nothing."""
+    assert antwort["link"] == {
+        "https": "outside",
+        "http": "outside",
+        "own": "allow",
+        "own_localhost": "allow",
+        "other_port_on_loopback": "outside",
+        "javascript": "block",
+        "file": "block",
+        "data": "block",
+        "unknown_scheme": "block",
+        "empty": "block",
+        "nothing": "block",
+        "tools_foreign": "block",
+        "tools_own": "block",
+    }
+
+
+def test_the_shell_asks_the_link_rule_for_a_click_and_hands_the_starter_to_the_navigation_rule():
+    """The wiring main.js cannot be run for here: the click request is read
+    by the one rule, from a sender that is not a developer-tools page, and
+    the navigation rule is given the frame that started the navigation."""
+    quelle = (WURZEL / "fenster-electron" / "main.js").read_text(encoding="utf-8")
+    anfrage = re.search(r"ipcMain\.on\('open-link', .*?\n\}\)", quelle, re.S)
+    assert anfrage, "the click request is not heard"
+    assert "regel.linkVerdict(address, PORT, { tools: toolsPages.has(event.sender) })" in anfrage.group(0)
+    assert "if (verdict === 'outside') nachDraussen(address)" in anfrage.group(0)
+    decide = re.search(r"function navigationDecide\(contents, details, redirect\) \{.*?\n\}", quelle, re.S)
+    assert decide and "...starterOf(details)" in decide.group(0)
+    starter = re.search(r"function starterOf\(details\) \{.*?\n\}", quelle, re.S)
+    assert starter and "byBrowser: true" in starter.group(0)
+    # The catcher goes into the session before the window is built.
+    assert re.search(
+        r"session\.defaultSession\.setPreloads\(\[path\.join\(__dirname, 'linkclicks\.js'\)\]\)"
+        r"\s*menueSetzen\(\)\s*fensterBauen\(\)",
+        quelle,
+    ), "linkclicks.js is not set as a preload before the window is built"
+
+
+def test_the_click_catcher_is_packed_and_its_channel_is_the_one_the_shell_hears():
+    """setPreloads names the file by path, not by `require`, so the test
+    above for required modules does not see it."""
+    paket = json.loads(PAKET.read_text(encoding="utf-8"))
+    assert "linkclicks.js" in paket["build"]["files"]
+    fenger = (WURZEL / "fenster-electron" / "linkclicks.js").read_text(encoding="utf-8")
+    haupt = (WURZEL / "fenster-electron" / "main.js").read_text(encoding="utf-8")
+    assert "const CHANNEL = 'open-link'" in fenger
+    assert "ipcMain.on('open-link'," in haupt

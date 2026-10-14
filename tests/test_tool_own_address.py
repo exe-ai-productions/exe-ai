@@ -50,7 +50,7 @@ def test_without_a_setting_it_stays_loopback():
     assert own_address(config) == "http://127.0.0.1:8095"
 
 
-def test_the_registry_hands_the_drawing_tool_that_address(config: Config):
+def test_the_registry_hands_the_drawing_tool_that_address(config: Config, tmp_path):
     """The wiring itself: the registry the service builds gives draw_image
     the address it listens on."""
     from fastapi.testclient import TestClient
@@ -59,6 +59,11 @@ def test_the_registry_hands_the_drawing_tool_that_address(config: Config):
     from app.tools.aufbau import registry_bauen
 
     config.app.host = "100.80.1.2"
+    # Beyond the loopback address the service starts only with a password
+    # set (app/anmeldung.py) — the file a server set-up names as well.
+    password_file = tmp_path / "password.txt"
+    password_file.write_text("open-sesame\n", encoding="utf-8")
+    config.app.password_file = str(password_file)
     with TestClient(app_erstellen(config)) as testclient:
         registry = registry_bauen(testclient.app, config)
     assert registry.bild_zugang is not None

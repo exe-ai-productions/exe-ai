@@ -54,7 +54,7 @@ def _answer(project: Project, chat_count: int) -> ProjectAnswer:
 
 @router.get("", response_model=list[ProjectAnswer], summary="List projects")
 def list_projects(
-    archived: bool = Query(default=False, description="Lists the archive instead"),
+    archived: bool = Query(default=False, description="List archived projects instead"),
     repositories: Repositories = Depends(hole_repositories),
     user_id: str = Depends(hole_benutzer_id),
 ) -> list[ProjectAnswer]:
@@ -78,7 +78,7 @@ def create_project(
     return _answer(repositories.projects.create(user_id=user_id, name=name), 0)
 
 
-@router.patch("/{project_id}", response_model=ProjectAnswer, summary="Change a project")
+@router.patch("/{project_id}", response_model=ProjectAnswer, summary="Update a project")
 def update_project(
     project_id: str,
     data: ProjectUpdate,
@@ -139,6 +139,19 @@ async def delete_project(
         )
     # Its chats go with it, each the way a single chat is deleted.
     chat_ids = repositories.projects.chat_ids(project_id)
+    # Every run is stopped and waited for before the first chat goes: one
+    # that does not end in time must leave the project whole, not half
+    # deleted with a window that was never told which chats are gone. The
+    # waits run one after the other, but each run already got its stop
+    # signal, so together they last as long as the slowest run.
+    for chat_id in chat_ids:
+        generierungen.alle_im_chat_abbrechen(chat_id)
+    for chat_id in chat_ids:
+        if not await generierungen.wait_for_chat_runs(chat_id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=t("fehler.chat_loeschen_lauf_laeuft", language),
+            )
     for chat_id in chat_ids:
         await remove_chat(
             chat_id,
@@ -146,6 +159,7 @@ async def delete_project(
             generierungen=generierungen,
             user_id=user_id,
             config=config,
+            sprache=language,
         )
     repositories.projects.delete(project_id)
     return chat_ids

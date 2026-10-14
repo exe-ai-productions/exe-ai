@@ -82,7 +82,7 @@ class PromptAntwort(BaseModel):
 @router.post(
     "/bild/prompt",
     response_model=PromptAntwort,
-    summary="Improve a picture prompt",
+    summary="Improve an image prompt",
 )
 async def prompt_verbessern(
     wunsch: PromptWunsch,
@@ -217,7 +217,7 @@ class AufbereitungAntwort(BaseModel):
 @router.get(
     "/bild/prompt/aufbereitung",
     response_model=AufbereitungAntwort,
-    summary="The image server's prompt preparation",
+    summary="Image server prompt preparation",
 )
 def aufbereitung_lesen(
     repositories: Repositories = Depends(hole_repositories),

@@ -69,6 +69,9 @@
      the next press draws from the text. */
   const strengthShown = $derived(strengthDecides())
   const familyEntry = $derived(familie())
+  /* The pose section stands only where sd.cpp computes a ControlNet: the
+     family table's `control_net`. A model whose family is unknown keeps it. */
+  const controlNetOffered = $derived(!familyEntry || familyEntry.control_net !== false)
   // A family that takes several references (the family table's `many_references`).
   const viele = $derived(Boolean(familyEntry?.many_references))
   /* How many CLIP layers can be skipped: the family's own CLIP encoder's
@@ -217,6 +220,17 @@
   const faktor = () => Number(werte.hires_wahl)
   const faktorSetzen = (wert) => {
     if (hires && Number.isFinite(Number(wert))) werte.hires_wahl = String(wert)
+  }
+
+  /* The model "Upscale" enlarges a finished picture with — apart from the
+     highres pass, and always a file of the folder: the row shows the one
+     chosen, otherwise the first, which is the one that is used. What the
+     chat keeps is only what was chosen. */
+  const upscaleAnzeige = () => (
+    listen.upscalers.includes(werte.upscale_model) ? werte.upscale_model : (listen.upscalers[0] ?? '')
+  )
+  const upscaleSetzen = (wert) => {
+    werte.upscale_model = wert
   }
 
   /* The face pass: the switch turns it on with the detector chosen last, or
@@ -461,6 +475,7 @@
     {/if}
   </StudioSection>
 
+  {#if controlNetOffered}
   <StudioSection titel={t('bild.gruppe_pose')}>
     {#snippet rechts()}
       <button class="ordnerzeichen" onclick={() => api.bildBegleiterOrdner('controlnet').catch(() => {})}
@@ -506,6 +521,7 @@
     <StudioSwitches group="guide" bind:values={werte.switches} conditions={bedingungen} upload={schalterBild}
                     sucht={searching()} />
   </StudioSection>
+  {/if}
 
   <StudioSection titel={t('bild.gruppe_upscaling')}>
     {#snippet rechts()}
@@ -514,6 +530,16 @@
         <Hauszeichen zeichen="ordner" groesse="klein" />
       </button>
     {/snippet}
+    <!-- Always there, whatever the highres switch says: an enlarging reads a
+         file of the folder and no built-in name. -->
+    <div class="zeile" data-suche={t('bild.upscaler')}>
+      <label class="name" for={feld('upscale_m')}>{t('bild.upscaler')}</label>
+      <div class="rechts wahl">
+        <Auswahlfeld id={feld('upscale_m')} bind:wert={upscaleAnzeige, upscaleSetzen}
+                     beschriftung={t('bild.upscaler')}
+                     eintraege={listen.upscalers.length ? alsAuswahl(listen.upscalers) : keins([])} />
+      </div>
+    </div>
     <div class="zeile" data-suche={t('bild.hires')}>
       <label class="name" for={feld('hires')}>{t('bild.hires')}</label>
       <InfoMark text={t('bild.info_hires')} />

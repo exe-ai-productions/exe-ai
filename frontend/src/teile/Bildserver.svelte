@@ -177,7 +177,12 @@
     aktualisierung = null
     try {
       const antwort = await api.bildProgrammAktualisierung()
-      if (lauf === pruefLauf) aktualisierung = antwort
+      if (lauf === pruefLauf) {
+        aktualisierung = antwort
+        // A list that could not be read compares nothing: said at the top,
+        // so the button does not look as if it did nothing.
+        if (antwort.unreadable) melde(t('bildserver.updates_nicht_pruefbar'), 'fehler')
+      }
     } catch (fehler) {
       if (lauf === pruefLauf) melde(String(fehler.message || fehler), 'fehler')
     } finally {

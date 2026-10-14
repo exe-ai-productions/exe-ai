@@ -44,13 +44,6 @@ log = logging.getLogger(__name__)
 PROGRAMM = "sd-cli.exe" if sys.platform == "win32" else "sd-cli"
 ORDNER = "stable-diffusion.cpp"
 
-# Long enough for a big picture on a slow machine, short enough that a run
-# gone wrong does not hold the lock for the rest of the evening.
-# 300 killed honest runs: an SDXL highres pass renders a second time at
-# 2048² and legitimately needs several minutes on Metal. The limit exists
-# for HUNG processes, not slow ones — the stop button covers impatience.
-ZEITGRENZE = 900
-
 # How long a cancelled generator gets to end before it is killed. Short: the
 # caller is holding a request open on this answer, and a program told to stop
 # drawing has nothing left to finish.
@@ -459,6 +452,9 @@ class Auftrag:
     # shape as everything else in this block.
     split_mode: str = ""
     backend: str = ""
+    # Seconds a picture may take before it is ended (app/bildgeraete.py);
+    # None draws without a limit and is stopped by hand. A video has none.
+    zeitgrenze: int | None = None
 
 
 def programm_finden(datenordner: Path) -> Path | None:
@@ -556,6 +552,7 @@ def loras(bildordner: Path) -> list[str]:
     return sorted(
         p.name for p in ordner.iterdir()
         if p.is_file() and p.suffix in {".gguf", ".safetensors", ".ckpt", ".pt"}
+        and not bildinhalt.is_sqlite(p)
     )
 
 
@@ -596,6 +593,7 @@ def _im_unterordner(bildordner: Path, unter: str) -> list[str]:
     return sorted(
         p.name for p in ordner.iterdir()
         if p.is_file() and p.suffix in {".gguf", ".safetensors", ".ckpt", ".pt", ".pth", ".onnx"}
+        and not bildinhalt.is_sqlite(p)
     )
 
 
@@ -1433,7 +1431,9 @@ class Bildrunner:
             for l in leser:
                 l.start()
             try:
-                self._prozess.wait(timeout=ZEITGRENZE)
+                self._prozess.wait(
+                    timeout=None if auftrag.video else auftrag.zeitgrenze
+                )
             except subprocess.TimeoutExpired as fehler:
                 self.stoppen()
                 # Collect the child so no zombie is left behind.

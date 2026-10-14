@@ -23,8 +23,10 @@ import re
 import secrets
 import tempfile
 import threading
+import time
 import uuid
-from typing import Literal
+from dataclasses import dataclass
+from typing import Literal, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import Response
@@ -94,7 +96,9 @@ class BildWunsch(BaseModel):
     # one, because that run is worth showing but the picture is not worth
     # keeping.
     lauf_chat: str | None = None
-    prompt: str = Field(min_length=1)
+    # What is drawn from. Only an enlarging may go without one: the upscaler
+    # reads no prompt (checked below, with the run's own checks).
+    prompt: str
     negativ: str = ""
     # A style the prompt is drawn through (app/bildstile.py): its text, with
     # ``{prompt}`` where the prompt goes, and its negative. The history keeps
@@ -305,12 +309,20 @@ class BildWunsch(BaseModel):
 
     @model_validator(mode="after")
     def _lauf_stimmig(self) -> "BildWunsch":
+        if not self.prompt and self.mode != "upscale":
+            # The same kind and the same bound as the length check the field
+            # had: the answer is built from the catalogue, in the language of
+            # the request (app/input_errors.py).
+            raise PydanticCustomError(
+                "string_too_short", "String should have at least 1 character", {"min_length": 1}
+            )
         if self.nr > self.von:
             # The check's own kind IS the catalogue key: the answer to a body
             # that fails its checks is built there (app/input_errors.py), in
             # the language of the request — a sentence written here would
             # reach an English window in German.
-            raise PydanticCustomError("bild_lauf_nr_zu_gross", "picture number beyond the run")
+            raise PydanticCustomError("bild_lauf_nr_zu_gross", "Image number is outside the "
+                                                               "range of this run.")
         return self
 
 
@@ -510,6 +522,10 @@ class TurboAntwort(BaseModel):
     # A picture holds the one-picture lock: start and stop by hand wait for
     # it (409), so the tile's button is locked meanwhile.
     picture_running: bool = False
+    # The server is down for one sd-cli picture and comes back after it: the
+    # catalogue key of the label of the control that picture needs sd-cli
+    # for. Empty whenever the server is not paused for a picture.
+    paused_for: str | None = None
 
 
 def _turbo_stand(turbo: Bildturbo, runner: Bildrunner) -> TurboAntwort:
@@ -517,6 +533,7 @@ def _turbo_stand(turbo: Bildturbo, runner: Bildrunner) -> TurboAntwort:
         zustand=turbo.zustand(), modell=turbo.modell,
         programm_da=turbo.programm is not None,
         picture_running=runner.laeuft(),
+        paused_for=turbo.paused_for(),
     )
 
 
@@ -532,9 +549,133 @@ def _hold_picture_lock(request: Request, sprache: str):
     return runner
 
 
-@router.get("/bild/turbo", response_model=TurboAntwort, summary="Image-Turbo — state")
+@router.get("/bild/turbo", response_model=TurboAntwort, summary="Image-Turbo — status")
 def turbo_stand(request: Request) -> TurboAntwort:
     return _turbo_stand(_turbo(request), _runner(request))
+
+
+class TurboReasonQuery(BaseModel):
+    """The values the studio holds right now that decide which painter draws
+    the next picture — nothing else: no prompt, no file is read for it."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    modell: str
+    live_preview: str = Field(default="", max_length=10)
+    pulid_weights: str | None = None
+    pulid_id_embedding: str | None = None
+    sigmas: str = Field(default="", max_length=500)
+    slg_scale: float = Field(default=0.0, ge=0.0)
+    skip_layers: str = Field(default="", max_length=100)
+    switches: dict[str, bool | int | float | str | None] = Field(default_factory=dict)
+    # The family the window states, as the draw sends it: with it the
+    # model's kit is read as the draw reads it, which decides whether the
+    # kit brings a second, high-noise diffusion model.
+    familie: str | None = Field(default=None, max_length=60)
+    # What the picture would carry along: a reference video, a LoRA in the
+    # stack (or the detector's), the detector, the highres pass, a video.
+    ref_video: bool = False
+    lora: bool = False
+    ad_modell: bool = False
+    hires: bool = False
+    video: bool = False
+    lora_apply_mode: str = bildwahlen.LORA_APPLY_MODE_VORGABE
+    pm_klasse: str = Field(default="", max_length=20)
+
+
+class TurboReasonAnswer(BaseModel):
+    # The catalogue key of the label of the control whose value sends the
+    # picture to sd-cli while the server runs, or None.
+    control: str | None = None
+
+
+@dataclass(frozen=True)
+class _StudioValues:
+    """``_CliValues`` for a picture that is only a set of values so far."""
+
+    live_preview: str
+    pulid_weights: str | None
+    pulid_id_embedding: str | None
+    sigmas: str
+    slg_scale: float
+    skip_layers: str
+    switches: dict
+    ref_video_frames: tuple
+    imatrix: Path | None
+    lora_apply_mode: str
+    mode: str = ""
+
+
+@router.post(
+    "/bild/turbo/reason", response_model=TurboReasonAnswer,
+    summary="Image-Turbo — what the studio's values need sd-cli for",
+)
+def turbo_reason(
+    query: TurboReasonQuery,
+    request: Request,
+    config: Config = Depends(hole_config),
+    repositories: Repositories = Depends(hole_repositories),
+) -> TurboReasonAnswer:
+    """Which control sends the picture, as the studio is set, to sd-cli —
+    asked of the same rule the draw route decides by
+    (``_cli_only_reason``), so the window keeps no list of its own. Nothing
+    while the server is not running: then every picture is drawn by sd-cli
+    and there is nothing to say."""
+    if not _turbo(request).laeuft():
+        return TurboReasonAnswer()
+    bildordner = _bildordner(config)
+    try:
+        model_file: Path | None = modell_pfad(bildordner, query.modell)
+    except BildFehler:
+        model_file = None
+    pm_active = bool(
+        photomaker.klasse_pruefen(query.pm_klasse)
+        and photomaker.modell(bildordner) is not None
+        and photomaker.gesichter(bildordner) is not None
+    )
+    try:
+        given = image_switches.check({
+            **bildgeraete.ohne_speicherschalter(query.switches),
+            **bildgeraete.lesen(repositories).switches,
+        })
+        # The kit is read only for a value of the high-noise pass, which
+        # counts exactly when the model's kit brings that second model, as
+        # in the draw: nothing else depends on it, and the window asks every
+        # few seconds.
+        second_model = model_file is not None and any(
+            "high_noise" in image_switches.BY_KEY[key].needs.split("|") for key in given
+        ) and _kit_has_high_noise(
+            config, repositories, query.modell, model_file, query.familie
+        )
+        switches = image_switches.active(
+            given,
+            {
+                "ad_model": query.ad_modell, "photomaker": pm_active,
+                "hires": query.hires, "video": query.video,
+                "high_noise": second_model, "ref_video": query.ref_video and query.video,
+            },
+        )
+    except ValueError:
+        # A value the table refuses fails the draw itself, with its words.
+        switches = {}
+    try:
+        imatrix = _imatrix(request, model_file) if model_file is not None else None
+    except BildFehler:
+        imatrix = None
+    values = _StudioValues(
+        live_preview=bildwahlen.live_preview_pruefen(query.live_preview),
+        pulid_weights=query.pulid_weights,
+        pulid_id_embedding=query.pulid_id_embedding,
+        sigmas=query.sigmas.strip(),
+        slg_scale=query.slg_scale,
+        skip_layers=query.skip_layers.strip(),
+        switches=switches,
+        ref_video_frames=("-",) if query.ref_video and query.video else (),
+        imatrix=imatrix,
+        lora_apply_mode=bildwahlen.lora_apply_mode_pruefen(query.lora_apply_mode),
+    )
+    reason = _cli_only_reason(values, query.lora or pm_active)
+    return TurboReasonAnswer(control=reason.control if reason else None)
 
 
 class TurboStart(BaseModel):
@@ -633,6 +774,27 @@ def _model_kit(
         if name in listed[listing]:
             kit[field] = name
     return kit
+
+
+def _kit_has_high_noise(
+    config: Config, repositories: Repositories, model: str, path: Path,
+    family_word: str | None,
+) -> bool:
+    """Does the kit of this model, read as a draw reads it, bring a second,
+    high-noise diffusion model? The values of that pass act only beside it,
+    so every answer about which painter draws a picture counts them in
+    exactly when the draw does. The family is the one the window states, or
+    else the one the model's header names — as in the draw route — and a
+    model whose family is not read has exactly the parts given to it."""
+    free = not bildmodellwerte.family_detection(repositories, model)
+    if family_word:
+        family_name = family_word
+    elif free:
+        family_name = ""
+    else:
+        family_name = bildinhalt.family(path) or ""
+    kit = _model_kit(config, repositories, model, path, image_families.get(family_name))
+    return "high_noise_diffusion_model" in kit
 
 
 def _kit_for_start(
@@ -811,21 +973,21 @@ class BildVorgabenAntwort(BaseModel):
     sources: dict[str, str] = Field(default_factory=dict)
 
 
-@router.get("/bild/server/log", response_model=list[str], summary="What the server says")
+@router.get("/bild/server/log", response_model=list[str], summary="Server messages")
 def bildserver_protokoll(request: Request) -> list[str]:
     """The picture server's own words since its last start, for the window's
     server log — the same answer every other server window reads."""
     return request.app.state.bildturbo.protokoll()
 
 
-@router.get("/bild/familien", summary="The table of model families")
+@router.get("/bild/familien", summary="Model family table")
 def bild_familien() -> list[dict]:
     """The one table of families — the window's family list, the fields a
     kit reads and every start value with its source."""
     return image_families.as_json()
 
 
-@router.get("/bild/switches", summary="The table of further sd.cpp switches")
+@router.get("/bild/switches", summary="Additional sd.cpp options")
 def image_switch_table(config: Config = Depends(hole_config)) -> dict:
     """The further switches the window offers, the files of each folder a
     file switch picks from, and the weight types — one list for every
@@ -896,7 +1058,8 @@ def _kit_complete(family_name: str, parts: dict[str, object | None], sprache: st
         )
 
 
-@router.get("/bild/vorgaben", response_model=BildVorgabenAntwort, summary="Starting values per model")
+@router.get("/bild/vorgaben", response_model=BildVorgabenAntwort, summary="Default values for each "
+                                                                          "model")
 def bild_vorgaben(
     modell: str | None = None,
     config: Config = Depends(hole_config),
@@ -1039,12 +1202,15 @@ class GeneratorAktualisierung(BaseModel):
     # release page or an unreadable tag compares nothing, and the window
     # must not answer that with "up to date".
     aktuell: bool = False
+    # True when a build is installed and the newest release could not be
+    # read: the window says so, instead of showing nothing.
+    unreadable: bool = False
 
 
 @router.get(
     "/bild/programm",
     response_model=GeneratorFortschritt | None,
-    summary="How far the generator download is",
+    summary="Image generator download progress",
 )
 def generator_fortschritt(
     download: Sddownload = Depends(hole_sddownload),
@@ -1055,7 +1221,7 @@ def generator_fortschritt(
 @router.get(
     "/bild/programm/varianten",
     response_model=GeneratorVariantenAntwort,
-    summary="Which GPU builds this PC can offer",
+    summary="GPU builds available for this PC",
 )
 def generator_varianten(config: Config = Depends(hole_config)) -> GeneratorVariantenAntwort:
     return GeneratorVariantenAntwort(
@@ -1070,7 +1236,7 @@ def generator_varianten(config: Config = Depends(hole_config)) -> GeneratorVaria
 @router.get(
     "/bild/programm/aktualisierung",
     response_model=GeneratorAktualisierung,
-    summary="Whether a newer version of the generator is out",
+    summary="Whether a newer generator version is available",
 )
 def generator_aktualisierung(config: Config = Depends(hole_config)) -> GeneratorAktualisierung:
     """Asked when the panel's check is pressed, never on opening and never
@@ -1083,14 +1249,15 @@ def generator_aktualisierung(config: Config = Depends(hole_config)) -> Generator
         return GeneratorAktualisierung(verfuegbar=False)
     veroeffentlichung = sddownload.neueste_veroeffentlichung()
     if veroeffentlichung is None:
-        return GeneratorAktualisierung(verfuegbar=False)
+        return GeneratorAktualisierung(verfuegbar=False, unreadable=True)
     if sddownload.ist_voraus(veroeffentlichung, installiert):
         return GeneratorAktualisierung(verfuegbar=True, bau=veroeffentlichung.bau)
     return GeneratorAktualisierung(verfuegbar=False, aktuell=True)
 
 
 @router.post(
-    "/bild/programm", response_model=GeneratorFortschritt, summary="Fetch the image generator"
+    "/bild/programm", response_model=GeneratorFortschritt, summary="Download the image "
+                                                                   "generator"
 )
 def generator_holen(
     anfrage: GeneratorHolenAnfrage | None = None,
@@ -1176,7 +1343,8 @@ class FortschrittAntwort(BaseModel):
     preview: int = 0
 
 
-@router.get("/bild/fortschritt", response_model=FortschrittAntwort, summary="Picture progress")
+@router.get("/bild/fortschritt", response_model=FortschrittAntwort, summary="Image generation "
+                                                                            "progress")
 def bild_fortschritt(request: Request) -> FortschrittAntwort:
     stand = _runner(request).fortschritt() or _turbo(request).fortschritt()
     if not stand:
@@ -1184,7 +1352,7 @@ def bild_fortschritt(request: Request) -> FortschrittAntwort:
     return FortschrittAntwort(laeuft=True, **stand)
 
 
-@router.post("/bild/info", summary="What a picture says about how it was made")
+@router.post("/bild/info", summary="Image generation metadata")
 async def picture_info_route(
     request: Request, language: str = Depends(hole_sprache),
 ) -> dict:
@@ -1208,7 +1376,8 @@ async def picture_info_route(
         return await asyncio.to_thread(picture_info.read, program, picture)
 
 
-@router.get("/bild/info", summary="What a picture of this installation was drawn with")
+@router.get("/bild/info", summary="Generation settings for an image created by this "
+                                  "installation")
 def drawn_with_route(name: str, request: Request) -> dict:
     """The prompt, the model and the values the picture of this name was
     drawn with, as the draw kept them — in the form the reading of a file
@@ -1218,7 +1387,7 @@ def drawn_with_route(name: str, request: Request) -> dict:
     return request.app.state.repositories.messages.drawn_with(name)
 
 
-@router.get("/bild/preview", summary="Live preview of the running picture")
+@router.get("/bild/preview", summary="Live preview of the image being generated")
 def live_preview_picture(request: Request, language: str = Depends(hole_sprache)) -> Response:
     """The picture as far as it is drawn, while sd-cli draws it with a
     live preview. Fetched with the session key in its header, like any
@@ -1239,7 +1408,7 @@ def live_preview_picture(request: Request, language: str = Depends(hole_sprache)
     return Response(data, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
-@router.post("/bild/stop", response_model=bool, summary="Cancel the picture")
+@router.post("/bild/stop", response_model=bool, summary="Cancel image generation")
 def bild_stoppen(request: Request) -> bool:
     """Ends the running picture. False when there was none.
 
@@ -1285,7 +1454,7 @@ def begleiterordner_zeigen(
     "/bild",
     response_model=BildAntwort,
     status_code=status.HTTP_201_CREATED,
-    summary="Draw a picture (offline)",
+    summary="Generate an image (offline)",
 )
 async def bild_erzeugen(
     wunsch: BildWunsch,
@@ -1443,7 +1612,7 @@ async def bild_erzeugen(
             # No family decides about the parts; only a family word nobody
             # knows is still refused.
             if wunsch.familie and not image_families.known(wunsch.familie):
-                raise ValueError(f"{wunsch.familie!r} is not a family this program knows")
+                raise ValueError(f"Unknown model family: {wunsch.familie!r}")
         else:
             bildbausatz.familie_pruefen(
                 family_name,
@@ -1493,6 +1662,11 @@ async def bild_erzeugen(
     # A video model draws in video mode only, a single frame included
     # (sd.cpp docs/wan.md:3); any other model when the wish asks for one.
     family_entry = image_families.get(family_name)
+    # sd.cpp hands the guide image to a UNet model only; for any other family
+    # the option would be passed over without a word, so it is not sent.
+    if family_entry is not None and not family_entry.control_net:
+        control_net_modell = None
+        control_bild = None
     video = wunsch.video or bool(family_entry and family_entry.video)
     end_bild = _startbild(config, wunsch.end_bild, sprache) if video else None
     steuerbilder = tuple(
@@ -1676,6 +1850,8 @@ async def bild_erzeugen(
         offload_to_cpu=geraete.offload_to_cpu,
         split_mode=geraete.split_mode,
         backend=geraete.backend,
+        # The machine's time limit; a video has none (it ends on a stop).
+        zeitgrenze=None if video else geraete.zeitgrenze,
         switches=switches,
         switch_paths=switch_paths,
         mode=wunsch.mode,
@@ -1757,7 +1933,14 @@ async def bild_erzeugen(
                 lora_aktiv, fingerprint,
             )
         elif make_room:
-            await asyncio.to_thread(_draw_with_server_paused, runner, turbo, auftrag, ziel)
+            pause_control: str | None = None
+            if auftrag.mode == "upscale":
+                pause_control = "bild.nur_hochskalieren"
+            elif (reason := _cli_only_reason(auftrag, lora_aktiv)) is not None:
+                pause_control = reason.control
+            await asyncio.to_thread(
+                _draw_with_server_paused, runner, turbo, auftrag, ziel, pause_control
+            )
         else:
             await asyncio.to_thread(runner.erzeugen, auftrag, ziel)
     except BildturboFehler as fehler:
@@ -1918,7 +2101,49 @@ def _number_list(text: str, kind: type) -> list | None:
         return None
 
 
-def _cli_only_reason(auftrag: Auftrag, lora_aktiv: bool) -> str | None:
+class _CliReason(str):
+    """Why a picture goes to sd-cli: the sentence the log carries, and in
+    ``control`` the catalogue key of the label of the control whose value
+    sends it there — the window names that control, so no list of reasons
+    lives anywhere else."""
+
+    control: str
+
+    def __new__(cls, text: str, control: str) -> _CliReason:
+        reason = super().__new__(cls, text)
+        reason.control = control
+        return reason
+
+
+class _CliValues(Protocol):
+    """What ``_cli_only_reason`` reads of a picture: the resolved job, or
+    the values the window holds before there is one."""
+
+    @property
+    def live_preview(self) -> str: ...
+    @property
+    def pulid_weights(self) -> object | None: ...
+    @property
+    def pulid_id_embedding(self) -> object | None: ...
+    @property
+    def sigmas(self) -> str: ...
+    @property
+    def slg_scale(self) -> float: ...
+    @property
+    def skip_layers(self) -> str: ...
+    @property
+    def switches(self) -> dict: ...
+    @property
+    def ref_video_frames(self) -> tuple: ...
+    @property
+    def mode(self) -> str: ...
+    @property
+    def imatrix(self) -> object | None: ...
+    @property
+    def lora_apply_mode(self) -> str: ...
+
+
+def _cli_only_reason(auftrag: _CliValues, lora_aktiv: bool) -> _CliReason | None:
     """What in this picture only sd-cli can draw, or None.
 
     The server's own interface carries every per-picture value this window
@@ -1937,24 +2162,27 @@ def _cli_only_reason(auftrag: Auftrag, lora_aktiv: bool) -> str | None:
     one short-lived process; on the server it ends the SERVER. The chosen
     mode still travels, unchanged, to the painter that draws it."""
     if auftrag.live_preview:
-        return "live preview"
+        return _CliReason("live preview", "bild.live_preview")
     if auftrag.pulid_weights is not None and auftrag.pulid_id_embedding is not None:
-        return "PuLID"
+        return _CliReason("PuLID", "bild.pulid")
     if auftrag.sigmas and _number_list(auftrag.sigmas, float) is None:
-        return "sigmas that are no list of numbers"
+        return _CliReason("sigmas not provided as a list of numbers", "bild.sigmas")
     if auftrag.slg_scale > 0 and auftrag.skip_layers and _number_list(auftrag.skip_layers, int) is None:
-        return "skip layers that are no list of numbers"
-    reason = image_switches.cli_only_reason(auftrag.switches)
-    if reason:
-        return reason
+        return _CliReason("skip layers not provided as a list of numbers", "bild.skip_layers")
+    switch = image_switches.cli_only(auftrag.switches)
+    if switch:
+        return _CliReason(switch.text, f"bild.sw_{switch.key}")
     if auftrag.ref_video_frames:
-        return "a reference video"
+        return _CliReason("a reference video", "bild.referenzvideo")
     if auftrag.mode == "adetailer":
-        return "ADetailer on a finished picture"
+        return _CliReason("ADetailer applied to a finished image", "bild.nur_adetailer")
     if auftrag.imatrix is not None:
-        return "an importance matrix being collected"
+        return _CliReason("importance matrix collection", "bildserver.wichtigkeitsmatrix")
     if lora_aktiv and auftrag.lora_apply_mode != "at_runtime":
-        return f"LoRA apply mode {auftrag.lora_apply_mode} would abort the server"
+        return _CliReason(
+            f"LoRA apply mode {auftrag.lora_apply_mode} would cause the server to abort",
+            "bild.lora_modus",
+        )
     return None
 
 
@@ -2562,7 +2790,7 @@ def _draw_on_server(
         daten = turbo.zeichnen(
             _turbo_video_body(auftrag) if auftrag.video else _turbo_auftrag(auftrag),
             paesse=_erwartete_paesse(auftrag), video=auftrag.video,
-            stopped=runner.stop_asked,
+            stopped=runner.stop_asked, zeitgrenze=auftrag.zeitgrenze,
         )
         # The last look: a stop asked in the moment the draw took over was
         # heard by neither side, and its picture is not handed back.
@@ -2584,6 +2812,7 @@ def _upscale_on_server(runner: Bildrunner, turbo: Bildturbo, job: Auftrag, targe
         data = turbo.upscale(
             _alsb64(job.startbild), job.upscale_model.stem,
             {".jpg": "jpeg", ".webp": "webp"}.get(target.suffix, "png"),
+            zeitgrenze=job.zeitgrenze,
         )
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
@@ -2592,26 +2821,39 @@ def _upscale_on_server(runner: Bildrunner, turbo: Bildturbo, job: Auftrag, targe
 
 
 def _draw_with_server_paused(
-    runner: Bildrunner, turbo: Bildturbo, auftrag: Auftrag, ziel: Path
+    runner: Bildrunner, turbo: Bildturbo, auftrag: Auftrag, ziel: Path,
+    control: str | None = None,
 ) -> None:
     """Pause the picture server, draw with sd-cli, start the server again —
     under ONE hold of the one-picture lock and in ONE thread. Nothing can
     start the server again or draw on it while the sd-cli picture needs its
     memory, and a request that is cancelled meanwhile cannot release the
     lock or bring the server back under a draw that is still running.
+    ``control`` names what needs sd-cli, for the window's footer while the
+    server is down.
 
     A stop asked while the server steps aside ends the picture before
     sd-cli is started; the server comes back as after every such picture."""
     runner.reservieren(stoppable=True)
     try:
-        paused = turbo.pause()
+        started = time.monotonic()
+        paused = turbo.pause(control)
+        if paused:
+            log.info(
+                "Image server steps aside for an sd-cli picture (%.1f s to stop)",
+                time.monotonic() - started,
+            )
         try:
             runner.erzeugen(auftrag, ziel, reserved=True)
         finally:
             if paused:
                 try:
+                    restarted = time.monotonic()
                     if turbo.resume():
-                        log.info("Image server started again on the same model")
+                        log.info(
+                            "Image server started again on the same model (%.1f s)",
+                            time.monotonic() - restarted,
+                        )
                 except Exception:  # noqa: BLE001 - the picture is drawn; a server that stays down is only slower
                     log.warning("Image server could not start again", exc_info=True)
     finally:
@@ -2657,18 +2899,22 @@ def _speicher_pruefen(
     """An honest sentence instead of a machine brought to its knees.
 
     Returns True when the picture server has to step aside for this sd-cli
-    picture: it does not fit beside the server, but it fits without it. The
-    server then stops for the picture and starts again on the same model
-    afterwards, and nothing is shown.
+    picture. It does so for every sd-cli picture while it runs — the same
+    model never lies in memory twice, whatever the figures say, and a model
+    file that cannot be read changes nothing about that. The server then
+    stops for the picture and starts again on the same model afterwards.
+    What is asked is only whether the picture fits without the server; when
+    it does not, the answer is the refusal below.
 
     ``loaded`` means the running server already holds every file of this
     picture — then nothing new is loaded and there is nothing to check.
     A picture that restarts the server frees what the server holds now."""
     if loaded:
         return False
+    steps_aside = not on_server and request.app.state.bildturbo.laeuft()
     files_gb = _kit_files_gb(auftrag)
     if files_gb is None:
-        return False
+        return steps_aside
     # What the running servers are holding RIGHT NOW, not what their files
     # weigh — the picture server included. All of them, not just the chat
     # model — see `bildspeicher` for why asking one of several is worse
@@ -2678,17 +2924,9 @@ def _speicher_pruefen(
     # Two readings of a growing server can differ a little; what is held
     # without it is never below nothing.
     gesamt = systemspeicher.gesamt_gb()
-    if not on_server and bildspeicher.passt(gesamt, belegt, files_gb):
-        return False
     without_server = max(0.0, belegt - server_gb)
     if bildspeicher.passt(gesamt, without_server, files_gb):
-        if not on_server:
-            log.info(
-                "Image server steps aside for an sd-cli picture: %.1f GB held, "
-                "%.1f GB of it by the image server, picture files %.1f GB, "
-                "machine %.1f GB", belegt, server_gb, files_gb, gesamt or 0.0,
-            )
-        return not on_server
+        return steps_aside
     raise HTTPException(
         status.HTTP_507_INSUFFICIENT_STORAGE,
         t("bild.kein_platz", sprache,

@@ -116,7 +116,7 @@ def data_url(roh: bytes) -> str:
 
     typ = medientyp(roh)
     if typ is None:
-        raise ValueError("these bytes are not a png, jpeg or webp picture")
+        raise ValueError("The data is not a PNG, JPEG, or WebP image.")
     return f"data:{typ};base64," + base64.b64encode(roh).decode()
 
 
@@ -171,7 +171,7 @@ def _antwort(quelle: Path, ziel_ordner: Path, *, bauen: bool) -> Path:
             return quelle
         ziel_ordner.mkdir(parents=True, exist_ok=True)
         if not _verkleinern(quelle, roh) or not roh.is_file():
-            raise OSError("the copy was not written")
+            raise OSError("The copy was not written.")
         atomic_file.rename_onto(roh, ziel)
         return ziel
     except Exception as fehler:  # noqa: BLE001 — every one of them means "original"
@@ -403,6 +403,30 @@ def geoeffnet(quelle: Path) -> Image.Image:
         return ImageOps.exif_transpose(datei)
 
 
+def on_white(bild: Image.Image) -> Image.Image:
+    """The picture a copy is written from: one with see-through areas lies
+    on white, the way a viewer shows it on paper, and is RGB afterwards.
+    The one place this rule stands — the model's copy and the prepared face
+    photos both come through here.
+
+    JPEG carries no alpha channel, and ``convert("RGB")`` alone drops it
+    without a ground: a fully see-through pixel is (0, 0, 0, 0) and turns
+    black, so dark writing on a see-through ground would reach a model as
+    black on black. A half see-through pixel mixes with white by its alpha.
+    A picture without see-through areas keeps its colours, and a grey one
+    stays grey."""
+    if bild.has_transparency_data:
+        # One white RGB ground and the alpha as the paste mask: no second
+        # full-size RGBA copy for a picture of many megapixels.
+        rgba = bild if bild.mode == "RGBA" else bild.convert("RGBA")
+        ground = Image.new("RGB", rgba.size, (255, 255, 255))
+        ground.paste(rgba, mask=rgba.getchannel("A"))
+        return ground
+    if bild.mode not in ("RGB", "L"):
+        return bild.convert("RGB")
+    return bild
+
+
 def _verkleinern(quelle: Path, ziel: Path) -> bool:
     """One pass per rung, every rung resampled FROM THE SOURCE (re-encoding
     an already-encoded copy would stack JPEG generations): the picture's
@@ -423,9 +447,7 @@ def _verkleinern(quelle: Path, ziel: Path) -> bool:
     the caller falls back to the original, and the next warm-up tries
     again."""
     try:
-        bild = geoeffnet(quelle)
-        if bild.mode not in ("RGB", "L"):
-            bild = bild.convert("RGB")
+        bild = on_white(geoeffnet(quelle))
         lang = max(bild.size)
         kante = min(lang, KANTE_MAX)
         while True:

@@ -34,16 +34,18 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
+from app.i18n import t
+
 Gruppe = Literal["sichtbar", "mehr"]
 
 
 @dataclass(frozen=True)
 class Parameter:
     name: str
+    # Catalogue keys (app/locales/<language>.json), spelled out in full at
+    # every entry; `als_dict` translates them for the reader's language.
     label: str
-    label_en: str
     hinweis: str
-    hinweis_en: str
     minimum: float
     maximum: float
     schritt: float
@@ -53,17 +55,16 @@ class Parameter:
     # module docstring: exactly one parameter is built this way.
     immer_zeigen: bool = False
     # Filled in by `unterstuetzte()` per dialect, never written by hand: does
-    # this backend evaluate the knob, and if it does not, what says so.
+    # this backend evaluate the knob, and if it does not, the catalogue key
+    # of the line that says so.
     aktiv: bool = True
     grund: str = ""
-    grund_en: str = ""
 
     def als_dict(self, sprache: str = "de") -> dict[str, Any]:
-        englisch = sprache.startswith("en")
         return {
             "name": self.name,
-            "label": self.label_en if englisch else self.label,
-            "hinweis": self.hinweis_en if englisch else self.hinweis,
+            "label": t(self.label, sprache),
+            "hinweis": t(self.hinweis, sprache),
             "minimum": self.minimum,
             "maximum": self.maximum,
             "schritt": self.schritt,
@@ -72,23 +73,20 @@ class Parameter:
             "aktiv": self.aktiv,
             # Only a locked knob carries one. `None` rather than an empty
             # string so the window can test the field itself.
-            "grund": ((self.grund_en if englisch else self.grund) or None),
+            "grund": t(self.grund, sprache) if self.grund else None,
         }
 
 
 PARAMETER: list[Parameter] = [
-    Parameter("temperature", "Temperatur", "Temperature",
-              "Wie frei formuliert wird", "How freely it phrases things",
+    Parameter("temperature", "parameter.label.temperature", "parameter.hint.temperature",
               0, 2, 0.05, "sichtbar"),
-    Parameter("top_p", "Top-P", "Top-P",
-              "Wie viel Wortauswahl zugelassen wird", "How much word choice is allowed",
+    Parameter("top_p", "parameter.label.top_p", "parameter.hint.top_p",
               0, 1, 0.01, "sichtbar"),
     # The ceiling here is the fallback for a model whose context window is
     # not known — the same 1,000,000 the request schema already allows
     # (app/api/v1/schemas.py). `unterstuetzte()` caps it further to the
     # actual model's window wherever that is known.
-    Parameter("max_tokens", "Antwortlänge", "Response length",
-              "Höchstzahl an Token", "Maximum number of tokens",
+    Parameter("max_tokens", "parameter.label.max_tokens", "parameter.hint.max_tokens",
               256, 1_000_000, 256, "sichtbar", ganzzahl=True),
     # Beside the response length, because that is the pot it used to be
     # taken out of: thinking and answering shared one budget, so a model
@@ -99,33 +97,24 @@ PARAMETER: list[Parameter] = [
     # -1 is Auto (no artificial cap, `unrestricted` on llama.cpp) and has to
     # survive `pruefen()` unclamped — a floor of 0 turned a stored -1 into a
     # 0, which reads as "no thinking at all" instead of "no cap".
-    Parameter("reasoning_budget", "Denklänge", "Thinking length",
-              "Wie lange vorgedacht werden darf", "How long it may think first",
+    Parameter("reasoning_budget", "parameter.label.reasoning_budget", "parameter.hint.reasoning_budget",
               -1, 1_000_000, 256, "sichtbar", ganzzahl=True, immer_zeigen=True),
 
-    Parameter("top_k", "Top-K", "Top-K",
-              "Nur die besten K Wörter, 0 schaltet es ab", "Only the top K words, 0 disables it",
+    Parameter("top_k", "parameter.label.top_k", "parameter.hint.top_k",
               0, 200, 1, ganzzahl=True),
-    Parameter("min_p", "Min-P", "Min-P",
-              "Wirft unwahrscheinliche Wörter weg", "Discards unlikely words",
+    Parameter("min_p", "parameter.label.min_p", "parameter.hint.min_p",
               0, 1, 0.01),
-    Parameter("repeat_penalty", "Wiederholungsbremse", "Repetition penalty",
-              "1,0 heißt aus", "1.0 means off",
+    Parameter("repeat_penalty", "parameter.label.repeat_penalty", "parameter.hint.repeat_penalty",
               1, 2, 0.01),
-    Parameter("repeat_last_n", "Bremse wirkt auf", "Penalty window",
-              "Wie viele Token zurück geschaut wird", "How many tokens back it looks",
+    Parameter("repeat_last_n", "parameter.label.repeat_last_n", "parameter.hint.repeat_last_n",
               0, 2048, 16, ganzzahl=True),
-    Parameter("presence_penalty", "Themenwechsel", "Presence penalty",
-              "Höher heißt: eher etwas Neues ansprechen", "Higher means: bring up new things",
+    Parameter("presence_penalty", "parameter.label.presence_penalty", "parameter.hint.presence_penalty",
               -2, 2, 0.05),
-    Parameter("frequency_penalty", "Wortwiederholung", "Frequency penalty",
-              "Höher heißt: seltener dasselbe Wort", "Higher means: repeat words less",
+    Parameter("frequency_penalty", "parameter.label.frequency_penalty", "parameter.hint.frequency_penalty",
               -2, 2, 0.05),
-    Parameter("typical_p", "Typical-P", "Typical-P",
-              "Bevorzugt erwartbare Formulierungen", "Prefers expected phrasing",
+    Parameter("typical_p", "parameter.label.typical_p", "parameter.hint.typical_p",
               0, 1, 0.01),
-    Parameter("seed", "Startwert", "Seed",
-              "Gleicher Wert, gleiche Antwort. -1 heißt zufällig", "Same value, same answer. -1 is random",
+    Parameter("seed", "parameter.label.seed", "parameter.hint.seed",
               -1, 2147483647, 1, ganzzahl=True),
 ]
 
@@ -198,30 +187,31 @@ GRENZEN: dict[str, dict[str, tuple[float, float]]] = {
 }
 
 
-# What a locked knob says about itself, per parameter and per dialect, in
-# both languages. Only a parameter marked `immer_zeigen` ever reaches this
-# table — everything else a dialect does not know is simply left out, as
-# before.
+# What a locked knob says about itself, per parameter and per dialect, as the
+# catalogue key of the line. Only a parameter marked `immer_zeigen` ever
+# reaches this table — everything else a dialect does not know is simply left
+# out, as before.
 #
 # The two cloud providers dropped the budget field and put an effort scale
 # in its place, which the thinking button already offers; an MLX server
 # swallows the field without an error and then ignores it (measured: a
 # budget of 16 tokens left the trace at full length), and it can only be set
 # per model in that server's own admin panel.
-_KEINE_DENKLAENGE = (
-    "Dieser Server unterstützt keine einstellbare Denklänge.",
-    "This server does not support a configurable thinking length.",
-)
+_KEINE_DENKLAENGE = "parameter.locked.no_thinking_length"
 # The second reason a locked thinking length can have, and the narrower one:
 # the backend would take the number (its dialect knows the name), the MODEL
 # cannot think — so the number would go nowhere. Kept apart from the line
 # above on purpose: one is about the wire, the other about the model, and a
 # reader who sees the wrong one looks in the wrong place.
-MODELL_OHNE_REASONING = (
-    "Dieses Modell unterstützt kein Reasoning – daher ist keine Denklänge einstellbar.",
-    "This model does not support reasoning — so no thinking length can be set.",
-)
-GRUENDE: dict[str, dict[str, tuple[str, str]]] = {
+MODELL_OHNE_REASONING = "parameter.locked.model_cannot_reason"
+# The third reason, and the only one that is about the request rather than the
+# backend or the model: at OpenAI's own host every request that carries tools
+# or a thinking stage goes over the Responses wire, which has no field for
+# the seed and the two penalties. The server would take the numbers on the
+# other wire, so they stay stored and offered — only the display says they
+# do nothing there.
+NO_EFFECT_AT_OPENAI = "parameter.locked.no_effect_at_openai"
+GRUENDE: dict[str, dict[str, str]] = {
     "reasoning_budget": {
         "anthropic": _KEINE_DENKLAENGE,
         "openai": _KEINE_DENKLAENGE,
@@ -242,8 +232,14 @@ GRUND_ALLGEMEIN = _KEINE_DENKLAENGE
 NAME_DENKLAENGE = "reasoning_budget"
 
 
-def grund_fuer(name: str, dialekt: str) -> tuple[str, str]:
-    """Why this parameter is locked for this dialect, German and English."""
+def _locked(p: Parameter, reason: str) -> Parameter:
+    """The row as the model window draws a knob that does nothing here: locked,
+    with the catalogue key of the reason."""
+    return replace(p, aktiv=False, grund=reason)
+
+
+def grund_fuer(name: str, dialekt: str) -> str:
+    """The catalogue key of why this parameter is locked for this dialect."""
     return (GRUENDE.get(name) or {}).get(dialekt) or GRUND_ALLGEMEIN
 
 
@@ -251,6 +247,7 @@ def unterstuetzte(
     dialekt: str,
     kontextfenster: int | None = None,
     faehigkeiten: dict[str, Any] | None = None,
+    without_effect_at_openai: tuple[str, ...] = (),
 ) -> list[Parameter]:
     """All parameters this dialect knows — in the order from above.
 
@@ -273,6 +270,13 @@ def unterstuetzte(
     than looked up so this module stays free of the discovery — and a
     caller that knows nothing about the model (`None`) gets today's answer
     unchanged: every dialect that knows the name offers it.
+
+    `without_effect_at_openai` names the parameters the model's host drops on
+    its Responses wire; the caller hands them in only for a model at OpenAI's
+    own host (`app/discovery.py`), so this module neither knows the wire nor
+    the host. Those rows stay in the list, locked, with the line that says
+    when they do nothing. The stored value is untouched and still goes out
+    on the other wire.
     """
     bekannt = DIALEKTE.get(dialekt) or DIALEKTE["openai"]
     grenzen = GRENZEN.get(dialekt) or {}
@@ -281,8 +285,7 @@ def unterstuetzte(
         if p.name not in bekannt:
             if not p.immer_zeigen:
                 continue
-            deutsch, englisch = grund_fuer(p.name, dialekt)
-            p = replace(p, aktiv=False, grund=deutsch, grund_en=englisch)
+            p = _locked(p, grund_fuer(p.name, dialekt))
         elif (
             p.name == "reasoning_budget"
             and faehigkeiten is not None
@@ -297,8 +300,9 @@ def unterstuetzte(
             # — and "said nothing" may not be read as "cannot think", or the
             # knob goes grey for a thinking model and names the wrong
             # culprit.
-            deutsch, englisch = MODELL_OHNE_REASONING
-            p = replace(p, aktiv=False, grund=deutsch, grund_en=englisch)
+            p = _locked(p, MODELL_OHNE_REASONING)
+        if p.name in without_effect_at_openai and p.aktiv:
+            p = _locked(p, NO_EFFECT_AT_OPENAI)
         if p.name in grenzen:
             minimum, maximum = grenzen[p.name]
             p = replace(p, minimum=minimum, maximum=maximum)

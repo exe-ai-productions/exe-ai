@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 
 import pytest
 
 from app.db import Database, repositories_erstellen
 from app.db.connection import SCHEMA_VERSION
+from app.db.folding import register_fold_function
 
 
 def test_schema_wird_angelegt(db: Database):
@@ -81,10 +83,9 @@ def test_chats_suchen_findet_den_inhalt_nicht_nur_den_titel(repos):
 
     treffer = repos.chats.auflisten(user_id="benutzer", suche="Heizkörper")
     assert [t.id for t in treffer] == [chat.id]
-    # A prefix is enough, and in the CONTENT the accent need not be typed —
-    # that is the index's tokenizer (`remove_diacritics 2`). The title half
-    # beside it is LIKE, which folds ASCII case and nothing else; a title
-    # written with an umlaut therefore still wants the umlaut.
+    # A prefix is enough, and the accent need not be typed — in the content
+    # that is the index's tokenizer (`remove_diacritics 2`), in the title it
+    # is the same folding applied to both sides.
     assert [t.id for t in repos.chats.auflisten(user_id="benutzer", suche="heizk")] == [chat.id]
     assert [t.id for t in repos.chats.auflisten(user_id="benutzer", suche="heizkorper")] == [
         chat.id
@@ -95,6 +96,87 @@ def test_chats_suchen_findet_den_inhalt_nicht_nur_den_titel(repos):
     # not dragged in by the other one's messages.
     assert repos.chats.auflisten(user_id="benutzer", suche="Dachziegel") == []
     assert [t.id for t in repos.chats.auflisten(user_id="benutzer", suche="Reis")] == [daneben.id]
+
+
+def test_chat_search_folds_the_title_like_the_content(repos):
+    """A title is found whichever way the word was typed: accents and case
+    are folded on both sides, as the message index folds them. SQLite's own
+    LIKE folds ASCII case only, so "heizkorper" missed a chat titled
+    "Heizkörper" while finding one that merely mentioned it."""
+    radiator = repos.chats.erstellen(user_id="benutzer", title="Heizkörper")
+    umlaut_chat = repos.chats.erstellen(user_id="benutzer", title="Über den Wolken")
+    sharp_s_chat = repos.chats.erstellen(user_id="benutzer", title="Straße nach Köln")
+    # The title typed in decomposed form (a name pasted out of Finder).
+    decomposed_chat = repos.chats.erstellen(user_id="benutzer", title="Mu\u0308ller")
+
+    def ids(query):
+        return [t.id for t in repos.chats.auflisten(user_id="benutzer", suche=query)]
+
+    assert ids("heizkorper") == [radiator.id]
+    assert ids("HEIZKÖRPER") == [radiator.id]
+    assert ids("Heizkörper") == [radiator.id]
+    assert ids("über") == [umlaut_chat.id]
+    assert ids("uber") == [umlaut_chat.id]
+    assert ids("muller") == [decomposed_chat.id]
+    assert ids("Müller") == [decomposed_chat.id]
+    # The line with no usable word (a single letter) is folded too.
+    assert sorted(ids("Ü")) == sorted([umlaut_chat.id, decomposed_chat.id])
+    assert ids("ß") == [sharp_s_chat.id]
+    # ß stays ß on both sides, as in the index: it is not read as "ss".
+    assert ids("straße") == [sharp_s_chat.id]
+    assert ids("strasse") == []
+    # A piece of a word inside the title still counts.
+    assert ids("zkorp") == [radiator.id]
+    # Silence probe: a title without the word is not found, and neither is
+    # a chat by letters that only look alike once accents are gone.
+    assert ids("heizung") == []
+    assert ids("koln nach strasse") == []
+    # A wildcard typed alone stays literal after the folding.
+    assert ids("%") == []
+
+
+def test_chat_search_title_and_content_with_two_words(repos):
+    """One word may sit in the title and the next in a message; a title that
+    holds a wildcard character is matched literally."""
+    chat = repos.chats.erstellen(user_id="benutzer", title="Köln 100% Plan")
+    repos.messages.speichern(chat_id=chat.id, role="user", content="Der Dachziegel fehlt")
+    other = repos.chats.erstellen(user_id="benutzer", title="Plan B")
+
+    def ids(query):
+        return [t.id for t in repos.chats.auflisten(user_id="benutzer", suche=query)]
+
+    assert ids("koln dachziegel") == [chat.id]
+    assert ids("dachziegel plan") == [chat.id]
+    assert sorted(ids("plan")) == sorted([chat.id, other.id])
+    assert ids("100%") == [chat.id]
+    assert ids("koln heizung") == []
+
+
+def test_chat_search_folds_only_what_the_index_folds(repos):
+    """The folding is the index's: Latin accents go, the marks of other
+    scripts stay, and a syllable of Hangul is not split into its parts."""
+    hangul = repos.chats.erstellen(user_id="benutzer", title="한국어")
+    greek = repos.chats.erstellen(user_id="benutzer", title="Οδός")
+    sigma = repos.chats.erstellen(user_id="benutzer", title="ΟΔΟΣ")
+
+    def ids(query):
+        return [t.id for t in repos.chats.auflisten(user_id="benutzer", suche=query)]
+
+    assert ids("한국어") == [hangul.id]
+    assert ids("하") == []
+    assert ids("οδοσ") == [sigma.id]
+    assert ids("οδος") == [sigma.id]
+    assert ids("οδός") == [greek.id]
+    assert ids("οδος") != [greek.id]
+
+
+def test_fold_function_passes_other_values_through():
+    """A cell that is not text is handed back as it is, so one odd row never
+    breaks a search; NULL stays NULL."""
+    connection = sqlite3.connect(":memory:")
+    register_fold_function(connection)
+    row = connection.execute("SELECT fold_text(5), fold_text(NULL), fold_text(x'41'), fold_text('Ä')").fetchone()
+    assert row == (5, None, b"A", "a")
 
 
 def test_die_suche_haelt_mit_wenn_eine_nachricht_sich_aendert(repos):
@@ -869,3 +951,97 @@ def test_ohne_kennung_gibt_es_keinen_engen_fall(tmp_path):
     assert repos.auftraege.beim_start_aufraeumen() == 0
 
     db.schliessen()
+
+
+# --- an attempt that was to replace an answer, cut off by a hard end --------
+
+
+def _answer_and_attempt(repos, *, names_old: bool = True):
+    chat = repos.chats.erstellen(user_id="lokal", title="c")
+    repos.messages.speichern(chat_id=chat.id, role="user", content="question")
+    old = repos.messages.speichern(
+        chat_id=chat.id, role="assistant", content="old answer", zustand="fertig"
+    )
+    attempt = repos.messages.speichern(
+        chat_id=chat.id,
+        role="assistant",
+        content="",
+        zustand="laeuft",
+        replaces_id=old.id if names_old else None,
+    )
+    return chat, old, attempt
+
+
+def test_a_replacing_attempt_cut_off_by_a_hard_end_leaves_only_the_old_answer(repos):
+    chat, old, attempt = _answer_and_attempt(repos)
+
+    repos.messages.beim_start_aufraeumen()
+
+    rows = repos.messages.auflisten(chat_id=chat.id)
+    assert [r.id for r in rows if r.role == "assistant"] == [old.id]
+    assert repos.messages.holen(old.id).zustand == "fertig"
+    assert repos.messages.holen(attempt.id) is None
+
+
+def test_silence_an_ordinary_running_answer_is_marked_stopped_as_before(repos):
+    chat, old, attempt = _answer_and_attempt(repos, names_old=False)
+
+    repos.messages.beim_start_aufraeumen()
+
+    assert repos.messages.holen(attempt.id).zustand == "abgebrochen"
+    assert repos.messages.holen(old.id).zustand == "fertig"
+
+
+def test_silence_an_attempt_whose_old_answer_is_gone_is_marked_stopped(repos):
+    chat, old, attempt = _answer_and_attempt(repos)
+    repos.messages.loeschen(old.id)
+
+    repos.messages.beim_start_aufraeumen()
+
+    assert repos.messages.holen(attempt.id).zustand == "abgebrochen"
+
+
+def test_silence_a_finished_replacement_stays_and_names_nobody(repos):
+    chat, old, attempt = _answer_and_attempt(repos)
+
+    repos.messages.finish_in_place_of(attempt.id, old.id, content="new answer", zustand="fertig")
+    repos.messages.beim_start_aufraeumen()
+
+    kept = repos.messages.holen(attempt.id)
+    assert (kept.content, kept.zustand) == ("new answer", "fertig")
+    assert repos.messages.holen(old.id) is None
+    named = repos.db.verbindung.execute(
+        "SELECT replaces_id FROM messages WHERE id = ?", (attempt.id,)
+    ).fetchone()["replaces_id"]
+    assert named is None
+
+
+def test_a_replacing_attempt_of_a_second_live_service_is_left_alone(tmp_path):
+    path = tmp_path / "shared-attempt.db"
+    one = Database(path, dienst_port=8095)
+    one.schema_einrichten()
+    two = Database(path, dienst_port=8093)
+    repos_one = repositories_erstellen(one)
+    repos_two = repositories_erstellen(two)
+    chat = repos_one.chats.erstellen(user_id="lokal", title="c")
+    old_one = repos_one.messages.speichern(
+        chat_id=chat.id, role="assistant", content="old", zustand="fertig"
+    )
+    mine = repos_one.messages.speichern(
+        chat_id=chat.id, role="assistant", content="", zustand="laeuft",
+        replaces_id=old_one.id,
+    )
+    old_two = repos_two.messages.speichern(
+        chat_id=chat.id, role="assistant", content="older", zustand="fertig"
+    )
+    theirs = repos_two.messages.speichern(
+        chat_id=chat.id, role="assistant", content="", zustand="laeuft",
+        replaces_id=old_two.id,
+    )
+
+    assert repos_one.messages.beim_start_aufraeumen(nur_eigene=True) == 1
+
+    # My own attempt is gone; the other service's is its live work.
+    assert repos_one.messages.holen(mine.id) is None
+    assert repos_one.messages.holen(theirs.id).zustand == "laeuft"
+    assert repos_one.messages.holen(old_two.id).zustand == "fertig"

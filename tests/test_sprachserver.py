@@ -545,6 +545,27 @@ def test_ein_stehender_server_meldet_keinen_speicher(client: TestClient):
     assert daten["belegt_gb"] is None
 
 
+def test_the_answer_carries_the_memory_of_the_tidy_up_server(client: TestClient, monkeypatch):
+    """The tidy-up server is a process of its own: while it runs, its share
+    rides along so the machine head's sum can count it."""
+    runner = _laufen_lassen(client, monkeypatch)
+    monkeypatch.setattr(runner, "belegt_gb", lambda: 1.8)
+    monkeypatch.setattr(client.app.state.sprachputzrunner, "belegt_gb", lambda: 2.4)
+    data = client.get("/api/v1/sprachserver").json()
+    assert data["belegt_gb"] == 1.8
+    assert data["tidy_up_used_gb"] == 2.4
+
+
+def test_a_standing_tidy_up_server_reports_no_memory(client: TestClient, monkeypatch):
+    """Schweigeprobe: the speech server runs, the tidy-up server does not —
+    no share is added for it."""
+    runner = _laufen_lassen(client, monkeypatch)
+    monkeypatch.setattr(runner, "belegt_gb", lambda: 1.8)
+    data = client.get("/api/v1/sprachserver").json()
+    assert data["belegt_gb"] == 1.8
+    assert data["tidy_up_used_gb"] is None
+
+
 def test_der_start_reicht_die_regler_durch(client: TestClient, monkeypatch):
     """Window, layers and threads come from the form; the port stays this
     server's own."""

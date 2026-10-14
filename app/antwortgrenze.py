@@ -195,6 +195,13 @@ def eingabe_schaetzen(nachrichten, werkzeuge=()) -> int:
       ``encrypted_content`` (:func:`_item_weight`). Its text items
       (``message_items``) are not counted again: their text is the
       message's ``content`` already.
+    * ``anthropic_blocks`` — a round's thinking on the Anthropic wire,
+      handed back unchanged beside its tool results
+      (``app/providers/anthropic.py``). The text of a ``thinking`` block
+      counts; its ``signature`` and the ``data`` of a ``redacted_thinking``
+      block are the provider's own seal and do not, like ``encrypted_content``
+      above. The ``text`` and ``tool_use`` blocks are only markers of their
+      place: their content is ``content`` and ``werkzeugaufrufe`` already.
 
     Counted apart, a chat with a picture in it weighed nothing at all for
     its image and asked for a ceiling the size of the whole window — one
@@ -213,9 +220,27 @@ def eingabe_schaetzen(nachrichten, werkzeuge=()) -> int:
             zeichen += kontextdruck.bild_tokens(len(bilder()))
         for teil in getattr(nachricht, "reasoning_items", None) or ():
             zeichen += _item_weight(teil)
+        for block in getattr(nachricht, "anthropic_blocks", None) or ():
+            zeichen += _thinking_block_weight(block)
     for werkzeug in werkzeuge or ():
         zeichen += tokenmass_tokens(str(werkzeug))
     return zeichen
+
+
+def _thinking_block_weight(block) -> int:
+    """What one block of a round's Anthropic content weighs on the way in:
+    the text of a ``thinking`` block, nothing for any other kind.
+
+    A ``redacted_thinking`` block carries only sealed ``data`` and a
+    ``thinking`` block's ``signature`` is a seal as well — neither is
+    priced by its length on this side. The ``text`` and ``tool_use`` blocks
+    are markers: what they stand for is counted from the message's
+    ``content`` and ``werkzeugaufrufe``.
+    """
+    if not isinstance(block, dict) or block.get("type") != "thinking":
+        return 0
+    text = block.get("thinking")
+    return tokenmass_tokens(text) if isinstance(text, str) else 0
 
 
 def _item_weight(item) -> int:

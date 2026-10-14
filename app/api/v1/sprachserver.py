@@ -80,6 +80,12 @@ class Auskunft(BaseModel):
     # Live resident memory of the running server, for the machine head's sum
     # — the same measurement the runner already keeps for itself.
     belegt_gb: float | None = None
+    # The same measurement for the tidy-up server, which is a second process
+    # of its own; None while it is not running.
+    tidy_up_used_gb: float | None = None
+    # The architecture the last start failed on because the server's build
+    # does not know it.
+    unknown_architecture: str | None = None
     kerne: int | None = None
     vorgaben: dict = {}
     # The works answers for the dictation fields — language, the two
@@ -159,6 +165,8 @@ def _auskunft(request: Request) -> Auskunft:
         schichten=lauf.schichten if lauf else None,
         threads=(lauf.fein.faeden if lauf and lauf.fein else None),
         belegt_gb=runner.belegt_gb(),
+        tidy_up_used_gb=_putzrunner(request).belegt_gb(),
+        unknown_architecture=runner.unknown_architecture(),
         kerne=os.cpu_count(),
         vorgaben={
             "kontext": KONTEXT_VORGABE,
@@ -175,7 +183,7 @@ def auskunft(request: Request) -> Auskunft:
     return _auskunft(request)
 
 
-@router.get("/log", response_model=list[str], summary="What the server says")
+@router.get("/log", response_model=list[str], summary="Server messages")
 def protokoll(request: Request) -> list[str]:
     return _runner(request).protokoll()
 
@@ -249,7 +257,7 @@ def _putzziel(request: Request, wer: str) -> tuple[str, str | None] | None:
 @router.post(
     "/transkribieren",
     response_model=Transkript,
-    summary="Recording to text (raw WAV bytes)",
+    summary="Transcribe a recording (raw WAV bytes)",
 )
 async def transkribieren(
     request: Request,
@@ -337,7 +345,7 @@ async def transkribieren(
 
 @router.post(
     "/sprechen",
-    summary="Text to speech (WAV bytes back)",
+    summary="Convert text to speech (returns WAV bytes)",
     response_class=Response,
 )
 async def sprechen(

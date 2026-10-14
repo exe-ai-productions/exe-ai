@@ -150,7 +150,16 @@ export async function starten(beiZeitende = null, aufPegelCb = null) {
     throw fehler
   }
   try {
-    kontext = new AudioContext({ sampleRate: ZIELRATE })
+    try {
+      kontext = new AudioContext({ sampleRate: ZIELRATE })
+    } catch (error) {
+      /* A browser may refuse the rate it was asked for (the constructor
+         throws NotSupportedError). The recording then starts at the rate
+         the device runs at: the header carries it and `dauerGrenze` follows
+         it. Any other failure is not about the rate and ends the start. */
+      if (error?.name !== 'NotSupportedError') throw error
+      kontext = new AudioContext()
+    }
     const adresse = URL.createObjectURL(new Blob([PROZESSOR], { type: 'text/javascript' }))
     try {
       await kontext.audioWorklet.addModule(adresse)

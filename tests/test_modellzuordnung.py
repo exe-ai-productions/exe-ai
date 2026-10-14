@@ -93,3 +93,63 @@ def test_entfernen_loescht_den_ganzen_eintrag(tmp_path: Path):
     modellzuordnung.eintragen(tmp_path, "modell.gguf", "mmproj", "modell-mmproj.gguf")
     modellzuordnung.entfernen(tmp_path, "modell.gguf")
     assert "modell.gguf" not in modellzuordnung.lade(tmp_path)
+
+
+# --- A sibling model as the draft -----------------------------------------
+# The catalogue fetches a draft into mtp/; the next start puts a whole model
+# back into the model folder. The note finds it in both places, mtp/ first.
+
+
+def test_a_sibling_draft_in_the_model_folder_is_found(tmp_path: Path):
+    (tmp_path / "modell.gguf").write_bytes(b"x")
+    (tmp_path / "geschwister.gguf").write_bytes(b"x")
+    modellzuordnung.eintragen(tmp_path, "modell.gguf", "mtp", "geschwister.gguf")
+    assert modellzuordnung.fuer(tmp_path, "modell.gguf")["mtp"] == "geschwister.gguf"
+
+
+def test_a_draft_in_mtp_still_counts(tmp_path: Path):
+    (tmp_path / "mtp").mkdir()
+    (tmp_path / "mtp" / "modul.gguf").write_bytes(b"x")
+    modellzuordnung.eintragen(tmp_path, "modell.gguf", "mtp", "modul.gguf")
+    assert modellzuordnung.fuer(tmp_path, "modell.gguf")["mtp"] == "modul.gguf"
+
+
+def test_a_draft_that_lies_nowhere_drops_out(tmp_path: Path):
+    modellzuordnung.eintragen(tmp_path, "modell.gguf", "mtp", "weg.gguf")
+    assert modellzuordnung.fuer(tmp_path, "modell.gguf")["mtp"] is None
+
+
+def test_the_model_itself_and_a_projector_are_no_draft(tmp_path: Path):
+    (tmp_path / "modell.gguf").write_bytes(b"x")
+    (tmp_path / "modell-mmproj-F16.gguf").write_bytes(b"x")
+    modellzuordnung.eintragen(tmp_path, "modell.gguf", "mtp", "modell.gguf")
+    assert modellzuordnung.fuer(tmp_path, "modell.gguf")["mtp"] is None
+    modellzuordnung.eintragen(tmp_path, "modell.gguf", "mtp", "modell-mmproj-F16.gguf")
+    assert modellzuordnung.fuer(tmp_path, "modell.gguf")["mtp"] is None
+
+
+def test_a_projector_still_counts_only_in_its_own_folder(tmp_path: Path):
+    (tmp_path / "modell-mmproj-F16.gguf").write_bytes(b"x")
+    modellzuordnung.eintragen(tmp_path, "modell.gguf", "mmproj", "modell-mmproj-F16.gguf")
+    assert modellzuordnung.fuer(tmp_path, "modell.gguf")["mmproj"] is None
+
+
+def test_a_name_with_a_path_stays_refused(tmp_path: Path):
+    (tmp_path / "geschwister.gguf").write_bytes(b"x")
+    modellzuordnung.eintragen(tmp_path, "modell.gguf", "mtp", "../geschwister.gguf")
+    assert modellzuordnung.fuer(tmp_path, "modell.gguf")["mtp"] is None
+
+
+def test_a_link_leading_out_of_the_folder_is_no_draft(tmp_path: Path):
+    """The same boundary as the runner's: the file itself, resolved, must lie
+    in the model folder — a start would refuse the link, so the note must not
+    offer it."""
+    ausserhalb = tmp_path / "ausserhalb"
+    ausserhalb.mkdir()
+    (ausserhalb / "geschwister.gguf").write_bytes(b"x")
+    ordner = tmp_path / "modelle"
+    ordner.mkdir()
+    (ordner / "modell.gguf").write_bytes(b"x")
+    (ordner / "link.gguf").symlink_to(ausserhalb / "geschwister.gguf")
+    modellzuordnung.eintragen(ordner, "modell.gguf", "mtp", "link.gguf")
+    assert modellzuordnung.fuer(ordner, "modell.gguf")["mtp"] is None

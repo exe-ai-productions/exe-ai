@@ -19,9 +19,18 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
+from pathlib import Path, PurePath
+from typing import NamedTuple
 
-from app import dokumentablage, dokumentcache, faltbitte, skills, werkzeugbild, werkzeugkuerzung
+from app import (
+    dokumentablage,
+    dokumentcache,
+    faltbitte,
+    kontextdruck,
+    skills,
+    werkzeugbild,
+    werkzeugkuerzung,
+)
 from app.db import Repositories
 from app.db.models import Chat
 from app.db.repositories.messages import ist_dienstbericht
@@ -79,8 +88,8 @@ def _picture_path_sentences(pictures: Path, namen: list[str]) -> str:
         quelle = _bild_quelle(pictures, name)
         if quelle is not None:
             saetze.append(
-                f"[The image attached here is kept in the image folder as {quelle} "
-                "— name that path when a tool or a job needs this picture.]"
+                f"[The attached image is stored in the image folder as {quelle}. Use this path "
+                "when a tool or job needs the image.]"
             )
     return "\n".join(saetze)
 
@@ -127,7 +136,216 @@ def _bild_daten_url(places: tuple[Path, Path], name: str | None) -> str | None:
         return None
 
 
-def bilder_vorbereiten(config, namen: list[str]) -> None:
+def _tool_picture_source(path: str) -> Path | None:
+    """The file a stored tool read named, if it can still be a picture for
+    the model: a file with a picture's ending. Not under the picture folder's
+    guard (``_bild_quelle``): the file lies in the user's own folder, where
+    the read tool was allowed to look when it attached it."""
+    from app.api.v1.bilder import ANZEIGBARE_ENDUNGEN
+
+    source = Path(path)
+    return source if source.suffix.lower() in ANZEIGBARE_ENDUNGEN else None
+
+
+def _tool_picture_data_url(places: tuple[Path, Path], path: str) -> str | None:
+    """The data URL of a picture a tool read, as a LATER request carries it.
+
+    Made the way the read tool made it for its own round
+    (``app/tools/datei_lesen.py`` ``_bild_bereiten``) — the model's copy where
+    one is on record, the file itself otherwise, the metadata off — but by
+    LOOKUP only, like ``_bild_daten_url``: the request's no-await stretch
+    starts no tool (``bilder_vorbereiten`` made the copy before). A file that
+    is gone, unreadable or no picture any more is no crash and no image: the
+    result then keeps its note with the path.
+    """
+    from app import model_image
+    from app.bildmetadaten import metadaten_entfernen
+
+    source = _tool_picture_source(path)
+    if source is None:
+        return None
+    file = model_image.nachschlag(source, places[1])
+    try:
+        raw = metadaten_entfernen(file.read_bytes())
+    except OSError:
+        return None
+    try:
+        return model_image.data_url(raw)
+    except ValueError:
+        log.warning("Picture %s is not a png, jpeg or webp file; it is left out", source.name)
+        return None
+
+
+def _row_tool_pictures(row) -> list[tuple[dict, str]]:
+    """The entries of one row — in the order they were made — that carry the
+    note of a picture their call handed the model
+    (``werkzeugbild.READ_IMAGE_PATH``), as ``(entry, path)``.
+
+    Read with the rules ``_werkzeugzuege`` builds its turns by: only the
+    model's own answers, not a row that goes back as a sentence for its
+    pictures, only calls that go back as calls. Entries are the objects the
+    turns read again, so the turns can tell them by identity.
+    """
+    if getattr(row, "role", None) != "assistant":
+        return []
+    if getattr(row, "art", None) != "nachricht" or _own_pictures(row):
+        return []
+    entries = (row.stats or {}).get("werkzeuge") or []
+    if not isinstance(entries, list):
+        return []
+    as_call = _fragen_als_aufruf(entries)
+    found: list[tuple[dict, str]] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not _geht_als_aufruf(entry, as_call):
+            continue
+        path = entry.get(werkzeugbild.READ_IMAGE_PATH)
+        if isinstance(path, str) and path:
+            found.append((entry, path))
+    return found
+
+
+def _tool_pictures_read(rows) -> list[tuple[dict, str]]:
+    """Every entry — oldest first — that carries the note of a picture its
+    call handed the model, as ``(entry, path)`` (``_row_tool_pictures``)."""
+    found: list[tuple[dict, str]] = []
+    for row in rows:
+        found.extend(_row_tool_pictures(row))
+    return found
+
+
+def _picture_events(rows) -> list[tuple[dict | None, str]]:
+    """Every picture the rows send, oldest first: ``(entry, path)`` for one a
+    tool read, ``(None, name)`` for one the user attached — the pictures the
+    run counted in its own request, in the order it carried them."""
+    events: list[tuple[dict | None, str]] = []
+    for row in rows:
+        attached = getattr(row, "anhang_bilder", None)
+        if not (getattr(row, "role", None) == "assistant" and _own_pictures(row)) and callable(attached):
+            events.extend((None, name) for name in attached())
+        events.extend(_row_tool_pictures(row))
+    return events
+
+
+def _picture_decision(
+    rows, places: tuple[Path, Path] | None
+) -> tuple[list[tuple[dict, str]], list[tuple[dict, str]], dict[int, str]]:
+    """``(riding, retired, urls)``: the tool pictures a rebuilt history
+    attaches again and the ones it does not, each as ``(entry, path)``,
+    oldest first, and the data URLs read on the way to the decision, by the
+    identity of the entry — the caller that attaches them does not read the
+    files a second time.
+
+    One rule with the run's own request (``werkzeugkuerzung.retired_positions``),
+    asked with the same pictures and the same sizes: a picture counts by the
+    data URL that is sent for it, an attached picture too, and a file that is
+    gone counts for nothing — the request has no picture for it. Without
+    ``places`` the sizes are unknown and the pictures count only by number.
+    """
+    events = _picture_events(rows)
+    if places is not None:
+        events = [event for event in events if _picture_file(places, event) is not None]
+    urls: dict[int, str] = {}
+    sizes: dict[int, int] = {}
+
+    def size_of(position: int) -> int:
+        if places is None:
+            return 0
+        if position not in sizes:
+            entry, reference = events[position]
+            if entry is not None:
+                url = _tool_picture_data_url(places, reference)
+                if url:
+                    urls[id(entry)] = url
+            else:
+                url = _bild_daten_url(places, reference)
+            sizes[position] = len(url) if url else 0
+        return sizes[position]
+
+    gone = set(
+        werkzeugkuerzung.retired_positions([entry is not None for entry, _ in events], size_of)
+    )
+    riding: list[tuple[dict, str]] = []
+    retired: list[tuple[dict, str]] = []
+    for position, (entry, reference) in enumerate(events):
+        if entry is None:
+            continue
+        (retired if position in gone else riding).append((entry, reference))
+    return riding, retired, urls
+
+
+def _picture_file(places: tuple[Path, Path], event: tuple[dict | None, str]) -> Path | None:
+    """The file a picture of ``_picture_events`` is sent from, if it is there:
+    a stat, no read — the one test that tells a picture the request carries
+    from one it has no file for any more."""
+    entry, reference = event
+    source = _tool_picture_source(reference) if entry is not None else _bild_quelle(places[0], reference)
+    return source if source is not None and source.is_file() else None
+
+
+def _tool_pictures_in_history(rows, places: tuple[Path, Path] | None = None) -> list[tuple[dict, str]]:
+    """The tool pictures a rebuilt history attaches again, oldest first —
+    the ones ``_picture_decision`` lets stay."""
+    return _picture_decision(rows, places)[0]
+
+
+def _tool_pictures_retired(rows, places: tuple[Path, Path] | None = None) -> dict[int, str]:
+    """The tool pictures a rebuilt history does not attach again, by the
+    identity of the entry that read them, with the path to read each from.
+    The run retired them from its own request (``werkzeugkuerzung``); the
+    history says the same of them, in the same words."""
+    return {id(entry): path for entry, path in _picture_decision(rows, places)[1]}
+
+
+class ToolPicturePlan(NamedTuple):
+    """What a request does with the tool pictures of its rows: the ones that
+    ride along again (entry identity -> ``(path, data URL)``), the ones the
+    run took out of its own request (entry identity -> path), and where the
+    pictures live (read once, with the first picture)."""
+
+    riding: dict[int, tuple[str, str]]
+    retired: dict[int, str]
+    places: tuple[Path, Path] | None
+
+
+def tool_picture_plan(rows, config, vision: bool, werkzeuge: bool) -> ToolPicturePlan:
+    """The plan for ``rows``, which are ALL the rows the request carries a
+    tool log of — the rule of the newest few counts across them, so the
+    history and an answer asked again after a failure are counted together
+    (``_verlauf_bauen``, ``answer_turns``).
+
+    Only for a model that sees and only where the request carries calls:
+    without them the results go back as text, and a picture needs its call.
+    """
+    riding: dict[int, tuple[str, str]] = {}
+    places: tuple[Path, Path] | None = None
+    if not (vision and werkzeuge):
+        return ToolPicturePlan(riding, {}, places)
+    if config is not None and _picture_events(rows):
+        places = _picture_places(config)
+    staying, retired, urls = _picture_decision(rows, places)
+    if places is not None:
+        for entry, path in staying:
+            # Read for the sizes already; a picture the decision did not need
+            # to size (the rule asked for the ones that stay, and these are
+            # they) is read here.
+            url = urls.get(id(entry)) or _tool_picture_data_url(places, path)
+            if url:
+                riding[id(entry)] = (path, url)
+    return ToolPicturePlan(riding, {id(entry): path for entry, path in retired}, places)
+
+
+def tool_pictures_of_rows(rows, config=None) -> set[int]:
+    """The stored entries whose pictures a request built from ``rows``
+    attaches again, by identity — what ``werkzeuggewicht`` is asked with, so
+    a weight can count the pictures the request really carries
+    (``_tool_pictures_in_history``). ``config`` tells where the pictures lie,
+    so they can be told by their size as the request tells them; without it
+    they count by number."""
+    places = _picture_places(config) if config is not None and _picture_events(rows) else None
+    return {id(entry) for entry, _path in _tool_pictures_in_history(rows, places)}
+
+
+def bilder_vorbereiten(config, namen: list[str], tool_pictures: list[str] | None = None) -> None:
     """Makes every picture a request will carry ready for the model —
     OUTSIDE the event loop: the route calls this through
     ``asyncio.to_thread``, because the FIRST look at a large picture starts
@@ -140,10 +358,17 @@ def bilder_vorbereiten(config, namen: list[str]) -> None:
 
     The source guard is shared with the send path (`_bild_quelle`): warming
     can neither drift wider nor narrower than sending.
+
+    ``werkzeugbilder`` are the whole paths of the pictures earlier tool reads
+    attached, oldest first (``werkzeugbild.READ_IMAGE_PATH`` on the rows):
+    the newest few are warmed too, because the copy of such a picture is
+    removed at every start of the service and a rebuilt history would
+    otherwise go out with the original whole.
     """
     from app import model_image
 
-    if not namen:
+    kept = (tool_pictures or [])[-werkzeugkuerzung.OUTBOUND_IMAGE_LIMIT :]
+    if not namen and not kept:
         return
     pictures, copies = _picture_places(config)
     for name in namen:
@@ -151,6 +376,21 @@ def bilder_vorbereiten(config, namen: list[str]) -> None:
         if quelle is None:
             continue
         model_image.kopie(quelle, copies)
+    for path in kept:
+        source = _tool_picture_source(path)
+        if source is not None:
+            model_image.kopie(source, copies)
+
+
+def _is_video(name: str) -> bool:
+    """Whether a stored picture name is a video: what the gallery plays.
+
+    The suffix list is the gallery's own (``VIDEO_MEDIENTYPEN``), so the
+    history and the window cannot disagree about what a file is.
+    """
+    from app.api.v1.bilder import VIDEO_MEDIENTYPEN
+
+    return PurePath(name).suffix.lower() in VIDEO_MEDIENTYPEN
 
 
 def _ersatzsatz(zeile) -> str:
@@ -168,7 +408,16 @@ def _ersatzsatz(zeile) -> str:
     """
     eigene = zeile.bild_dateien() if zeile.role == "assistant" else []
     if eigene:
-        # A picture the assistant carries was GENERATED, not seen.
+        # A picture the assistant carries was GENERATED, not seen. A video
+        # rides in the same field, so the name decides which word is true.
+        videos = sum(1 for name in eigene if _is_video(name))
+        if videos == len(eigene):
+            return (
+                "[A generated video was shown here.]" if videos == 1
+                else f"[{videos} generated videos were shown here.]"
+            )
+        if videos:
+            return f"[{len(eigene)} generated images and videos were shown here.]"
         return (
             "[A generated image was shown here.]" if len(eigene) == 1
             else f"[{len(eigene)} generated images were shown here.]"
@@ -227,15 +476,25 @@ def _zeilenworte(
     # assistant text, so the model still knows what it asked and what the
     # user decided.
     werkzeuge = (zeile.stats or {}).get("werkzeuge") or []
+    # A stored log of the wrong shape — a string, a list of strings — is a
+    # row somebody wrote by hand (the messages route takes any ``stats``): it
+    # is passed over, like by the four readers below, and never an exception
+    # for every later request of the chat.
+    if not isinstance(werkzeuge, list):
+        werkzeuge = []
     fragen = [
         w
         for w in werkzeuge
-        if w.get("name") == frage_werkzeug.WERKZEUG_NAME
+        if isinstance(w, dict) and w.get("name") == frage_werkzeug.WERKZEUG_NAME
     ]
     if zeile.role == "assistant" and fragen and not _fragen_als_aufruf(werkzeuge):
         zeilen = "\n".join(
             "[You asked: {frage} — the user answered: {antwort}]".format(
-                frage=(w.get("argumente") or {}).get("question", ""),
+                frage=(
+                    w["argumente"].get("question", "")
+                    if isinstance(w.get("argumente"), dict)
+                    else ""
+                ),
                 antwort=w.get("ergebnis", ""),
             )
             for w in fragen
@@ -277,17 +536,19 @@ def _zeilenworte(
         ganz = dokument.extracted_text or ""
         anteil = (dokumentplan or {}).get(dokument_id)
         if anteil is None or not anteil.ganz:
-            # Too big for this model's window (app/dokumentbudget.py), or a
-            # plan that says nothing about this document at all — read the
-            # same safe way, named rather than guessed at with a cut nobody
-            # asked for. The model is told the document is attached and how
-            # large it is, and told to say so rather than answer as though
-            # it knew the content.
+            # Too big for this request (app/dokumentbudget.py): over the
+            # model's window, over half of it, or past the room the rest of
+            # the request leaves — or a plan that says nothing about this
+            # document at all. Read the same safe way, named rather than
+            # guessed at with a cut nobody asked for. The model is told the
+            # document is attached and how large it is, and told to say so
+            # rather than answer as though it knew the content. The sentence
+            # names no single reason: any of them is the case here, and a
+            # document that fits the window can be left out as well.
             kopf = (
-                f'[Attached document "{dokument.filename}" — {len(ganz)} characters, '
-                f"too large for this model's context and not included here. Say "
-                f"so rather than answering as if you knew its content."
-                f"{dokumentablage.nachlesehinweis(dokument.pfad, dokument.pages)}]"
+                f'[Attached document "{dokument.filename}" contains {len(ganz)} characters, '
+                'is too large to be sent with this request, and is not included here. Explain '
+                f'this rather than answering as though you had read it.{dokumentablage.nachlesehinweis(dokument.pfad, dokument.pages)}]'
             )
             inhalt = f"{kopf}\n\n{inhalt}" if inhalt else kopf
             continue
@@ -311,10 +572,8 @@ def faltkopf(dokument) -> str:
     """
     ganz = dokument.extracted_text or ""
     return (
-        f'[Attached document "{dokument.filename}" — '
-        f"{len(ganz)} characters, not included here. Only what this "
-        f"conversation says about it is."
-        f"{dokumentablage.nachlesehinweis(dokument.pfad, dokument.pages)}]"
+        f'[Attached document "{dokument.filename}" contains {len(ganz)} characters and is not '
+        f'included here. Only references to it in this conversation are available.{dokumentablage.nachlesehinweis(dokument.pfad, dokument.pages)}]'
     )
 
 
@@ -381,7 +640,12 @@ def zeilentext(
 VERLAUF_ERGEBNIS_ZEICHEN = 500
 
 
-def _ergebnis_im_verlauf(eintrag: dict, grenze: int | None = VERLAUF_ERGEBNIS_ZEICHEN) -> str:
+def _ergebnis_im_verlauf(
+    eintrag: dict,
+    grenze: int | None = VERLAUF_ERGEBNIS_ZEICHEN,
+    picture_rides: bool = False,
+    picture_retired: bool = False,
+) -> str:
     """What one earlier call returned, as a LATER request reads it.
 
     The one reading of a chat row's result, in here once and read by every
@@ -423,7 +687,16 @@ def _ergebnis_im_verlauf(eintrag: dict, grenze: int | None = VERLAUF_ERGEBNIS_ZE
     """
     ergebnis = eintrag.get("ergebnis_modell", eintrag.get("ergebnis"))
     pfad = werkzeugbild.gelesener_bildpfad(str(eintrag.get("name") or ""), ergebnis)
-    if pfad:
+    # A picture that rides along again (``picture_rides``: one of the newest
+    # few, ``_tool_pictures_in_history``) keeps the sentence the call
+    # returned — "attached below" is true of this request again.
+    if pfad and not picture_rides:
+        # One the run retired from its own request (``picture_retired``)
+        # stands as the run left it: the bare sentence here, the note with
+        # the path in the turn behind the round's results
+        # (``_werkzeugzuege``).
+        if picture_retired:
+            return werkzeugbild.NICHT_MEHR_DABEI
         return werkzeugbild.NICHT_MEHR_DABEI + dokumentablage.nachlesehinweis(pfad)
     text = ergebnis if isinstance(ergebnis, str) else ""
     if grenze is not None and len(text) > grenze:
@@ -431,29 +704,72 @@ def _ergebnis_im_verlauf(eintrag: dict, grenze: int | None = VERLAUF_ERGEBNIS_ZE
     return text
 
 
-def werkzeuggewicht(zeile) -> int:
+def _own_pictures(zeile) -> list[str]:
+    """The pictures an assistant row carries of its own — a drawing it made.
+    Asked of any row object: those that cannot name pictures carry none."""
+    if getattr(zeile, "role", None) != "assistant":
+        return []
+    own_files = getattr(zeile, "bild_dateien", None)
+    return own_files() if callable(own_files) else []
+
+
+def werkzeuggewicht(zeile, offers_tools: bool = True, pictures: set[int] | None = None) -> int:
     """How many characters a row's tool log adds to a prompt on top of its
-    text — what ``_werkzeugzuege`` below sends for it.
+    text — what ``_verlauf_bauen`` sends for it.
 
     Compaction judges a fold by what the middle really puts into a request
     (app/chatverdichtung.py). Since an answer's calls travel back as calls,
-    its text alone undercounts it by every argument and every capped
-    result; a middle of twenty calls weighed by prose alone looks ten
-    thousand characters lighter than it is, and a summary that saves
-    plenty is thrown away as "no saving". Zero for every row that is not
-    one of the model's own answers — the same rows the turns are built
-    from, and no others.
+    its text alone undercounts it by every argument and every result; a
+    middle of twenty calls weighed by prose alone looks ten thousand
+    characters lighter than it is, and a summary that saves plenty is
+    thrown away as "no saving". Zero for every row that is not one of the
+    model's own answers — the same rows the turns are built from, and no
+    others.
+
+    A result counts in the length the turns send: whole for a row that
+    stored its rounds, cut to ``VERLAUF_ERGEBNIS_ZEICHEN`` for an older one.
+    Counted at the cut for both, a result of twenty thousand characters
+    weighed five hundred and the chat folded late or not at all.
+
+    The request that is asked about decides the shape. ``offers_tools``: it
+    offers tools, and the calls go back as turns — the arguments and the
+    results, and for the pictures in ``pictures`` (the entries
+    ``tool_pictures_of_rows`` names) the price of a picture on top.
+    Without the offer the calls go back as the text block above the answer,
+    its header and the labels of its lines included
+    (``_werkzeuge_als_text``): the weight is what that block adds.
+
+    A row the request sends as a sentence — an answer that carries pictures
+    of its own — sends no tool log at all, and weighs none.
     """
     if getattr(zeile, "role", None) != "assistant" or getattr(zeile, "art", None) != "nachricht":
+        return 0
+    if _own_pictures(zeile):
         return 0
     eintraege = (zeile.stats or {}).get("werkzeuge") or []
     if not isinstance(eintraege, list):
         return 0
+    if not offers_tools:
+        # One text stands for any answer text: what is asked is the block, and
+        # the block is written in one place. It is counted with the two
+        # characters that set it off from the words — which an answer without
+        # words does not have: two characters over, in that one case.
+        block = _werkzeuge_als_text(zeile, "x")
+        return 0 if block == "x" else len(block) - len("x")
     gewicht = 0
     als_aufruf = _fragen_als_aufruf(eintraege)
     for eintrag in eintraege:
         if not isinstance(eintrag, dict) or not _geht_als_aufruf(eintrag, als_aufruf):
             continue
+        with_picture = id(eintrag) in (pictures or ())
+        # Asked with the set of the newest pictures at all (``pictures`` is
+        # not None: the request carries pictures), a call that read one and
+        # is not in it is one the run took out — the history says so in a
+        # turn of its own (``_werkzeugzuege``).
+        path = eintrag.get(werkzeugbild.READ_IMAGE_PATH)
+        retired = bool(
+            pictures is not None and isinstance(path, str) and path and not with_picture
+        )
         argumente = eintrag.get("argumente")
         gewicht += (
             len(json.dumps(argumente, ensure_ascii=False)) if isinstance(argumente, dict) else 2
@@ -463,11 +779,102 @@ def werkzeuggewicht(zeile) -> int:
         # note with a path, which is longer than the sentence it replaces,
         # and a weight taken from the stored string would report a saving
         # the request never made.
-        gewicht += len(_ergebnis_im_zug(eintrag))
+        # The length the turns send. A row that stored its rounds goes back
+        # whole (``_werkzeugzuege`` hands the result over uncut, so the
+        # request reads like the run's own); a row from before the round
+        # marks goes back as it always did, each result cut to
+        # ``VERLAUF_ERGEBNIS_ZEICHEN`` (``_werkzeugzuege_alt``).
+        gewicht += len(
+            _ergebnis_im_zug(
+                eintrag,
+                None if als_aufruf else VERLAUF_ERGEBNIS_ZEICHEN,
+                picture_rides=with_picture,
+                picture_retired=retired,
+            )
+        )
+        if with_picture:
+            gewicht += kontextdruck.bild_zeichen(1)
+        if retired:
+            # What the turn behind the round says of it: the sentence and
+            # the note with the path (``werkzeugkuerzung.retire_pictures``).
+            gewicht += len(werkzeugkuerzung.BILD_ENTFERNT) + len(
+                dokumentablage.nachlesehinweis(path)
+            )
     return gewicht
 
 
-def _ergebnis_im_zug(eintrag: dict, grenze: int | None = VERLAUF_ERGEBNIS_ZEICHEN) -> str:
+def _cannot_see_note(count: int) -> str:
+    """What stands for ``anzahl`` earlier attachments when the model at the
+    wheel cannot see: said, and not silently dropped — asked about a picture,
+    the model can answer honestly instead of inventing its contents."""
+    if count == 1:
+        return "[An image was attached here that this model cannot see.]"
+    return f"[{count} images were attached here that this model cannot see.]"
+
+
+def _unreadable_note(count: int) -> str:
+    """What stands for attachments that cannot go along because their file is
+    gone or is no picture: said, and not silently dropped, for the same reason
+    as above — asked about the picture, the model answers honestly."""
+    if count == 1:
+        return "[An image was attached here that cannot be read.]"
+    return f"[{count} images were attached here that cannot be read.]"
+
+
+def picture_weight(row, words: str, vision: bool) -> int:
+    """What the pictures attached to a row weigh in the request that carries
+    it, in characters: for a model that sees, the price of a picture each
+    (``app/kontextdruck.py``); for one that does not, the sentence that goes
+    instead, with the line break that sets it behind the words.
+
+    ``worte`` is what the row says in words (``_zeilenworte``). A row with
+    pictures of its own (a generated answer) sends a sentence for them and no
+    picture: nothing to add here, ``_ersatzsatz`` is its words.
+    """
+    if _own_pictures(row):
+        return 0
+    count = len(row.anhang_bilder())
+    if not count:
+        return 0
+    if vision:
+        return kontextdruck.bild_zeichen(count)
+    return len(_cannot_see_note(count)) + (1 if words else 0)
+
+
+def row_weight(
+    row,
+    repositories: Repositories,
+    *,
+    document_plan: dict | None = None,
+    offers_tools: bool = True,
+    vision: bool = True,
+    pictures: set[int] | None = None,
+) -> int:
+    """What ONE row weighs in the request that is asked about, in
+    characters — what the fold measures a middle by (``_mitte_wirklich``).
+
+    The same three readings the request is built from: the words, with the
+    documents named and not counted (the plan counts them), the pictures the
+    way the request sends them (``picture_weight``), and the tool log in the
+    shape the offer gives it (``werkzeuggewicht``). A row that would say
+    nothing at all says what ``_ersatzsatz`` says, as it does in a request;
+    where a picture carries the row, the words stay empty.
+    """
+    words = _zeilenworte(
+        row, repositories, volltext_mitschicken=False, dokumentplan=document_plan
+    )
+    picture_chars = picture_weight(row, words, vision)
+    if not words and not picture_chars:
+        words = _ersatzsatz(row)
+    return len(words) + picture_chars + werkzeuggewicht(row, offers_tools, pictures)
+
+
+def _ergebnis_im_zug(
+    eintrag: dict,
+    grenze: int | None = VERLAUF_ERGEBNIS_ZEICHEN,
+    picture_rides: bool = False,
+    picture_retired: bool = False,
+) -> str:
     """One earlier call's result as a later request writes it — its text, and
     where there was none the sentence that stands for it.
 
@@ -485,7 +892,7 @@ def _ergebnis_im_zug(eintrag: dict, grenze: int | None = VERLAUF_ERGEBNIS_ZEICHE
     there the same result reads as the cut alone — under the floor the block
     was written for either way.
     """
-    text = _ergebnis_im_verlauf(eintrag, grenze)
+    text = _ergebnis_im_verlauf(eintrag, grenze, picture_rides, picture_retired)
     return text if text.strip() else faltbitte.OHNE_AUSGABE
 
 
@@ -575,7 +982,13 @@ def werkzeuge_fuer_die_faltung(gespeichert, inhalt: str) -> str:
     )
 
 
-def _werkzeugzuege(gespeichert, inhalt: str) -> list[ChatNachricht]:
+def _werkzeugzuege(
+    gespeichert,
+    inhalt: str,
+    with_blocks: bool = False,
+    pictures: dict[int, tuple[str, str]] | None = None,
+    retired: dict[int, str] | None = None,
+) -> list[ChatNachricht]:
     """An earlier answer that used tools, in the shape the model produced it.
 
     The run builds one assistant turn per tool round — the text of that
@@ -597,6 +1010,23 @@ def _werkzeugzuege(gespeichert, inhalt: str) -> list[ChatNachricht]:
     real calls in the first answer, none afterwards, empty fences named
     "applet-title" where the calls should have been.
 
+    ``with_blocks`` hands back the content blocks a round of Anthropic's
+    wire stored (``blocks``): only for the one answer that is asked again
+    after it failed, never for the history of earlier answers.
+
+    ``pictures`` are the tool pictures that go out again, by the identity of
+    the stored entry that read them, as ``(path, data URL)``
+    (``_tool_pictures_in_history``). Such a call's result stays as it was
+    returned, and the round's pictures follow its results in one user turn,
+    where the run had put them (``app/werkzeugbild.py`` ``nachricht``).
+
+    ``retired`` are the pictures the run took out of its own request, by the
+    entry that read them, with their paths (``_tool_pictures_retired``): the
+    result stands as the bare sentence and the turn behind the round says
+    that the picture was removed and where to read it again — the very
+    message the run wrote (``werkzeugkuerzung.retire_pictures``). A round
+    that read some of each keeps the turn with its remaining pictures.
+
     A row saved before those three were stored carries none of them: it
     reads the way it always did — every call in one turn, the ids made
     here, each result cut to ``VERLAUF_ERGEBNIS_ZEICHEN``. Providers only
@@ -615,29 +1045,9 @@ def _werkzeugzuege(gespeichert, inhalt: str) -> list[ChatNachricht]:
     if not als_aufruf:
         return _werkzeugzuege_alt(gespeichert, inhalt, brauchbar)
 
-    # The calls of one round together, in the order they were made — grouped
-    # over EVERY stored entry, not only over the ones that go back as calls:
-    # the round's text and its thinking parts stand at the ROUND
-    # (``app/api/v1/generierung.py``, ``_runde_im_protokoll``), on its first
-    # entry, whichever that is.
-    runden: list[tuple[object, list[dict]]] = []
-    for eintrag in eintraege:
-        if not isinstance(eintrag, dict):
-            continue
-        if runden and runden[-1][0] == eintrag.get("runde"):
-            runden[-1][1].append(eintrag)
-        else:
-            runden.append((eintrag.get("runde"), [eintrag]))
-
     nachrichten: list[ChatNachricht] = []
-    runden_texte: list[str] = []
-    for runde, gruppe in runden:
-        # Anywhere in the round, not only on its first call: an entry without
-        # a name goes back as no call, and the round's text must not go with
-        # it.
-        text = next((e["text"] for e in gruppe if isinstance(e.get("text"), str)), "")
-        if text:
-            runden_texte.append(text)
+    for runde, gruppe in _stored_rounds(eintraege):
+        text = _round_text(gruppe)
         # The Responses wire's round items, stored beside the text by the
         # same first call (``app/api/v1/generierung.py``,
         # ``_runde_im_protokoll``): the encrypted thinking and the text parts
@@ -650,6 +1060,15 @@ def _werkzeugzuege(gespeichert, inhalt: str) -> list[ChatNachricht]:
         )
         textteile: list[dict] = next(
             (e["textteile"] for e in gruppe if isinstance(e.get("textteile"), list)), []
+        )
+        # The Anthropic wire's blocks of a round that thought, stored the
+        # same way (``_runde_im_protokoll``). Handed back only for the one
+        # answer that is asked again (``answer_turns``): in the history of
+        # earlier answers they stay where they are, as they always did.
+        blocks: list[dict] = (
+            next((e["blocks"] for e in gruppe if isinstance(e.get("blocks"), list)), [])
+            if with_blocks
+            else []
         )
         # Row, round and number: the server's ids are unique inside ONE
         # response only, so a rebuilt history can meet the same id twice —
@@ -673,39 +1092,143 @@ def _werkzeugzuege(gespeichert, inhalt: str) -> list[ChatNachricht]:
                 werkzeugaufrufe=aufrufe,
                 reasoning_items=denkteile,
                 message_items=textteile,
+                anthropic_blocks=blocks,
             )
         )
+        riding = pictures or {}
+        gone = retired or {}
         nachrichten.extend(
             ChatNachricht(
                 role="tool",
-                content=_ergebnis_im_zug(eintrag, None),
+                content=_ergebnis_im_zug(eintrag, None, id(eintrag) in riding, id(eintrag) in gone),
                 werkzeugaufruf_id=aufruf.id,
             )
             # Paired over the same list the calls were built from: an entry
             # of the group that goes back as no call has no result either.
             for eintrag, aufruf in zip(zuege, aufrufe, strict=True)
         )
+        # After ALL of the round's results: a call and its result stay
+        # adjacent, and the picture rides on a user turn of its own. The
+        # turn is written with every picture of the round, as the run
+        # first wrote it, and the retired ones are taken out the way the
+        # run took them out — so a round that read some of each ends up
+        # with the turn of its remaining pictures, and one that retired all
+        # with the sentence alone.
+        carried = [e for e in zuege if id(e) in riding or id(e) in gone]
+        paths = [riding[id(e)][0] if id(e) in riding else gone[id(e)] for e in carried]
+        picture_turn = werkzeugbild.nachricht(
+            [PurePath(path).name for path in paths],
+            [riding[id(e)][1] if id(e) in riding else "" for e in carried],
+            paths,
+        )
+        if picture_turn is not None:
+            out = {i for i, e in enumerate(carried) if id(e) in gone}
+            if out:
+                picture_turn = werkzeugkuerzung.retire_pictures(picture_turn, out)
+            nachrichten.append(picture_turn)
 
-    # Where the rounds end in the row's text. Not at its first character:
-    # an attached document's text is prepended to it (`_zeilenworte`), so
-    # such a row does not begin with its rounds.
-    gesamt = "".join(runden_texte)
-    stelle = inhalt.rfind(gesamt) if gesamt else 0
-    if gesamt and stelle < 0:
+    span = _rounds_span(eintraege, inhalt)
+    if span is None:
         # The stored text and the rounds do not line up at all. Rebuilding
         # it round by round would drop text; the old shape carries all of it.
         return _werkzeugzuege_alt(gespeichert, inhalt, brauchbar)
     # What the answer said after its last round is no round of its own: it
     # goes back as its own turn, right behind them.
-    schluss = inhalt[stelle + len(gesamt) :]
+    schluss = inhalt[span[1] :]
     # What stands BEFORE the rounds belongs to the row, not to a round — an
     # attached document's text (`_zeilenworte`) — and has no other place.
-    kopf = inhalt[:stelle]
+    kopf = inhalt[: span[0]]
     if kopf:
         nachrichten.insert(0, ChatNachricht(role="assistant", content=kopf))
     if schluss:
         nachrichten.append(ChatNachricht(role="assistant", content=schluss))
     return nachrichten
+
+
+def _stored_rounds(eintraege) -> list[tuple[object, list[dict]]]:
+    """The calls of one round together, in the order they were made — grouped
+    over EVERY stored entry, not only over the ones that go back as calls:
+    the round's text and its thinking parts stand at the ROUND
+    (``app/api/v1/generierung.py``, ``_runde_im_protokoll``), on its first
+    entry, whichever that is."""
+    runden: list[tuple[object, list[dict]]] = []
+    for eintrag in eintraege:
+        if not isinstance(eintrag, dict):
+            continue
+        if runden and runden[-1][0] == eintrag.get("runde"):
+            runden[-1][1].append(eintrag)
+        else:
+            runden.append((eintrag.get("runde"), [eintrag]))
+    return runden
+
+
+def _round_text(gruppe: list[dict]) -> str:
+    """What a stored round said. Anywhere in the round, not only on its first
+    call: an entry without a name goes back as no call, and the round's text
+    must not go with it."""
+    return next((e["text"] for e in gruppe if isinstance(e.get("text"), str)), "")
+
+
+def _rounds_span(eintraege, inhalt: str) -> tuple[int, int] | None:
+    """Where a row's stored rounds begin and end in its text, or ``None``
+    where the text does not hold them.
+
+    Not at its first character: an attached document's text is prepended to
+    a row (`_zeilenworte`), so such a row does not begin with its rounds.
+    Rounds that said nothing stand at the very front and take no room.
+    """
+    gesamt = "".join(_round_text(gruppe) for _, gruppe in _stored_rounds(eintraege))
+    if not gesamt:
+        return 0, 0
+    stelle = inhalt.rfind(gesamt)
+    return None if stelle < 0 else (stelle, stelle + len(gesamt))
+
+
+def rounds_end(eintraege, inhalt: str) -> int | None:
+    """Where the stored rounds of an answer end in its text — everything
+    behind that point was said after its last round. ``None`` where the text
+    does not hold the rounds."""
+    span = _rounds_span(eintraege, inhalt)
+    return None if span is None else span[1]
+
+
+def answer_turns(
+    gespeichert,
+    inhalt: str,
+    werkzeuge: bool = True,
+    tool_plan: ToolPicturePlan | None = None,
+) -> list[ChatNachricht]:
+    """One answer of the model's own, as a request carries it.
+
+    Its tool rounds as calls and results while the request offers tools
+    (``_werkzeugzuege``), as text where it does not (``_werkzeuge_als_text``)
+    — the two shapes ``_verlauf_bauen`` gives an earlier answer. Nothing for
+    an answer with neither words nor calls.
+
+    For the one answer that is not a finished row of the history: a failed
+    one whose model call is asked again (app/answer_replay.py). Its turns
+    close the request, behind the rows that stood in front of it.
+
+    ``tool_plan`` is the plan of the whole request, the rows and this
+    answer counted together (``tool_picture_plan``): the pictures this
+    answer read go out again, and go out retired, by the rule the run
+    applied to its own request. Left out, the answer is counted alone.
+    """
+    if werkzeuge:
+        if tool_plan is None:
+            tool_plan = tool_picture_plan([gespeichert], None, False, werkzeuge)
+        zuege = _werkzeugzuege(
+            gespeichert,
+            inhalt,
+            with_blocks=True,
+            pictures=tool_plan.riding,
+            retired=tool_plan.retired,
+        )
+        if zuege:
+            return zuege
+    else:
+        inhalt = _werkzeuge_als_text(gespeichert, inhalt)
+    return [ChatNachricht(role="assistant", content=inhalt)] if inhalt else []
 
 
 def _fragen_als_aufruf(eintraege) -> bool:
@@ -927,8 +1450,13 @@ def _verlauf_bauen(
     werkzeuge: bool = True,
     dokumentplan: dict | None = None,
     gespraechsanweisung: str | None = None,
+    tool_plan: ToolPicturePlan | None = None,
 ) -> list[ChatNachricht]:
     """Builds the message list for a request.
+
+    ``tool_plan`` — the tool pictures of the request as worked out by the
+    caller over every row that carries a tool log into it; left out, it is
+    worked out here over ``zeilen``.
 
     ``gespraechsanweisung`` — a spoken turn's instruction, the note that
     the model's previous reply was stopped (app/stop_note.py), or both —
@@ -1011,6 +1539,15 @@ def _verlauf_bauen(
     # Where the pictures and their copies live — read at the first picture,
     # then kept for the rest of this build (`_picture_places`).
     picture_places: tuple[Path, Path] | None = None
+    # The newest tool pictures go out again, each with the entry that read it
+    # (``_werkzeugzuege``), and the ones before them say they were taken out
+    # of the run's own request, in the same words: only for a model that
+    # sees, and only where the request carries calls (``tool_picture_plan``).
+    if tool_plan is None:
+        tool_plan = tool_picture_plan(zeilen, config, vision, werkzeuge)
+    tool_pictures = tool_plan.riding
+    retired_pictures = tool_plan.retired
+    picture_places = tool_plan.places
     for gespeichert in zeilen:
         # The reasoning does not belong in the history — it is display, not
         # context. Everything that DOES belong is one call: `_zeilenworte`
@@ -1057,7 +1594,9 @@ def _verlauf_bauen(
         # commands returned.
         if gespeichert.role == "assistant" and gespeichert.art == "nachricht":
             if werkzeuge:
-                werkzeugzuege = _werkzeugzuege(gespeichert, inhalt)
+                werkzeugzuege = _werkzeugzuege(
+                    gespeichert, inhalt, pictures=tool_pictures, retired=retired_pictures
+                )
                 if werkzeugzuege:
                     nachrichten.extend(werkzeugzuege)
                     continue
@@ -1107,11 +1646,7 @@ def _verlauf_bauen(
             # see. Saying so beats silently dropping it: asked about the
             # picture, the model can answer honestly instead of inventing
             # its contents.
-            hinweis = (
-                "[An image was attached here that this model cannot see.]"
-                if len(anhaenge) == 1
-                else f"[{len(anhaenge)} images were attached here that this model cannot see.]"
-            )
+            hinweis = _cannot_see_note(len(anhaenge))
             rolle, dienstbericht = _als_modellnachricht(gespeichert)
             nachrichten.append(
                 ChatNachricht(
@@ -1136,6 +1671,9 @@ def _verlauf_bauen(
                 for url in (_bild_daten_url(picture_places, name) for name in anhaenge)
                 if url
             ]
+            if (unreadable := len(anhaenge) - len(image_urls)) > 0:
+                hinweis = _unreadable_note(unreadable)
+                inhalt = f"{inhalt}\n{hinweis}" if inhalt else hinweis
         rolle, dienstbericht = _als_modellnachricht(gespeichert)
         nachrichten.append(
             ChatNachricht(

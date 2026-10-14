@@ -76,7 +76,7 @@ def test_der_aufruf_meldet_und_sagt_dem_modell_dass_es_aufhoeren_darf(monkeypatc
     monkeypatch.setattr(
         ziel_werkzeug.cronmeldung,
         "melden",
-        lambda text, *, erfolgreich: gemeldet.append((text, erfolgreich)),
+        lambda text, *, erfolgreich, sprache=None: gemeldet.append((text, erfolgreich)),
     )
     antwort = asyncio.run(ziel_werkzeug.ausfuehren({"report": "Testziel erreicht"}))
     assert gemeldet == [("Testziel erreicht", True)]
@@ -88,7 +88,7 @@ def test_ein_leerer_aufruf_meldet_gar_nichts(monkeypatch):
     monkeypatch.setattr(
         ziel_werkzeug.cronmeldung,
         "melden",
-        lambda text, *, erfolgreich: gemeldet.append(text),
+        lambda text, *, erfolgreich, sprache=None: gemeldet.append(text),
     )
     with pytest.raises(ziel_werkzeug.ZielVerboten):
         asyncio.run(ziel_werkzeug.ausfuehren({"report": "   "}))

@@ -24,7 +24,7 @@ def gemeldet(monkeypatch):
     aufrufe: list[tuple[str, bool]] = []
     monkeypatch.setattr(
         cronablauf.cronmeldung, "melden",
-        lambda text, *, erfolgreich: aufrufe.append((text, erfolgreich)),
+        lambda text, *, erfolgreich, sprache=None: aufrufe.append((text, erfolgreich)),
     )
     return aufrufe
 
@@ -58,8 +58,8 @@ def test_mit_ziel_traegt_der_auftragstext_ziel_und_anweisung(repos):
     assert "Eine ungelesene Mail von Müller im Posteingang" in text
     # The two halves that make silence the default: call it only when met,
     # and otherwise stop rather than explain.
-    assert "ONLY when this goal is met" in text
-    assert "finish quietly" in text
+    assert "ONLY when this goal has been achieved" in text
+    assert "finish without a notification" in text
 
 
 def test_geaendertes_ziel_wirkt_ab_dem_naechsten_lauf(repos):
@@ -208,7 +208,7 @@ async def test_zu_lange_still_meldet_einmal_und_laeuft_weiter(repos, gemeldet):
     # The program saying it has heard nothing back, not the entry's own
     # report — which is why it comes even though this entry has a goal and
     # is otherwise exempt from the closing announcement.
-    assert gemeldet == [("Ins Postfach sehen — no goal report in 3 runs", False)]
+    assert gemeldet == [("Ins Postfach sehen — no goal completion report after 3 runs", False)]
 
     frisch = repos.cronjobs.holen(eintrag.id)
     # Never switched off for being quiet — that was the whole decision.
@@ -274,7 +274,7 @@ async def test_werkzeug_legt_mit_ziel_an(repos, tmp_path):
         },
         repos.cronjobs, (tmp_path,),
     )
-    assert "reports only when reached and stops" in antwort
+    assert "reports only when the goal is reached and stops" in antwort
     eintrag = repos.cronjobs.auflisten()[0]
     assert eintrag.ziel == "Eine ungelesene Mail von Müller"
     assert eintrag.ziel_stilllegen is True
@@ -358,7 +358,7 @@ async def test_werkzeug_setzt_ein_ziel_nachtraeglich(repos, tmp_path):
         {"action": "update", "id": eintrag.id, "goal": "Mail von Müller"},
         repos.cronjobs, (tmp_path,),
     )
-    assert "reports only when reached" in antwort
+    assert "reports only when the goal is reached" in antwort
     assert repos.cronjobs.holen(eintrag.id).ziel == "Mail von Müller"
 
 

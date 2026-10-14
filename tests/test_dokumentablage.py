@@ -130,7 +130,7 @@ def test_zu_grosses_dokument_nennt_den_weg_zum_nachlesen(tmp_path):
     repos = _repos(tmp_path)
     zeile, dokument = _zeile_mit_dokument(repos, "A" * 300_000, "/geteilt/bericht.pdf")
     text = zeilentext(zeile, repos, dokumentplan={dokument.id: Anteil(ganz=False)})
-    assert "too large for this model's context" in text
+    assert "is too large to be sent with this request" in text
     assert "/geteilt/bericht.pdf" in text
     assert "read_file" in text
 
@@ -141,7 +141,7 @@ def test_ohne_pfad_bleibt_die_karte_wie_sie_war(tmp_path):
     repos = _repos(tmp_path)
     zeile, dokument = _zeile_mit_dokument(repos, "A" * 300_000, None)
     text = zeilentext(zeile, repos, dokumentplan={dokument.id: Anteil(ganz=False)})
-    assert "too large for this model's context" in text
+    assert "is too large to be sent with this request" in text
     assert "read_file" not in text
 
 

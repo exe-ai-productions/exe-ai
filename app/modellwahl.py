@@ -19,7 +19,8 @@ belong to the models, and they mean different things:
     Which model was last in use — what a new chat starts on. It sat in
     browser storage, so a second window on the same service opened on
     whatever came first in the list instead of on the model being worked
-    with.
+    with. The name it went by is kept beside its id: a model is named by
+    its server, and a server that does not answer names nothing.
 
 Both are checked, not trusted. Names are ids that go into a URL and into a
 request to a model server; anything that is not a non-empty string has no
@@ -77,11 +78,16 @@ SCHLUESSEL_ZULETZT = "modell_zuletzt"
 
 
 def zuletzt_pruefen(wert: Any) -> dict[str, str] | None:
-    """``modell_zuletzt``: the id of the model last in use.
+    """``modell_zuletzt``: the id of the model last in use, and the name it
+    was chosen under.
 
     An object rather than a bare string for the same reason the switches
     here are: the settings route reads a falsy value as "nothing set", and
     an id is a string that could be empty.
+
+    The id is what the choice is; without one nothing is stored. The name
+    is a memo for the time the model's server does not answer, so a name
+    that is no usable text is left out and the choice is stored without it.
     """
     if not isinstance(wert, dict):
         return None
@@ -91,4 +97,10 @@ def zuletzt_pruefen(wert: Any) -> dict[str, str] | None:
     name = name.strip()
     if not name or len(name) > MAX_LAENGE:
         return None
-    return {"id": name}
+    sauber = {"id": name}
+    shown = wert.get("name")
+    if isinstance(shown, str):
+        shown = shown.strip()
+        if shown and len(shown) <= MAX_LAENGE:
+            sauber["name"] = shown
+    return sauber

@@ -60,6 +60,19 @@ const status = {
 let mainWindow = () => null
 let installing = false
 
+// What an installation asks of the service, handed in by the shell (start).
+// The release about to be installed replaces the service's own files, and a
+// service left running would go on as the old program on top of them — with
+// the new window attaching to it after the restart. So `endService` ends the
+// service of this installation, with its model server, before the package
+// takes over, and rejects with the reason where it cannot. `restartService`
+// brings it back where the installation fails after that: the program runs
+// on then, and so must its service.
+const service = { endService: async () => {}, restartService: () => {} }
+// Set from the service's end until the program's: an installation that
+// fails in that stretch has taken the service down and owes it back.
+let serviceEnded = false
+
 function snapshot() {
   return { ...status, progress: status.progress && { ...status.progress } }
 }
@@ -85,6 +98,10 @@ function fail(error) {
   installing = false
   const reason = reasonOf(error)
   change({ state: 'error', reason, progress: null }, `error: ${reason}`)
+  if (serviceEnded) {
+    serviceEnded = false
+    service.restartService()
+  }
 }
 
 autoUpdater.on('checking-for-update', () => {
@@ -155,15 +172,20 @@ function download() {
   return settle(() => autoUpdater.downloadUpdate())
 }
 
-// Ends the program, installs the fetched release and starts it again. On
-// macOS the system's updater first takes the package over, so the program
-// ends a moment after the call, not with it; a second call in between must
-// not start that a second time.
-function install() {
+// Ends the service, then the program, installs the fetched release and
+// starts it again. The service goes first, and nothing is handed over before
+// it is gone: where it cannot be ended, nothing is installed, and the state
+// is the error with its reason. On macOS the system's updater first takes
+// the package over, so the program ends a moment after the call, not with
+// it; a second call in between — or while the service is still ending —
+// must not start that a second time.
+async function install() {
   if (status.state !== 'downloaded' || installing) return snapshot()
   installing = true
   console.log(`Update: installing ${status.found}`)
   try {
+    await service.endService()
+    serviceEnded = true
     autoUpdater.quitAndInstall()
   } catch (error) {
     fail(error)
@@ -173,8 +195,11 @@ function install() {
 
 // Wires the bridge's four calls. `window` hands back the main window, or
 // nothing while there is none: only that page hears of a change.
-function start(window) {
+// `installation` carries the two things an installation asks of the service
+// (above); a shell that hands in none installs without them.
+function start(window, installation = {}) {
   mainWindow = window
+  Object.assign(service, installation)
   ipcMain.handle('updates-status', () => snapshot())
   ipcMain.handle('updates-check', () => check())
   ipcMain.handle('updates-download', () => download())

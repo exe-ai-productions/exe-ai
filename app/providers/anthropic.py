@@ -78,6 +78,26 @@ DENKEN_AN: tuple[str, ...] = ("enabled", "adaptive")
 # missing one is refused with a 400 — and neither ever carries a cache mark.
 THINKING_BLOCKS: tuple[str, ...] = ("thinking", "redacted_thinking")
 
+# What the API's 400 says when the thinking blocks handed back are refused:
+# the signature is no longer valid (a key, a model or a day later) or the
+# blocks are not what the server sent. The words that name the refusal, kept
+# here once and compared in lower case.
+THINKING_REFUSALS: tuple[str, ...] = (
+    "`thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified",
+    "invalid `signature` in `thinking` block",
+)
+
+
+def refuses_thinking_blocks(status: int | None, raw_text: str | None) -> bool:
+    """Whether a refused request was refused over the thinking blocks it
+    carried: a 400 whose text names one of ``THINKING_REFUSALS``. Any other
+    400 is somebody else's problem and stays an error."""
+    if status != 400 or not raw_text:
+        return False
+    text = raw_text.lower()
+    return any(wording in text for wording in THINKING_REFUSALS)
+
+
 # Anthropic's own host. The request for a readable summary goes there and
 # nowhere else: a server that only speaks this dialect is somebody else's,
 # and one that checks the `thinking` object strictly would refuse the field
@@ -668,6 +688,54 @@ class AnthropicProvider(Provider):
     # --- Streaming --------------------------------------------------------
 
     async def streamen(self, anfrage: Generierungsanfrage) -> AsyncIterator[Stueck]:
+        """The stream of one request — asked once more without the thinking
+        blocks it handed back where the API refuses exactly those.
+
+        A round of an answer that failed is asked again with the thinking
+        its run had stored, and a signature that was valid then may be none
+        any more: another key, another model, a day later. The refusal
+        arrives as a 400 before the first packet, so nothing of the refused
+        attempt has reached the caller. The request goes out once more with
+        no thinking block in any message; where that one goes through, the
+        blocks are gone from the messages for the rounds that follow, so
+        none of them asks twice. No sentence for the person, no second
+        wire: the same request, minus what was refused.
+        """
+        begun = False
+        try:
+            async for stueck in self._streamen_ab(anfrage, self._koerper_bauen(anfrage)):
+                begun = True
+                yield stueck
+            return
+        except ProviderFehler as fehler:
+            if (
+                begun
+                or not refuses_thinking_blocks(fehler.status, fehler.rohtext)
+                or not self._hands_back_thinking(anfrage)
+            ):
+                raise
+            log.warning(
+                "%s refused the thinking blocks handed back; asking once more without them: %s",
+                self.name,
+                (fehler.rohtext or "")[:200],
+            )
+        for nachricht in anfrage.nachrichten:
+            nachricht.anthropic_blocks = []
+        async for stueck in self._streamen_ab(anfrage, self._koerper_bauen(anfrage)):
+            yield stueck
+
+    def _hands_back_thinking(self, anfrage: Generierungsanfrage) -> bool:
+        """Whether this request carries thinking blocks to Anthropic's own
+        host — the only place they go back to (``_round_content``)."""
+        return ist_anthropic(wirt_von(self.endpunkt.base_url)) and any(
+            block.get("type") in THINKING_BLOCKS
+            for nachricht in anfrage.nachrichten
+            for block in nachricht.anthropic_blocks
+        )
+
+    async def _streamen_ab(
+        self, anfrage: Generierungsanfrage, koerper: dict[str, Any]
+    ) -> AsyncIterator[Stueck]:
         """Translates Anthropic's typed events into our chunks.
 
         The shape is different from OpenAI's: content arrives as
@@ -676,7 +744,6 @@ class AnthropicProvider(Provider):
         come in `message_start` and `message_delta`.
         """
         adresse = f"{self.endpunkt.base_url}/messages"
-        koerper = self._koerper_bauen(anfrage)
 
         beginn = time.monotonic()
         erstes_token_nach: float | None = None

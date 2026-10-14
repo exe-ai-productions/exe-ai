@@ -334,6 +334,24 @@ def _file_name(name: str) -> str:
     return Path(" ".join(str(name or "").split())).name.replace("\x00", "")
 
 
+def _already_in_chat_folder(datenverzeichnis: Path, chat_id: str, source: Path) -> str | None:
+    """The path of ``source`` where it is a file that already lies in this
+    chat's own folder — in a subfolder as well — and ``None`` for any other.
+
+    Both sides are resolved first, so a link or a ``..`` cannot pass a file
+    from elsewhere for one of the chat's own."""
+    folder = chatordner(datenverzeichnis, chat_id)
+    if folder is None:
+        return None
+    try:
+        file = source.resolve()
+        if file.is_file() and file.is_relative_to(folder.resolve()):
+            return str(file)
+    except (OSError, RuntimeError):
+        pass
+    return None
+
+
 def keep_in_chat(
     repositories: Any,
     datenverzeichnis: Path,
@@ -343,6 +361,7 @@ def keep_in_chat(
     typ: str = "",
     agent: str = "",
     job: str = "",
+    source: Path | None = None,
 ) -> Any | None:
     """Keeps a file in THIS chat's own folder and enters it as a document of
     the chat — what the person drops in an open chat, what the chat's own
@@ -354,6 +373,10 @@ def keep_in_chat(
     anything. The row carries no extracted text — it is a file in the
     folder, not an attachment a request carries; the model reads it with
     ``read_file`` like any other file there.
+
+    ``source`` is the file a delivery was made from, where it came from a
+    path: one that already lies in the chat's own folder is not copied — the
+    row points at it, so the folder holds one file and the wall one tile.
 
     ``None`` when the chat does not exist (the caller then keeps the file in
     the dock). Raises ``OSError`` when the file could not be written, so the
@@ -370,7 +393,9 @@ def keep_in_chat(
     if rueckfall is None:
         return None
     dateiname = _file_name(name)
-    pfad = ablegen(daten, dateiname or "file", [], rueckfall=rueckfall)
+    pfad = (
+        _already_in_chat_folder(datenverzeichnis, chat_id, source) if source is not None else None
+    ) or ablegen(daten, dateiname or "file", [], rueckfall=rueckfall)
     if pfad is None:
         raise OSError(f"'{dateiname}' could not be stored in the chat's folder.")
     return repositories.documents.speichern(
@@ -394,6 +419,7 @@ def deliver_to_chat(
     job: str = "",
     chat: str = "",
     answer: str | None = None,
+    source: Path | None = None,
 ) -> Any | None:
     """A delivery kept in a chat — one way for the two callers that have one.
 
@@ -426,7 +452,7 @@ def deliver_to_chat(
             ):
                 return known
     document = keep_in_chat(
-        repositories, datenverzeichnis, chat, name, daten, agent=agent, job=job
+        repositories, datenverzeichnis, chat, name, daten, agent=agent, job=job, source=source
     )
     if document is not None and answer:
         repositories.messages.attach_document(answer, document.id)
@@ -474,12 +500,12 @@ def nachlesehinweis(pfad: str | None, seiten: int | None = None) -> str:
 
     if ist_bild:
         return (
-            f" The file itself is at '{pfad}' — if read_file is among your "
-            "tools, read it with it."
+            f" The file is located at '{pfad}'. If read_file is available among your tools, "
+            "use it to read the file."
         )
     umfang = f", {seiten} pages" if seiten else ""
     return (
-        f" The file itself is at '{pfad}'{umfang} — if read_file is among your "
-        "tools, read the parts you need with it: the argument page for one "
-        "page of a PDF, offset and limit for a stretch of lines."
+        f" The file is located at '{pfad}'{umfang}. If read_file is available among your "
+        "tools, use it to read the required sections: use page for a single PDF page, or "
+        "offset and limit for a range of lines."
     )

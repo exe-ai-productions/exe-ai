@@ -17,7 +17,8 @@
      (app/diktatsprachewahl.py) — the service is what uses them, on every
      single request, and a copy kept in this page would be read by nobody. */
   import { api } from '../lib/api.js'
-  import { t } from '../lib/texte.svelte.js'
+  import { t, texte } from '../lib/texte.svelte.js'
+  import { fractionDigits, formatNumber } from '../lib/numberDisplay.js'
   import { katalogOeffnen, melde } from '../lib/zustand.svelte.js'
   import { diktat, standLaden, werteSetzen } from '../lib/diktat.svelte.js'
   import { SPRACHEN } from '../lib/diktatsprachen.js'
@@ -25,6 +26,7 @@
   import Servertafel from './Servertafel.svelte'
   import Serverregler from './Serverregler.svelte'
   import Startknopf from './Startknopf.svelte'
+  import Startfehler from './Startfehler.svelte'
   import Hauszeichen from './Hauszeichen.svelte'
   import Serverabschnitt from './Serverabschnitt.svelte'
   import Serverreihe from './Serverreihe.svelte'
@@ -414,8 +416,23 @@
   const werkBereinigung = $derived(auskunft?.diktat_vorgaben?.bereinigung_anweisung ?? '')
   const werkGespraechsanweisung = $derived(auskunft?.diktat_vorgaben?.gespraechsanweisung ?? '')
 
-  function anzeige(zahl, ganzzahlig) {
-    return ganzzahlig ? String(zahl) : Number(zahl).toFixed(2)
+  /* Three fields stand under the same visible name, and each has a reset
+     button of the same name. For a screen reader every one of them carries
+     the name of its group in front — the words the window already shows, in
+     the order group, field. */
+  const anweisungsname = $derived(
+    `${t('sprachserver.gruppe_diktat')} ${t('sprachserver.feld_anweisung')}`,
+  )
+  const putzanweisungsname = $derived(
+    `${t('sprachserver.gruppe_bereinigung')} ${t('sprachserver.feld_anweisung')}`,
+  )
+  const gespraechsanweisungsname = $derived(
+    `${t('sprachserver.gruppe_gespraech')} ${t('sprachserver.feld_gespraechsanweisung')}`,
+  )
+  const zuruecksetzenName = (feldname) => `${t('sprachserver.zuruecksetzen')} ${feldname}`
+
+  function anzeige(zahl, ganzzahlig, schritt) {
+    return ganzzahlig ? String(zahl) : formatNumber(zahl, fractionDigits(schritt), texte.sprache)
   }
 </script>
 
@@ -453,6 +470,7 @@
   {/snippet}
 
   {#snippet inhalt(modellkarte)}
+    <Startfehler arch={auskunft?.unknown_architecture} />
     <Serverreihe>
       {#snippet links()}
         {@render modellkarte()}
@@ -495,9 +513,10 @@
               knapp
               zeilen={3}
               bind:wert={anweisungstext}
-              beschriftung={t('sprachserver.feld_anweisung')}
+              beschriftung={anweisungsname}
             />
-            <button class="stillknopf" onclick={() => (anweisungstext = werkAnweisung)}>
+            <button class="stillknopf" aria-label={zuruecksetzenName(anweisungsname)}
+                    onclick={() => (anweisungstext = werkAnweisung)}>
               {t('sprachserver.zuruecksetzen')}
             </button>
           </div>
@@ -541,9 +560,10 @@
               knapp
               zeilen={3}
               bind:wert={putzanweisungstext}
-              beschriftung={t('sprachserver.feld_anweisung')}
+              beschriftung={putzanweisungsname}
             />
-            <button class="stillknopf" onclick={() => (putzanweisungstext = werkBereinigung)}>
+            <button class="stillknopf" aria-label={zuruecksetzenName(putzanweisungsname)}
+                    onclick={() => (putzanweisungstext = werkBereinigung)}>
               {t('sprachserver.zuruecksetzen')}
             </button>
           </div>
@@ -636,9 +656,10 @@
               knapp
               zeilen={3}
               bind:wert={gespraechsanweisungstext}
-              beschriftung={t('sprachserver.feld_gespraechsanweisung')}
+              beschriftung={gespraechsanweisungsname}
             />
-            <button class="stillknopf" onclick={() => (gespraechsanweisungstext = werkGespraechsanweisung)}>
+            <button class="stillknopf" aria-label={zuruecksetzenName(gespraechsanweisungsname)}
+                    onclick={() => (gespraechsanweisungstext = werkGespraechsanweisung)}>
               {t('sprachserver.zuruecksetzen')}
             </button>
           </div>
@@ -666,7 +687,7 @@
             bind:wert={stimmregler[p.knopf]}
             stufen={p.stufen}
             beschriftung={parameterlabels[p.knopf]}
-            anzeige={(w) => anzeige(w, p.ganzzahlig)}
+            anzeige={(w) => anzeige(w, p.ganzzahlig, p.schritt)}
             mit_zahl={false}
             fuellung
           />

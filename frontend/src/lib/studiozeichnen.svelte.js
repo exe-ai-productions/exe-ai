@@ -7,32 +7,30 @@
   Without an open chat, drawing opens one first, and the new chat starts
   with what the studio holds — its values, its kind, its control video. So
   does a chat that is created any other way while the studio shows values
-  without one. A chat opened that way goes again when none of the pictures
-  it was opened for is drawn (`takeBackUnlessDrawn`).
+  without one. A chat opened that way stays, whatever becomes of its
+  pictures: the studio never deletes a chat.
 */
-import { flushSync, tick } from 'svelte'
+import { tick } from 'svelte'
 import { api } from './api.js'
+import { chatNameFrom } from './chatName.js'
 import { chatStateRead, chatanzeige, chatless } from './chatanzeige.svelte.js'
 import { imageSwitches } from './imageSwitches.svelte.js'
 import { seedlage } from './bildseed.svelte.js'
 import { familyOf } from './imageFamilies.svelte.js'
 import {
-  art, auswahl, drawAsked, leinwand, maskIntoChat, maskOutOfChat, pictureMissing, refVideo, setValues,
-  startValuesThere, steuervideo, stilVon, studioSichtbar, takesRefVideo, werte, werteVorschlagen,
+  art, auswahl, drawAsked, leinwand, maskIntoChat, pictureMissing, refVideo, setValues,
+  startValuesThere, steuervideo, stilVon, studioSichtbar, takesRefVideo, werte,
 } from './studio.svelte.js'
-import { leaveStanding } from './terminalfenster.svelte.js'
 import { t } from './texte.svelte.js'
 import { videoFrames as takeVideoFrames } from './videoFrames.js'
-import { chatLoeschen, melde, neuerChat, openNewChat, zustand } from './zustand.svelte.js'
+import { melde, openNewChat, zustand } from './zustand.svelte.js'
 
 // sd-cli's own frame rate, what control frames are taken at without one —
 // and the rate it reads a reference video at.
 const SD_CLI_FPS = 24
 
 /* The chat's picture line, handed in by the studio while it is mounted:
-   its way in, the stop of the picture drawing now, a waiting one taken out.
-   The way in answers how that one picture ended, once it has: drawn or
-   not. */
+   its way in, the stop of the picture drawing now, a waiting one taken out. */
 export const zeichnung = $state({
   losZeichnen: null, stopEins: null, entfernen: null, bereitet: false,
 })
@@ -135,134 +133,6 @@ chatless.pictureValues = (chatId) => {
   return Object.keys(set).length ? set : null
 }
 
-/* The chat a press opened to draw into, while no picture has been drawn
-   into it: every press into it asks, once its own pictures have ended,
-   whether the chat goes again. */
-let openedUndrawn = null
-
-/* Whether the service still holds a run of the chat as going. */
-const running = (runs) => runs.some((run) => run.zustand === 'laeuft')
-
-/* The one wait for a chat's runs to end that is under way, and the stream
-   it listens on. Only the chat a press opened can be taken back, so there
-   is never more than one to wait for: every press into that chat shares the
-   wait, and a wait for a chat that is no longer the one is given up. */
-let awaited = null
-
-/* Waits until the service has reported the end of every run of the chat
-   that it held as going: the chat's run stream is followed from where the
-   fetched list ends, the one the terminal reads, until each of them has had
-   its `lauf_ende` — a run that starts meanwhile is waited for as well.
-   Nothing is asked again at intervals. A dropped stream comes back by
-   itself and is sent again from the same place; if the end is never
-   reported, the wait never ends and the chat it was for is left standing. */
-function runsEnded(chat, runs, from) {
-  if (awaited?.chat === chat) return awaited.ended
-  awaited?.stream.close()
-  const going = new Set(runs.filter((run) => run.zustand === 'laeuft').map((run) => run.lauf))
-  const stream = new EventSource(api.laeufeStrom(chat, from))
-  const ended = new Promise((resolve) => {
-    stream.onmessage = (message) => {
-      let event
-      try {
-        event = JSON.parse(message.data)
-      } catch {
-        return
-      }
-      if (event.typ === 'lauf_start') going.add(event.lauf)
-      else if (event.typ === 'lauf_ende') going.delete(event.lauf)
-      if (going.size) return
-      stream.close()
-      if (awaited?.stream === stream) awaited = null
-      resolve()
-    }
-  })
-  awaited = { chat, stream, ended }
-  return ended
-}
-
-/* A chat opened to draw into is taken back when none of the pictures
-   pressed for was drawn: it would stand in the list holding nothing but the
-   prompt. Only a chat that holds nothing goes — a picture still in the line
-   for it, an answer on its way or a row the service keeps for it leaves it
-   standing, and so does a service that cannot say.
-
-   Never while the service still holds a run of the chat as going: a picture
-   that was stopped is drawn on until the painter lets go, and deleting the
-   chat under it would take a going run with it. The chat goes once that
-   run's end has been reported, and everything is looked at afresh then —
-   the run may have ended with a picture after all. */
-async function takeBackUnlessDrawn(chat, pictures) {
-  const drawn = await Promise.all(pictures)
-  if (openedUndrawn !== chat) return
-  if (drawn.some(Boolean)) {
-    openedUndrawn = null
-    return
-  }
-  const busy = () => Boolean(zustand.bildLaeuftChat[chat] || zustand.laeuft[chat] || zustand.sendet[chat])
-  let rows, runs
-  for (;;) {
-    if (busy()) return
-    let from
-    try {
-      ;[{ nachrichten: rows }, { laeufe: runs, ab: from }] = await Promise.all([
-        api.nachrichten(chat),
-        api.laeufe(chat),
-      ])
-    } catch {
-      return
-    }
-    if (openedUndrawn !== chat || rows.length || busy()) return
-    if (!running(runs)) break
-    await runsEnded(chat, runs, from)
-    if (openedUndrawn !== chat) return
-  }
-  try {
-    // The chat's own values are what is laid back: its store is read first.
-    if (chatanzeige.chatId === chat) await chatStateRead()
-  } catch {
-    return
-  }
-  if (openedUndrawn !== chat || busy()) return
-  openedUndrawn = null
-  if (zustand.aktiverChat === chat && chatanzeige.chatId === chat) leaveAsItStands(chat, runs)
-  // A chat that cannot be deleted stays in the list; the window has left it.
-  await chatLoeschen(chat).catch(() => {})
-}
-
-/* The window leaves a chat that is about to go, and looks as it did before
-   the press that opened it. What was set in the studio belongs to no chat
-   again — the values, the laid videos, the painted mask — and the chat's
-   runs stay in the terminal as the service kept them, the failed picture's
-   among them, until another chat is opened.
-
-   Leaving refills the studio for no chat and empties the terminal; both
-   happen within the flush below, and what stood is laid back before
-   anything is painted. The values the chat held of its own are set again,
-   the others shown again as they were — a model's start values are not
-   written into the next chat as its own. */
-function leaveAsItStands(chat, runs) {
-  const shown = $state.snapshot(werte)
-  const own = {
-    ...(chatanzeige.geladen ? $state.snapshot(chatanzeige.bildfenster) : {}),
-    ...setValues(),
-  }
-  if (steuervideo.chat === chat) steuervideo.chat = null
-  if (refVideo.chat === chat) refVideo.chat = null
-  maskOutOfChat(chat)
-  // The sidebar's sheet is not this press's to change.
-  const sheet = zustand.seitenblatt
-  neuerChat()
-  zustand.seitenblatt = sheet
-  flushSync()
-  leaveStanding(runs)
-  const names = Object.keys(shown)
-  werteVorschlagen(Object.fromEntries(names.filter((name) => !(name in own)).map((name) => [name, shown[name]])))
-  for (const name of names) {
-    if (name in own) werte[name] = own[name]
-  }
-}
-
 /* The references of an edit: the picture in the generation area first, as
    the area holds it, then the ones laid down in the right column. A family
    that takes one reference has the area as its one place for it. */
@@ -336,6 +206,9 @@ async function vorbereitenUndZeichnen(modeWish) {
   /* The family as it stands at the press, too: the column that refills for
      a new chat asks for the default model's family on the way. */
   const fam = familyOf(w.familie || auswahl.klasse)
+  // A ControlNet goes along only for a family sd.cpp computes it for; a
+  // model whose family is unknown is left as it was.
+  const controlNet = !fam || fam.control_net !== false
   let control = null
   if (!modeWish && kind.value === 'v2v') {
     control = await steuerbilder(w)
@@ -352,11 +225,12 @@ async function vorbereitenUndZeichnen(modeWish) {
   // a new chat refills the surface: the picture to start from, or the first
   // reference of an edit.
   const nutztStart = ['img2img', 'i2v', 'flf2v'].includes(kind.value)
-  const fromArea = nutztStart || kind.value === 'edit'
+  const edits = kind.value === 'edit'
+  const fromArea = nutztStart || edits
   let flaeche = null
   if (!modeWish && fromArea && w.startbild && leinwand.ausgeben) {
     try {
-      flaeche = await leinwand.ausgeben(w.startbild, kind.value === 'img2img')
+      flaeche = await leinwand.ausgeben(w.startbild, kind.value === 'img2img' || edits, edits)
     } catch (fehler) {
       melde(String(fehler.message || fehler), 'fehler')
       return
@@ -369,17 +243,17 @@ async function vorbereitenUndZeichnen(modeWish) {
   const place = kind.value === 'img2img' ? flaeche?.place ?? null : null
   let ziel = chatanzeige.chatId
   if (!ziel) {
-    // No chat yet: one is opened, named after the prompt.
-    const text = w.prompt.trim()
-    const title = text.length > 40 ? text.slice(0, 40) + '…' : text || t('eingabe.bild_titel')
+    // No chat yet: one is opened, named after the prompt by the rule every
+    // new chat is named by.
+    const title = chatNameFrom(w.prompt) || t('eingabe.bild_titel')
     try {
       ziel = (await openNewChat({ title, endpoint_id: zustand.modellId || null })).id
     } catch (fehler) {
       melde(String(fehler.message || fehler), 'fehler')
       return
     }
-    openedUndrawn = ziel
   }
+  const paintedEdit = edits && Boolean(flaeche?.maske)
   const stil = stilVon(w.stil)
   const ganz = (wert) => Math.trunc(zahl(wert, 0))
   const drawsVideo = kind.video
@@ -401,9 +275,17 @@ async function vorbereitenUndZeichnen(modeWish) {
     scheduler: w.scheduler,
     loras: w.stapel.filter((e) => e.name).map((e) => ({ name: e.name, staerke: e.staerke })),
     lora_apply_mode: w.lora_modus,
-    startbild: nutztStart ? flaeche?.startbild ?? (w.startbild || null) : null,
-    staerke: w.staerke,
-    maske: kind.value === 'img2img' ? flaeche?.maske ?? (w.maske || null) : null,
+    // An edit draws from its reference alone; with a mask painted over it
+    // the picture goes as the starting picture as well, so the mask has a
+    // picture to act on and the strength a start to measure from.
+    startbild: nutztStart ? flaeche?.startbild ?? (w.startbild || null)
+      : paintedEdit ? flaeche.startbild : null,
+    // The strength control is not shown for an edit, and a picture laid
+    // into the area leaves it below 1: that hidden value would let the
+    // reference stand almost unchanged, so the mask alone decides.
+    staerke: paintedEdit ? 1 : w.staerke,
+    maske: kind.value === 'img2img' ? flaeche?.maske ?? (w.maske || null)
+      : paintedEdit ? flaeche.maske : null,
     crop_of: place ? w.startbild : null,
     crop_box: place,
     video: drawsVideo,
@@ -433,10 +315,12 @@ async function vorbereitenUndZeichnen(modeWish) {
     pulid_weights: w.pulid_weights || null,
     pulid_id_embedding: w.pulid_id_embedding || null,
     pulid_id_weight: w.pulid_id_weight,
-    control_net: w.control_net || null,
-    control_image: w.control_image || null,
+    // Only where the family's model computes a ControlNet (the family
+    // table's `control_net`); a model without a known family sends it.
+    control_net: controlNet ? w.control_net || null : null,
+    control_image: controlNet ? w.control_image || null : null,
     control_strength: w.control_strength,
-    canny: Boolean(w.canny),
+    canny: controlNet && Boolean(w.canny),
     hires,
     // Left out while the pass is off: the service keeps its own.
     hires_scale: hires ? Number(w.hires_wahl) : undefined,
@@ -472,17 +356,50 @@ async function vorbereitenUndZeichnen(modeWish) {
     const base = modeWish.mode === 'upscale'
       ? { modell: w.modell, chat_id: ziel, prompt: modeWish.prompt }
       : grund
-    const picture = losZeichnen({ ...base, ...modeWish, von: 1, nr: 1, lauf_kennung: null, frage_erstellen: true })
-    if (ziel === openedUndrawn) takeBackUnlessDrawn(ziel, [picture])
+    // An enlarging that has no prompt writes no question into the chat.
+    losZeichnen({ ...base, ...modeWish, von: 1, nr: 1, lauf_kennung: null,
+                  frage_erstellen: Boolean(modeWish.prompt) })
     return
   }
   const anzahl = Math.max(1, ganz(w.bilder_je_lauf) || 1)
   // Not `crypto.randomUUID()`: over plain HTTP the page is no secure context.
   const laufKennung = anzahl > 1
     ? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}` : null
-  const pictures = []
   for (let nr = 1; nr <= anzahl; nr += 1) {
-    pictures.push(losZeichnen({ ...grund, von: anzahl, nr, lauf_kennung: laufKennung, frage_erstellen: nr === 1 }))
+    losZeichnen({ ...grund, von: anzahl, nr, lauf_kennung: laufKennung, frage_erstellen: nr === 1 })
   }
-  if (ziel === openedUndrawn) takeBackUnlessDrawn(ziel, pictures)
+}
+
+/* The values the next draw would send that decide which painter draws it,
+   as they stand now — what the service is asked about while the picture
+   server runs, so the footer can say which control sends the picture to
+   sd-cli. Null while no model is chosen. */
+export function painterQuery() {
+  const w = $state.snapshot(werte)
+  if (!w.modell) return null
+  const kind = art()
+  const fam = familyOf(w.familie || auswahl.klasse)
+  const adAn = Boolean(w.ad_modell)
+  const named = (stapel) => (stapel ?? []).some((entry) => entry.name)
+  return {
+    modell: w.modell,
+    live_preview: w.live_preview,
+    pulid_weights: w.pulid_weights || null,
+    pulid_id_embedding: w.pulid_id_embedding || null,
+    sigmas: w.sigmas.trim(),
+    slg_scale: zahl(w.slg_scale, 0),
+    skip_layers: w.skip_layers.trim(),
+    switches: gesetzteSchalter(w.switches),
+    // As the draw sends it: the service reads the model's kit with it.
+    familie: w.familie || fam?.name || null,
+    ref_video: Boolean(
+      refVideo.datei && refVideo.chat === chatanzeige.chatId && takesRefVideo(kind, fam),
+    ),
+    lora: named(w.stapel) || (adAn && named(w.ad_stapel)),
+    ad_modell: adAn,
+    hires: Boolean(w.hires_wahl),
+    video: Boolean(kind.video),
+    lora_apply_mode: w.lora_modus,
+    pm_klasse: w.pm_klasse,
+  }
 }

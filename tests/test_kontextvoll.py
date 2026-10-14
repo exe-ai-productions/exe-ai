@@ -15,6 +15,7 @@ import json
 import pytest
 
 from app import (
+    antwortgrenze,
     chatverdichtung,
     faltpause,
     fenstergroesse,
@@ -335,7 +336,7 @@ def test_chat_einmal_zu_lang_faltet_einmal_und_die_antwort_kommt(client, chat_id
     assert provider.groessen[1] < provider.groessen[0]
     # The question being answered is never folded away.
     assert "Newest question" in (provider.letzte_anfrage.nachrichten[-1].content or "")
-    assert "".join(e.get("text", "") for e in ereignisse if e["typ"] == "content") == "Hallo Welt"
+    assert "".join(e.get("text", "") for e in ereignisse if e["typ"] == "content") == "Hello World"
     assert not [e for e in ereignisse if e["typ"] == "error"]
     assert ereignisse[-1]["typ"] == "done"
     assert ereignisse[-1]["verdichtet"]
@@ -438,7 +439,7 @@ def test_chat_findet_die_erste_stufe_keine_mitte_faltet_die_naechste(client, cha
     assert provider.faltungen == 1
     assert len(provider.groessen) == 2
     assert provider.groessen[1] < provider.groessen[0]
-    assert "".join(e.get("text", "") for e in ereignisse if e["typ"] == "content") == "Hallo Welt"
+    assert "".join(e.get("text", "") for e in ereignisse if e["typ"] == "content") == "Hello World"
     assert "kontextfenster_voll" not in _antwort(client, chat_id)["stats"]
 
 
@@ -747,6 +748,87 @@ def test_chat_ein_fremder_400er_wird_nicht_gefaltet(client, chat_id):
     assert "kontextfenster_voll" not in stats
 
 
+# What llama.cpp writes into a running stream when its cache has no room: the
+# sentence names no context at all, the `type` of the packet does.
+KV_CACHE_PACKET = (
+    '{"error":{"code":400,"message":"failed to find 7909 available cells in kv cache",'
+    '"type":"exceed_context_size_error"}}'
+)
+SERVER_ERROR_PACKET = (
+    '{"error":{"code":500,"message":"model crashed","type":"server_error"}}'
+)
+
+
+class FailsInTheStream(ZuLangDannGut):
+    """Refuses the first ``zu_lang`` answer requests from inside the stream:
+    the error carries the sentence of the packet and the packet as raw text,
+    never a body. ``vorher`` pieces go out first."""
+
+    def __init__(self, *args, paket: str = KV_CACHE_PACKET, vorher: int = 0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.paket = paket
+        self.vorher = vorher
+
+    async def streamen(self, anfrage):
+        if _ist_faltung(anfrage) or len(self.groessen) >= self.zu_lang:
+            async for stueck in super().streamen(anfrage):
+                yield stueck
+            return
+        self.groessen.append(_groesse(anfrage))
+        self.grenzen.append(anfrage.max_tokens)
+        self.texte.append("\n".join(n.content or "" for n in anfrage.nachrichten))
+        for nr in range(self.vorher):
+            yield Stueck("content", text=f"part {nr} ")
+        error = json.loads(self.paket)["error"]
+        raise ProviderFehler(
+            f"test returned status {error['code']}: {error['message']}",
+            status=error["code"], rohtext=self.paket,
+        )
+
+
+def test_chat_a_full_context_from_inside_the_stream_folds_and_the_answer_comes(client, chat_id):
+    provider = _chat_mit(client, FailsInTheStream(mock_endpunkt("test"), zu_lang=1))
+    _langer_chat(client, chat_id)
+
+    ereignisse = _senden(client, chat_id)
+
+    assert provider.faltungen == 1
+    assert len(provider.groessen) == 2
+    assert "".join(e.get("text", "") for e in ereignisse if e["typ"] == "content") == "Hello World"
+    assert not [e for e in ereignisse if e["typ"] == "error"]
+    stats = _antwort(client, chat_id)["stats"]
+    assert "kontextfenster_voll" not in stats
+    assert "fehler" not in stats
+
+
+def test_chat_a_full_context_after_a_piece_ends_with_the_card(client, chat_id):
+    provider = _chat_mit(client, FailsInTheStream(mock_endpunkt("test"), zu_lang=1, vorher=1))
+    _langer_chat(client, chat_id)
+
+    _senden(client, chat_id)
+
+    # The piece is out: no fold, no second request, the round ends with the card.
+    assert provider.faltungen == 0
+    assert len(provider.groessen) == 1
+    stats = _antwort(client, chat_id)["stats"]
+    assert stats["kontextfenster_voll"] is True
+
+
+def test_silence_chat_a_server_error_in_the_stream_is_no_full_context(client, chat_id):
+    provider = _chat_mit(
+        client, FailsInTheStream(mock_endpunkt("test"), zu_lang=1, paket=SERVER_ERROR_PACKET),
+    )
+    _langer_chat(client, chat_id)
+
+    _senden(client, chat_id)
+
+    assert provider.faltungen == 0
+    assert len(provider.groessen) == 1
+    stats = _antwort(client, chat_id)["stats"]
+    assert "model crashed" in stats["fehler"]
+    assert "kontextfenster_voll" not in stats
+
+
 # --- Job ---------------------------------------------------------------------
 
 
@@ -879,7 +961,7 @@ def test_auftrag_faltet_mit_dem_ersatzwert_eines_unbekannten_modells(config, cli
     assert zustand.kontext_quelle == fenstergroesse.QUELLE_ERSATZ
     assert daten["state"] == "fertig"
     status_schritte = [s["inhalt"] for s in daten["schritte"] if s["typ"] == "status"]
-    assert "Compacted the history to keep the context from filling up." in status_schritte
+    assert "Der Verlauf wurde komprimiert, damit der Kontext nicht vollständig belegt wird." in status_schritte
 
 
 def test_auftrag_einmal_zu_lang_faltet_und_wiederholt_die_runde(config, client):
@@ -895,9 +977,9 @@ def test_auftrag_einmal_zu_lang_faltet_und_wiederholt_die_runde(config, client):
     # folds nothing and moves straight on to the next, smaller one without
     # resending — the step the file's own test for that describes. One
     # refusal, one summary, one round sent again.
-    assert [s for s in _status(daten) if "attempt 2/3" in s]
+    assert [s for s in _status(daten) if "Versuch 2/3" in s]
     # Silence test: a fold that went through reports no failure.
-    assert not [s for s in _status(daten) if "fold failed" in s]
+    assert not [s for s in _status(daten) if "Komprimierung fehlgeschlagen" in s]
 
 
 def test_auftrag_viermal_zu_lang_endet_nach_drei_faltungen_mit_kontext_voll(config, client):
@@ -914,7 +996,7 @@ def test_auftrag_viermal_zu_lang_endet_nach_drei_faltungen_mit_kontext_voll(conf
     assert len(provider.groessen) == 3
     assert len(set(provider.groessen)) == 3
     assert provider.groessen == sorted(provider.groessen, reverse=True)
-    assert len([s for s in _status(daten) if "compacted the history" in s]) == 2
+    assert len([s for s in _status(daten) if "Der Verlauf wurde komprimiert" in s]) == 2
 
 
 def test_auftrag_lernt_wenn_die_faltung_aufgibt(config, client):
@@ -958,8 +1040,8 @@ def test_auftrag_scheitert_die_faltung_eine_anfrage_dann_kontext_voll(
     assert len(provider.groessen) == 1
     assert list(_schritte_mit_mitte_je_runde(schritte).values()) == [1]
     status = _status(daten)
-    assert not [s for s in status if "compacted the history" in s]
-    assert status.count("fold failed — the history stays unfolded") == 1
+    assert not [s for s in status if "Der Verlauf wurde komprimiert" in s]
+    assert status.count("Komprimierung fehlgeschlagen — der Verlauf bleibt unkomprimiert.") == 1
 
 
 def test_auftrag_scheitert_die_faltung_vor_dem_senden_eine_anfrage_dann_kontext_voll(
@@ -984,8 +1066,8 @@ def test_auftrag_scheitert_die_faltung_vor_dem_senden_eine_anfrage_dann_kontext_
     assert len(je_runde) > 1
     assert set(je_runde.values()) == {1}
     status = _status(daten)
-    assert not [s for s in status if "compacted the history" in s]
-    assert status.count("fold failed — the history stays unfolded") == 1
+    assert not [s for s in status if "Der Verlauf wurde komprimiert" in s]
+    assert status.count("Komprimierung fehlgeschlagen — der Verlauf bleibt unkomprimiert.") == 1
 
 
 def test_auftrag_zwei_fehlschlaege_vor_dem_senden_schliessen_die_sperre_mit_hinweis(
@@ -1005,8 +1087,8 @@ def test_auftrag_zwei_fehlschlaege_vor_dem_senden_schliessen_die_sperre_mit_hinw
 
     assert provider.faltungen >= 2
     status = _status(daten)
-    assert status.count("fold failed — the history stays unfolded") == provider.faltungen
-    assert status.count("automatic folding stopped for this run") == 1
+    assert status.count("Komprimierung fehlgeschlagen — der Verlauf bleibt unkomprimiert.") == provider.faltungen
+    assert status.count("Die automatische Komprimierung ist für diesen Durchlauf deaktiviert.") == 1
 
 
 def test_auftrag_ohne_platz_fuer_die_zusammenfassung_ein_schritt_und_keine_zeile(
@@ -1027,7 +1109,7 @@ def test_auftrag_ohne_platz_fuer_die_zusammenfassung_ein_schritt_und_keine_zeile
     je_runde = _schritte_mit_mitte_je_runde(schritte)
     assert len(je_runde) > 1
     assert set(je_runde.values()) == {1}
-    assert not [s for s in _status(daten) if "fold failed" in s]
+    assert not [s for s in _status(daten) if "Komprimierung fehlgeschlagen" in s]
 
 
 class ZuLangOhneErsparnis(ZuLangImAuftrag):
@@ -1076,8 +1158,8 @@ def test_auftrag_scheitert_die_faltung_am_rundenende_laeuft_der_lauf_weiter(conf
     ]
     assert len(faltungen) == 1
     status = _status(daten)
-    assert status.count("fold failed — the history stays unfolded") == 1
-    assert "Compacted the history to keep the context from filling up." not in status
+    assert status.count("Komprimierung fehlgeschlagen — der Verlauf bleibt unkomprimiert.") == 1
+    assert "Der Verlauf wurde komprimiert, damit der Kontext nicht vollständig belegt wird." not in status
 
 
 def test_auftrag_findet_die_erste_stufe_keine_mitte_faltet_eine_kleinere(config, client):
@@ -1094,7 +1176,7 @@ def test_auftrag_findet_die_erste_stufe_keine_mitte_faltet_eine_kleinere(config,
     assert provider.groessen[1] < provider.groessen[0]
     status = _status(daten)
     assert not [s for s in status if "attempt 1/3" in s]
-    assert [s for s in status if "attempt 2/3" in s or "attempt 3/3" in s]
+    assert [s for s in status if "Versuch 2/3" in s or "Versuch 3/3" in s]
 
 
 def test_auftrag_stopp_waehrend_der_faltung_schickt_nicht_neu(config, client):
@@ -1334,6 +1416,60 @@ def test_max_model_len_with_a_set_length_past_the_window_is_too_large():
 
 
 @pytest.mark.parametrize(
+    ("input_tokens", "expected"),
+    [
+        # The window the refusal names, less the estimated input, less 64.
+        (1_200, (kontextvoll.GRENZE, 8192 - 1_200 - 64)),
+        (8_192 - 64 - 1, (kontextvoll.GRENZE, 1)),
+        # Nothing free beside the input: the card, no fold.
+        (8_192 - 64, (kontextvoll.KARTE, None)),
+        (8_150, (kontextvoll.KARTE, None)),
+        # An input past the window itself: only a fold helps.
+        (9_000, (kontextvoll.FALTEN, None)),
+        # No estimate, nothing guessed: folded, as before.
+        (None, (kontextvoll.FALTEN, None)),
+    ],
+)
+def test_max_model_len_with_the_ceiling_is_worked_out_from_the_estimated_input(
+    input_tokens, expected
+):
+    """vLLM's "max_tokens=Z cannot be greater than max_model_len=W" names the
+    ceiling and the window and no input: the request is worked out against W
+    from the caller's own estimate."""
+    error = _fehler(VLLM_MAX_MODEL_LEN)
+
+    assert kontextvoll.abhilfe(error, fenster=200_000, input_tokens=input_tokens) == expected
+
+
+def test_max_model_len_with_a_set_length_past_the_window_stays_too_large_beside_an_estimate():
+    """The silence probe: a set length at or past W ends at once, whatever
+    estimate the caller hands in."""
+    error = _fehler(VLLM_MAX_MODEL_LEN)
+
+    assert kontextvoll.abhilfe(
+        error, eingestellte_grenze=16_384, fenster=200_000, input_tokens=1_200
+    ) == (kontextvoll.LIMIT_TOO_LARGE, None)
+
+
+def test_a_refusal_that_counts_its_own_input_ignores_the_estimate():
+    """vLLM's current wording carries the input as an exact count: that count
+    is read, the estimate of the caller is not."""
+    error = _fehler(VLLM_ANTWORT_FUELLT)
+
+    assert kontextvoll.abhilfe(error, input_tokens=5) == (kontextvoll.GRENZE, 8192 - 1200 - 64)
+    assert kontextvoll.abhilfe(error, input_tokens=None) == (kontextvoll.GRENZE, 8192 - 1200 - 64)
+
+
+def test_an_estimate_does_not_turn_a_refusal_without_both_numbers_into_a_lowered_ceiling():
+    """Other refusals without numbers keep their answer: the estimate is read
+    for one wording only."""
+    for rohtext in (OHNE_ZAHLEN, VLLM_MINDESTENS, LLAMA):
+        assert kontextvoll.abhilfe(_fehler(rohtext), fenster=200_000, input_tokens=1_200) == (
+            kontextvoll.FALTEN, None
+        )
+
+
+@pytest.mark.parametrize(
     ("rohtext", "grenze", "fenster"),
     [
         # oMLX: "Prompt too long: 300000 tokens exceeds max context window
@@ -1457,7 +1593,7 @@ def test_chat_antwortgrenze_fuellt_das_fenster_die_grenze_sinkt_statt_zu_falten(
     assert provider.grenzen == [8192, 8192 - 1200 - 64]
     # The same request, only the ceiling lowered.
     assert provider.groessen[0] == provider.groessen[1]
-    assert "".join(e.get("text", "") for e in ereignisse if e["typ"] == "content") == "Hallo Welt"
+    assert "".join(e.get("text", "") for e in ereignisse if e["typ"] == "content") == "Hello World"
     assert not _verdichtungen(client, chat_id)
     stats = _antwort(client, chat_id)["stats"]
     assert "kontextfenster_voll" not in stats
@@ -1492,7 +1628,7 @@ def test_chat_faltet_wenn_die_zahlen_die_eingabe_ueber_dem_fenster_nennen(
 
     assert provider.faltungen == 1
     assert len(provider.groessen) == 2
-    assert "".join(e.get("text", "") for e in ereignisse if e["typ"] == "content") == "Hallo Welt"
+    assert "".join(e.get("text", "") for e in ereignisse if e["typ"] == "content") == "Hello World"
     assert len(_verdichtungen(client, chat_id)) == 1
     assert "kontextfenster_voll" not in _antwort(client, chat_id)["stats"]
 
@@ -1568,7 +1704,7 @@ def test_chat_faltet_wenn_die_eingabe_schuld_ist(client, chat_id):
 
     assert provider.faltungen == 1
     assert len(provider.groessen) == 2
-    assert "".join(e.get("text", "") for e in ereignisse if e["typ"] == "content") == "Hallo Welt"
+    assert "".join(e.get("text", "") for e in ereignisse if e["typ"] == "content") == "Hello World"
 
 
 def test_chat_ohne_zahlen_und_grenze_am_bekannten_fenster_endet_sofort(client, chat_id):
@@ -1660,6 +1796,80 @@ def test_chat_max_model_len_with_a_set_length_past_it_ends_at_once(client, chat_
     assert stats.get("kontextfenster_voll") is not True
 
 
+def test_chat_max_model_len_under_auto_lowers_the_ceiling_and_folds_nothing(client, chat_id):
+    """On the Anthropic wire Auto carries a number, and an entered window
+    above the server's real one lets it go out larger than the server takes:
+    "max_tokens=Z cannot be greater than max_model_len=8192". The request goes
+    again with the room under 8192 that is free beside its input, and nothing
+    is folded — before, three summaries were written for nothing."""
+    provider = _chat_mit(
+        client,
+        ZuLangDannGut(mock_endpunkt("test"), zu_lang=1, rohtext=VLLM_MAX_MODEL_LEN),
+        anthropic=True,
+    )
+    _langer_chat(client, chat_id, paare=1)
+
+    ereignisse = _senden(client, chat_id)
+
+    assert provider.faltungen == 0
+    assert len(provider.groessen) == 2
+    erste, zweite = provider.grenzen
+    assert erste > 8192
+    assert 0 < zweite < 8192
+    assert "".join(e.get("text", "") for e in ereignisse if e["typ"] == "content") == "Hello World"
+    assert not _verdichtungen(client, chat_id)
+    stats = _antwort(client, chat_id)["stats"]
+    assert "kontextfenster_voll" not in stats
+    assert "fehler" not in stats
+
+
+def test_chat_max_model_len_under_auto_with_an_input_past_the_window_folds(client, chat_id):
+    """The silence probe for the room: where the input alone is past 8192 no
+    ceiling can be made to fit, and the history is folded as it always was."""
+    provider = _chat_mit(
+        client,
+        ZuLangDannGut(mock_endpunkt("test"), zu_lang=1, rohtext=VLLM_MAX_MODEL_LEN),
+        anthropic=True,
+    )
+    _langer_chat(client, chat_id)
+
+    _senden(client, chat_id)
+
+    assert provider.faltungen == 1
+    assert len(provider.groessen) == 2
+
+
+def test_chat_max_model_len_under_auto_with_an_input_that_fills_the_window_is_the_card(
+    client, chat_id, monkeypatch
+):
+    """The estimate of the input leaves nothing free under 8192: no fold can
+    help the ceiling, so the card says the window is full."""
+    provider = _chat_mit(
+        client,
+        ZuLangDannGut(mock_endpunkt("test"), zu_lang=4, rohtext=VLLM_MAX_MODEL_LEN),
+        anthropic=True,
+    )
+    # A history with a middle to fold: the fold WOULD have something to do,
+    # so "nothing folded" is the rule at work and not a lack of material.
+    _langer_chat(client, chat_id)
+    measured = antwortgrenze.eingabe_schaetzen
+    # Only the estimate asked after the refusal is the filling one: the one
+    # before the first request has to stay what it is.
+    monkeypatch.setattr(
+        antwortgrenze,
+        "eingabe_schaetzen",
+        lambda messages, tools=(): 8_192 - 10 if provider.groessen else measured(
+            messages, tools
+        ),
+    )
+
+    _senden(client, chat_id)
+
+    assert provider.faltungen == 0
+    assert len(provider.groessen) == 1
+    assert _antwort(client, chat_id)["stats"]["kontextfenster_voll"] is True
+
+
 def test_chat_eine_kleinere_eingestellte_laenge_faltet_weiter(client, chat_id):
     """The silence probe: the same refusal with an answer length well under
     the window is an input problem, and the history is folded as before."""
@@ -1699,7 +1909,7 @@ def test_chat_ueber_der_lesegrenze_laesst_nach_der_faltung_nichts_heimlich_weg(c
     assert "answer 2 " not in erste
     assert "answer 2 " in zweite
     assert "Newest question" in zweite
-    assert "".join(e.get("text", "") for e in ereignisse if e["typ"] == "content") == "Hallo Welt"
+    assert "".join(e.get("text", "") for e in ereignisse if e["typ"] == "content") == "Hello World"
 
 
 def test_auftrag_antwortgrenze_fuellt_das_fenster_die_grenze_sinkt_nur_fuer_die_runde(
@@ -1730,8 +1940,8 @@ def test_auftrag_antwortgrenze_fuellt_das_fenster_die_grenze_sinkt_nur_fuer_die_
     # again after the refusal carries the one the refusal named.
     assert all(g is None for g in provider.grenzen[:9] + provider.grenzen[10:])
     status = _status(daten)
-    assert [s for s in status if f"answer ceiling lowered to {frei} for this round (attempt 1/3)" in s]
-    assert not [s for s in status if "compacted the history" in s]
+    assert [s for s in status if f"Die Antwortgrenze wurde für diese Runde auf {frei} gesenkt (Versuch 1/3)" in s]
+    assert not [s for s in status if "Der Verlauf wurde komprimiert" in s]
 
 
 def test_auftrag_eine_zu_grosse_eingestellte_laenge_endet_sofort(config, client):
@@ -1752,7 +1962,7 @@ def test_auftrag_eine_zu_grosse_eingestellte_laenge_endet_sofort(config, client)
 
     assert daten["end_reason"] == "antwortlaenge_zu_gross"
     assert provider.faltungen == 0
-    assert not [s for s in _status(daten) if "compacted the history" in s]
+    assert not [s for s in _status(daten) if "Der Verlauf wurde komprimiert" in s]
 
 
 def test_job_max_model_len_with_a_set_length_past_it_ends_at_once(config, client):
@@ -1774,7 +1984,33 @@ def test_job_max_model_len_with_a_set_length_past_it_ends_at_once(config, client
     assert provider.faltungen == 0
     assert len(provider.groessen) == 1
     lines = _status(job)
-    assert not [s for s in lines if "compacted the history" in s or "ceiling lowered" in s]
+    assert not [s for s in lines if "Der Verlauf wurde komprimiert" in s or "ceiling lowered" in s]
+
+
+def test_job_max_model_len_under_auto_lowers_the_ceiling_for_the_round_and_folds_nothing(
+    config, client
+):
+    """The same refusal in a job under Auto on the Anthropic wire, with an
+    entered window above the server's real 8192: the round goes again with
+    the room that is free under 8192, nothing is folded, and the run is
+    answered."""
+    provider = ZuLangImAuftrag(
+        mock_endpunkt("test"), zu_lang=1, rohtext=VLLM_MAX_MODEL_LEN, text_laenge=50
+    )
+
+    daten = _auftrag(client, config, provider, context_tokens=200_000, anthropic=True)
+
+    assert daten["state"] == "fertig"
+    assert provider.faltungen == 0
+    assert len(provider.groessen) == 2
+    # The refused round carried Auto's number, past the server's window; the
+    # round sent again carries one that fits under it.
+    refused, again = provider.grenzen[-2:]
+    assert refused > 8192
+    assert 0 < again < 8192
+    status = _status(daten)
+    assert [s for s in status if "Die Antwortgrenze wurde für diese Runde auf" in s]
+    assert not [s for s in status if "Der Verlauf wurde komprimiert" in s]
 
 
 def test_auftrag_kein_platz_fuer_eine_antwort_endet_mit_kontext_voll(config, client):
@@ -1786,7 +2022,7 @@ def test_auftrag_kein_platz_fuer_eine_antwort_endet_mit_kontext_voll(config, cli
     assert provider.faltungen == 0
     assert len(provider.groessen) == 1
     status = _status(daten)
-    assert not [s for s in status if "compacted the history" in s or "ceiling lowered" in s]
+    assert not [s for s in status if "Der Verlauf wurde komprimiert" in s or "ceiling lowered" in s]
 
 
 @pytest.mark.parametrize("rohtext", [ANTHROPIC_SUMME_UEBER_FENSTER, VLLM_EINGABE_UEBER_FENSTER])
@@ -1799,7 +2035,7 @@ def test_auftrag_faltet_wenn_die_zahlen_die_eingabe_ueber_dem_fenster_nennen(
 
     assert daten["state"] == "fertig"
     assert provider.faltungen == 1
-    assert [s for s in _status(daten) if "compacted the history" in s]
+    assert [s for s in _status(daten) if "Der Verlauf wurde komprimiert" in s]
 
 
 def test_auftrag_faltet_wenn_die_eingabe_schuld_ist(config, client):
@@ -1851,7 +2087,7 @@ def test_auftrag_ein_fremder_400er_wird_weder_gefaltet_noch_gesenkt(config, clie
     # lowered either: no round names a ceiling at all.
     assert all(g is None for g in provider.grenzen)
     status = _status(daten)
-    assert not [s for s in status if "compacted the history" in s or "ceiling lowered" in s]
+    assert not [s for s in status if "Der Verlauf wurde komprimiert" in s or "ceiling lowered" in s]
 
 
 # --- A window that becomes unknown mid-run ------------------------------------
