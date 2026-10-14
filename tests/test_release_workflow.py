@@ -50,7 +50,10 @@ def test_a_version_tag_or_a_hand_start_triggers_the_build():
 
 def test_the_tests_run_on_four_workers():
     runs = _runs(_workflow()["jobs"]["tests"])
-    assert runs[_index(runs, "python -m pytest")] == "python -m pytest tests/ -q -n 4 --dist loadfile"
+    assert runs[_index(runs, "python -m pytest")] == "python -m pytest tests/ -v -n 4 --dist loadfile"
+    step = _workflow()["jobs"]["tests"]["steps"][_index(runs, "python -m pytest")]
+    # The temporary files go to the work drive, not the small system drive.
+    assert step["env"] == {"TEMP": "${{ runner.temp }}", "TMP": "${{ runner.temp }}"}
     assert "pytest-xdist" in runs[_index(runs, "pip install")]
 
 
@@ -65,7 +68,10 @@ def test_the_package_job_builds_on_windows_and_publishes_with_the_runs_token():
     # once, and a red test job is seen before the draft is published by hand.
     assert "needs" not in job
     step = job["steps"][_index(_runs(job), "electron-builder")]
-    assert step["run"] == "npx electron-builder --win --publish always"
+    # node-pty brings its own Windows binaries, so the Windows build skips the
+    # native rebuild, which would need a Visual Studio the runner's node-gyp
+    # cannot find.
+    assert step["run"] == "npx electron-builder --win --publish always -c.npmRebuild=false"
     assert step["working-directory"] == "fenster-electron"
     assert step["env"]["GH_TOKEN"] == "${{ secrets.GITHUB_TOKEN }}"
 

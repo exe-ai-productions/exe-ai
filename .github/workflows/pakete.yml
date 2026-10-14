@@ -47,7 +47,14 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt pytest-xdist
-      - run: python -m pytest tests/ -q -n 4 --dist loadfile
+      # One line per test, so a red test is named in
+      # the log even when the run dies before its summary. The temporary
+      # files go to the runner's work drive: the system drive is small, and
+      # a full disk turns every later test into an error.
+      - run: python -m pytest tests/ -v -n 4 --dist loadfile
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
 
   paket:
     runs-on: windows-latest
@@ -75,9 +82,14 @@ jobs:
       - run: pyinstaller deploy/exe-ai-terminal.spec
 
       # The shell: installer and latest.yml, straight to the release draft.
+      # node-pty ships its own N-API binaries for Windows (prebuilds/win32-x64),
+      # so the Windows build skips the native rebuild: it needs a Visual
+      # Studio the bundled node-gyp can find, and it would gain nothing. The
+      # macOS build keeps the rebuild, because the prebuilt macOS spawn-helper
+      # comes without its executable bit.
       - run: npm ci
         working-directory: fenster-electron
-      - run: npx electron-builder --win --publish always
+      - run: npx electron-builder --win --publish always -c.npmRebuild=false
         working-directory: fenster-electron
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
