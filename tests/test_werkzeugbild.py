@@ -301,7 +301,7 @@ def test_only_the_three_newest_pictures_of_the_chat_ride_again(client, tmp_path)
 
     mit_bild = [n for n in verlauf if n.alle_bild_urls()]
     assert len(mit_bild) == 3
-    assert [n.werkzeugbilder[0].rsplit("/", 1)[-1] for n in mit_bild] == [
+    assert [Path(n.werkzeugbilder[0]).name for n in mit_bild] == [
         "foto2.png",
         "foto3.png",
         "foto4.png",

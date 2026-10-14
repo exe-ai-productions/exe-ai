@@ -47,6 +47,7 @@ from tests.cli.program import (
     Held,
     Program,
     Run,
+    a_session_without_the_console,
     on_a_port,
     posix_only,
     run_client,
@@ -224,7 +225,8 @@ def test_nothing_is_written_once_the_screen_is_leaving(
     monkeypatch.setattr(sys, "stdout", written)
     ctx.commands = _NoCommands()  # type: ignore[assignment]
     ctx.asker = _NoQuestions()  # type: ignore[assignment]
-    app = CliApp(ctx)
+    with a_session_without_the_console():
+        app = CliApp(ctx)
 
     app.print_above("before")
     assert "before" in written.getvalue()

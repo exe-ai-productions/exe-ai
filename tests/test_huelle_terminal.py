@@ -43,6 +43,17 @@ def _laufe(skript: str, *, timeout: int = 30) -> dict:
     return json.loads(lauf.stdout.strip().splitlines()[-1])
 
 
+def _slashes(wert):
+    """The paths of a report with one separator: ``path.join`` of the host
+    writes a backslash on Windows and a slash elsewhere, and what the
+    tests state is the order of the parts."""
+    if isinstance(wert, dict):
+        return {schluessel: _slashes(inhalt) for schluessel, inhalt in wert.items()}
+    if isinstance(wert, list):
+        return [_slashes(inhalt) for inhalt in wert]
+    return wert.replace("\\", "/") if isinstance(wert, str) else wert
+
+
 def _stueck(quelle: str, muster: str, name: str) -> str:
     treffer = re.search(muster, quelle, re.S)
     assert treffer, f"{name} not found"
@@ -61,7 +72,7 @@ console.log(JSON.stringify({{
   own: t.clientCommand({{ env: {{ EXE_AI_CLI: '/elsewhere/exe' }}, packaged: true, resourcesPath: '/App/Resources' }}),
 }}))
 """
-    ergebnis = _laufe(skript)
+    ergebnis = _slashes(_laufe(skript))
     assert ergebnis["source"]["file"] == "/repo/.venv/bin/python"
     assert ergebnis["source"]["args"] == ["-m", "cli"]
     assert ergebnis["source"]["cwd"] == "/repo"
@@ -346,7 +357,7 @@ console.log(JSON.stringify({{
   note: d.noteFile('/root', 8090),
 }}))
 """
-    ergebnis = _laufe(skript)
+    ergebnis = _slashes(_laufe(skript))
     assert ergebnis["own"] == "/own/folder"
     assert ergebnis["source"] == "/repo"
     assert ergebnis["mac"] == "/Users/x/Library/Application Support/Exe AI Terminal"

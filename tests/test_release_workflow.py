@@ -72,6 +72,10 @@ def test_the_package_job_builds_on_windows_and_publishes_with_the_runs_token():
     # native rebuild, which would need a Visual Studio the runner's node-gyp
     # cannot find.
     assert step["run"] == "npx electron-builder --win --publish always -c.npmRebuild=false"
+    # The runner's own shell is PowerShell, which cuts `-c.npmRebuild=false` at
+    # the dot: electron-builder then looks for a file `.npmRebuild=false`. bash
+    # hands the switch over whole.
+    assert step["shell"] == "bash"
     assert step["working-directory"] == "fenster-electron"
     assert step["env"]["GH_TOKEN"] == "${{ secrets.GITHUB_TOKEN }}"
 

@@ -86,10 +86,13 @@ jobs:
       # so the Windows build skips the native rebuild: it needs a Visual
       # Studio the bundled node-gyp can find, and it would gain nothing. The
       # macOS build keeps the rebuild, because the prebuilt macOS spawn-helper
-      # comes without its executable bit.
+      # comes without its executable bit. The step runs in bash: PowerShell
+      # cuts `-c.npmRebuild=false` at the dot, and electron-builder then looks
+      # for a configuration file named `.npmRebuild=false`.
       - run: npm ci
         working-directory: fenster-electron
       - run: npx electron-builder --win --publish always -c.npmRebuild=false
+        shell: bash
         working-directory: fenster-electron
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

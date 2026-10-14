@@ -42,7 +42,7 @@ from cli.render import build_renderer, clock, split_blocks
 from cli.status import build_status
 from cli.texts import Texts
 from stub_service import eventually, foreground, noted
-from tests.cli.program import Run, run_client
+from tests.cli.program import Run, a_session_without_the_console, local_clock, run_client
 from tests.cli.stub_service import StubService
 from test_shell import SLEEP_RUNS, STARTS_A_SLEEP
 from test_stream import shown_text, typed_line, where
@@ -498,7 +498,8 @@ def built(tmp_path: Path) -> CliApp:
     ctx.renderer = build_renderer(ctx)
     ctx.asker = dialogs.build_asker(ctx)
     ctx.commands = commands.build_commands(ctx)
-    app = CliApp(ctx)
+    with a_session_without_the_console():
+        app = CliApp(ctx)
     # Wired the way the client wires it: a command that leaves reaches
     # this screen and not the one the context started with.
     ctx.screen = app
@@ -809,20 +810,28 @@ def test_a_list_of_another_length_takes_only_the_rows_it_needs_and_gives_them_ba
     rows for a slash, three for a slash and a letter. What it does not need
     any more is empty again, and the next list starts from there."""
     terminal = Terminal(rows=40)
+    free = 40 - BLOCK_ROWS
     with running(tmp_path, terminal) as app:
-        eventually(lambda: terminal.pushes == [40 - BLOCK_ROWS])
+        eventually(lambda: terminal.pushes == [free])
         typed_into(app, "/")
         eventually(lambda: the_list_is_open(app))
+        # Read off what the screen knows to be empty above the block, not
+        # off the pushes that led there: the drawing of a letter may land
+        # between the key and the new list, and the list is then given
+        # back whole before the shorter one takes its rows — one push
+        # more, the same rows empty.
+        eventually(lambda: app._free_rows._count == free - COMPLETION_ROWS)
         typed_into(app, "t")
-        eventually(lambda: terminal.pushes == [40 - BLOCK_ROWS, COMPLETION_ROWS - 3])
+        eventually(lambda: app._free_rows._count == free - 3)
         assert len(app._input.buffer.complete_state.completions) == 3
         emptied(app)
-        eventually(lambda: terminal.pushes == [40 - BLOCK_ROWS, COMPLETION_ROWS - 3, 3])
+        eventually(lambda: app._free_rows._count == free)
         typed_into(app, "/")
         eventually(lambda: the_list_is_open(app))
+        eventually(lambda: app._free_rows._count == free - COMPLETION_ROWS)
         settled()
         assert terminal.scrolled == 0
-        assert terminal.pushes == [40 - BLOCK_ROWS, COMPLETION_ROWS - 3, 3]
+        assert terminal.pushes[0] == free
 
 
 def test_each_printed_line_pushes_the_head_up_by_one_row_and_the_block_stays_down(tmp_path):
@@ -1338,13 +1347,14 @@ def test_blanks_at_the_end_of_a_line_are_taken_off_and_the_colour_codes_stay(tex
 def test_a_chats_title_in_the_head_is_shown_whole_where_the_window_has_room(tmp_path):
     title = "A long conversation about the plans for the garden and the house in spring".ljust(90, ".")
     assert len(title) == 90
-    chats = [{"id": "c-1", "title": title, "updated_at": "2026-10-11T04:34:00+02:00"}]
+    stamp = "2026-10-11T04:34:00+02:00"
+    chats = [{"id": "c-1", "title": title, "updated_at": stamp}]
     wide = recorded(
         "/quit" + ENTER, service=Service(chats=chats), tmp_path=tmp_path, output=Terminal(columns=200)
     )
     row = next(line for line in wide.splitlines() if line.strip().startswith("1"))
     # The whole title, and the time of the chat behind it.
-    assert title in row and row.rstrip().endswith("2026-10-11 04:34")
+    assert title in row and row.rstrip().endswith(local_clock(stamp))
     narrow = recorded(
         "/quit" + ENTER, service=Service(chats=chats), tmp_path=tmp_path, output=Terminal(columns=60)
     )

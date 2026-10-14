@@ -232,7 +232,8 @@ def _run(scenario: str) -> dict:
         path.write_text(content, encoding="utf-8")
     try:
         done = subprocess.run(
-            ["node", "taken-back.driver.mjs"], cwd=FRONTEND, capture_output=True, text=True, timeout=120,
+            ["node", "taken-back.driver.mjs"], cwd=FRONTEND, capture_output=True, text=True,
+            encoding="utf-8", timeout=120,
         )
     finally:
         for path in [*files, *(FRONTEND / f"taken-back.{name}.mjs" for name in MODULES)]:

@@ -310,6 +310,10 @@ class Listening:
         # The process the note names has been there since long before the
         # note was written: it is the one that wrote it.
         monkeypatch.setattr(service, "began", lambda pid: 0.0)
+        # The way these tests follow is the one that signals the process;
+        # on Windows the service is asked through a marker file and only
+        # then ended from outside, which test_service_windows_stop.py holds.
+        monkeypatch.setattr(service, "_on_windows", lambda: False)
 
     def kill(self, pid: int, number: Any) -> None:
         self.signals.append((pid, number))

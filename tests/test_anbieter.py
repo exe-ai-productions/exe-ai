@@ -386,13 +386,36 @@ def _add_own(client, kennung: str, schluessel: str = "sk-test-1234"):
 
 def test_removing_a_provider_leaves_the_other_env_lines_byte_equal(client, eigener_ordner):
     before = "# my keys\nOTHER_KEY=abc\n\n# note\nLAST_KEY=xyz\n"
-    (eigener_ordner / ".env").write_text(before, encoding="utf-8")
+    # Bytes, not text: a text write would turn each line break into CRLF on
+    # Windows, and the file would not be the one the test means to keep.
+    (eigener_ordner / ".env").write_bytes(before.encode("utf-8"))
     _add_own(client, "eigene")
     assert "EIGENE_API_KEY=sk-test-1234" in (eigener_ordner / ".env").read_text()
 
     assert client.delete("/api/v1/providers/eigene").status_code == 204
 
     assert (eigener_ordner / ".env").read_bytes() == before.encode("utf-8")
+
+
+def test_a_env_file_with_windows_line_ends_keeps_them_through_a_key_coming_and_going(
+    client, eigener_ordner
+):
+    """The same file as above, written by a Windows editor: the key's line is
+    added and taken out again, and every other line comes back with its own
+    line end. Silence probe: a file with plain line ends gets no CR."""
+    crlf = b"# my keys\r\nOTHER_KEY=abc\r\n\r\n# note\r\nLAST_KEY=xyz\r\n"
+    (eigener_ordner / ".env").write_bytes(crlf)
+    _add_own(client, "eigene")
+    mid = (eigener_ordner / ".env").read_bytes()
+    assert b"EIGENE_API_KEY=sk-test-1234\r\n" in mid
+    assert mid.count(b"\r\n") == mid.count(b"\n")
+
+    assert client.delete("/api/v1/providers/eigene").status_code == 204
+
+    assert (eigener_ordner / ".env").read_bytes() == crlf
+    (eigener_ordner / ".env").write_bytes(b"OTHER_KEY=abc\n")
+    _add_own(client, "eigene")
+    assert b"\r" not in (eigener_ordner / ".env").read_bytes()
 
 
 def test_a_key_another_provider_reads_stays_until_the_last_one_goes(client, eigener_ordner, monkeypatch):

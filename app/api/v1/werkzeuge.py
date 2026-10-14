@@ -200,7 +200,10 @@ async def werkzeug_konfiguration_schreiben(
     read display fetches the result via ``GET /tools``.
     """
     pfad = config.pfad(config.mcp.servers_file)
-    pfad.write_text(daten.content, encoding="utf-8")
+    # ``newline=""``: the text goes to disk as the editor sent it — the system
+    # would turn each line break into CRLF on Windows, and the next read
+    # would hand the editor another text than the one it saved.
+    pfad.write_text(daten.content, encoding="utf-8", newline="")
     antwort = _konfig_antwort(daten.content, sprache)
     if antwort.kaputt is None and config.features.mcp:
         aufgaben.halten(

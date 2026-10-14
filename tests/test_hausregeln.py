@@ -1475,9 +1475,14 @@ const api = {
     protokoll.push(['stop', generationId, chatId])
     return { abgebrochen: 1 }
   },
-  nachrichten: async () => {
+  nachrichten: async (chatId, optionen) => {
     protokoll.push('api.nachrichten')
+    // A question whose signal has ended fails as a fetch does, and takes no
+    // claim: the wait after a stop ends at once instead of running through
+    // every claim left, one timer tick each (about 16 ms apiece on Windows).
+    if (optionen?.signal?.aborted) throw new DOMException('aborted', 'AbortError')
     await new Promise((frei) => setTimeout(frei, 0))
+    if (optionen?.signal?.aborted) throw new DOMException('aborted', 'AbortError')
     const claim = globalThis.__claims?.length ? globalThis.__claims.shift() : null
     if (claim === 'offline') throw new Error('offline')
     if (claim?.add) dienst.push(claim.add)

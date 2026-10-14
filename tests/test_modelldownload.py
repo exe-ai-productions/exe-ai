@@ -267,7 +267,9 @@ def test_a_repo_without_an_owner_has_no_third_name(tmp_path):
     with pytest.raises(DownloadFehler) as fehler:
         Modelldownload(tmp_path).starten("Repo", "m.gguf", size=4096)
     assert fehler.value.grund == "schon_da"
-    assert [pfad.name for pfad in sorted(tmp_path.iterdir())] == ["Repo-m.gguf", "m.gguf"]
+    # By name: the order of two paths follows the host's rules for case
+    # (Windows folds it), and only the two names are the point here.
+    assert sorted(pfad.name for pfad in tmp_path.iterdir()) == ["Repo-m.gguf", "m.gguf"]
 
 
 def test_a_free_name_stays_flat(tmp_path, strom):

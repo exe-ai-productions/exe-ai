@@ -12,8 +12,28 @@ import re
 from pathlib import Path
 
 
+def _zeilen_lesen(datei: Path) -> tuple[list[str], str]:
+    """The lines of the file and the line ending it uses: CRLF for a file a
+    Windows editor wrote, LF otherwise and for a file that is not there yet.
+    Read without translation, so a rewrite hands every line back the way it
+    stood."""
+    if not datei.exists():
+        return [], "\n"
+    with open(datei, encoding="utf-8", newline="") as quelle:
+        text = quelle.read()
+    return text.splitlines(), "\r\n" if "\r\n" in text else "\n"
+
+
+def _zeilen_schreiben(datei: Path, zeilen: list[str], ende: str) -> None:
+    """The lines, each closed by ``ende`` and none translated by the system
+    (``newline=""``: on Windows a plain LF would turn into CRLF)."""
+    text = ende.join(zeilen).rstrip() + ende if zeilen else ""
+    with open(datei, "w", encoding="utf-8", newline="") as ziel:
+        ziel.write(text)
+
+
 def env_schreiben(datei: Path, name: str, wert: str) -> None:
-    zeilen = datei.read_text(encoding="utf-8").splitlines() if datei.exists() else []
+    zeilen, ende = _zeilen_lesen(datei)
     neu, gesetzt = [], False
     for zeile in zeilen:
         if re.match(rf"^\s*#?\s*{re.escape(name)}\s*=", zeile):
@@ -25,7 +45,7 @@ def env_schreiben(datei: Path, name: str, wert: str) -> None:
     if not gesetzt:
         neu.append(f"{name}={wert}")
     datei.parent.mkdir(parents=True, exist_ok=True)
-    datei.write_text("\n".join(neu).rstrip() + "\n", encoding="utf-8")
+    _zeilen_schreiben(datei, neu, ende)
     datei.chmod(0o600)
 
 
@@ -47,10 +67,10 @@ def env_entfernen(datei: Path, name: str) -> bool:
     stay as the user wrote them. Says whether there was a line to take."""
     if not datei.exists():
         return False
-    zeilen = datei.read_text(encoding="utf-8").splitlines()
+    zeilen, ende = _zeilen_lesen(datei)
     neu = [z for z in zeilen if not re.match(rf"^\s*{re.escape(name)}\s*=", z)]
     if len(neu) == len(zeilen):
         return False
-    datei.write_text("\n".join(neu).rstrip() + "\n" if neu else "", encoding="utf-8")
+    _zeilen_schreiben(datei, neu, ende)
     datei.chmod(0o600)
     return True

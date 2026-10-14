@@ -18,6 +18,7 @@ from cli import glyphs, prefs, render, themes, wordmark
 from cli.client import ServiceClient
 from cli.interfaces import Context, Screen
 from cli.texts import Texts
+from tests.cli.program import local_clock
 
 WIDTH = 80
 ESCAPE = "\x1b"
@@ -622,9 +623,9 @@ def recent() -> list[str]:
     """The newest three chats with the number each one opens by."""
     return [
         WORDS.t("cli.recent_chats"),
-        "1  Say hello in one sentence  2026-10-11 04:34",
-        "2  Image ideas for October    2026-10-10 18:00",
-        "3  Project plan               2026-10-09 09:00",
+        f"1  Say hello in one sentence  {local_clock(CHATS[0]['updated_at'])}",
+        f"2  Image ideas for October    {local_clock(CHATS[1]['updated_at'])}",
+        f"3  Project plan               {local_clock(CHATS[2]['updated_at'])}",
         "",
     ]
 

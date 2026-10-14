@@ -86,6 +86,9 @@ def test_rundreise_sichern_und_lesen(config, client):
     daten = client.get("/api/v1/tools/config").json()
     assert daten["content"] == GUELTIG
     assert Path(config.pfad(config.mcp.servers_file)).read_text(encoding="utf-8") == GUELTIG
+    # Byte for byte: the line breaks stay the ones the editor sent, whatever
+    # the host's own line end is.
+    assert Path(config.pfad(config.mcp.servers_file)).read_bytes() == GUELTIG.encode("utf-8")
 
 
 def test_kaputte_datei_wird_gesichert_aber_benannt(config, client):

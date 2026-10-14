@@ -21,13 +21,14 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 import uvicorn
-from prompt_toolkit.application import create_app_session
+from prompt_toolkit.application import create_app_session, get_app_session
 from prompt_toolkit.data_structures import Size
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import ColorDepth, DummyOutput, Output
@@ -101,6 +102,13 @@ class Gated(StubService):
 # --- In this process ---------------------------------------------------------------
 
 
+def local_clock(stamp: str) -> str:
+    """A time of the service as the client shows it: in the clock of the
+    machine the test runs on, which is not the zone the stamp was written
+    in."""
+    return datetime.fromisoformat(stamp).astimezone().strftime("%Y-%m-%d %H:%M")
+
+
 def in_full_colours(look: str, colour_name: str) -> str:
     """A colour of a look as a terminal is sent it in 24 bits."""
     colour = themes.get(look).colours[colour_name]
@@ -108,16 +116,34 @@ def in_full_colours(look: str, colour_name: str) -> str:
     return f"{FULL}{red};{green};{blue}"
 
 
+@contextlib.contextmanager
+def a_session_without_the_console() -> Iterator[None]:
+    """The session a screen is built in. A test that gave its thread an
+    output keeps it; otherwise the screen would be handed the console of
+    the program that runs the tests — and on Windows a runner has none, so
+    looking for it ends in an error of its own. Here it gets an output that
+    is eighty columns wide and forty rows high, and an input nobody types
+    into."""
+    if get_app_session()._output is not None:
+        yield
+        return
+    with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
+        yield
+
+
 def terminal(
     monkeypatch: pytest.MonkeyPatch, environment: dict[str, str]
 ) -> tuple[io.StringIO, Output]:
     """A terminal of that environment for a run in this process: what it is
     sent, colour codes included, and the output to hand to the run. What
-    the environment says about colours is read as at a real start."""
+    the environment says about colours is read as at a real start — on
+    every system the way a POSIX one reads it: where Windows would ask the
+    console of the machine, the environment of the test is what says."""
     for name in COLOUR_VARIABLES:
         monkeypatch.delenv(name, raising=False)
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setattr("rich.console.WINDOWS", False)
     sent = io.StringIO()
     output = Vt100_Output(
         sent,
