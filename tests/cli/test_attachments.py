@@ -5,6 +5,7 @@ service is the stand-in; nothing is drawn."""
 from __future__ import annotations
 
 import io
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -42,7 +43,9 @@ def folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (work / "sub").mkdir()
     (work / "example.com").write_text("not a mail address", encoding="utf-8")
     monkeypatch.chdir(work)
+    # ``~`` reads HOME on a Unix system and USERPROFILE on Windows.
     monkeypatch.setenv("HOME", str(work))
+    monkeypatch.setenv("USERPROFILE", str(work))
     return work
 
 
@@ -111,7 +114,10 @@ def test_the_home_folder_is_counted(tool, stub, folder):
 
 def test_a_sentence_that_ends_right_behind_the_path_still_finds_the_file(tool, stub):
     chat.send(tool, "have a look at @notiz.txt.")
-    assert [upload[1] for upload in stub.uploads] == ["notiz.txt"]
+    # Windows reads a name with a period at its end as the name without it,
+    # so there the first try already finds the file.
+    assert [upload[1].rstrip(".") for upload in stub.uploads] == ["notiz.txt"]
+    assert [upload[3] for upload in stub.uploads] == [b"hello"]
 
 
 def test_the_same_file_named_twice_goes_once(tool, stub):
@@ -217,21 +223,39 @@ def test_nothing_is_completed_without_an_at_or_inside_a_word(folder):
 # --- A dropped file -------------------------------------------------------------------------
 
 
+def led_to(mentions: str | None) -> list[Path]:
+    """The files the mentions in the field lead back to: a path is written
+    behind the ``@`` with a backslash before each backslash, so what counts
+    is where it leads, not how it is spelled."""
+    assert mentions is not None and mentions.endswith(" ")
+    return list(attachments.mentioned_files(mentions))
+
+
 def test_a_dropped_path_becomes_a_mention(folder):
     path = str(folder / "notiz.txt")
-    assert attachments.paths_as_mentions(path) == f"@{path} "
+    mention = attachments.paths_as_mentions(path)
+    assert mention is not None and mention.startswith("@")
+    assert led_to(mention) == [Path(path)]
 
 
 def test_a_dropped_path_with_a_blank_is_written_with_a_backslash(folder):
     dropped = str(folder / "mein bild.png")
-    # A terminal writes the blank with a backslash, or the path in quotes.
-    for typed in (dropped.replace(" ", "\\ "), f"'{dropped}'"):
-        assert attachments.paths_as_mentions(typed) == "@" + dropped.replace(" ", "\\ ") + " "
+    if os.name == "nt":
+        # A terminal on Windows puts the path in quotes.
+        typed_forms = [f'"{dropped}"']
+    else:
+        # A terminal writes the blank with a backslash, or the path in quotes.
+        typed_forms = [dropped.replace(" ", "\\ "), f"'{dropped}'"]
+    for typed in typed_forms:
+        mention = attachments.paths_as_mentions(typed)
+        assert led_to(mention) == [Path(dropped)]
+        if os.name != "nt":
+            assert mention == "@" + dropped.replace(" ", "\\ ") + " "
 
 
 def test_several_dropped_files_become_several_mentions(folder):
     one, two = str(folder / "notiz.txt"), str(folder / "bild.png")
-    assert attachments.paths_as_mentions(f"{one} {two}") == f"@{one} @{two} "
+    assert led_to(attachments.paths_as_mentions(f"{one} {two}")) == [Path(one), Path(two)]
 
 
 @pytest.mark.parametrize(
@@ -266,6 +290,8 @@ def test_a_file_dropped_on_the_running_screen_stands_in_the_field_as_a_mention(
     with stub.http() as http:
         run = run_client(http, tmp_path, monkeypatch, drive)
     assert run.code == 0
-    assert stub.sent[0]["content"] == f"@{path}"
+    content = stub.sent[0]["content"]
+    assert content.startswith("@")
+    assert list(attachments.mentioned_files(content)) == [Path(path)]
     assert [upload[1] for upload in stub.uploads] == ["notiz.txt"]
     assert stub.sent[0]["dokumente"] == ["doc-1"]

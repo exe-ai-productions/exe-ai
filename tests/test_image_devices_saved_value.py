@@ -14,6 +14,8 @@ from fastapi.testclient import TestClient
 
 from tests.image_window_page import needs_browser, run_cases
 
+BROWSER_ON_MAC_ONLY = pytest.mark.platforms("darwin", reason="the browser run of the interface is checked on macOS only")
+
 URL = "/api/v1/settings/global/bildgeraete"
 
 
@@ -51,6 +53,7 @@ def report() -> dict:
     return run_cases(CASES)
 
 
+@BROWSER_ON_MAC_ONLY
 @needs_browser
 def test_the_window_takes_over_the_corrected_split(report):
     assert report["splitTextShownFirst"] is True
@@ -59,6 +62,7 @@ def test_the_window_takes_over_the_corrected_split(report):
     assert report["splitTextShownAfter"] is False
 
 
+@BROWSER_ON_MAC_ONLY
 @needs_browser
 def test_the_window_takes_over_a_text_the_service_tidied(report):
     assert report["backendStored"] == "clip=cpu"

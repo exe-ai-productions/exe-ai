@@ -102,7 +102,7 @@ def test_the_conversation_is_announced_with_what_the_voice_is_loaded_with(
     answer = client.post(HOLD)
     assert answer.status_code == 200 and answer.json() == {"kept": True}
     assert voice.held == [VoiceSpec(
-        library_dir="/engine", model=str(folder / "voice-Q8_0.gguf"),
+        library_dir=str(Path("/engine")), model=str(folder / "voice-Q8_0.gguf"),
         mmproj=str(folder / "vision" / "voice-Q8_0-mmproj-Q8_0.gguf"),
         speaker=str(folder / "sample.wav"), gpu_layers=40, threads=6,
     )]

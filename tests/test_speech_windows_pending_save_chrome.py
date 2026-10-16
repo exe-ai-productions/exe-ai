@@ -32,10 +32,13 @@ from app import appfenster, prozessstopp
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("node") is None or not (FRONTEND / "node_modules" / "vite").exists(),
-    reason="no node or no frontend dependencies on this machine",
-)
+pytestmark = [
+    pytest.mark.platforms("darwin", reason="the browser run of the interface is checked on macOS only"),
+    pytest.mark.skipif(
+        shutil.which("node") is None or not (FRONTEND / "node_modules" / "vite").exists(),
+        reason="no node or no frontend dependencies on this machine",
+    ),
+]
 
 SHELL = """<script>
   import Bereinigungsserver from %(bereinigung)r

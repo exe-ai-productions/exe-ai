@@ -1,10 +1,9 @@
 # Patch notes
 
-## 0.6.14 — Picture Studio
+## 0.6.14 — Feature Update
 
 ### New
 
-- Added a picture studio of its own that keeps its picture, mask, model and values, draws without a chat and lists its own pictures.
 - Added the switch "Keep model loaded" to the speech server window; it keeps the voice loaded for the length of a conversation, so it starts speaking sooner.
 - Added the field "Pause before sending" to the speech server window; it sets how long you stay silent before what you said is sent.
 - Added "Auto" for GPU layers in the llama.cpp server windows: an empty field leaves it to llama.cpp how much of the model goes on the graphics card.
@@ -49,9 +48,10 @@
 
 ### Images and video
 
-- We improved the studio, which now opens with the hand tool and with the mask switched off; a mask that is switched off is neither shown nor sent.
+- We improved the Images area, which no longer belongs to a chat: it keeps its own picture, mask, model and values, draws without a chat and lists only its own pictures.
+- We improved the Images area, which now opens with the hand tool and with the mask switched off; a mask that is switched off is neither shown nor sent.
 - Fixed an issue where brush and eraser left marks while the mask was switched off.
-- We improved the studio row, which keeps the original picture on top, and the studio now shows the resolution of the picture in the area.
+- We improved the row of pictures in the Images area, which keeps the original picture on top, and the area now shows the resolution of the picture.
 - Fixed an issue that loaded the image model a second time for the first picture after the image server was started by hand.
 - Fixed an issue where upscaling ignored the device settings of the image server.
 - Fixed an issue where a refused setting of the image server disappeared.

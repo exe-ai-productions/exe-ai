@@ -14,6 +14,8 @@ from fastapi.testclient import TestClient
 
 from tests.image_window_page import needs_browser, run_cases
 
+BROWSER_ON_MAC_ONLY = pytest.mark.platforms("darwin", reason="the browser run of the interface is checked on macOS only")
+
 URL = "/api/v1/settings/global/bildgeraete"
 
 
@@ -70,6 +72,7 @@ def report() -> dict:
     return run_cases(CASES)
 
 
+@BROWSER_ON_MAC_ONLY
 @needs_browser
 def test_the_window_shows_the_kept_value_and_says_the_change_was_not_kept(report):
     assert report["firstShown"] == "5"

@@ -39,7 +39,9 @@ from app.tools.registry import WerkzeugRegistry
 # ``killpg``, a Unix signal — is marked with the systems it belongs
 # to and skipped elsewhere, with the reason on the skip line. Everything else
 # runs everywhere: a test is marked only when the behaviour does not exist on
-# the other system, never because it would need rewriting there.
+# the other system, never because it would need rewriting there. The one
+# exception is the group of tests that open the built interface in a browser
+# (``*_chrome.py`` and the image-window cases): they run on macOS only.
 #
 #     @pytest.mark.platforms("posix", reason="the execute bit")
 #     pytestmark = pytest.mark.platforms("darwin", reason="the Keychain")

@@ -55,7 +55,7 @@ def test_every_answer_reads_the_program_through_the_one_function(
     )
     monkeypatch.setattr(runner_module, "_program", lambda runner, config: program)
     answer = client.get(route).json()
-    assert answer["programm"] == "/opt/test/llama-server"
+    assert answer["programm"] == str(program.path)
     assert answer["version"] == "b9999"
     assert answer["updatable"] is True
     assert answer["restorable"] is True

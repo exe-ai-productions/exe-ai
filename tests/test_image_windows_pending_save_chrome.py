@@ -13,6 +13,8 @@ import pytest
 
 from tests.image_window_page import needs_browser, run_cases
 
+pytestmark = pytest.mark.platforms("darwin", reason="the browser run of the interface is checked on macOS only")
+
 CASES = r"""
 const sent = (key) => backend.calls.filter((c) => c.key === key).map((c) => c.sent)
 

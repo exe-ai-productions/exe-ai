@@ -116,7 +116,9 @@ def test_the_process_answers_on_its_pipes_and_ends_when_told():
         assert _ask(process, {"op": "dance"}) == {"ok": False, "error": "unknown_operation"}
         refused = _ask(process, {"op": "load", "library_dir": "/nonexistent", "model": "m",
                                   "mmproj": "p", "speaker": None})
-        assert refused["ok"] is False and refused["error"].startswith("library")
+        # The refusal names the folder it could not use; how the system words
+        # a missing folder is its own business.
+        assert refused["ok"] is False and "nonexistent" in refused["error"]
         assert process.stdin
         process.stdin.write(json.dumps({"op": "quit"}) + "\n")
         process.stdin.flush()

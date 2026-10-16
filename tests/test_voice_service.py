@@ -214,7 +214,7 @@ def test_the_command_is_the_program_itself_packaged_and_start_py_from_source(mon
 
     monkeypatch.setattr(paketierung, "ist_eingefroren", lambda: True)
     monkeypatch.setattr(paketierung, "programmpfad", lambda: Path("/app/Exe AI"))
-    assert voice_service.worker_command() == ["/app/Exe AI", "--voice"]
+    assert voice_service.worker_command() == [str(Path("/app/Exe AI")), "--voice"]
     monkeypatch.setattr(paketierung, "ist_eingefroren", lambda: False)
     command = voice_service.worker_command()
     assert command[0] == sys.executable and command[1].endswith("start.py")

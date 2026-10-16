@@ -18,9 +18,12 @@ import pytest
 
 from tests.model_windows_page import BROWSER_TESTS_POSSIBLE, run_cases
 
-pytestmark = pytest.mark.skipif(
-    not BROWSER_TESTS_POSSIBLE, reason="no node or no frontend dependencies on this machine"
-)
+pytestmark = [
+    pytest.mark.platforms("darwin", reason="the browser run of the interface is checked on macOS only"),
+    pytest.mark.skipif(
+        not BROWSER_TESTS_POSSIBLE, reason="no node or no frontend dependencies on this machine"
+    ),
+]
 
 CASES = r"""
 const report = {}

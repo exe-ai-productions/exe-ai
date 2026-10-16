@@ -48,7 +48,10 @@ def texts() -> Texts:
 def the_editor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     script = tmp_path / "fake_editor.py"
     script.write_text(SCRIPT, encoding="utf-8")
-    monkeypatch.setenv("VISUAL", f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}")
+    # The editor line is split the way the system splits a command line: with
+    # double quotes on Windows, where the words keep a single quote.
+    quote = (lambda word: f'"{word}"') if sys.platform == "win32" else shlex.quote
+    monkeypatch.setenv("VISUAL", f"{quote(sys.executable)} {quote(str(script))}")
     monkeypatch.delenv("EDITOR_MODE", raising=False)
 
 

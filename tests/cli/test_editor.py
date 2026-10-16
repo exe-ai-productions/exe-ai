@@ -96,7 +96,10 @@ def tool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     needs, with the script as the editor."""
     script = tmp_path / "fake_editor.py"
     script.write_text(SCRIPT, encoding="utf-8")
-    monkeypatch.setenv("VISUAL", f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}")
+    # The editor line is split the way the system splits a command line: with
+    # double quotes on Windows, where the words keep a single quote.
+    quote = (lambda word: f'"{word}"') if sys.platform == "win32" else shlex.quote
+    monkeypatch.setenv("VISUAL", f"{quote(sys.executable)} {quote(str(script))}")
     monkeypatch.setenv("EDITOR_RECORD", str(tmp_path / "path.txt"))
     monkeypatch.delenv("EDITOR_MODE", raising=False)
     context = SimpleNamespace(screen=PlainScreen(), renderer=RecordingRenderer())
@@ -135,8 +138,11 @@ def test_an_error_code_drops_the_text_and_says_nothing(tool, monkeypatch):
 def test_an_editor_that_cannot_be_started_is_said_in_the_systems_words(tool, monkeypatch):
     monkeypatch.setenv("VISUAL", "no-such-editor-0f3a")
     assert editor.edit(tool, "Before.") is None
-    assert len(tool.renderer.errors) == 1
-    assert "no-such-editor-0f3a" in tool.renderer.errors[0]
+    # What the system says for a program it cannot start: the words are its
+    # own, so they are asked of it instead of written down here.
+    with pytest.raises(OSError) as asked:
+        subprocess.run(["no-such-editor-0f3a"], check=False)
+    assert tool.renderer.errors == [str(asked.value)]
 
 
 def test_the_editor_is_never_started_through_a_shell(tool, monkeypatch):

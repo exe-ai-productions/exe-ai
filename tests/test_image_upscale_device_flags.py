@@ -38,15 +38,15 @@ def test_the_upscale_command_carries_the_machine_values(tmp_path, monkeypatch):
                         ("--backend", "cuda0")):
         assert command[command.index(flag) + 1] == value
     assert "--offload-to-cpu" in command
-    assert command[command.index("-i") + 1] == "/in.png"
-    assert command[-2:] == ["-o", "/out.png"]
+    assert command[command.index("-i") + 1] == str(Path("/in.png"))
+    assert command[-2:] == ["-o", str(Path("/out.png"))]
 
 
 def test_values_that_are_unset_stay_off_the_line(tmp_path, monkeypatch):
     command = _runner(tmp_path, monkeypatch).befehl(_upscale(), Path("/out.png"))
     assert command == [
-        "/fake/sd-cli", "-M", "upscale", "--upscale-model", "/u/esrgan.pth",
-        "-i", "/in.png", "-o", "/out.png",
+        str(Path("/fake/sd-cli")), "-M", "upscale", "--upscale-model", str(Path("/u/esrgan.pth")),
+        "-i", str(Path("/in.png")), "-o", str(Path("/out.png")),
     ]
 
 
