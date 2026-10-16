@@ -38,6 +38,9 @@ from app import ggufmtp as gguf
 
 BILDMODELL = "bildmodell"
 TEXTVERSTEHER = "textversteher"
+# The vision half of a vision-language encoder (an mmproj file): its header
+# says it holds a vision encoder, which no text encoder does.
+SEHTEIL = "sehteil"
 VAE = "vae"
 # Not one of the kinds ``sorte`` answers — such a file is a VAE there — but
 # what ``companion`` calls a VAE of video frames.
@@ -46,7 +49,7 @@ UNBEKANNT = "unbekannt"
 
 
 def sorte(pfad: Path) -> str:
-    """Which of the three kinds this file's header says it is, or
+    """Which of the four kinds this file's header says it is, or
     ``unbekannt``. Never raises — a broken or foreign file proves nothing
     either way, and the caller must still be able to offer it as today."""
     try:
@@ -55,8 +58,8 @@ def sorte(pfad: Path) -> str:
         return UNBEKANNT
     if gelesen is None:
         return UNBEKANNT
-    is_gguf, architecture, names = gelesen
-    return header_kind(names, architecture, is_gguf=is_gguf)
+    is_gguf, architecture, names, vision = gelesen
+    return header_kind(names, architecture, is_gguf=is_gguf, vision=vision)
 
 
 # --- safetensors -------------------------------------------------------
@@ -134,7 +137,12 @@ _GGUF_TEXTVERSTEHER_ARCHITEKTUREN = {
 }
 
 
-def _gguf_sorte(architecture: str | None) -> str:
+def _gguf_sorte(architecture: str | None, vision: bool = False) -> str:
+    # The vision flag is checked first: a projector file names the same
+    # architecture (``clip``) as a CLIP text encoder, and only this flag
+    # tells the two apart.
+    if vision:
+        return SEHTEIL
     if architecture in _GGUF_BILDMODELL_ARCHITEKTUREN:
         return BILDMODELL
     if architecture in _GGUF_TEXTVERSTEHER_ARCHITEKTUREN:
@@ -148,6 +156,13 @@ def _gguf_architecture(header: gguf.Header | None) -> str | None:
         return None
     architecture = header[0].get(gguf.ARCHITEKTUR_SCHLUESSEL)
     return architecture if isinstance(architecture, str) else None
+
+
+def _gguf_vision(header: gguf.Header | None) -> bool:
+    """Whether the header says the file holds a vision encoder."""
+    if header is None:
+        return False
+    return header[0].get(gguf.SEHTEIL_SCHLUESSEL) is True
 
 
 # --- Family and companion kind -------------------------------------------
@@ -174,10 +189,11 @@ def tensors(path: Path) -> tuple[dict[str, list[int]], str | None] | None:
     return gelesen[2], gelesen[1]
 
 
-# A header read: whether it is GGUF, GGUF's architecture, and every weight's
+# A header read: whether it is GGUF, GGUF's architecture, every weight's
 # name with its shape — None for the names when a GGUF name is not valid
-# UTF-8, so the architecture still answers.
-_ImageHeader = tuple[bool, str | None, dict[str, list[int]] | None]
+# UTF-8, so the architecture still answers — and whether a GGUF header
+# says the file holds a vision encoder.
+_ImageHeader = tuple[bool, str | None, dict[str, list[int]] | None, bool]
 
 
 def _image_header(path: Path) -> _ImageHeader | None:
@@ -198,7 +214,10 @@ def _image_header_cached(path: str, size: int, mtime_ns: int) -> _ImageHeader | 
                 header = gguf.read_header(Path(path))
                 if header is None:
                     return None
-                return True, _gguf_architecture(header), _gguf_names(header)
+                return (
+                    True, _gguf_architecture(header), _gguf_names(header),
+                    _gguf_vision(header),
+                )
             if len(start) == 8:
                 header_length = struct.unpack("<Q", start)[0]
                 if 0 < header_length < _SAFETENSORS_HOECHSTE_KOPF_LAENGE:
@@ -209,7 +228,7 @@ def _image_header_cached(path: str, size: int, mtime_ns: int) -> _ImageHeader | 
                             name: list(value.get("shape") or [])
                             for name, value in loaded.items()
                             if name != "__metadata__" and isinstance(value, dict)
-                        }
+                        }, False
     except OSError:
         # Not readable right now: raised past the cache, so it is not kept.
         raise
@@ -325,20 +344,22 @@ def header_family(
 
 
 def header_kind(
-    names: dict[str, list[int]] | None, architecture: str | None, *, is_gguf: bool
+    names: dict[str, list[int]] | None, architecture: str | None, *, is_gguf: bool,
+    vision: bool = False,
 ) -> str:
-    """Which of the three kinds a header says the file is, or ``unbekannt``
-    — what ``sorte`` answers for a file that lies in a folder."""
+    """Which of the four kinds a header says the file is, or ``unbekannt``
+    — what ``sorte`` answers for a file that lies in a folder. ``vision``:
+    the GGUF header says the file holds a vision encoder."""
     if is_gguf:
-        return _gguf_sorte(architecture)
+        return _gguf_sorte(architecture, vision)
     return _sorte_aus_tensornamen(list(names or {}))
 
 
 class HeadReading(NamedTuple):
     """What a header says: the family it names (``None`` where it names
-    none), the kind of file (``BILDMODELL``, ``TEXTVERSTEHER``, ``VAE`` or
-    ``UNBEKANNT``) and whether the file is a LoRA or a ControlNet — which
-    has no kind and no family here."""
+    none), the kind of file (``BILDMODELL``, ``TEXTVERSTEHER``, ``SEHTEIL``,
+    ``VAE`` or ``UNBEKANNT``) and whether the file is a LoRA or a
+    ControlNet — which has no kind and no family here."""
 
     family: str | None
     kind: str
@@ -346,10 +367,14 @@ class HeadReading(NamedTuple):
 
 
 def read_header(
-    names: dict[str, list[int]] | None, architecture: str | None, *, is_gguf: bool
+    names: dict[str, list[int]] | None, architecture: str | None, *, is_gguf: bool,
+    vision: bool = False,
 ) -> HeadReading:
     family, companion = header_family(names, architecture, is_gguf=is_gguf)
-    kind = UNBEKANNT if companion else header_kind(names, architecture, is_gguf=is_gguf)
+    kind = (
+        UNBEKANNT if companion
+        else header_kind(names, architecture, is_gguf=is_gguf, vision=vision)
+    )
     return HeadReading(family, kind, companion)
 
 
@@ -397,7 +422,7 @@ def header_from_bytes(data: bytes, file_size: int) -> _ImageHeader | None:
             raise HeaderIncomplete()
         if header is None:
             return None
-        return True, _gguf_architecture(header), _gguf_names(header)
+        return True, _gguf_architecture(header), _gguf_names(header), _gguf_vision(header)
     if len(data) < 8:
         raise HeaderIncomplete(8)
     length = struct.unpack("<Q", data[:8])[0]
@@ -415,7 +440,7 @@ def header_from_bytes(data: bytes, file_size: int) -> _ImageHeader | None:
         name: list(value.get("shape") or [])
         for name, value in loaded.items()
         if name != "__metadata__" and isinstance(value, dict)
-    }
+    }, False
 
 
 def _is_gguf(path: Path) -> bool:

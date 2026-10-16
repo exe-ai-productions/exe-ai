@@ -20,11 +20,13 @@
   import { t } from '../lib/texte.svelte.js'
   import { neuigkeit } from '../lib/ereignisstrom.svelte.js'
   import { katalogOeffnen, melde } from '../lib/zustand.svelte.js'
+  import { createDelayedWriter } from '../lib/delayedWriter.js'
   import Servertafel from './Servertafel.svelte'
   import Serverregler from './Serverregler.svelte'
   import Startknopf from './Startknopf.svelte'
   import Startfehler from './Startfehler.svelte'
   import Serverlogkopf from './Serverlogkopf.svelte'
+  import LlamaCppSection from './LlamaCppSection.svelte'
   import {
     protokollOffen,
     oeffneProtokoll,
@@ -46,6 +48,34 @@
     if (protokollOffen()) setzeProtokollZeilen(protokoll)
   })
 
+  /* The file and the port the idle server shows are what is stored for the
+     next start (the answer says so), else the server's own. What the hand
+     changes from there is written as it is touched — a beat after the last
+     change, made at once when the window goes away and before "Start". */
+  let ausgangsstand = null
+  const writer = createDelayedWriter(400)
+  $effect(() => () => {
+    writer.flush()
+  })
+  $effect(() => {
+    const jetzt = { model: gewaehlt, port }
+    writer.cancel('embedding')
+    if (!ausgangsstand || auskunft?.laeuft || !jetzt.model) return
+    if (jetzt.model === ausgangsstand.model && jetzt.port === ausgangsstand.port) return
+    writer.plan('embedding', () =>
+      api.einstellungMischen('global', 'embedding', jetzt).then(
+        () => {
+          ausgangsstand = jetzt
+        },
+        () => {
+          melde(t('fehler.einstellung_speichern'), 'fehler')
+          gewaehlt = ausgangsstand.model
+          port = ausgangsstand.port
+        },
+      ),
+    )
+  })
+
   async function laden() {
     try {
       auskunft = await api.einbettungAuskunft()
@@ -53,6 +83,7 @@
       if (!gewaehlt || !auskunft.modelle.some((m) => m.name === gewaehlt)) {
         gewaehlt = auskunft.modell || auskunft.modelle[0]?.name || ''
       }
+      if (!ausgangsstand && !auskunft.laeuft) ausgangsstand = { model: gewaehlt, port }
       /* An open drawer is fed when this panel loads — it fetches on a
          change, not on a timer (unlike the other server windows), and the
          pop-out button fetches for itself below. A closed drawer costs no
@@ -79,6 +110,7 @@
     if (arbeitet) return
     arbeitet = true
     try {
+      await writer.flush()
       auskunft = auskunft?.laeuft
         ? await api.einbettungStoppen()
         : await api.einbettungStarten(gewaehlt, port)
@@ -156,6 +188,7 @@
         <Startknopf text={tat.text} punkt={tat.punkt} gesperrt={tat.gesperrt} onTat={tat.onTat} />
       {/snippet}
     </Serverregler>
+    <LlamaCppSection {auskunft} onrefresh={laden} />
   {/snippet}
 
   {#snippet unten()}

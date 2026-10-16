@@ -20,6 +20,11 @@ PAGE = (
 )
 
 
+# One model that answers: a client that finds none is asked to set one up,
+# which is no part of what these tests are about.
+ONE_MODEL = {"id": "local", "name": "Local Model", "erreichbar": True, "context_tokens": 8192}
+
+
 class Service:
     """A stand-in that serves the page with the key and guards its API with
     it, the way the service does. Every request it sees is kept."""
@@ -364,7 +369,7 @@ class Guarded(Service):
         if path == "/api/v1/health":
             return httpx.Response(200, json={"status": "ok", "version": "9.8.7"})
         if path == "/api/v1/models":
-            return httpx.Response(200, json=[])
+            return httpx.Response(200, json=[ONE_MODEL])
         if path == "/api/v1/chats" and request.method == "POST":
             return httpx.Response(201, json={"id": "chat-1", "title": "A fresh chat"})
         return httpx.Response(404, json={"detail": "No such address"})
@@ -527,7 +532,7 @@ def test_a_local_service_never_asks(terminal, tmp_path):
         if request.url.path == "/api/v1/health":
             return httpx.Response(200, json={"status": "ok", "version": "9.8.7"})
         if request.url.path == "/api/v1/models":
-            return httpx.Response(200, json=[])
+            return httpx.Response(200, json=[ONE_MODEL])
         if request.url.path == "/api/v1/chats" and request.method == "POST":
             return httpx.Response(201, json={"id": "chat-1", "title": "A fresh chat"})
         return httpx.Response(404, json={"detail": "No such address"})

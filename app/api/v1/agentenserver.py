@@ -38,9 +38,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from app import agentenmodellwahl
+from app.feineinstellungen import context_per_request
 from app.agentenserver import ENDPUNKT_ID, MODELL_VORGABE, endpunkt_bauen
 from app.api.abhaengigkeiten import hole_config, hole_sprache
-from app.api.v1.runner import Modelldatei, _zuordnung
+from app.api.v1.runner import Modelldatei, ProgramState, _zuordnung, program_state
 from app.config import Config
 from app.i18n import t
 from app.modellrunner import RunnerFehler
@@ -49,7 +50,7 @@ from app.systemspeicher import gesamt_gb
 router = APIRouter(prefix="/agentenmodell", tags=["agentenmodell"])
 
 
-class Auskunft(BaseModel):
+class Auskunft(ProgramState):
     """What the slot's own page needs to draw itself.
 
     Deliberately the same shape as the model server's answer: the two pages
@@ -57,7 +58,6 @@ class Auskunft(BaseModel):
     page below has to ask a different question for every field it mirrors.
     """
 
-    programm: str | None = None
     ordner: str
     # The models this server could be given. The same folder the chat model
     # uses — a small model is a model. With sizes, because the memory
@@ -66,6 +66,8 @@ class Auskunft(BaseModel):
     # The vision projectors in the folder. Their own list: they cannot start,
     # but the page needs to know they are there to offer one.
     mmproj: list[str] = []
+    # The size in gigabytes of each projector above, by name.
+    projector_size_gb: dict[str, float] = {}
     # The prediction modules — the built-in drafts, with sizes because a
     # draft is a passenger in the memory plan.
     mtp: list[Modelldatei] = []
@@ -79,6 +81,10 @@ class Auskunft(BaseModel):
     # does.
     kontext: int | None = None
     schichten: int | None = None
+    # The context one request gets while the slots do not share the cache
+    # (several slots, `kv_unified` off) — None where every request may use
+    # the whole window.
+    kontext_je_anfrage: int | None = None
     port: int | None = None
     drafter: str | None = None
     vision: str | None = None
@@ -120,10 +126,11 @@ def _auskunft(request: Request) -> Auskunft:
     runner = _runner(request)
     lauf = runner.lauf()
     return Auskunft(
-        programm=str(runner.programm) if runner.programm else None,
+        **program_state(runner, request.app.state.config),
         ordner=str(runner.ordner),
         modelle=[Modelldatei(name=m.name, groesse_gb=m.groesse_gb) for m in runner.modelle()],
         mmproj=runner.mmproj(),
+        projector_size_gb=runner.projector_sizes(),
         mtp=[Modelldatei(name=m.name, groesse_gb=m.groesse_gb) for m in runner.mtp()],
         speicher_gb=gesamt_gb(),
         kerne=os.cpu_count(),
@@ -132,6 +139,9 @@ def _auskunft(request: Request) -> Auskunft:
         modell=lauf.modell if lauf else None,
         kontext=lauf.kontext if lauf else None,
         schichten=lauf.schichten if lauf else None,
+        kontext_je_anfrage=(
+            context_per_request(lauf.kontext, lauf.fein) if lauf else None
+        ),
         port=lauf.port if lauf else runner.port_vorgabe,
         drafter=lauf.drafter if lauf else None,
         vision=lauf.vision if lauf else None,
@@ -144,7 +154,7 @@ def _auskunft(request: Request) -> Auskunft:
             name: wert
             for name, wert in agentenmodellwahl.VORGABE.items()
             # The choice itself is answered by the field, not by a fallback.
-            if name not in ("sorte", "wert")
+            if name not in ("sorte", "wert", "module")
         },
     )
 
@@ -171,7 +181,7 @@ async def starten(
         # Window, layers, port, speed module, projector and the engine levers,
         # all read from the one field's setting — the same call the autostart
         # makes. Nothing about how this slot runs is decided in this file.
-        startwerte = agentenmodellwahl.slot_startwerte(repositories)
+        startwerte = agentenmodellwahl.slot_startwerte(repositories, daten.modell)
         lauf = _runner(request).starten(daten.modell, **startwerte)
     except RunnerFehler as fehler:
         lage = {
@@ -181,6 +191,9 @@ async def starten(
             "kein_modell": status.HTTP_404_NOT_FOUND,
         }.get(fehler.grund, status.HTTP_400_BAD_REQUEST)
         raise HTTPException(lage, t(f"fehler.runner_{fehler.grund}", sprache)) from None
+    # The file that came up is the one the field names from now on, whoever
+    # started it — the window, the command line, a second window.
+    agentenmodellwahl.remember_file(repositories, daten.modell)
     # The started server joins the model list by itself, exactly as the main
     # runner's does (app/api/v1/runner.py). This is what makes the one field
     # work without a second resolution path: a slot choice resolves through

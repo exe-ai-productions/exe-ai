@@ -1569,15 +1569,12 @@ class WerkzeugRegistry:
             painter = video_tool if name == video_tool.WERKZEUG_NAME else bild_werkzeug
             basis, bilderordner, schluessel = self.bild_zugang
             try:
-                # A job run hands its own id in as `chat_id` (for its
-                # notes); the tool reads the picture window of the chat the
-                # job was started from. Only a chat's own answer takes the
-                # picture or the video into the chat.
+                # Only a chat's own answer takes the picture or the video
+                # into the chat; a job's stays in the pictures folder.
                 return await painter.ausfuehren(
                     argumente, basis, bilderordner, schluessel,
                     antwort_id=antwort_id if herkunft == "chat" else None,
                     chat_id=chat_id if herkunft == "chat" else None,
-                    job_id=chat_id if herkunft != "chat" else None,
                     deliver_with=self._deliver_with(herkunft, agent),
                     abbruch=abbruch,
                     input_picture=self._input_picture(argumente.get("image"), ordner),

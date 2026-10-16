@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.no_console import no_window
+from app.tools.mcp_logo import logo_of
 
 log = logging.getLogger(__name__)
 
@@ -154,6 +155,9 @@ class MCPStdioClient:
         self._zaehler = 0
         self._schreibsperre = asyncio.Lock()
         self.werkzeuge: list[MCPWerkzeug] = []
+        # The logo the server sent along, checked, as a data URL — or None
+        # (app/tools/mcp_logo.py).
+        self.logo: str | None = None
 
     @property
     def laeuft(self) -> bool:
@@ -193,7 +197,15 @@ class MCPStdioClient:
             (antwort.get("serverInfo") or {}).get("name", "unbekannt"),
         )
         await self._benachrichtigen("notifications/initialized")
-        self.werkzeuge = await self._werkzeuge_holen()
+        # A program started on this machine has no origin to vouch for an
+        # address; its logo is a picture it hands over itself, or a public one.
+        logo = asyncio.ensure_future(logo_of((antwort.get("serverInfo") or {}).get("icons")))
+        try:
+            self.werkzeuge = await self._werkzeuge_holen()
+        except BaseException:
+            logo.cancel()
+            raise
+        self.logo = await logo
 
     async def stoppen(self) -> None:
         if self._prozess is None:

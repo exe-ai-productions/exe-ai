@@ -131,9 +131,9 @@ def test_a_helper_over_the_limit_reads_german_in_the_window_and_english_for_the_
         registry=NamedRegistry(client, True, None),
     )
 
-    inside = t("jobs.helper_limit", "de", **AT_THE_LIMIT)
+    inside = t("jobs.helper_limit_both_one", "de", **AT_THE_LIMIT)
     assert shown == FRAME["de"] + inside
-    assert read == FRAME["en"] + t("jobs.helper_limit", "en", **AT_THE_LIMIT)
+    assert read == FRAME["en"] + t("jobs.helper_limit_both_one", "en", **AT_THE_LIMIT)
     assert inside not in read
     assert len(client.get("/api/v1/jobs").json()) == 1
 

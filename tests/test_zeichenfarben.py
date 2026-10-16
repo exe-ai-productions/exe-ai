@@ -94,39 +94,23 @@ def _palette_wert(modus: str, name: str) -> str:
     return treffer.group(1)
 
 
-def test_die_denken_marke_traegt_das_hausblau():
-    """The mark that says an answer thought first
-    carries the blue this interface already spends on "something runs" —
-    not the still grey of a subtitle, which is the tone for what may be
-    skipped. The unfolded thought below keeps its own quieter colour: the
-    mark says something IS there, the text is what it says."""
+def test_the_thinking_mark_wears_the_quietest_text_step():
+    """The head of a block says that the answer thought and did something
+    before its text. It is no state, it is a name: it carries the quietest
+    step of the interface's text (`--text-neben`), the same one as the
+    thinking and the calls under it, and its shimmer while the block goes is
+    that same colour lit up — not the blue of "something runs", which the
+    dot on the line says already."""
     quelle = (TEILE / "Nachricht.svelte").read_text(encoding="utf-8")
-    kopf = _regel(quelle, ".gedanke-kopf")
-    assert "color: var(--blau-text)" in kopf, (
-        "the thinking mark no longer carries the house blue"
+    kopf = _regel(quelle, ".block-head")
+    assert "color: var(--text-neben)" in kopf, (
+        "the head of a block no longer carries the quietest text step"
     )
-    assert "var(--text-still)" not in kopf, (
-        "the thinking mark carries the quiet grey again"
-    )
-    text = _regel(quelle, ".gedanke-text")
-    assert "color: var(--text-leise)" in text, (
-        "the expanded thought text lost its own colour"
-    )
-    # The name alone is not the rule: the mark is drawn in `--blau-text`,
-    # and THAT value has to stay readable in every appearance. Checked here
-    # for all six, against each one's own ground.
-    for bild, grund in (
-        ("", "#e0d7c3"),                  # light, the base block
-        ("dunkel", "#131312"),
-        ("darkmatter", "#0b0817"),
-        ("heaven", "#e8eef8"),
-        ("moune", "#f3fbe9"),
-    ):
-        farbe = _palette_wert(bild, "--blau-text")
-        k = _kontrast(farbe, grund)
-        assert k >= 3.0, (
-            f"the thinking mark in {bild or 'light'}: only {k:.2f} : 1 on {grund}"
-        )
+    assert "--blau-text" not in kopf, "the head of a block carries the blue again"
+    glanz = _regel(quelle, ".leucht")
+    assert "var(--text-neben)" in glanz, "the shimmer is no longer the head's colour"
+    assert "--blau" not in glanz, "the shimmer carries the blue again"
+    assert "gedanke-kopf" not in quelle, "the old blue mark is back"
 
 
 def _lum(hexwert: str) -> float:
@@ -296,21 +280,22 @@ def test_the_chat_glass_is_never_frosted():
 
 def test_loading_again_is_the_one_circular_arrow_of_the_house():
     """The sign for loading a page again is the circular arrow an answer
-    already wears for "once more" — one drawing, asked for by name, and the
-    same path and the same sharp corner in both places."""
+    already wears for "once more" — one drawing, the same two paths and the
+    same round corners in both places (the arrow itself is
+    tests/test_regenerate_arrow.py's business)."""
     signs = (TEILE / "Hauszeichen.svelte").read_text(encoding="utf-8")
     branch = re.search(r"\{:else if zeichen === 'neu_laden'\}([\s\S]*?)\{:else if", signs)
     assert branch, "the sign neu_laden is missing"
     paths = re.findall(r"<path ([^>]*?)\s*/>", branch.group(1))
-    assert len(paths) == 1, paths
-    path = re.search(r'd="([^"]+)"', paths[0])
-    assert path and 'stroke-linejoin="miter"' in paths[0], paths[0]
-    # Under an answer the arrow is either that very path or the sign itself,
-    # asked for by name — never a second drawing of its own.
+    assert len(paths) == 2, paths
+    assert all("stroke-linejoin" not in tag for tag in paths), "the sign takes the round join of the grid"
+    drawn = [re.search(r'd="([^"]+)"', tag).group(1) for tag in paths]
+    # Under an answer the arrow is either those very paths or the sign
+    # itself, asked for by name — never a second drawing of its own.
     message = (TEILE / "Nachricht.svelte").read_text(encoding="utf-8")
-    arrows = re.findall(r'<path d="(M20 11a[^"]*)"', message)
+    arrows = re.findall(r'<path d="(M21 12a9[^"]*)"', message)
     by_name = 'zeichen="neu_laden"' in message
     assert arrows or by_name, "the arrow under an answer is gone"
-    assert all(d == path.group(1) for d in arrows), (
+    assert all(d == drawn[0] for d in arrows), (
         "the arrow under an answer is no longer the drawing neu_laden carries"
     )

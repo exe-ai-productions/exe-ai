@@ -21,6 +21,8 @@ responsive whatever the service takes its time over.
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import contextlib
 import functools
 import io
@@ -32,13 +34,15 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from prompt_toolkit.application import Application, run_in_terminal
 from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.completion import Completer, ThreadedCompleter, merge_completers
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples, to_formatted_text
 from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.key_binding import (
     ConditionalKeyBindings,
     KeyBindings,
@@ -67,7 +71,7 @@ from prompt_toolkit.widgets import TextArea
 from rich.console import Console, RenderableType
 from rich.text import Text
 
-from cli import chat, free_rows, glyphs, render, shell, themes
+from cli import attachments, chat, free_rows, glyphs, render, shell, themes
 from cli.client import ServiceError, ServiceUnreachable
 from cli.interfaces import Context, Fragments, Screen
 
@@ -93,6 +97,8 @@ FULL_COLOURS = "truecolor"
 
 # What a terminal empties its window on, the cursor then on the first cell.
 EMPTY_WINDOW = "\x1b[2J\x1b[H"
+
+_T = TypeVar("_T")
 
 
 class LeaveAsked(BaseException):
@@ -177,7 +183,7 @@ class CliApp(Screen):
             wrap_lines=True,
             style="class:input",
             history=InMemoryHistory(),
-            completer=ctx.commands.completer(),
+            completer=self._completer(ctx),
             complete_while_typing=True,
             # What a question asks for hidden is typed without a sign of it.
             password=Condition(lambda: ctx.asker.secret()),
@@ -190,6 +196,8 @@ class CliApp(Screen):
             # eight lines tall around one line of text.
             dont_extend_height=True,
         )
+        # A selection that searches takes up every change of the field.
+        self._input.buffer.on_text_changed += lambda buffer: self._ctx.asker.typed(buffer.text)
         self._app: Application[None] = Application(
             layout=Layout(self._block(), focused_element=self._input),
             key_bindings=self._key_bindings(),
@@ -207,6 +215,17 @@ class CliApp(Screen):
         # The empty rows above the block that it takes before the terminal
         # scrolls the history for it.
         self._free_rows = free_rows.FreeRows(self._app.renderer)
+
+    @staticmethod
+    def _completer(ctx: Context) -> Completer:
+        """The commands behind a slash and the paths behind an ``@``, asked
+        on a thread of their own: the second reads the disk, and the screen
+        must not wait for it."""
+        completers = [attachments.MentionCompleter()]
+        commands_completer = ctx.commands.completer()
+        if commands_completer is not None:
+            completers.insert(0, commands_completer)
+        return ThreadedCompleter(merge_completers(completers))
 
     def _colour_depth(self) -> ColorDepth | None:
         """How many colours the fixed block is drawn in. Where the terminal
@@ -403,6 +422,7 @@ class CliApp(Screen):
             # cursor — it stands on the last row — leaves the height at zero.
             return
         window, block = free_rows.layout_rows(app)
+        self._free_rows.drew(above)
         missing = window - block - above
         if missing <= 0:
             self._pushed_from = None
@@ -413,7 +433,7 @@ class CliApp(Screen):
             # would be once too often.
             return
         self._pushed_from = (above, window)
-        self._push_down(missing)
+        self._push_down(missing, above)
 
     async def _look_again_after_cursor_report(self, app: Application[None]) -> None:
         try:
@@ -424,17 +444,29 @@ class CliApp(Screen):
         if app.renderer.height_is_known:
             app.invalidate()
 
-    def _push_down(self, rows: int) -> None:
+    def _push_down(self, rows: int, above: int) -> None:
         """Pushes the block down by ``rows`` rows: the block is taken off
         the screen, that many empty lines are written where it stood, and
         it is drawn again below them — on the screen's own thread, where
-        this is called from, the terminal can be asked for that directly."""
+        this is called from, the terminal can be asked for that directly.
+        ``above`` is the rows the history takes above the block."""
         output = self._app.output
+        # Rows the terminal scrolled off the top for a block that was taller
+        # are not made good with empty lines between the history and the
+        # block: the history moves down into them, and the block stays on
+        # the last rows with it standing right above.
+        shifted = self._free_rows.scrolled_away(rows)
 
         def write_empty_lines() -> None:
-            output.write_raw("\n" * rows)
+            if shifted:
+                # Home, then a reverse index for each row: at the top of the
+                # window the content moves down by one and an empty row comes
+                # in — what every terminal does with it. The cursor goes
+                # back to the row below the history, which has moved down.
+                output.write_raw("\x1b[H" + "\x1bM" * shifted + f"\x1b[{above + shifted + 1};1H")
+            output.write_raw("\n" * (rows - shifted))
             output.flush()
-            self._free_rows.pushed(rows)
+            self._free_rows.pushed(rows - shifted, shifted)
 
         run_in_terminal(write_empty_lines, in_executor=False)
 
@@ -461,6 +493,7 @@ class CliApp(Screen):
         keys.add("enter")(self._on_enter)
         keys.add("escape", "enter")(self._on_newline)
         keys.add("c-j")(self._on_newline)
+        keys.add(Keys.BracketedPaste)(self._on_paste)
         keys.add("c-c")(self._on_interrupt)
         # With text in the field the key keeps its usual meaning there:
         # delete the character under the cursor.
@@ -488,6 +521,14 @@ class CliApp(Screen):
 
     def _on_newline(self, event: KeyPressEvent) -> None:
         event.current_buffer.insert_text("\n")
+
+    def _on_paste(self, event: KeyPressEvent) -> None:
+        """A pasted text goes into the field as it is — but one that is
+        nothing but the paths of existing files, which is what a file
+        dropped on the terminal pastes, becomes a mention for each."""
+        pasted = event.data.replace("\r\n", "\n").replace("\r", "\n")
+        mentions = attachments.paths_as_mentions(pasted)
+        event.current_buffer.insert_text(pasted if mentions is None else mentions)
 
     def _on_leave(self, event: KeyPressEvent) -> None:
         self.exit()
@@ -726,6 +767,12 @@ class CliApp(Screen):
         """Called with the lock of the history held."""
         if self._leaving.is_set() or not self._app.is_running:
             return
+        # The window is empty, and the block is at its top: whatever pushed
+        # it down before is of no use to say it was pushed from here. A
+        # second emptying that comes before a drawing has measured the first
+        # push would else find the same place noted, take it for an output
+        # that does not move for the lines, and leave the block on top.
+        self._pushed_from = None
         sys.stdout.write(EMPTY_WINDOW)
         sys.stdout.flush()
 
@@ -738,6 +785,12 @@ class CliApp(Screen):
         # Through the queue as well: the lines typed before it still go into
         # the chat that was open when they were typed.
         self._inputs.put(lambda: chat.new_chat(self._ctx))
+
+    def queue(self, work: Callable[[], None]) -> None:
+        """Hands ``work`` to the worker, behind what already waits: it runs
+        in its turn once the screen is up — before the start the queue only
+        collects."""
+        self._inputs.put(work)
 
     def exit(self) -> None:
         self._leaving.set()
@@ -770,6 +823,27 @@ class CliApp(Screen):
         for thread in list(self._threads):
             if thread is not current:
                 thread.join(max(0.0, until - time.monotonic()))
+
+    def hand_over(self, work: Callable[[], _T]) -> _T:
+        """Gives the terminal to ``work`` — from a thread of the worker —
+        and waits for it: the block is taken off the screen, ``work`` runs on
+        a thread of its own so that the screen does not stand still, and the
+        block is drawn again afterwards. What is written to the history in
+        the meantime waits behind it, as the output is held while the
+        terminal is lent."""
+        loop = self._app.loop
+        if not (self._app.is_running and loop is not None):
+            return work()
+        done: concurrent.futures.Future[_T] = concurrent.futures.Future()
+
+        async def lend() -> None:
+            try:
+                done.set_result(await run_in_terminal(work, in_executor=True))
+            except BaseException as error:  # handed on to the caller below
+                done.set_exception(error)
+
+        loop.call_soon_threadsafe(lambda: asyncio.ensure_future(lend()))
+        return done.result()
 
     def _on_screen_thread(self, action: Callable[[], None]) -> None:
         loop = self._app.loop

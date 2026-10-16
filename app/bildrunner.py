@@ -27,6 +27,7 @@ import signal
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import NamedTuple
 from pathlib import Path
@@ -457,36 +458,62 @@ class Auftrag:
     zeitgrenze: int | None = None
 
 
-def programm_finden(datenordner: Path) -> Path | None:
+# The memory-block switches an upscale reads: the place the weights live is
+# the only one of them the upscaler's context takes besides the threads, the
+# backend and the VRAM budget.
+UPSCALE_SWITCHES = ("params_backend",)
+
+
+def _device_flags(auftrag: Auftrag) -> list[str]:
+    """The machine's threads, VRAM budget, offloading, split and backend as
+    sd-cli's flags; each stays off the line while it is unset. A picture and
+    an upscale carry the same ones."""
+    teile: list[str] = []
+    if auftrag.threads > 0:
+        teile += ["--threads", str(auftrag.threads)]
+    if auftrag.vram_limit:
+        teile += ["--max-vram", auftrag.vram_limit]
+    if auftrag.offload_to_cpu:
+        teile += ["--offload-to-cpu"]
+    if auftrag.split_mode:
+        teile += ["--split-mode", auftrag.split_mode]
+    if auftrag.backend:
+        teile += ["--backend", auftrag.backend]
+    return teile
+
+
+def programm_finden(datenordner: Path, variante: str | None = None) -> Path | None:
     """The sd-cli binary, or nothing if this machine has none.
 
     PATH first, so somebody who installed their own build gets theirs. Then
     the data folder, which is where the fetch next door puts it — bare for a
     build unpacked by hand, one level down in a build-named folder for a
     fetched one. That second case is what makes the fetch worth having: a
-    program nobody can find is a program nobody got.
+    program nobody can find is a program nobody got. ``variante`` is the
+    variant picked, which the build folders keep to.
     """
     gefunden = shutil.which(PROGRAMM)
     if gefunden:
         return Path(gefunden)
     from app.sddownload import gefundenes_programm
 
-    return gefundenes_programm(datenordner)
+    return gefundenes_programm(datenordner, variante)
 
 
 def modelle(bildordner: Path) -> list[str]:
     """The image models lying in their own folder, by file name.
 
     A file the content-sniffing catch net (``app.bildinhalt``) is CERTAIN
-    is a text encoder or a VAE is excluded here — it belongs in one of the
-    companion lists instead (``textversteher()``/``vaes()`` below). A file
+    is a text encoder, a vision part or a VAE is excluded here — it belongs
+    in one of the companion lists instead (``textversteher()``/
+    ``sehteile()``/``vaes()`` below). A file
     it cannot identify is offered here exactly as before: ``unbekannt``
     means "treat it like an image model", never "hide it".
     """
     ordner = Path(bildordner).expanduser()
     if not ordner.is_dir():
         return []
-    ausgeschlossen = {bildinhalt.TEXTVERSTEHER, bildinhalt.VAE}
+    ausgeschlossen = {bildinhalt.TEXTVERSTEHER, bildinhalt.SEHTEIL, bildinhalt.VAE}
     # A model can also be a folder: one that holds the index of its shards
     # (``bildinhalt.folder_model``) is offered by the folder's name and
     # handed to sd-cli as it is. Any other folder is none.
@@ -669,13 +696,42 @@ def upscalers(bildordner: Path) -> list[str]:
     return _im_unterordner(bildordner, UPSCALER_ORDNER)
 
 
+def _textordner_dateien(bildordner: Path, sorte: str) -> set[str]:
+    """The files of the text encoder folder whose header says they are of
+    this kind (``bildinhalt.SEHTEIL``), or, for ``TEXTVERSTEHER``, every
+    file of it that is not a vision part: a file the head cannot tell
+    stays where it lies, as before."""
+    ordner = Path(bildordner).expanduser() / TEXTVERSTEHER_ORDNER
+    vision = {
+        name for name in _im_unterordner(bildordner, TEXTVERSTEHER_ORDNER)
+        if bildinhalt.sorte(ordner / name) == bildinhalt.SEHTEIL
+    }
+    if sorte == bildinhalt.SEHTEIL:
+        return vision
+    return set(_im_unterordner(bildordner, TEXTVERSTEHER_ORDNER)) - vision
+
+
 def textversteher(bildordner: Path) -> list[str]:
     """The text encoder files (T5, CLIP, an LLM checkpoint) a Bausatz family
     assembles a picture from, in their own folder below the image models,
     plus any the content-sniffing catch net finds loose in the main
-    folder."""
-    return sorted(set(_im_unterordner(bildordner, TEXTVERSTEHER_ORDNER))
-                  | set(_hauptordner_fang(bildordner, bildinhalt.TEXTVERSTEHER)))
+    folder. A vision part (an mmproj file) lies in the same folder and is
+    none of them: it is read by ``sehteile()``."""
+    return sorted(
+        _textordner_dateien(bildordner, bildinhalt.TEXTVERSTEHER)
+        | set(_hauptordner_fang(bildordner, bildinhalt.TEXTVERSTEHER))
+    )
+
+
+def sehteile(bildordner: Path) -> list[str]:
+    """The vision parts (mmproj files) a VLM encoder is edited with — the
+    files whose header says they hold a vision encoder, in the text encoder
+    folder or caught loose in the main folder. Only what the head says: a
+    text encoder is never one."""
+    return sorted(
+        _textordner_dateien(bildordner, bildinhalt.SEHTEIL)
+        | set(_hauptordner_fang(bildordner, bildinhalt.SEHTEIL))
+    )
 
 
 def embeddings(bildordner: Path) -> list[str]:
@@ -743,6 +799,10 @@ def upscaler_path(image_folder: Path, name: str) -> Path:
 
 def textversteher_pfad(bildordner: Path, name: str) -> Path:
     return _begleiter_pfad(bildordner, name, TEXTVERSTEHER_ORDNER, textversteher(bildordner))
+
+
+def vision_part_path(bildordner: Path, name: str) -> Path:
+    return _begleiter_pfad(bildordner, name, TEXTVERSTEHER_ORDNER, sehteile(bildordner))
 
 
 def imatrix_path(model: Path) -> Path:
@@ -825,8 +885,12 @@ def ad_args_text(auftrag: Auftrag) -> str:
 class Bildrunner:
     """One picture at a time, on this machine."""
 
-    def __init__(self, datenordner: Path) -> None:
+    def __init__(
+        self, datenordner: Path, fassung: Callable[[], str | None] | None = None
+    ) -> None:
         self._datenordner = Path(datenordner).expanduser()
+        # Asked per start: the variant of the program the user picked.
+        self._fassung = fassung or (lambda: None)
         self._schloss = threading.Lock()
         # The running program, so a stop can actually reach it. Without this
         # the only way out of a picture was to wait five minutes for the
@@ -923,7 +987,7 @@ class Bildrunner:
 
     @property
     def programm(self) -> Path | None:
-        return programm_finden(self._datenordner)
+        return programm_finden(self._datenordner, self._fassung())
 
     def laeuft(self) -> bool:
         return self._schloss.locked()
@@ -996,9 +1060,18 @@ class Bildrunner:
             # Only the upscaler reads the picture: no model, no prompt.
             if auftrag.upscale_model is None or auftrag.startbild is None:
                 raise BildFehler("bild.modus_unvollstaendig")
+            # The upscaler reads the machine's threads, devices and memory
+            # like a picture does (sd.cpp's UpscalerGGML takes the threads,
+            # the backend, the parameter backend and the VRAM budget); a
+            # switch only a picture has stays off.
             return [
                 str(programm), "-M", "upscale",
                 "--upscale-model", str(auftrag.upscale_model),
+                *_device_flags(auftrag),
+                *image_switches.cli_parts(
+                    {k: v for k, v in auftrag.switches.items() if k in UPSCALE_SWITCHES},
+                    auftrag.switch_paths,
+                ),
                 "-i", str(auftrag.startbild), "-o", str(ziel),
             ]
         if auftrag.mode == "adetailer" and (auftrag.ad_modell is None or auftrag.startbild is None):
@@ -1142,16 +1215,7 @@ class Bildrunner:
         teile += ["--rng", auftrag.rng]
         if auftrag.weight_type:
             teile += ["--type", auftrag.weight_type]
-        if auftrag.threads > 0:
-            teile += ["--threads", str(auftrag.threads)]
-        if auftrag.vram_limit:
-            teile += ["--max-vram", auftrag.vram_limit]
-        if auftrag.offload_to_cpu:
-            teile += ["--offload-to-cpu"]
-        if auftrag.split_mode:
-            teile += ["--split-mode", auftrag.split_mode]
-        if auftrag.backend:
-            teile += ["--backend", auftrag.backend]
+        teile += _device_flags(auftrag)
         if auftrag.hires:
             teile += ["--hires", "--hires-scale", str(auftrag.hires_scale)]
             if auftrag.hires_steps > 0:

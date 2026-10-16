@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shutil
 import textwrap
 import time
@@ -36,10 +37,12 @@ from rich.markdown import (
     ListItem,
     Markdown,
     MarkdownElement,
+    Paragraph,
     TableElement,
 )
 from rich.rule import Rule
 from rich.segment import Segment
+from rich.style import Style
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
@@ -87,6 +90,12 @@ _MEASURED_SPEED = ("server", "gemessen")
 
 # The clock the durations are read from.
 _now = time.monotonic
+
+# A web address as it stands in running text: up to the next space or
+# quote. What closes a sentence or a bracket around it is cut off after.
+_ADDRESS = re.compile(r"https?://[^\s<>\"'`]+", re.IGNORECASE)
+_ADDRESS_CLOSERS = {")": "(", "]": "[", "}": "{"}
+_ADDRESS_PUNCTUATION = ".,;:!?"
 
 # The characters that steer a terminal instead of showing in it: everything
 # below the space except the line break and the tab, the delete character
@@ -198,6 +207,35 @@ def _short(value: Any) -> str:
     return _shown(json.dumps(value, ensure_ascii=False))
 
 
+def _address_end(address: str) -> int:
+    """How much of ``address`` is the address: the sentence's full stop or
+    a bracket that closes something outside it does not belong to it."""
+    end = len(address)
+    while end > 1:
+        last = address[end - 1]
+        opening = _ADDRESS_CLOSERS.get(last)
+        if last in _ADDRESS_PUNCTUATION or (
+            opening is not None and address[:end].count(last) > address[:end].count(opening)
+        ):
+            end -= 1
+            continue
+        break
+    return end
+
+
+def link_addresses(text: Text) -> Text:
+    """Makes every web address in ``text`` a link to itself, so that a
+    terminal that knows links opens it however the lines wrap. The address
+    stays written out. Only http and https: nothing else is opened."""
+    for found in _ADDRESS.finditer(text.plain):
+        address = found.group()
+        end = _address_end(address)
+        if end <= len("https://"):
+            continue
+        text.stylize(Style(link=address[:end]), found.start(), found.start() + end)
+    return text
+
+
 def _first_argument(arguments: Any) -> str:
     """The short form of a call's arguments: its first field."""
     if isinstance(arguments, Mapping) and arguments:
@@ -288,13 +326,22 @@ class OneLine:
 # --- Markdown in the look's colours and signs ---------------------------------
 
 
+class _Syntax(Syntax):
+    """Code whose web addresses can be opened."""
+
+    def highlight(
+        self, code: str, line_range: tuple[int | None, int | None] | None = None
+    ) -> Text:
+        return link_addresses(super().highlight(code, line_range))
+
+
 class _Code(CodeBlock):
     """A block of code in the look's own code colours, with a fine line down
     its side instead of a ground painted behind it."""
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         code = str(self.text).rstrip()
-        syntax = Syntax(code, self.lexer_name, theme=themes.current().syntax_theme(), word_wrap=True)
+        syntax = _Syntax(code, self.lexer_name, theme=themes.current().syntax_theme(), word_wrap=True)
         bar = Segment(glyphs.glyph("gutter") + " ", console.get_style("markdown.hr", default="none"))
         yield from _beside(console, options, syntax, bar, bar)
 
@@ -320,10 +367,23 @@ class _Item(ListItem):
         yield from _beside(console, options, self.elements, Segment(numeral, style))
 
 
+class _Paragraph(Paragraph):
+    """A paragraph whose web addresses can be opened."""
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        text = link_addresses(self.text.copy())
+        text.justify = self.justify
+        yield text
+
+
 class _Heading(Heading):
     """Every heading starts at the left edge of the text column."""
 
     LEVEL_ALIGN: ClassVar[dict[str, JustifyMethod]] = {}
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        for text in super().__rich_console__(console, options):
+            yield link_addresses(text) if isinstance(text, Text) else text
 
 
 class _Line(HorizontalRule):
@@ -343,12 +403,12 @@ class _Table(TableElement):
         )
         if self.header is not None and self.header.row is not None:
             for column in self.header.row.cells:
-                heading = column.content.copy()
+                heading = link_addresses(column.content.copy())
                 heading.stylize("markdown.table.header")
                 table.add_column(heading)
         if self.body is not None:
             for row in self.body.rows:
-                table.add_row(*[cell.content for cell in row.cells])
+                table.add_row(*[link_addresses(cell.content.copy()) for cell in row.cells])
         yield table
 
 
@@ -382,6 +442,7 @@ class AnswerBlock(Markdown):
         "blockquote_open": _Quote,
         "list_item_open": _Item,
         "heading_open": _Heading,
+        "paragraph_open": _Paragraph,
         "hr": _Line,
         "table_open": _Table,
         "image": _Picture,
@@ -430,9 +491,9 @@ class Head:
         if glyphs.speaks_unicode() and options.max_width >= WORDMARK_FROM:
             margin = " " * WORDMARK_MARGIN
             letters = "\n".join(margin + line for line in wordmark.WORDMARK)
-            yield Text(letters, style="exe.text", no_wrap=True, overflow="crop")
+            yield Text(letters, style="exe.mark", no_wrap=True, overflow="crop")
         else:
-            name = Text(wordmark.WORDMARK_PLAIN, style="exe.text", no_wrap=True)
+            name = Text(wordmark.WORDMARK_PLAIN, style="exe.mark", no_wrap=True)
             name.stylize("bold")
             yield name
         yield Text("")
@@ -580,16 +641,16 @@ class HistoryRenderer(Renderer):
         # the colours a command prints stay, every other control sequence
         # goes.
         self._close_open()
-        self._emit(_LINE, Text.from_ansi(text, style="exe.text"))
+        self._emit(_LINE, link_addresses(Text.from_ansi(text, style="exe.text")))
 
     def error(self, text: str) -> None:
         # An error in the middle of an answer stands below what had arrived.
         self._close_open()
-        words = Text(_shown(text), style="exe.red")
+        words = link_addresses(Text(_shown(text), style="exe.red"))
         self._emit(_LINE, Beside(words, glyphs.glyph("error"), "exe.red"))
 
     def user_message(self, text: str) -> None:
-        words = Text(_shown(text), style="exe.text")
+        words = link_addresses(Text(_shown(text), style="exe.text"))
         self._emit(_USER, Beside(words, glyphs.glyph("user"), "exe.prompt"))
 
     # --- One answer ---
@@ -754,12 +815,12 @@ class HistoryRenderer(Renderer):
         line = Table.grid(expand=True, padding=(0, 1))
         line.add_column(ratio=1, no_wrap=True, overflow=glyphs.overflow())
         line.add_column(justify="right", no_wrap=True)
-        line.add_row(head, tail)
+        line.add_row(link_addresses(head), tail)
 
         rows = [row.rstrip() for row in _shown(result).splitlines() if row.strip()]
         style = "exe.red" if failed else "exe.muted"
         below: list[RenderableType] = [
-            self._line("", "    " + row, style) for row in rows[:RESULT_LINES]
+            OneLine(link_addresses(Text("    " + row, style=style))) for row in rows[:RESULT_LINES]
         ]
         if len(rows) > RESULT_LINES:
             more = f"    {glyphs.glyph('more')} {RESULT_LINES}/{len(rows)}"

@@ -477,7 +477,7 @@ def test_the_card_tells_its_state_with_the_dot_and_nothing_else():
 
 def test_an_answer_draws_its_files_as_a_row_of_cards():
     message = MESSAGE.read_text(encoding="utf-8")
-    assert "{#each cardRows(dateiTeile(teil.text, versaetze[i])) as stueck, j (j)}" in message
+    assert "{#each cardRows(dateiTeile(quelle, versaetze[i])) as stueck, j (j)}" in message
     assert "writing={isWriting(file)}" in message
     # Blue only while the answer runs: a message cut short ends in the same
     # open fence, and its file is simply as far as it got.

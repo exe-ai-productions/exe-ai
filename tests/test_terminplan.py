@@ -841,8 +841,8 @@ def test_autumn_change_a_missed_moment_of_the_first_pass_is_caught_up(config, cl
 
 
 def test_autumn_change_the_preview_counts_both_passes(client, monkeypatch):
-    """The line under a typed cron expression: at 02:50 +02:00 the next runs
-    of a quarter-hour schedule are the second pass of the hour, in order."""
+    """The line under a typed cron expression: at 02:50 +02:00 the next run
+    of a quarter-hour schedule is the second pass of the hour."""
     from app.api.v1 import cronjobs
 
     jetzt = datetime(2026, 10, 25, 0, 50, tzinfo=timezone.utc).astimezone(BERLIN)
@@ -851,12 +851,8 @@ def test_autumn_change_the_preview_counts_both_passes(client, monkeypatch):
     quarter = client.get("/api/v1/cronjobs/preview", params={"zeitplan": "*/15 * * * *"})
     daily = client.get("/api/v1/cronjobs/preview", params={"zeitplan": "30 2 * * *"})
 
-    assert quarter.json() == [
-        "2026-10-25T02:00:00+01:00", "2026-10-25T02:15:00+01:00", "2026-10-25T02:30:00+01:00",
-    ]
-    assert daily.json() == [
-        "2026-10-25T02:30:00+01:00", "2026-10-26T02:30:00+01:00", "2026-10-27T02:30:00+01:00",
-    ]
+    assert quarter.json() == ["2026-10-25T02:00:00+01:00"]
+    assert daily.json() == ["2026-10-25T02:30:00+01:00"]
 
 
 def test_the_calendar_names_both_passes_of_the_repeated_hour():

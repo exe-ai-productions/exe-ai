@@ -31,7 +31,6 @@
 
   let pfad = $state('')
   const shownPath = $derived(pathText ?? pfad)
-  let neustartNoetig = $state(false)
 
   async function laden() {
     try {
@@ -59,7 +58,6 @@
     if (!neu || neu === pfad) return
     try {
       const antwort = await api.speicherortSetzen(name, neu)
-      neustartNoetig = !antwort.ist_standard && antwort.neustart_noetig
       pfad = antwort.pfad
       melde(t('speicherorte.geaendert'), 'hinweis')
       onaendern?.()
@@ -71,7 +69,7 @@
 
 <div class="zeile">
   {#if etikett}<span class="etikett">{etikett}</span>{/if}
-  <span class="pfad" title={shownPath}>{shownPath}</span>
+  <span class="pfad" title={shownPath}><span>{shownPath}</span></span>
   <!-- Open and change as a tight cluster of square icon buttons, held closer
        to each other than to the path, so they read as one group of tools. -->
   <div class="knopfpaar">
@@ -92,9 +90,6 @@
     </button>
   </div>
 </div>
-{#if neustartNoetig}
-  <p class="hinweis">{t('speicherorte.neustart')}</p>
-{/if}
 
 <style>
   .zeile {
@@ -115,17 +110,23 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    /* Keep the folder name in view under the ellipsis, not the drive root.
-       plaintext keeps the path itself reading left-to-right, so the digits
-       and punctuation in a path like /Volumes/Data Disk/… are not reordered by
-       the rtl box — only the truncation side moves to the front. */
+    /* Keep the folder name in view under the ellipsis, not the drive root:
+       the box reads right to left, so the ellipsis stands at its left end
+       and the end of the path stays. The path itself, in the inner span,
+       keeps reading left to right — the digits and marks of a path like
+       /Volumes/Data Disk/… stay in their order. A bidi mode of its own on
+       the box would take its `direction` away again and cut the path at its
+       end. */
     direction: rtl;
-    unicode-bidi: plaintext;
     text-align: left;
     /* A path reads in the one face of the house, like every other datum. A
        server window's card sets it one step larger (Serverabschnitt.svelte). */
     font: 400 var(--pfad-schrift, 11px) var(--schrift);
     color: var(--text-still);
+  }
+  .pfad span {
+    direction: ltr;
+    unicode-bidi: bidi-override;
   }
   .knopfpaar {
     flex: none;
@@ -158,9 +159,4 @@
     color: var(--text-leise);
   }
   .ordnerknopf:hover { background: var(--glass-hover); }
-  .hinweis {
-    margin: 6px 0 0;
-    font-size: 11.5px;
-    color: var(--gelb);
-  }
 </style>

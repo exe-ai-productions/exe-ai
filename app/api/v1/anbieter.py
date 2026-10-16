@@ -21,11 +21,15 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+from io import StringIO
 from pathlib import Path
+from typing import Any
 
-import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
+from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from ruamel.yaml.representer import RoundTripRepresenter
 
 from app import atomic_file
 from app.api.abhaengigkeiten import hole_config, hole_sprache
@@ -63,7 +67,103 @@ BEKANNT = {
 KENNUNG = re.compile(r"^[a-z][a-z0-9_-]{1,30}$")
 
 
-def _atomar_schreiben(konfig_datei: Path, rohdaten: dict) -> None:
+class _KonfigDarsteller(RoundTripRepresenter):
+    """Writes an empty value as the word `null`, the way the file has always
+    carried it; the parser would write it as nothing at all."""
+
+    def darstellen_nichts(self, daten: None) -> Any:
+        return self.represent_scalar("tag:yaml.org,2002:null", "null")
+
+
+# On the subclass only: the parser's own class keeps its way of writing.
+_KonfigDarsteller.add_representer(type(None), _KonfigDarsteller.darstellen_nichts)
+
+
+def _einzug(text: str) -> tuple[int, int]:
+    """The indent the file already uses: the width of a nested mapping, and
+    how far a list dash stands in from its key. A file written by hand or by
+    this program keeps its own look when it is written back."""
+    mapping, dash = 2, 0
+    zeilen = text.splitlines()
+    for zeile in zeilen:
+        stripped = zeile.lstrip(" ")
+        if stripped.startswith("- "):
+            dash = len(zeile) - len(stripped)
+            break
+    for zeile in zeilen:
+        stripped = zeile.lstrip(" ")
+        if stripped and not stripped.startswith(("#", "- ")) and len(zeile) > len(stripped):
+            mapping = len(zeile) - len(stripped)
+            break
+    return mapping, dash
+
+
+def _lesen(konfig_datei: Path) -> tuple[Any, YAML]:
+    """The file parsed for writing back, and the writer that gives it back as
+    it was: comments, blank lines, key order, quotes and the indent stay, and
+    only what a route changed in the returned value changes in the file.
+
+    The value is changed in place (an entry removed with ``del``, not by
+    building a new list): a new list has none of the comments the old one
+    carried between its entries.
+    """
+    text = konfig_datei.read_text(encoding="utf-8")
+    mapping, dash = _einzug(text)
+    schreiber = YAML()
+    schreiber.preserve_quotes = True
+    schreiber.allow_unicode = True
+    # A long value is never folded onto a second line.
+    schreiber.width = 4096
+    schreiber.indent(mapping=mapping, sequence=dash + 2, offset=dash)
+    schreiber.Representer = _KonfigDarsteller
+    daten = schreiber.load(text)
+    return (CommentedMap() if daten is None else daten), schreiber
+
+
+def _schwanz(eintrag: Any) -> tuple[CommentedMap, Any] | None:
+    """Where the comment lines behind an entry are kept: on the last key of
+    its last nested mapping (the parser hangs them on the value they follow).
+    None for an entry that ends in a list — those comments stay where they
+    are."""
+    knoten = eintrag
+    while isinstance(knoten, CommentedMap) and knoten:
+        schluessel = list(knoten.keys())[-1]
+        wert = knoten[schluessel]
+        if isinstance(wert, CommentedMap) and wert:
+            knoten = wert
+            continue
+        if isinstance(wert, CommentedSeq):
+            return None
+        return knoten, schluessel
+    return None
+
+
+def _eintrag_entfernen(endpunkte: Any, stelle: int) -> None:
+    """Takes one entry out of the list, with the comment that introduced it
+    and the one that ends its last line, and keeps the comment lines behind
+    it: those introduce the NEXT entry, and the parser has them hanging on
+    this one, where a plain removal would drop them with it."""
+    if stelle > 0:
+        weg = _schwanz(endpunkte[stelle])
+        davor = _schwanz(endpunkte[stelle - 1])
+        if weg and davor:
+            wegstelle = weg[0].ca.items.get(weg[1])
+            token = wegstelle[2] if wegstelle else None
+            if token is not None:
+                # Everything behind the first line break is comment lines of
+                # their own; the first line is the removed entry's own line end.
+                rest = token.value.split("\n", 1)[1] if "\n" in token.value else ""
+                eintrag = davor[0].ca.items.setdefault(davor[1], [None, None, None, None])
+                if eintrag[2] is not None:
+                    # The line end of the entry in front keeps its own comment.
+                    eintrag[2].value = eintrag[2].value.split("\n", 1)[0] + "\n" + rest
+                else:
+                    token.value = "\n" + rest
+                    eintrag[2] = token
+    del endpunkte[stelle]
+
+
+def _atomar_schreiben(konfig_datei: Path, rohdaten: Any, schreiber: YAML) -> None:
     """Whole or not at all (app/atomic_file.py): an interrupted write in
     place would leave a half file — and a half ``config.yaml`` is a program
     with no endpoints at all on the next start.
@@ -71,9 +171,9 @@ def _atomar_schreiben(konfig_datei: Path, rohdaten: dict) -> None:
     Blocking: the write waits on Windows while the file is held. A route
     calls it through ``asyncio.to_thread`` so the event loop keeps answering.
     """
-    atomic_file.write(
-        konfig_datei, yaml.safe_dump(rohdaten, allow_unicode=True, sort_keys=False)
-    )
+    ausgabe = StringIO()
+    schreiber.dump(rohdaten, ausgabe)
+    atomic_file.write(konfig_datei, ausgabe.getvalue())
 
 
 # One route at a time between reading config.yaml and writing it back: the
@@ -198,14 +298,14 @@ async def hinzufuegen(
 
     konfig_datei = _konfig_datei(config)
     async with _schleuse:
-        rohdaten = yaml.safe_load(konfig_datei.read_text(encoding="utf-8")) or {}
+        rohdaten, schreiber = _lesen(konfig_datei)
         endpunkte = rohdaten.setdefault("endpoints", [])
 
         if any(e.get("id") == kennung for e in endpunkte):
             raise HTTPException(status.HTTP_409_CONFLICT, t("fehler.anbieter_doppelt", sprache))
 
         endpunkte.append({"id": kennung, "group": "cloud", **vorlage})
-        await asyncio.to_thread(_atomar_schreiben, konfig_datei, rohdaten)
+        await asyncio.to_thread(_atomar_schreiben, konfig_datei, rohdaten, schreiber)
 
     # The key last: an entry without a key shows a red lamp and can be
     # repaired, a key without an entry belongs to nothing and is only lying
@@ -274,7 +374,7 @@ async def faehigkeiten_setzen(
     konfig_datei = _konfig_datei(config)
     async with _schleuse:
         if konfig_datei.is_file():
-            rohdaten = yaml.safe_load(konfig_datei.read_text(encoding="utf-8")) or {}
+            rohdaten, schreiber = _lesen(konfig_datei)
             for eintrag in rohdaten.get("endpoints") or []:
                 if eintrag.get("id") != endpoint_id:
                     continue
@@ -289,7 +389,7 @@ async def faehigkeiten_setzen(
                         faehigkeiten[name] = wert
                 if not faehigkeiten:
                     eintrag.pop("capabilities", None)
-            await asyncio.to_thread(_atomar_schreiben, konfig_datei, rohdaten)
+            await asyncio.to_thread(_atomar_schreiben, konfig_datei, rohdaten, schreiber)
 
     return {"id": endpoint_id, "capabilities": endpunkt.capabilities.model_dump()}
 
@@ -343,7 +443,7 @@ async def kontext_setzen(
     konfig_datei = _konfig_datei(config)
     async with _schleuse:
         if konfig_datei.is_file():
-            rohdaten = yaml.safe_load(konfig_datei.read_text(encoding="utf-8")) or {}
+            rohdaten, schreiber = _lesen(konfig_datei)
             getroffen = False
             for eintrag in rohdaten.get("endpoints") or []:
                 if eintrag.get("id") != endpoint_id:
@@ -358,7 +458,7 @@ async def kontext_setzen(
             # not free: it goes through the parser, so every explaining comment in
             # it is gone afterwards.
             if getroffen:
-                await asyncio.to_thread(_atomar_schreiben, konfig_datei, rohdaten)
+                await asyncio.to_thread(_atomar_schreiben, konfig_datei, rohdaten, schreiber)
 
     return {"id": endpoint_id, "context_tokens": wert}
 
@@ -392,7 +492,7 @@ async def zeitgrenze_setzen(
     konfig_datei = _konfig_datei(config)
     async with _schleuse:
         if konfig_datei.is_file():
-            rohdaten = yaml.safe_load(konfig_datei.read_text(encoding="utf-8")) or {}
+            rohdaten, schreiber = _lesen(konfig_datei)
             getroffen = False
             for eintrag in rohdaten.get("endpoints") or []:
                 if eintrag.get("id") != endpoint_id:
@@ -405,7 +505,7 @@ async def zeitgrenze_setzen(
                 else:
                     eintrag["timeout_enabled"] = False
             if getroffen:
-                await asyncio.to_thread(_atomar_schreiben, konfig_datei, rohdaten)
+                await asyncio.to_thread(_atomar_schreiben, konfig_datei, rohdaten, schreiber)
 
     return {"id": endpoint_id, "timeout_enabled": daten.timeout_enabled}
 
@@ -440,11 +540,17 @@ async def loeschen(
     konfig_datei = _konfig_datei(config)
     async with _schleuse:
         if konfig_datei.is_file():
-            rohdaten = yaml.safe_load(konfig_datei.read_text(encoding="utf-8")) or {}
-            vorher = rohdaten.get("endpoints") or []
-            rohdaten["endpoints"] = [e for e in vorher if e.get("id") != endpoint_id]
-            if len(rohdaten["endpoints"]) != len(vorher):
-                await asyncio.to_thread(_atomar_schreiben, konfig_datei, rohdaten)
+            entfernt = False
+            rohdaten, schreiber = _lesen(konfig_datei)
+            endpunkte = rohdaten.get("endpoints") or []
+            # In place, last to first: the entries after a removed one move up
+            # and the comments between them move with them.
+            for stelle in range(len(endpunkte) - 1, -1, -1):
+                if endpunkte[stelle].get("id") == endpoint_id:
+                    _eintrag_entfernen(endpunkte, stelle)
+                    entfernt = True
+            if entfernt:
+                await asyncio.to_thread(_atomar_schreiben, konfig_datei, rohdaten, schreiber)
 
     # Asked, removed from the list and taken out of ``.env`` in one go, with
     # no wait in between: a provider added meanwhile either is in the list

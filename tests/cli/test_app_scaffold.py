@@ -93,7 +93,13 @@ class Service:
         if path == "/api/v1/health":
             return httpx.Response(200, json={"status": "ok", "version": "9.8.7"})
         if path == "/api/v1/models":
-            return httpx.Response(200, json=self.models)
+            # The full list on request, else the models that answer.
+            listed = [
+                entry
+                for entry in self.models
+                if entry.get("erreichbar") or request.url.params.get("alle")
+            ]
+            return httpx.Response(200, json=listed)
         if path == "/api/v1/chats" and request.method == "POST":
             wanted = json.loads(request.content)
             return httpx.Response(
@@ -134,6 +140,8 @@ class Terminal(DummyOutput):
         self.columns, self.rows = columns, rows
         self.row = 0
         self.pushes: list[int] = []
+        # How many rows the window's content was moved down by, each time.
+        self.shifts: list[int] = []
         self.scrolled = 0
 
     def get_size(self) -> Size:
@@ -148,6 +156,10 @@ class Terminal(DummyOutput):
     def write_raw(self, data: str) -> None:
         if data and not data.strip("\n"):
             self.pushes.append(len(data))
+        for run in re.findall(r"\x1b\[H((?:\x1bM)+)", data):
+            self.shifts.append(len(run) // 2)
+        for row in re.findall(r"\x1b\[(\d+);1H", data):
+            self.row = min(self.rows - 1, int(row) - 1)
         _, emptied, data = data.rpartition(EMPTY_WINDOW)
         if emptied:
             self.row = 0
@@ -324,7 +336,8 @@ def test_a_model_chosen_last_that_the_service_no_longer_lists_leaves_the_first(t
 
 
 def test_without_a_reachable_model_the_chat_is_created_without_one(tmp_path):
-    service = Service(models=[])
+    # A provider is entered, and it does not answer: nothing is left to set up.
+    service = Service(models=[{"id": "gone", "name": "Gone Model", "erreichbar": False}])
     shown = recorded("Hello there" + ENTER + "/quit" + ENTER, service=service, tmp_path=tmp_path)
     created = next(request for request in service.seen if request.method == "POST")
     assert json.loads(created.content) == {}
@@ -713,6 +726,8 @@ def running(tmp_path: Path, terminal: Terminal) -> Iterator[CliApp]:
             finally:
                 shared._input, shared._output = former
 
+        if hasattr(terminal, "bind_input"):
+            terminal.bind_input(pipe)
         thread = threading.Thread(target=run_the_screen, daemon=True)
         thread.start()
         # A screen that never leaves gets its input closed, so the test
@@ -884,6 +899,154 @@ def test_a_list_that_opens_after_the_window_changed_its_height_takes_no_rows_on_
         assert terminal.scrolled > 0
 
 
+class AnswersOnCue(Terminal):
+    """A terminal that says where its cursor stands only when told to: the
+    question is kept with the row the cursor stood on when it was asked, and
+    the answer goes into the client's input in the order of the questions —
+    as late as the test wants."""
+
+    def __init__(self, columns: int = 80, rows: int = 40) -> None:
+        super().__init__(columns, rows)
+        self.asked: list[int] = []
+        self.answered = 0
+        self._pipe: Any = None
+
+    def bind_input(self, pipe: Any) -> None:
+        self._pipe = pipe
+
+    @property
+    def responds_to_cpr(self) -> bool:
+        return True
+
+    def get_rows_below_cursor_position(self) -> int:
+        raise NotImplementedError
+
+    def ask_for_cpr(self) -> None:
+        self.asked.append(self.row)
+
+    def answer(self, count: int = 1) -> None:
+        """The oldest ``count`` questions that wait are answered, all in one
+        piece of input — the answers that come late come together."""
+        text = ""
+        for _ in range(count):
+            row = self.asked[self.answered]
+            self.answered += 1
+            text += f"\x1b[{row + 1};1R"
+        self._pipe.send_text(text)
+
+    def answer_all(self) -> None:
+        """Everything asked so far, and what is asked in answer to that."""
+        for _ in range(20):
+            if self.answered >= len(self.asked):
+                return
+            self.answer(len(self.asked) - self.answered)
+            settled()
+
+
+def test_a_second_clear_before_the_push_was_measured_pushes_again(tmp_path):
+    """The terminal says where its cursor stands late. A second clear comes
+    before a drawing has measured the push of the first: the block stands at
+    the top again, and nothing but a push brings it to the last rows."""
+    terminal = AnswersOnCue(rows=40)
+    free = 40 - BLOCK_ROWS
+    with running(tmp_path, terminal) as app:
+        eventually(lambda: terminal.asked)
+        terminal.answer_all()
+        eventually(lambda: terminal.pushes == [free])
+        terminal.answer_all()
+        settled()
+        assert terminal.pushes == [free]
+
+        app.clear()
+        eventually(lambda: len(terminal.asked) > terminal.answered)
+        terminal.answer(len(terminal.asked) - terminal.answered)
+        eventually(lambda: terminal.pushes == [free, free])
+        # The push is not measured yet — nothing has answered since — when
+        # the window is emptied again.
+        app.clear()
+        # Two questions wait: the one of the first push and the one of the
+        # second clear. They are answered together, and only then is the
+        # block measured again — at the top, where the first push had put
+        # it before it moved.
+        eventually(lambda: len(terminal.asked) - terminal.answered >= 2)
+        terminal.answer_all()
+        eventually(lambda: terminal.pushes == [free, free, free])
+        settled()
+        assert terminal.pushes == [free, free, free]
+
+
+def rows_between_the_history_and_the_block(app: CliApp, terminal: WindowTerminal) -> int:
+    """How many rows right above the block hold nothing: the history ends
+    that many rows above it."""
+    count = 0
+    for line in reversed(above_the_block(app, terminal)):
+        if "".join(line).strip():
+            break
+        count += 1
+    return count
+
+
+def test_a_list_closed_over_a_full_window_leaves_no_blank_rows_above_the_block(tmp_path):
+    """The history fills the window, so the list scrolls it up when it
+    opens. Closed, the block is one row high again: the history moves down
+    into the rows the list left, and no empty row is written between it and
+    the block."""
+    terminal = with_a_history(WindowTerminal(WIDE_COLUMNS, rows=30), 60)
+    with running(tmp_path, terminal) as app:
+        settled()
+        history = right_above_the_block(app, terminal)
+        assert history
+        assert rows_between_the_history_and_the_block(app, terminal) == 0
+        for _ in range(2):
+            typed_into(app, "/")
+            eventually(lambda: the_list_is_open(app))
+            settled()
+            emptied(app)
+            eventually(lambda: not the_list_is_open(app))
+            settled()
+            assert right_above_the_block(app, terminal) == history
+            assert rows_between_the_history_and_the_block(app, terminal) == 0
+            # The block is on the last row of the window all the time.
+            assert terminal.y == len(terminal.lines) - 1 - (STATUS_LINES + 1)
+
+
+def test_a_command_list_below_one_printed_line_leaves_no_blank_rows_either(tmp_path):
+    """The running chat: a line stands above the block, nothing is known to
+    be empty there, the list scrolls the line and the rows over it up."""
+    terminal = with_a_history(WindowTerminal(WIDE_COLUMNS, rows=30), 60)
+    with running(tmp_path, terminal) as app:
+        settled()
+        app.print_above(Text("the last printed line"))
+        eventually(lambda: "thelastprintedline" in right_above_the_block(app, terminal))
+        settled()
+        history = right_above_the_block(app, terminal)
+        typed_into(app, "/")
+        eventually(lambda: the_list_is_open(app))
+        settled()
+        emptied(app)
+        eventually(lambda: not the_list_is_open(app))
+        settled()
+        assert right_above_the_block(app, terminal) == history
+        assert rows_between_the_history_and_the_block(app, terminal) == 0
+
+
+def test_silence_probe_a_list_closed_in_a_window_with_room_still_pushes_the_block_down(tmp_path):
+    """Nothing scrolled for the list here: the empty rows it took are given
+    back as empty rows between the head and the block, as before."""
+    terminal = Terminal(rows=40)
+    with running(tmp_path, terminal) as app:
+        eventually(lambda: terminal.pushes == [40 - BLOCK_ROWS])
+        settled()
+        typed_into(app, "/")
+        eventually(lambda: the_list_is_open(app))
+        settled()
+        emptied(app)
+        eventually(lambda: terminal.pushes == [40 - BLOCK_ROWS, COMPLETION_ROWS])
+        settled()
+        assert terminal.shifts == []
+        assert terminal.scrolled == 0
+
+
 def test_a_list_that_opens_in_a_cleared_window_takes_the_rows_the_block_was_pushed_by(tmp_path):
     """A line stands above the block, so nothing is known to be empty; the
     window is cleared and the block pushed to the last rows again, and
@@ -929,7 +1092,7 @@ def test_an_output_whose_cursor_the_lines_do_not_move_is_pushed_once(tmp_path):
 
 # What reaches a terminal, piece by piece: a sequence that tells it what to
 # do, or one sign.
-WRITTEN = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|.", re.DOTALL)
+WRITTEN = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1bM|.", re.DOTALL)
 
 # The width the block is drawn in first, and the widths the window is drawn
 # down to: by one column, by a third — every row of the block takes two
@@ -1005,8 +1168,25 @@ class WindowTerminal(DummyOutput):
                 self._next_row()
             elif written == "\r":
                 self.x = 0
+            elif written == "\x1bM":
+                # Reverse index: up a row, and at the top of the window the
+                # content moves down by one.
+                if self.y == self.top:
+                    self._scroll_down(1)
+                else:
+                    self.y -= 1
+            elif re.fullmatch(r"\x1b\[\d+;\d+H", written):
+                row, column = (int(part) for part in written[2:-1].split(";"))
+                self.cursor_goto(row, column)
             elif written >= " ":
                 self._put(written)
+
+    def _scroll_down(self, amount: int) -> None:
+        """What the window shows moves down by ``amount`` rows, empty rows
+        come in at the top and the rows at the bottom leave; the history
+        above the window and the cursor stay where they are."""
+        window = self.lines[self.top :]
+        self.lines[self.top :] = [[] for _ in range(amount)] + window[: len(window) - amount]
 
     def _put(self, sign: str) -> None:
         # A wide sign holds its cell and, with nothing in it, the next.

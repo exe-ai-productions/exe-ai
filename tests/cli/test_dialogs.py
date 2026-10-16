@@ -1438,3 +1438,192 @@ def test_leaving_with_a_selection_open_lets_go_of_the_command_that_waits_for_the
     # waits for its threads, and the selection would stand for good.
     assert not asker[0].pending()
     assert chosen(service) == []
+
+
+# --- A checklist ------------------------------------------------------------------------
+
+
+def box(ticked: bool) -> str:
+    return glyphs.glyph("checked" if ticked else "unchecked")
+
+
+def test_a_checklist_shows_which_entries_are_ticked_and_names_its_own_keys(wide: None) -> None:
+    asker = lone_asker()
+    thread, returned = standing(lambda: asker.check(entries(3), checked=[1]))
+    until(asker.pending)
+    mark = glyphs.glyph("prompt")
+    none = " " * len(mark)
+    assert shown_lines(asker) == [
+        f"{mark} 1. {box(False)} Entry 1  info 1",
+        f"{none} 2. {box(True)} Entry 2  info 2",
+        f"{none} 3. {box(False)} Entry 3  info 3",
+        Texts("en").t("cli.select_keys_check"),
+    ]
+    asker.close()
+    thread.join(WAIT_SECONDS)
+    assert returned == [None]
+
+
+def test_the_space_bar_ticks_the_marked_entry_writes_nothing_and_enter_confirms(wide: None) -> None:
+    asker = lone_asker()
+    thread, returned = standing(lambda: asker.check(entries(3), checked=[2]))
+    until(asker.pending)
+    assert press(asker, " ").text == ""
+    press(asker, Keys.Down)
+    press(asker, " ")
+    # Entry 1 and entry 2 were ticked beside entry 3: all three stand ticked.
+    assert [line for line in shown_lines(asker) if box(True) in line].__len__() == 3
+    # Ticking the marked one again unticks it.
+    press(asker, " ")
+    assert [line for line in shown_lines(asker) if box(True) in line].__len__() == 2
+    press(asker, Keys.Enter)
+    thread.join(WAIT_SECONDS)
+    assert returned == [[0, 2]]
+
+
+def test_a_checklist_confirmed_as_it_stands_returns_what_was_ticked_and_ignores_typing() -> None:
+    asker = lone_asker()
+    thread, returned = standing(lambda: asker.check(entries(3), checked=[2, 0]))
+    until(asker.pending)
+    press(asker, Keys.Enter, typed="2")
+    thread.join(WAIT_SECONDS)
+    assert returned == [[0, 2]]
+
+
+def test_escape_closes_a_checklist_with_nothing_confirmed() -> None:
+    asker = lone_asker()
+    thread, returned = standing(lambda: asker.check(entries(2), checked=[0]))
+    until(asker.pending)
+    press(asker, Keys.Escape)
+    thread.join(WAIT_SECONDS)
+    assert returned == [None]
+
+
+def test_a_list_without_entries_is_no_checklist() -> None:
+    assert lone_asker().check([]) is None
+
+
+def test_the_space_bar_does_nothing_where_no_checklist_stands() -> None:
+    asker = lone_asker()
+    thread, _ = standing(lambda: asker.choose(entries(2)))
+    until(asker.pending)
+    bindings = asker.key_bindings()
+    assert bindings is not None
+    claimed = [b for b in bindings.get_bindings_for_keys((" ",)) if b.filter()]
+    assert claimed == []
+    asker.close()
+    thread.join(WAIT_SECONDS)
+
+
+# --- A selection that searches --------------------------------------------------------------
+
+
+def named(*titles: str) -> list[Entry]:
+    return [Entry(cells=[("text", title)], value=title) for title in titles]
+
+
+def until_lines(asker: Asker, wanted: Callable[[list[str]], bool]) -> None:
+    until(lambda: wanted(shown_lines(asker)))
+
+
+def test_a_word_typed_replaces_the_entries_with_what_was_found_renumbered(wide: None) -> None:
+    asker = lone_asker()
+    asked: list[str] = []
+
+    def find(word: str) -> list[Entry]:
+        asked.append(word)
+        return named("Website texts") if word == "web" else []
+
+    thread, returned = standing(lambda: asker.search(named("Tax", "Website texts", "Notes"), find))
+    until(asker.pending)
+    assert [line for line in shown_lines(asker) if "Tax" in line or "Notes" in line]
+    asker.typed("web")
+    until_lines(asker, lambda lines: any("Website texts" in line for line in lines)
+                and not any("Tax" in line for line in lines))
+    assert asked == ["web"]
+    keys = Texts("en").t("cli.select_keys_search")
+    assert shown_lines(asker)[-1] == keys
+    press(asker, Keys.Enter, typed="web")
+    thread.join(WAIT_SECONDS)
+    assert returned and returned[0].value == "Website texts"
+
+
+def test_a_number_or_an_empty_field_shows_the_opening_entries_again_and_picks_by_number(wide: None) -> None:
+    asker = lone_asker()
+    thread, returned = standing(
+        lambda: asker.search(named("Tax", "Website texts", "Notes"), lambda word: named("Website texts"))
+    )
+    until(asker.pending)
+    asker.typed("web")
+    until_lines(asker, lambda lines: not any("Tax" in line for line in lines))
+    asker.typed("")
+    until_lines(asker, lambda lines: any("Tax" in line for line in lines))
+    asker.typed("3")
+    until_lines(asker, lambda lines: any("Notes" in line for line in lines))
+    press(asker, Keys.Enter, typed="3")
+    thread.join(WAIT_SECONDS)
+    assert returned and returned[0].value == "Notes"
+
+
+def test_an_answer_that_comes_after_a_younger_one_changes_nothing(wide: None) -> None:
+    asker = lone_asker()
+    gate = threading.Event()
+    seen: list[str] = []
+
+    def find(word: str) -> list[Entry]:
+        seen.append(word)
+        if word == "slow":
+            gate.wait(WAIT_SECONDS)
+            return named("From the old word")
+        return named("From the young word")
+
+    thread, returned = standing(lambda: asker.search(named("Tax"), find))
+    until(asker.pending)
+    asker.typed("slow")
+    until(lambda: seen == ["slow"])
+    asker.typed("fast")
+    until_lines(asker, lambda lines: any("From the young word" in line for line in lines))
+    gate.set()
+    time.sleep(0.4)
+    assert any("From the young word" in line for line in shown_lines(asker))
+    assert not any("From the old word" in line for line in shown_lines(asker))
+    asker.close()
+    thread.join(WAIT_SECONDS)
+
+
+def test_nothing_found_shows_the_sentence_for_it_and_enter_picks_nothing(wide: None) -> None:
+    asker = lone_asker()
+    thread, returned = standing(
+        lambda: asker.search(named("Tax"), lambda word: [], empty="No matches")
+    )
+    until(asker.pending)
+    asker.typed("zzz")
+    until_lines(asker, lambda lines: "No matches" in lines)
+    press(asker, Keys.Enter, typed="zzz")
+    assert asker.pending()
+    asker.close()
+    thread.join(WAIT_SECONDS)
+    assert returned == [None]
+
+
+def test_enter_before_the_pause_is_over_searches_for_the_word_at_once(wide: None) -> None:
+    asker = lone_asker()
+    thread, returned = standing(
+        lambda: asker.search(named("Tax", "Website texts"), lambda word: named("Website texts"))
+    )
+    until(asker.pending)
+    asker.typed("web")
+    press(asker, Keys.Enter, typed="web")
+    thread.join(WAIT_SECONDS)
+    assert returned and returned[0].value == "Website texts"
+
+
+def test_escape_closes_the_selection_and_takes_what_was_typed_with_it(wide: None) -> None:
+    asker = lone_asker()
+    thread, returned = standing(lambda: asker.search(named("Tax"), lambda word: named("Tax")))
+    until(asker.pending)
+    asker.typed("ta")
+    field = press(asker, Keys.Escape, typed="ta")
+    thread.join(WAIT_SECONDS)
+    assert returned == [None]
+    assert field.text == ""

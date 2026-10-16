@@ -191,25 +191,24 @@ def test_a_catalogue_card_has_no_way_to_start_a_model():
 
 
 def test_a_picture_handed_to_the_closed_studio_outlives_the_filling():
-    """The left column fills the values from the chat's store when it comes
-    up. A picture handed over while the studio is shut is set before that,
-    so it is noted for the filling, which then keeps it instead of putting
-    the stored start picture back."""
+    """The left column fills the values from the studio's store when it
+    comes up. A picture handed over while the studio is shut is set before
+    that, so it is noted for the filling, which then keeps it instead of
+    putting the stored start picture back."""
     store = (WURZEL / "frontend" / "src" / "lib" / "studio.svelte.js").read_text(encoding="utf-8")
     handed = store.split("export function studioWithPicture(name) {", 1)[1].split("\n}\n", 1)[0]
     assert "const columnUp = studioSichtbar()" in handed
-    assert "if (!columnUp) vorgemerkt = { chat: chatanzeige.chatId, startbild: name }" in handed
+    assert "if (!columnUp) vorgemerkt = { startbild: name }" in handed
     # The order matters: the note is read before the studio is opened.
     assert handed.index("studioSichtbar()") < handed.index("studioOeffnen()") < handed.index("vorgemerkt")
     filling = store.split("export function werteFuellen() {", 1)[1].split("\n}\n", 1)[0]
     assert "werte.startbild = vorgemerkt.startbild" in filling
 
 
-def test_a_new_chat_is_the_open_chat_of_the_window():
+def test_a_new_chat_is_the_open_chat_of_the_window_and_the_studio_opens_none():
     """A chat is created in one place, and that place makes it the chat the
-    window's own state belongs to. A chat that was only made the active one
-    left the studio without a chat: it kept no values and drew into a second
-    chat."""
+    window's own state belongs to. The studio belongs to no chat: its draw
+    makes none, names none and takes nothing into the one that opens."""
     source = WURZEL / "frontend" / "src"
     calls = {}
     for pfad in sorted(source.rglob("*.svelte")) + sorted(source.rglob("*.js")):
@@ -221,30 +220,16 @@ def test_a_new_chat_is_the_open_chat_of_the_window():
     opened = state.split("export async function openNewChat(data) {", 1)[1].split("\n}\n", 1)[0]
     assert "await api.chatAnlegen(data)" in opened
     assert "chatZustandLaden(chat.id)" in opened
-    # What the window held without a chat is in the store before it is read.
-    assert opened.index("einstellungSetzen(`chat:${chat.id}`, 'bildfenster'") < opened.index("chatZustandLaden(chat.id)")
-    # The ways a chat comes into being all go through it.
+    # It writes nothing of the studio into the chat, and holds none of it.
+    assert "einstellungSetzen" not in opened and "chatless" not in state
     assert "await openNewChat({ title: t('chat.unbenannt')" in state
     assert "await openNewChat({ title: ersterTitel" in (source / "App.svelte").read_text(encoding="utf-8")
-    assert "await openNewChat({ title, endpoint_id: zustand.modellId || null })" in DRAW.read_text(encoding="utf-8")
-    # The studio hands in what it holds without a chat, and stays silent
-    # while a chat is open or while it neither shows nor prepares a draw.
+    # The studio's draw opens no chat, names none and says it is the studio's.
     draw = DRAW.read_text(encoding="utf-8")
-    reader = draw.split("chatless.pictureValues = (chatId) => {", 1)[1].split("\n}\n", 1)[0]
-    assert "if (chatanzeige.chatId || !(studioSichtbar() || zeichnung.bereitet)) return null" in reader
-    assert "if (steuervideo.datei) steuervideo.chat = chatId" in reader
-    # The painted mask moves with the chat, and so does what was set —
-    # whether or not the model's start values have arrived by then.
-    assert "maskIntoChat(chatId)" in reader and "startValues" not in reader
+    assert "openNewChat" not in draw and "chat_id" not in draw and "chatanzeige" not in draw
+    assert draw.count("studio: true") == 2
     studio = (source / "lib" / "studio.svelte.js").read_text(encoding="utf-8")
-    moved = studio.split("export function maskIntoChat(chatId) {", 1)[1].split("\n}\n", 1)[0]
-    assert "masken.get(null)" in moved and "masken.set(chatId, held)" in moved and "masken.delete(null)" in moved
-    assert "startValuesIn" not in studio and "startValuesArrived" not in studio
-    assert "chatless.pictureValues?.(chat.id)" in opened
-    # The family of the draw is read at the press, before a new chat refills
-    # the column.
-    drawn = draw.split("async function vorbereitenUndZeichnen(modeWish) {", 1)[1]
-    assert drawn.index("const fam = familyOf(") < drawn.index("await openNewChat(")
+    assert "chatanzeige" not in studio and "maskIntoChat" not in studio and "CARRIED" not in studio
     # The silence check: opening a chat and leaving for a new one load the
     # window's state as before.
     switch = state.split("export async function chatOeffnen(id) {", 1)[1].split("\nexport ", 1)[0]
@@ -272,14 +257,14 @@ def test_a_picture_in_the_area_sets_kind_and_strength_in_one_place():
     assert "KINDS.filter((k) => k.video === video && (!family || family.tasks.includes(k.task))" in studio
     assert "const FROM_AREA = ['img2img', 'edit', 'i2v', 'flf2v']" in studio
     # A family unknown at that moment is asked again when it arrives, for
-    # the model and the chat the picture came into the area with.
-    assert "kindDue = familie() ? null : { model: werte.modell, chat: chatanzeige.chatId }" in rule
+    # the model the picture came into the area with.
+    assert "kindDue = familie() ? null : { model: werte.modell }" in rule
     asked_again = studio.split("export async function vorgabenHolen() {", 1)[1].split("\n}\n", 1)[0]
-    assert "if (due && dueModel === model && due.chat === chat && werte.startbild) kindOntoPicture()" in asked_again
+    assert "if (due && dueModel === model && werte.startbild) kindOntoPicture()" in asked_again
     # Picture to picture stands before the edit in the table the rule walks.
     kinds = studio.split("export const KINDS = [", 1)[1].split("\n]\n", 1)[0]
     assert kinds.index("'img2img'") < kinds.index("'edit'") and kinds.index("'i2v'") < kinds.index("'flf2v'")
-    # A chat that opens with a picture in its area is shown the same, unwritten.
+    # A studio that opens with a picture in its area is shown the same, unwritten.
     # The family off a header is the model's it was read for: another model in
     # the values makes it unknown before the rule walks the kinds.
     filling = studio.split("export function werteFuellen() {", 1)[1].split("\n}\n", 1)[0]
@@ -329,7 +314,7 @@ def test_an_edit_sends_the_picture_in_the_area_as_its_first_reference():
     # picture to picture and the videos only — an edit sends them solely
     # when a mask is painted over its picture (see the next test).
     assert "const nutztStart = ['img2img', 'i2v', 'flf2v'].includes(kind.value)" in draw
-    assert "maske: kind.value === 'img2img' ? flaeche?.maske ?? (w.maske || null)" in draw
+    assert "maske: !maskOn ? null\n      : kind.value === 'img2img' ? flaeche?.maske ?? (w.maske || null)" in draw
     column = DETAILS.read_text(encoding="utf-8")
     edit = column.split("{#if kind.value === 'edit'}", 1)[1].split("{:else if kind.input}", 1)[0]
     row = edit.split("{#if viele}", 1)
@@ -347,12 +332,15 @@ def test_an_edit_with_a_painted_mask_sends_the_mask_and_the_picture_it_acts_on()
     area hands an edit's picture over whole — it is never cut to a part to
     be set back into the picture, since an edit's result is a new picture."""
     draw = DRAW.read_text(encoding="utf-8")
-    assert "const paintedEdit = edits && Boolean(flaeche?.maske)" in draw
+    assert "const paintedEdit = edits && maskOn && Boolean(flaeche?.maske)" in draw
     # Asked of the area as a picture to start from is, with the mask on.
     assert "flaeche = await leinwand.ausgeben(w.startbild, kind.value === 'img2img' || edits, edits)" in draw
     body = draw.split("startbild: nutztStart ? flaeche?.startbild ?? (w.startbild || null)", 1)[1]
     assert body.startswith("\n      : paintedEdit ? flaeche.startbild : null,")
-    assert "maske: kind.value === 'img2img' ? flaeche?.maske ?? (w.maske || null)\n      : paintedEdit ? flaeche.maske : null," in draw
+    assert (
+        "maske: !maskOn ? null\n      : kind.value === 'img2img' ? flaeche?.maske ?? (w.maske || null)\n"
+        "        : paintedEdit ? flaeche.maske : null," in draw
+    )
     # The flag is computed before the body is built, and an edit sets back
     # no part of a picture.
     assert draw.index("const paintedEdit =") < draw.index("startbild: nutztStart ?")
@@ -375,42 +363,38 @@ def test_an_edit_with_a_painted_mask_sends_the_mask_and_the_picture_it_acts_on()
     assert "await ausgebenNeu(name, mitMaske, bearbeiten)" in kept
 
 
-def test_a_chat_stores_only_what_was_set_for_it():
-    """A chat's picture values start empty in the window: no built-in
-    default stands among them, so none is written back as the chat's own,
-    and the studio shows the model's start value for every value the chat
-    does not hold — each on its own."""
+def test_the_studio_stores_only_what_was_set_for_it():
+    """The studio's values start empty in its store: no built-in default
+    stands among them, so none is written back as its own, and the studio
+    shows the model's start value for every value it does not hold — each
+    on its own."""
     source = WURZEL / "frontend" / "src"
-    state = (source / "lib" / "chatanzeige.svelte.js").read_text(encoding="utf-8")
-    assert "VORGABE_BILDFENSTER" not in state
-    assert "cfg: 7" not in state and "offen:" not in state
-    assert "  bildfenster: {},\n" in state
-    loading = state.split("async function readChatState(chatId) {", 1)[1].split("\n}\n", 1)[0]
-    assert "chatanzeige.bildfenster = {}\n" in loading
-    assert "chatanzeige.bildfenster = { ...(daten.bildfenster?.wert || {}) }" in loading
-    # What is written is the chat's own values with the change laid over.
-    saving = state.split("function speichern(schluessel, teil) {", 1)[1].split("\n}\n", 1)[0]
-    assert "Object.assign(stand, teil)" in saving
-    assert "merken(chatanzeige.chatId, schluessel, { ...stand })" in saving
-    # The start values go to every field the chat has none of its own for,
-    # the CFG of a chat with a size of its own among them.
+    store = (source / "lib" / "studioStore.svelte.js").read_text(encoding="utf-8")
+    assert "cfg: 7" not in store and "pending:" not in store
+    assert "  value: {},\n" in store
+    # Read from the global scope without a chat, written whole into it.
+    assert "api.einstellungAufgeloest(KEY)" in store
+    assert "api.einstellungSetzen('global', KEY, { ...studioStore.value })" in store
+    assert "const KEY = 'bildfenster'" in store
+    # What is written is the studio's own values with the change laid over,
+    # and nothing before the store was read.
+    saving = store.split("export function writeStudioStore(part) {", 1)[1].split("\n}\n", 1)[0]
+    assert saving.index("if (!studioStore.loaded) return") < saving.index(
+        "Object.assign(studioStore.value, part)")
+    # The start values go to every field the studio has none of its own for,
+    # the CFG of a studio with a size of its own among them.
     column = (TEILE / "StudioBasics.svelte").read_text(encoding="utf-8")
     assert "MITGROESSE" not in column
     assert "if (!fehlen.includes(name) || !asFilled) delete teil[name]" in column
-    # The silence check: a value the chat does hold is its own in the
-    # studio, and only a changed value is written.
+    # The silence check: a value the studio does hold is its own, and only a
+    # changed value is written.
     studio = (source / "lib" / "studio.svelte.js").read_text(encoding="utf-8")
     filling = studio.split("export function werteFuellen() {", 1)[1].split("\n}\n", 1)[0]
     assert "const eigen = stand[name] !== undefined" in filling
     chosen = studio.split("export function setValues() {", 1)[1].split("\n}\n", 1)[0]
     assert "if (JSON.stringify(value) !== JSON.stringify(geschrieben[name])) set[name] = value" in chosen
     writing = studio.split("export function werteSchreiben() {", 1)[1].split("\n}\n", 1)[0]
-    assert "const teil = setValues()" in writing and "bildfensterAusDemStudio(teil)" in writing
-    # A chat created out of the studio is given the same and no more: not
-    # the whole of what the window shows.
-    reader = DRAW.read_text(encoding="utf-8").split("chatless.pictureValues = (chatId) => {", 1)[1].split("\n}\n", 1)[0]
-    assert "const set = setValues()" in reader and "snapshot" not in reader
-    assert "return Object.keys(set).length ? set : null" in reader
+    assert "const teil = setValues()" in writing and "writeStudioStore(teil)" in writing
 
 
 def test_the_search_goes_over_both_columns_by_one_rule():
@@ -476,7 +460,7 @@ def test_the_head_of_a_folded_section_rests_while_a_search_stands():
 
 
 def test_a_draw_waits_for_the_start_values_of_the_shown_model():
-    """A value the chat has none of its own for is the model's start value.
+    """A value the studio has none of its own for is the model's start value.
     Those arrive a moment after the studio shows a model; a picture pressed
     for meanwhile is drawn with them once they are laid in, never with the
     values the fields start at — and not at all when they do not arrive."""
@@ -486,11 +470,8 @@ def test_a_draw_waits_for_the_start_values_of_the_shown_model():
     assert drawn.index("const startValues = await startValuesThere()") < drawn.index(
         "const w = $state.snapshot(werte)")
     assert drawn.count("$state.snapshot(werte)") == 1
-    # The press counts for the chat it was made in, and without start
-    # values nothing is drawn — after the word about a missing model.
-    assert drawn.index("const chat = chatanzeige.chatId") < drawn.index("await startValuesThere()")
-    assert drawn.split("await startValuesThere()", 1)[1].lstrip().startswith(
-        "if (chatanzeige.chatId !== chat) return")
+    # Without start values nothing is drawn — after the word about a
+    # missing model.
     assert drawn.index("melde(t('bildserver.kein_standardmodell'), 'hinweis')") < drawn.index(
         "if (!startValues) return") < drawn.index("const kind = art()")
     store = (WURZEL / "frontend" / "src" / "lib" / "studio.svelte.js").read_text(encoding="utf-8")
@@ -505,9 +486,9 @@ def test_a_draw_waits_for_the_start_values_of_the_shown_model():
     assert "laying.then((laid) => { if (laid) startValuesLaid = true }, () => {})" in laying
     assert "startValuesDue = Promise.all([startValuesDue, settled])" in laying
     # Every way the start values come into the studio says so: the filling
-    # for a chat, a model picked, "Standard", a family said by hand.
+    # of the studio, a model picked, "Standard", a family said by hand.
     basics = (TEILE / "StudioBasics.svelte").read_text(encoding="utf-8")
-    for source, heads in ((basics, ("async function fuellen(id, dabei) {", "async function modellGewaehlt(name) {",
+    for source, heads in ((basics, ("async function fuellen() {", "async function modellGewaehlt(name) {",
                                     "async function standardHolen() {")),
                           (store, ("export async function familieWaehlen(name) {",))):
         for head in heads:
@@ -516,7 +497,7 @@ def test_a_draw_waits_for_the_start_values_of_the_shown_model():
             assert "return false" in body or "return Boolean(v)" in body, head
         fetches = source.count("await vorgabenHolen()")
         assert fetches == len(heads), "start values fetched outside layingStartValues"
-    filling = basics.split("async function fuellen(id, dabei) {", 1)[1].split("\n  }\n", 1)[0]
+    filling = basics.split("async function fuellen() {", 1)[1].split("\n  }\n", 1)[0]
     # What was set by hand while the start values were on their way stays:
     # they go only to a value that still stands as it was filled.
     assert filling.index("const fehlen = werteFuellen()") < filling.index(
@@ -584,7 +565,7 @@ def test_the_mode_stands_at_the_prompt_bar_and_auto_names_the_kind_it_draws():
     auto = store.split("export function autoKind() {", 1)[1].split("\n}\n", 1)[0]
     assert "const [fromText, fromPicture] = autoPair(kinds, video)" in auto
     assert "return (video ? ['t2v', 'i2v'] : ['txt2img', 'img2img']).map(" in store
-    assert "const masked = surface.masked || Boolean(werte.maske)" in auto
+    assert "const masked = surface.maskOn && (surface.masked || Boolean(werte.maske))" in auto
     assert "if (fromPicture && werte.startbild && (masked || Number(werte.staerke) < 1)) return fromPicture" in auto
     assert "return fromText ?? kinds.find((k) => FROM_AREA.includes(k.value)) ?? kinds[0]" in auto
     missing = store.split("export function pictureMissing() {", 1)[1].split("\n}\n", 1)[0]
@@ -638,14 +619,14 @@ def test_the_mode_stands_at_the_prompt_bar_and_auto_names_the_kind_it_draws():
     assert "onclick={() => (auswahl.medium = name)}>{t(`bild.medium_${name}`)}</button>" in basics
 
 
-def test_the_newest_picture_of_a_chat_stands_in_its_area_by_itself():
-    """A picture drawn for the chat stands in the generation area once it is
-    finished, the newest wins; a chat that opens with no picture of its own
-    there shows the newest it has. It is shown, not written, changes neither
-    mode nor strength, and an area emptied by hand stays empty until the next
-    picture is finished or one is laid in. A finished video stays in the row
-    of pictures. A finished picture as large as the one it replaces keeps
-    zoom and place."""
+def test_the_newest_picture_of_the_studio_stands_in_its_area_by_itself():
+    """A picture the studio drew stands in the generation area once it is
+    finished, the newest wins; a studio that opens with no picture of its
+    own there shows the newest it has. It is shown, not written, changes
+    neither mode nor strength, and an area emptied by hand stays empty until
+    the next picture is finished or one is laid in. A finished video stays
+    in the row of pictures. A finished picture as large as the one it
+    replaces keeps zoom and place."""
     parts = _studio_parts()
     source = WURZEL / "frontend" / "src"
     store = (source / "lib" / "studio.svelte.js").read_text(encoding="utf-8")
@@ -654,38 +635,38 @@ def test_the_newest_picture_of_a_chat_stands_in_its_area_by_itself():
     assert "werteVorschlagen({ startbild: name, maske: '' })" in shown
     assert "pictureInArea" not in shown and "staerke" not in shown and "auswahl" not in shown
     looked = store.split("export async function newestIntoArea() {", 1)[1].split("\n}\n", 1)[0]
-    assert "names = (await api.bilderListe({ chat })).bilder ?? []" in looked
-    assert "if (look !== areaLook || chat !== chatanzeige.chatId) return" in looked
-    finished = "if (newest && before !== undefined && newest !== before && drawAskedFor.has(chat)) {"
+    assert "names = (await api.bilderListe({ studio: true })).bilder ?? []" in looked
+    assert "if (look !== areaLook) return" in looked
+    finished = "if (newest && before !== undefined && newest !== before && drawAskedSince) {"
     assert finished in looked
     assert looked.index(finished) < looked.index("leinwand.keepView = newest") < looked.index("showInArea(newest)")
-    assert "if (!zustand.pictureQueue.some((w) => w.chat_id === chat)) drawAskedFor.delete(chat)" in looked
-    # A chat's own picture comes first, and an emptied area stays empty.
+    assert "if (!zustand.pictureQueue.length) drawAskedSince = false" in looked
+    # The studio's own picture comes first, and an emptied area stays empty.
     none = store.split("function newestWhereNone() {", 1)[1].split("\n}\n", 1)[0]
-    assert "if (!chatanzeige.geladen || werte.startbild || emptied.has(chat)) return" in none
+    assert "if (!studioStore.loaded || werte.startbild || emptied) return" in none
     filling = store.split("export function werteFuellen() {", 1)[1].split("\n}\n", 1)[0]
     assert filling.rindex("pictureInArea()") < filling.index("newestWhereNone()")
     chosen = store.split("export function startbildWaehlen(name) {", 1)[1].split("\n}\n", 1)[0]
     assert "if (geschrieben.startbild === name) geschrieben.startbild = ''" in chosen
-    assert "emptied.delete(chatanzeige.chatId)" in chosen
+    assert "emptied = false" in chosen
     pictures = (source / "lib" / "studiobilder.svelte.js").read_text(encoding="utf-8")
     emptied = store.split("export function emptyArea() {", 1)[1].split("\n}\n", 1)[0]
-    assert "emptied.add(chatanzeige.chatId)" in emptied
+    assert "emptied = true" in emptied
     # One way empties the area: the area's own "remove" and the first-frame
     # field of the right column both take it.
     assert "emptyArea()" in pictures.split("export function bildEntfernen() {", 1)[1].split("\n}\n", 1)[0]
     released = DETAILS.read_text(encoding="utf-8").split("function startbildLoesen() {", 1)[1].split("\n  }\n", 1)[0]
     assert "emptyArea()" in released and "werte.startbild" not in released
-    # The chat's pictures are read once: the row of pictures shows what the
-    # area read, and asks only for a project's.
-    assert "Object.assign(chatPictures, { chat, names })" in looked
+    # The studio's pictures are read once: the row of pictures shows what
+    # the area read, and asks for nothing of its own.
+    assert "studioPictures.names = names" in looked
     rail = parts["StudioGallery.svelte"]
-    assert "ofProject ? projectPictures : chatPictures.chat === chatId ? chatPictures.names : []" in rail
-    assert "api.bilderListe({ projekt })" in rail and "api.bilderListe({ chat" not in rail
+    assert "const bilder = $derived(studioPictures.names)" in rail
+    assert "api.bilderListe" not in rail
     # The draw says that a picture is on its way; a video is none.
     drawn = DRAW.read_text(encoding="utf-8").split("async function vorbereitenUndZeichnen(modeWish) {", 1)[1]
-    assert "if (modeWish || !drawsVideo) drawAsked(ziel)" in drawn
-    assert drawn.index("drawAsked(ziel)") < drawn.index("losZeichnen({ ...base")
+    assert "if (modeWish || !drawsVideo) drawAsked()" in drawn
+    assert drawn.index("drawAsked()") < drawn.index("losZeichnen({ ...base")
     canvas = parts["StudioCanvas.svelte"]
     assert "untrack(newestIntoArea)" in canvas
     loaded = canvas.split("function bildGeladen(ereignis) {", 1)[1].split("\n  }\n", 1)[0]
@@ -761,11 +742,11 @@ def test_a_family_that_edits_only_with_a_lora_offers_the_edit_with_one():
     assert "const noEdit = Boolean(family?.edit_needs_lora) && lorasKnown" in kinds
     assert "&& !werte.stapel.some((entry) => entry.name)" in kinds
     assert "&& !(noEdit && k.value === 'edit'))" in kinds
-    # Until the values shown are filled from the open chat's read store its
+    # Until the values shown are filled from the studio's read store its
     # LoRAs are not known: a chosen edit must not give way in that moment.
-    assert "const lorasKnown = !chatanzeige.chatId || (filledFor.chat === chatanzeige.chatId && filledFor.read)" in kinds
+    assert "const lorasKnown = filledFor.read" in kinds
     filling = store.split("export function werteFuellen() {", 1)[1].split("\n}\n", 1)[0]
-    assert "Object.assign(filledFor, { chat: chatanzeige.chatId, read: chatanzeige.geladen })" in filling
+    assert "Object.assign(filledFor, { read: studioStore.loaded, done: true })" in filling
     assert filling.index("werte[name] = structuredClone(") < filling.index("Object.assign(filledFor,")
     # The rule is the table's: the field is the one the family list hands
     # over, and the list of kinds names no family itself.
@@ -795,9 +776,9 @@ def test_picture_infos_ask_the_program_first_and_the_file_second():
     empty = "if (!gefunden || !Object.keys(gefunden).length) {"
     read = "gefunden = await api.pictureInfo(await api.bildBlob(name))"
     assert asked.index(kept) < asked.index(empty) < asked.index(read)
-    # The silence check: the newest question for the open chat still wins,
-    # and the file is read the way it was.
-    assert "if (nr === infoAnfrage && fuer === chatanzeige.chatId) bildInfo.werte = gefunden ?? {}" in asked
+    # The silence check: the newest question still wins, and the file is
+    # read the way it was.
+    assert "if (nr === infoAnfrage) bildInfo.werte = gefunden ?? {}" in asked
     assert "ruf('/bild/info', { method: 'POST', headers: { 'Content-Type': file.type }, body: file })" in api
     # Both routes are the service's own, and answer in the same names.
     route = (WURZEL / "app" / "api" / "v1" / "bild.py").read_text(encoding="utf-8")
@@ -847,59 +828,50 @@ def test_the_studio_lays_in_the_vae_format_the_rng_and_the_switch_rows_a_family_
     assert "  vae_format: 'auto',\n  rng: 'cuda'," in studio
 
 
-def test_a_draw_in_a_chat_waits_for_that_chat_s_own_values():
-    """While a chat's store is still being read the studio shows the default
-    model. A press on "draw" then waits for the read and for the column's
-    filling, and only then for the start values; a read that failed draws
-    nothing and says what it failed with."""
+def test_a_draw_waits_for_the_studios_own_values():
+    """While the studio's store is still being read the studio shows the
+    default model. A press on "draw" then waits for the read and for the
+    column's filling, and only then for the start values; a read that
+    failed draws nothing and says what it failed with."""
     source = WURZEL / "frontend" / "src"
     press = DRAW.read_text(encoding="utf-8").split("async function vorbereitenUndZeichnen(modeWish) {", 1)[1]
     press = press.split("const startValues = await startValuesThere()", 1)
     assert len(press) == 2
     waiting = press[0]
-    assert "if (chat) {" in waiting
     order = [waiting.index(part) for part in (
-        "read = chatStateRead()", "await read", "} while (read !== chatStateRead())",
-        "if (chatanzeige.chatId !== chat) return", "if (!chatanzeige.geladen) {", "await tick()")]
+        "await readStudioStore()", "if (!studioStore.loaded) {", "await tick()")]
     assert order == sorted(order)
-    assert "if (chatanzeige.readError) melde(chatanzeige.readError, 'fehler')" in waiting
-    # What the press waits for is the read the chat was opened with.
-    state = (source / "lib" / "chatanzeige.svelte.js").read_text(encoding="utf-8")
-    assert "export const chatStateRead = () => reading" in state
-    opened = state.split("export function chatZustandLaden(chatId) {", 1)[1].split("\n}\n", 1)[0]
-    assert "reading = readChatState(chatId)" in opened and "return reading" in opened
-    read = state.split("async function readChatState(chatId) {", 1)[1].split("\n}\n", 1)[0]
-    # A new read starts without a failure; a failure counts only for the chat still open.
-    assert read.index("chatanzeige.readError = ''") < read.index("chatanzeige.chatId = chatId")
-    assert "if (chatanzeige.chatId === chatId) chatanzeige.readError = String(error.message || error)" in read
-    # The silence check: without a chat nothing is waited for but the start
-    # values, and a read that came through sets no failure.
-    assert waiting.index("if (chat) {") < waiting.index("read = chatStateRead()")
-    assert read.count("chatanzeige.readError = ") == 2
+    assert "if (studioStore.error) melde(studioStore.error, 'fehler')" in waiting
+    # What the press waits for is the one read the studio's store makes.
+    state = (source / "lib" / "studioStore.svelte.js").read_text(encoding="utf-8")
+    reading = state.split("export function readStudioStore() {", 1)[1].split("\n}\n", 1)[0]
+    assert "request ??= api.einstellungAufgeloest(KEY)" in reading and "return request" in reading
+    assert "studioStore.loaded = true" in reading
+    assert "studioStore.error = String(failure?.message || failure)" in reading
+    # The silence check: no chat is asked about anywhere on the way.
+    assert "chatanzeige" not in DRAW.read_text(encoding="utf-8") and "chatanzeige" not in state
 
 
-def test_a_failed_read_of_the_chat_s_values_leaves_the_area_empty_like_any_other():
-    """The surface keeps its fitted picture while a chat's values are on
+def test_a_failed_read_of_the_studios_values_leaves_the_area_empty_like_any_other():
+    """The surface keeps its fitted picture while the studio's values are on
     their way. A read that failed brings none: the picture is forgotten and
     the next one is fitted."""
     canvas = (TEILE / "StudioCanvas.svelte").read_text(encoding="utf-8")
     assert ("if (bildUrl) return\n"
-            "    if (chatanzeige.chatId && !chatanzeige.geladen && !chatanzeige.readError) return\n"
+            "    if (!studioStore.loaded && !studioStore.error) return\n"
             "    tick().then(() => {\n"
             "      if (!bildUrl) fittedPicture = null\n") in canvas
 
 
-def test_what_was_set_since_a_chat_opened_stays_when_its_stored_values_arrive():
-    """A chat's stored values arrive a moment after it was opened. What was
-    typed or set in that moment stays: the late store fills only what is
-    untouched since, and what stayed is the chat's own from here on."""
+def test_what_was_set_since_the_studio_opened_stays_when_its_stored_values_arrive():
+    """The studio's stored values arrive a moment after it was opened. What
+    was typed or set in that moment stays: the late store fills only what is
+    untouched since, and what stayed is the studio's own from here on."""
     studio = (WURZEL / "frontend" / "src" / "lib" / "studio.svelte.js").read_text(encoding="utf-8")
     filling = studio.split("export function werteFuellen() {", 1)[1].split("\n}\n", 1)[0]
-    # Late is the read store of the chat the values were last filled for unread.
-    assert "const late = chatanzeige.geladen && !filledFor.read && filledFor.chat === chatanzeige.chatId\n" in filling
-    # What a chat opened from the window takes along stands where the late
-    # store's set values stand: it is kept like them, and written like them.
-    assert "const touched = late ? setValues() : carried\n" in filling
+    # Late is the store unread at the last filling and read now.
+    assert "const late = studioStore.loaded && !filledFor.read\n" in filling
+    assert "const touched = late ? setValues() : {}\n" in filling
     loop = filling.split("for (const [name, start] of Object.entries(ANFANG)) {", 1)[1].split("\n  }\n", 1)[0]
     order = [loop.index(part) for part in (
         "read[name] = structuredClone($state.snapshot(eigen ? stand[name] : start))",
@@ -910,8 +882,8 @@ def test_what_was_set_since_a_chat_opened_stays_when_its_stored_values_arrive():
     # What stayed differs from what was read, so it is written as set by hand.
     assert "\n  geschrieben = read\n" in filling
     assert filling.index("geschrieben = read") < filling.index(
-        "Object.assign(filledFor, { chat: chatanzeige.chatId, read: chatanzeige.geladen })")
-    assert "if (Object.keys(touched).length && chatanzeige.geladen) werteSchreiben()\n  return fehlen" in filling
+        "Object.assign(filledFor, { read: studioStore.loaded, done: true })")
+    assert "if (Object.keys(touched).length && studioStore.loaded) werteSchreiben()\n  return fehlen" in filling
     # The silence check: an untouched field is filled as before, and what
     # counts as set is what differs from what was read or shown.
     assert "const eigen = stand[name] !== undefined" in loop

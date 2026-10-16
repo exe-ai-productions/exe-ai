@@ -28,6 +28,7 @@
      document without two elements answering to the same name. The model
      server passes `rs`, which is what its fields were called before this
      component existed. */
+  import { untrack } from 'svelte'
   import { t } from '../lib/texte.svelte.js'
   import Auswahlfeld from './Auswahlfeld.svelte'
   import Hauszeichen from './Hauszeichen.svelte'
@@ -87,7 +88,8 @@
 
     kontext = $bindable(8192),
     kontextstufen = [],
-    schichten = $bindable(99),
+    /* `null` is "Auto": no count is sent and the engine places the layers. */
+    schichten = $bindable(null),
     maxSchichten = 99,
     faeden = $bindable(0),
     maxFaeden = 8,
@@ -124,18 +126,61 @@
      still folds the drawer away for whoever does not need it. */
   let erweitertOffen = $state(true)
 
-  /* The MoE track needs a plain number; "off" is the empty field. Both
-     sides are kept in step, each with its own equality guard, so the two
-     effects cannot chase each other. */
+  /* The MoE track needs a plain number; "off" is the empty field, and so is
+     a zero. Both sides are kept in step, each effect reading only the side
+     it follows and writing the other without reading it back: reading both
+     would let the field's effect put the track back to where the field
+     stands before the track's effect has told the field where the hand left
+     it, and the track could not be dragged from an empty field. */
   let moeRegler = $state(0)
   $effect(() => {
     const ziel = moeSchichten ?? 0
-    if (moeRegler !== ziel) moeRegler = ziel
+    untrack(() => {
+      if (moeRegler !== ziel) moeRegler = ziel
+      if (moeSchichten === 0) moeSchichten = null
+    })
   })
   $effect(() => {
-    const ziel = moeRegler > 0 ? moeRegler : null
-    if (moeSchichten !== ziel) moeSchichten = ziel
+    const spur = moeRegler
+    untrack(() => {
+      const ziel = spur > 0 ? spur : null
+      if (moeSchichten !== ziel) moeSchichten = ziel
+    })
   })
+
+  /* The layer track needs a plain number; "Auto" is the empty field. It
+     stands at the end of the track, the place "All" stands — the track says
+     nothing more than the field here. Both sides are kept in step, each with
+     its own equality guard, so the two effects cannot chase each other: the
+     hand moving the track makes the field a number, and a field that was
+     emptied stays empty while the track still rests at its end. */
+  let schichtenRegler = $state(maxSchichten)
+  /* Each effect reads only the side it follows and writes the other without
+     reading it back: reading both would let the field's effect put the track
+     back to where the field stands before the track's effect has told the
+     field where the hand left it. */
+  $effect(() => {
+    const ziel = schichten === null || schichten === undefined ? maxSchichten : schichten
+    untrack(() => {
+      if (schichtenRegler !== ziel) schichtenRegler = ziel
+    })
+  })
+  $effect(() => {
+    const spur = schichtenRegler
+    untrack(() => {
+      if ((schichten === null || schichten === undefined) && spur === maxSchichten) return
+      if (schichten !== spur) schichten = spur
+    })
+  })
+
+  /* With several slots that do not share the cache, one request gets the
+     window divided by their number: the window names that value next to the
+     context it shows. */
+  const jeAnfrage = $derived(
+    parallel > 1 && fein.kv_unified === false && kontext > 0
+      ? Math.floor(kontext / parallel)
+      : null,
+  )
 
   // How many rows the storage card holds (Serverabschnitt.svelte, `gewicht`).
   const zeigtSchaetzung = $derived(Boolean(schaetzung && maschineGb))
@@ -192,6 +237,9 @@
       <div class="zeile regel">
         <div class="kopfzeile">
           <label class="regelname" for="{kennung}-kontext">{t('modell.feld_kontext')}</label>
+          {#if jeAnfrage}
+            <span class="jeanfrage">{parallel} × {kurzK(jeAnfrage)}</span>
+          {/if}
           <div class="zahlplatz">
             <Zahlenfeld bind:wert={kontext} {gesperrt} min={512} max={1048576} schritt={1024} />
           </div>
@@ -214,12 +262,13 @@
       <div class="kopfzeile">
         <label class="regelname" for="{kennung}-schichten">{t('modell.feld_schichten')}</label>
         <div class="zahlplatz">
-          <Zahlenfeld bind:wert={schichten} {gesperrt} min={0} max={maxSchichten} />
+          <Zahlenfeld bind:wert={schichten} {gesperrt} min={0} max={maxSchichten}
+                      ganzzahlig nullwort={t('parameter.auto')} />
         </div>
       </div>
       <Schieberegler
         id="{kennung}-schichten"
-        bind:wert={schichten}
+        bind:wert={schichtenRegler}
         min={0}
         max={maxSchichten}
         {gesperrt}
@@ -298,7 +347,7 @@
      what a KV cache is never has to find out. -->
 {#if (teil === 'fein' || teil === 'alles') && erweitert}
   <Serverabschnitt klappbar bind:offen={erweitertOffen} titel={t('modell.gruppe_erweitert')}
-                   gewicht={vorladen !== null ? 5 : 4}>
+                   gewicht={vorladen !== null ? 6 : 5}>
     <div class="zeile niedrig">
       <!-- What the switch turns the cache INTO, after the name. -->
       <span class="name">{t('modell.feld_kv')} · {t('modell.feld_kv_wert')}</span>
@@ -327,6 +376,14 @@
                     min={0} max={maxParallel} ganzzahlig
                     nullwort={t('parameter.auto')} />
       </div>
+    </div>
+    <div class="zeile niedrig">
+      <!-- Shared by default; with the slot count on Auto the engine turns it
+           on itself, so the switch stands on and cannot be moved. -->
+      <span class="name">{t('modell.feld_kv_unified')}</span>
+      <Schalter an={!parallel || fein.kv_unified !== false} gesperrt={gesperrt || !parallel}
+                beschriftung={t('modell.feld_kv_unified')}
+                onschalten={() => (fein.kv_unified = fein.kv_unified === false)} />
     </div>
     <div class="zeile niedrig">
       <label class="zahlname" for="{kennung}-port">{t('modell.feld_port')}</label>
@@ -365,6 +422,13 @@
     display: block;
     height: 100%;
     background: var(--gruen);
+  }
+  .jeanfrage {
+    flex: none;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--text-still);
+    white-space: nowrap;
   }
   .schaetz {
     flex: none;

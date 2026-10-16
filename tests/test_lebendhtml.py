@@ -99,6 +99,33 @@ void rolle.offsetHeight
 kasten.innerHTML = zeilen(42)
 meldung.neuaufbau = { vorher: obenAlt, nachher: rolle.scrollTop }
 
+// Fading in: the characters that came up within the last 280 ms wear a span
+// with a negative delay of their age; what is older is plain again. The clock
+// is the page's own `performance.now`, set by hand so no timer is needed.
+let clock = 1000
+performance.now = () => clock
+const flowing = document.getElementById('flowing')
+const spans = () => Array.from(flowing.querySelectorAll('.flow-char')).map(
+  (s) => ({ text: s.textContent, delay: s.style.animationDelay }))
+const action = lebendHtml(flowing, { html: '<p>Hello</p>', fadeIn: false })
+meldung.flowFirst = { spans: spans(), text: flowing.textContent }
+clock = 1100
+action.update({ html: '<p>Hello world</p>', fadeIn: true })
+meldung.flowNew = { spans: spans(), text: flowing.textContent }
+clock = 1200
+action.update({ html: '<p>Hello world, how</p>', fadeIn: true })
+meldung.flowMore = { spans: spans(), text: flowing.textContent }
+clock = 1500
+action.update({ html: '<p>Hello world, how</p>', fadeIn: true })
+meldung.flowLater = { spans: spans(), text: flowing.textContent, html: flowing.innerHTML }
+clock = 1600
+action.update({ html: '<p>Hello world, how are</p>', fadeIn: false })
+meldung.flowWhole = { spans: spans(), text: flowing.textContent }
+// A text that is handed in as a plain string never fades.
+const plain = document.getElementById('plain')
+lebendHtml(plain, '<p>All here</p>')
+meldung.plain = { spans: Array.from(plain.querySelectorAll('.flow-char')).length, text: plain.textContent }
+
 document.getElementById('ergebnis').textContent = JSON.stringify(meldung)
 """
 
@@ -108,6 +135,7 @@ def _seite() -> str:
     return (
         "<!doctype html><meta charset=utf-8><title>lebendhtml</title>"
         '<div id="rolle" style="height:120px;overflow:auto"><div id="kasten"></div></div>'
+        '<div id="flowing"></div><div id="plain"></div>'
         '<pre id="ergebnis"></pre>'
         f"<script>{quelle}\n{FAELLE}</script>"
     )
@@ -213,3 +241,32 @@ def test_der_alte_neuaufbau_wirft_die_ansicht_zurueck(meldung):
     still holds, but the reason recorded in lebendhtml.js no longer does."""
     neu = meldung["neuaufbau"]
     assert neu["nachher"] < neu["vorher"], neu
+
+
+def test_new_characters_fade_in_and_older_ones_stand_plain_again(meldung):
+    """The characters of a flowing text fade in for 280 ms: each piece that
+    came up in that time wears a span whose negative delay is its age, so a
+    span made afresh with the next frame goes on from where the last one
+    was. Whatever is older is plain text again, and the text itself is the
+    same in every step."""
+    assert meldung["flowFirst"] == {"spans": [], "text": "Hello"}
+    assert meldung["flowNew"] == {
+        "spans": [{"text": " world", "delay": "0ms"}],
+        "text": "Hello world",
+    }
+    assert meldung["flowMore"] == {
+        "spans": [
+            {"text": " world", "delay": "-100ms"},
+            {"text": ", how", "delay": "0ms"},
+        ],
+        "text": "Hello world, how",
+    }
+    assert meldung["flowLater"]["spans"] == []
+    assert meldung["flowLater"]["html"] == "<p>Hello world, how</p>"
+
+
+def test_without_fade_in_the_text_stands_whole_and_without_wrappers(meldung):
+    """The silence probe: an answer that is stored, and the text of a window
+    that reduces motion, are drawn whole — no span, no delay."""
+    assert meldung["flowWhole"] == {"spans": [], "text": "Hello world, how are"}
+    assert meldung["plain"] == {"spans": 0, "text": "All here"}

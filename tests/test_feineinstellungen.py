@@ -59,7 +59,7 @@ def test_festnageln_nutzt_die_nicht_veraltete_form():
 
 
 def test_parallel_gesetzt_wird_gesagt():
-    assert flags(Feineinstellungen(parallel=4)) == ["--parallel", "4"]
+    assert flags(Feineinstellungen(parallel=4)) == ["--parallel", "4", "--kv-unified"]
 
 
 def test_parallel_ungesetzt_bleibt_stumm():
@@ -80,7 +80,7 @@ def test_alles_zusammen_bleibt_lesbar():
         "--threads", "6",
         "--n-cpu-moe", "4",
         "--load-mode", "mmap+mlock",
-        "--parallel", "2",
+        "--parallel", "2", "--kv-unified",
     ]
 
 

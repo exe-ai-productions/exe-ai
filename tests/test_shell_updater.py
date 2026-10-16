@@ -147,7 +147,7 @@ def test_before_any_look_the_state_is_none_with_the_running_version():
     state = _updater("return { state: await status(), calls, lines, sent }")
     assert state["state"] == {
         "version": "0.6.9", "found": "", "notes": "", "date": "",
-        "state": "none", "progress": None, "reason": "",
+        "state": "none", "progress": None, "reason": "", "step": "",
     }
     assert state["calls"] == [] and state["lines"] == [] and state["sent"] == []
 
@@ -169,7 +169,7 @@ def test_a_newer_version_is_found_with_its_notes_and_its_date():
     found = {
         "version": "0.6.9", "found": "0.6.10", "notes": "<p>Fixes</p>",
         "date": "2026-01-02T03:04:05.000Z", "state": "available",
-        "progress": None, "reason": "",
+        "progress": None, "reason": "", "step": "",
     }
     assert result["answer"] == found
     assert result["calls"] == ["check"]
@@ -727,3 +727,48 @@ def test_the_settings_row_of_a_store_copy_names_the_store_and_offers_no_look():
     assert "{#if updates.state !== 'store'}" in row
     assert "{#if updates.state === 'store'}" in row
     assert "t('updates.store')" in row
+
+
+# --- a failure names the step it belongs to ----------------------------------
+
+
+def test_a_failed_look_names_the_step_check():
+    state = _updater("""
+    autoUpdater.checkForUpdates = () => fail(new Error('offline'))
+    return handlers['updates-check']()
+    """)
+    assert (state["state"], state["step"], state["reason"]) == ("error", "check", "offline")
+
+
+def test_a_failed_download_names_the_step_download_and_a_later_look_names_check():
+    result = _updater(f"""
+    autoUpdater.emit('update-available', {AVAILABLE})
+    autoUpdater.downloadUpdate = () => fail(new Error('sha512 checksum mismatch'))
+    const download = await handlers['updates-download']()
+    autoUpdater.checkForUpdates = () => fail(new Error('offline'))
+    const look = await handlers['updates-check']()
+    return {{ download: [download.state, download.step, download.reason], look: [look.state, look.step] }}
+    """)
+    assert result["download"] == ["error", "download", "sha512 checksum mismatch"]
+    assert result["look"] == ["error", "check"]
+
+
+def test_a_failed_installation_names_the_step_install_with_the_reason_the_end_gave():
+    result = _updater(f"""
+    autoUpdater.emit('update-available', {AVAILABLE})
+    autoUpdater.emit('update-downloaded', {{ version: '0.6.10' }})
+    ending.fails = 'The service on port 8090 is still running.'
+    const refused = await handlers['updates-install']()
+    return {{ refused: [refused.state, refused.step, refused.reason], calls }}
+    """, service=True)
+    assert result["refused"] == ["error", "install", "The service on port 8090 is still running."]
+
+
+def test_a_failure_of_the_library_during_the_installation_names_the_step_install():
+    state = _updater(f"""
+    autoUpdater.emit('update-available', {AVAILABLE})
+    autoUpdater.emit('update-downloaded', {{ version: '0.6.10' }})
+    autoUpdater.quitAndInstall = () => {{ throw new Error('the package could not be taken over') }}
+    return handlers['updates-install']()
+    """, service=True)
+    assert (state["state"], state["step"]) == ("error", "install")

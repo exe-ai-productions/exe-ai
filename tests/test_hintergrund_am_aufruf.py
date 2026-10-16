@@ -280,7 +280,7 @@ def test_das_fenster_zeichnet_die_berichtszeile_nicht_und_fuellt_die_karte():
     assert "ereignis.typ === 'lauf_gelesen'" in strom
     assert "aufrufkarte(ereignis.lauf)" in strom
     karte = (WURZEL / "frontend/src/teile/Nachricht.svelte").read_text(encoding="utf-8")
-    assert "hintergrundStand(teil.werkzeug)" in karte
+    assert "hintergrundStand(werkzeug)" in karte
     assert "t('werkzeug.hintergrund_laeuft')" in karte
     # Green and red only while nobody has looked — read, the dot steps back.
     assert "if (lauf.gelesen || werkzeug.gesehen) return null" in karte

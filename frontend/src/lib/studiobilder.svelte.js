@@ -3,7 +3,6 @@
    infos, the faces redone, upscaled. The infos are a card on the surface
    (StudioPictureInfo.svelte); "Use" writes their values into the fields. */
 import { api } from './api.js'
-import { chatanzeige } from './chatanzeige.svelte.js'
 import { auswahl, emptyArea, familie, listen, pictureMissing, startbildWaehlen, werte } from './studio.svelte.js'
 import { studioZeichnen } from './studiozeichnen.svelte.js'
 import { t } from './texte.svelte.js'
@@ -41,13 +40,10 @@ export async function nachbessern(name) {
     melde(t('bild.modus_unvollstaendig'), 'fehler')
     return
   }
-  const fuer = chatanzeige.chatId
   let prompt = werte.prompt.trim()
   if (!prompt) {
     const gefunden = await api.drawnWith(name).catch(() => null)
     prompt = typeof gefunden?.prompt === 'string' ? gefunden.prompt.trim() : ''
-    // Another chat was opened while the question was on its way.
-    if (fuer !== chatanzeige.chatId) return
   }
   if (!prompt) {
     melde(t('studio.no_prompt'), 'hinweis')
@@ -67,10 +63,7 @@ export async function hochskalieren(name) {
     melde(t('bild.modus_unvollstaendig'), 'fehler')
     return
   }
-  const fuer = chatanzeige.chatId
   const gefunden = await api.drawnWith(name).catch(() => null)
-  // Another chat was opened while the question was on its way.
-  if (fuer !== chatanzeige.chatId) return
   const gemerkt = typeof gefunden?.prompt === 'string' ? gefunden.prompt.trim() : ''
   studioZeichnen({ mode: 'upscale', startbild: name, maske: null, upscale_model: upscaler,
                    prompt: gemerkt || werte.prompt.trim() })
@@ -88,18 +81,16 @@ export function bildEntfernen() {
    by its name; where it kept nothing — a picture drawn elsewhere, or one
    from before the program kept any — what the file itself says. A question
    for the kept values that fails counts as nothing kept: the file is read
-   all the same. Only the newest question counts, and only for the chat
-   that asked it. */
+   all the same. Only the newest question counts. */
 let infoAnfrage = 0
 export async function infosZeigen(name) {
   const nr = ++infoAnfrage
-  const fuer = chatanzeige.chatId
   try {
     let gefunden = await api.drawnWith(name).catch(() => null)
     if (!gefunden || !Object.keys(gefunden).length) {
       gefunden = await api.pictureInfo(await api.bildBlob(name))
     }
-    if (nr === infoAnfrage && fuer === chatanzeige.chatId) bildInfo.werte = gefunden ?? {}
+    if (nr === infoAnfrage) bildInfo.werte = gefunden ?? {}
   } catch (fehler) {
     if (nr === infoAnfrage) melde(String(fehler.message || fehler), 'fehler')
   }

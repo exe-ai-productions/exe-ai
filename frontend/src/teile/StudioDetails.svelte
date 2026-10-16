@@ -13,7 +13,6 @@
      them. Pictures go up like any attachment and travel by the name the
      service gave them; one that arrives after the chat was switched, or
      after a newer choice, is set nowhere. */
-  import { untrack } from 'svelte'
   import Auswahlfeld from './Auswahlfeld.svelte'
   import Bildablage from './Bildablage.svelte'
   import Hauszeichen from './Hauszeichen.svelte'
@@ -27,13 +26,12 @@
   import Zahlenfeld from './Zahlenfeld.svelte'
   import { api } from '../lib/api.js'
   import { PREDICTIONEN } from '../lib/bildlisten.js'
-  import { chatanzeige } from '../lib/chatanzeige.svelte.js'
   import { familyOf, imageFamilies } from '../lib/imageFamilies.svelte.js'
   import { imageSwitches } from '../lib/imageSwitches.svelte.js'
   import { rollfade } from '../lib/rollfade.js'
   import {
-    art, auswahl, emptyArea, familie, familieWaehlen, listen, refVideo, refVideoRelease, refVideoSet, searchRows,
-    searching, startbildWaehlen, steuervideo, steuervideoLoesen, steuervideoSetzen, strengthDecides,
+    art, auswahl, emptyArea, familie, familieWaehlen, listen, pictureFromOutside, refVideo, refVideoRelease,
+    refVideoSet, searchRows, searching, steuervideo, steuervideoLoesen, steuervideoSetzen, strengthDecides,
     takesRefVideo, werte,
   } from '../lib/studio.svelte.js'
   import { t } from '../lib/texte.svelte.js'
@@ -114,17 +112,15 @@
   const modelRows = $derived(modelRowsOf(modelKeys))
 
   /* One upload: the name the service gave the picture, or null when it
-     failed or no longer counts — the chat was switched, or `gilt` says a
-     newer choice came. A failure is said only where it still counts. */
+     failed or no longer counts — `gilt` says a newer choice came. A failure
+     is said only where it still counts. */
   async function hochladen(datei, gilt = () => true) {
     if (!datei) return null
-    const fuer = chatanzeige.chatId
-    const zaehlt = () => fuer === chatanzeige.chatId && gilt()
     try {
       const ergebnis = await api.bildHochladen(datei)
-      return zaehlt() ? ergebnis.bild : null
+      return gilt() ? ergebnis.bild : null
     } catch (fehler) {
-      if (zaehlt()) melde(String(fehler.message || fehler), 'fehler')
+      if (gilt()) melde(String(fehler.message || fehler), 'fehler')
       return null
     }
   }
@@ -163,7 +159,7 @@
     const wahl = ++startWahl
     const name = await hochladen(datei, () => wahl === startWahl)
     if (!name) return false
-    startbildWaehlen(name)
+    pictureFromOutside(name)
     return true
   }
   function startbildLoesen() {
@@ -200,20 +196,9 @@
   // A picture for one of sd.cpp's switches.
   const schalterBild = (datei) => hochladen(datei)
 
-  /* A control video is not kept with a chat: another chat lets it go —
-     also one opened while this column was hidden behind a tool. The same
-     for a reference video. */
-  $effect(() => {
-    const chat = chatanzeige.chatId
-    untrack(() => {
-      if (steuervideo.datei && steuervideo.chat !== chat) steuervideoLoesen()
-      if (refVideo.datei && refVideo.chat !== chat) refVideoRelease()
-    })
-  })
-
   /* The highres pass: the picker switches it, the scale row sets how much.
-     The chat keeps the scale as the one value `hires_wahl`, empty while the
-     pass is off. */
+     The studio keeps the scale as the one value `hires_wahl`, empty while
+     the pass is off. */
   function hiresSchalten(wert) {
     werte.hires_wahl = wert ? String(werte.hires_wahl || HIRES_START) : ''
   }

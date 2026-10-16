@@ -200,7 +200,7 @@
             </div>
           </div>
           <Standpille farbe={istAn(gewaehltesWerkzeug.name) ? 'blau' : 'still'}>
-            {t(istAn(gewaehltesWerkzeug.name) ? 'werkzeuge.an' : 'werkzeuge.aus')}
+            {t(istAn(gewaehltesWerkzeug.name) ? 'status.aktiv' : 'status.inaktiv')}
           </Standpille>
         </div>
 

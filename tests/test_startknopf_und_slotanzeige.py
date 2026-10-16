@@ -150,8 +150,10 @@ def test_der_startknopf_friert_die_motorhebel_nicht_mehr_ein():
     button wrote them a second time. Same rule as the numbers, same filter.
     """
     quelle = ohne_kommentare(MODELLSERVER.read_text(encoding="utf-8"))
-    # No naked write left anywhere — both writers go through one place.
-    assert quelle.count("api.einstellungSetzen('global', FEINEINSTELLUNGEN") == 1
+    # No naked write of the whole row left anywhere — both writers go
+    # through one place, and that one sends only the levers that changed.
+    assert "api.einstellungSetzen('global', FEINEINSTELLUNGEN" not in quelle
+    assert quelle.count("api.einstellungMischen('global', FEINEINSTELLUNGEN") == 1
     assert "function feinSchreiben()" in quelle
     # And that one place is asked whether there is anything to say.
     assert "feinNachzutragen()" in rumpf(quelle, "async function starten()")

@@ -1124,20 +1124,21 @@ def test_ein_bild_eines_zweiten_chats_bleibt(client, chat_id):
     assert not (ordner / eigen).exists()
 
 
-def test_a_starting_image_of_another_chats_studio_stays(client, chat_id):
-    """A picture another chat's picture studio holds as its starting image
-    is named by no row there: deleting the chat that drew it leaves it."""
+def test_a_starting_image_the_studio_holds_stays(client, chat_id):
+    """A picture the picture studio holds as its starting image is named by
+    no row: deleting the chat that drew it leaves it."""
     held, own, only_here = _bild(client), _bild(client), _bild(client)
     second = client.post("/api/v1/chats", json={"title": "Second"}).json()["id"]
     repositories = client.app.state.repositories
     repositories.messages.speichern(
         chat_id=chat_id, role="user", content="x", anhaenge=[held, own, only_here]
     )
-    repositories.einstellungen.setzen(f"chat:{second}", "bildfenster", {"startbild": held})
-    # Silence probes: the deleted chat's own studio keeps nothing alive, and
-    # neither does another key of the second chat that carries the name.
-    repositories.einstellungen.setzen(f"chat:{chat_id}", "bildfenster", {"startbild": only_here})
-    repositories.einstellungen.setzen(f"chat:{second}", "layout", {"startbild": own})
+    repositories.einstellungen.setzen("global", "bildfenster", {"startbild": held})
+    # Silence probes: what another chat stored for its own window keeps
+    # nothing alive — nobody reads it any more — and neither does another
+    # key of the studio's scope that carries the name.
+    repositories.einstellungen.setzen(f"chat:{second}", "bildfenster", {"startbild": own})
+    repositories.einstellungen.setzen("global", "layout", {"startbild": only_here})
 
     assert client.delete(f"/api/v1/chats/{chat_id}").status_code == 204
 
@@ -1147,21 +1148,22 @@ def test_a_starting_image_of_another_chats_studio_stays(client, chat_id):
     assert not (folder / only_here).exists()
 
 
-def test_a_picture_only_a_studio_holds_goes_with_the_last_chat_that_holds_it(client, chat_id):
-    """Chat A drew it, chat B's studio holds it as its starting image:
-    deleting A leaves it — and from then on no row names it. Deleting B
-    takes it along, instead of leaving it in the folder for good."""
+def test_a_picture_the_studio_let_go_of_is_not_deleted_by_itself(client, chat_id):
+    """Chat A drew it, the studio holds it: deleting A leaves it — and from
+    then on no row names it. Nothing deletes it behind the studio's back
+    when the studio lets go, nor when another chat goes."""
     held = _bild(client)
     second = client.post("/api/v1/chats", json={"title": "Second"}).json()["id"]
     repositories = client.app.state.repositories
     repositories.messages.speichern(chat_id=chat_id, role="assistant", content="", bild=held)
-    repositories.einstellungen.setzen(f"chat:{second}", "bildfenster", {"startbild": held})
+    repositories.einstellungen.setzen("global", "bildfenster", {"startbild": held})
     folder = _bilderordner(client)
 
     assert client.delete(f"/api/v1/chats/{chat_id}").status_code == 204
     assert (folder / held).is_file()
+    repositories.einstellungen.setzen("global", "bildfenster", {"startbild": ""})
     assert client.delete(f"/api/v1/chats/{second}").status_code == 204
-    assert not (folder / held).exists()
+    assert (folder / held).is_file()
 
 
 @pytest.mark.parametrize("held_as", [
@@ -1171,14 +1173,13 @@ def test_a_picture_only_a_studio_holds_goes_with_the_last_chat_that_holds_it(cli
     lambda name: {"startbild": "0" * 32 + ".png", "maske": name},
     lambda name: {"switches": {"ip_adapter_image": name}},
 ], ids=["end-picture", "reference", "guide", "mask", "switch"])
-def test_every_place_of_another_chats_studio_keeps_a_picture(client, chat_id, held_as):
-    """Not the starting image alone: whatever place of another chat's
-    studio holds the picture, it does not vanish from under that chat."""
+def test_every_place_of_the_studio_keeps_a_picture(client, chat_id, held_as):
+    """Not the starting image alone: whatever place of the studio holds the
+    picture, it does not vanish from under the studio."""
     held, own = _bild(client), _bild(client)
-    second = client.post("/api/v1/chats", json={"title": "Second"}).json()["id"]
     repositories = client.app.state.repositories
     repositories.messages.speichern(chat_id=chat_id, role="user", content="x", anhaenge=[held, own])
-    repositories.einstellungen.setzen(f"chat:{second}", "bildfenster", held_as(held))
+    repositories.einstellungen.setzen("global", "bildfenster", held_as(held))
 
     assert client.delete(f"/api/v1/chats/{chat_id}").status_code == 204
 
@@ -1188,9 +1189,10 @@ def test_every_place_of_another_chats_studio_keeps_a_picture(client, chat_id, he
 
 
 def test_a_picture_laid_into_the_studio_goes_with_its_chat(client, chat_id):
-    """A picture laid into the studio's area is named by no row: the chat's
-    own studio is what holds it, and it goes with the chat — unless a row of
-    another chat names it, or the name is none the picture route gave."""
+    """A picture laid into the window an older chat stored is named by no
+    row: that window is what held it, and it goes with the chat — unless a
+    row of another chat names it, or the name is none the picture route
+    gave."""
     laid, also_in_a_row, beside = _bild(client), _bild(client), _bild(client)
     second = client.post("/api/v1/chats", json={"title": "Second"}).json()["id"]
     repositories = client.app.state.repositories

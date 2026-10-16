@@ -1,5 +1,122 @@
 # Patch notes
 
+## 0.6.14 — Picture Studio
+
+### New
+
+- Added a picture studio of its own that keeps its picture, mask, model and values, draws without a chat and lists its own pictures.
+- Added the switch "Keep model loaded" to the speech server window; it keeps the voice loaded for the length of a conversation, so it starts speaking sooner.
+- Added the field "Pause before sending" to the speech server window; it sets how long you stay silent before what you said is sent.
+- Added "Auto" for GPU layers in the llama.cpp server windows: an empty field leaves it to llama.cpp how much of the model goes on the graphics card.
+- Added the switch "KV - Unified" under "Parallel requests"; with it, every request can use the whole context instead of a fixed share.
+- Added the llama.cpp section, with its download and update, to every llama.cpp server window.
+- Added a restart of the running llama.cpp servers after a new build is downloaded: they start again with the values they ran with, and the old build stays until every model is loaded and takes over if a start fails.
+- Added a copy of llama.cpp of its own for the kept voice, downloaded by itself the first time it is needed, so a change of the server build never touches the voice.
+- Added links for bare web addresses: an http or https address in an answer can now be clicked.
+- Added the logo an MCP server sends along to its card, its tool rows and its notices.
+
+### Chat
+
+- We improved the flow of a running answer: text and thinking fade in, the text follows at most a quarter of a second behind, the view glides along, and thinking and tool calls form one block per run.
+- We improved the line beside an answer, which now always ends at its mark: the mark keeps drawing itself without disappearing and stays still once the answer is done.
+- Fixed an issue that pulled a running answer up when its first tool calls folded into a bundle.
+- We improved the speed of the chat list with many chats.
+- We improved the arrow of the Regenerate button.
+- Fixed an issue where the model told you to look for delivered files in the Doc folder, which does not show them in a chat.
+- Fixed an issue where the microphone did not start again from the second round of a conversation on some Macs; the microphone now opens once and stays open until the conversation ends.
+- Fixed an issue that ended a conversation round with an error when the microphone had delivered no sound yet.
+- We improved the error message of speech recognition, which now names the reason the speech server gave.
+- We improved the start of the voice in a conversation, which now begins speaking at the first comma of an answer.
+- Fixed an issue where the clean-up model answered a dictated question instead of tidying it.
+- We improved the microphone button: while you dictate or talk, a line takes the place of the buttons on the left of the input bar and shows your voice, and the voice of the answer in blue; the timer beside the button is gone.
+- Fixed an issue where the voice still spoke a sentence after a conversation had ended, loading a second voice model for it.
+- Fixed an issue where a voice kept loaded could make a Mac with 8 GB of memory stop responding for about a minute; on such a computer "Keep model loaded" now starts switched off.
+
+### Context and models
+
+- Fixed an issue where the window could keep working with an older background service instead of starting its own.
+- Fixed an issue where a new storage location for models only took effect after a restart.
+- Fixed an issue where the model row did not name the file that is really running.
+- Fixed an issue where the agent server forgot its speed and vision modules at every change of model.
+- Fixed an issue where the vision row showed no projector although the server started with the one found next to the model.
+- Fixed an issue where the memory estimate left out the 8-bit cache and the vision projector.
+- Fixed an issue where a second window overwrote the advanced settings of the model server.
+- Fixed an issue that lost a change made just before a server window was closed or started.
+- Fixed an issue where the slider "MoE experts on CPU" could not be dragged while its field was empty.
+- Fixed an issue that lost the model, context, GPU layers, CPU threads and port of the speech, clean-up and embedding servers.
+- Fixed an issue where every sentence of the voice ended with "Speech generation failed." on computers with little memory.
+- Fixed an issue that refused a voice sample saved in the extensible WAV format.
+
+### Images and video
+
+- We improved the studio, which now opens with the hand tool and with the mask switched off; a mask that is switched off is neither shown nor sent.
+- Fixed an issue where brush and eraser left marks while the mask was switched off.
+- We improved the studio row, which keeps the original picture on top, and the studio now shows the resolution of the picture in the area.
+- Fixed an issue that loaded the image model a second time for the first picture after the image server was started by hand.
+- Fixed an issue where upscaling ignored the device settings of the image server.
+- Fixed an issue where a refused setting of the image server disappeared.
+- Fixed an issue where the image server showed "inactive" instead of "error" when its server had stopped.
+- Fixed an issue that reported a long picture in the chat as timed out.
+- Fixed an issue that kept an enlarged picture with default values instead of those of its original.
+- Fixed an issue that counted pictures you took out of a run as not generated after a reload.
+- We improved the picture kits: the vision field offers only files with a vision encoder, a part the image program adds by itself counts as there, the kit of Qwen-Image 2.1 brings its vision part, and its Turbo files start with the eight steps of their model card.
+- We improved the picture card in the Terminal panel, which shows the prompt once, leaves out empty values and uses the words of the app.
+
+### Model catalogue and downloads
+
+- We improved the choice of the image program's variant: the variant you picked is the one that starts.
+- Fixed an issue where an update of the image program on a Mac used a variant left on disk, and on Windows a build that was still being unpacked; a new build is now put in place only once it is complete.
+
+### Agents, jobs and schedules
+
+- Added picture addresses to agent jobs: a job can take a picture from an http or https address, with a size limit and a safety check.
+- Fixed an issue where a stop right after a handoff let the run continue.
+- Fixed an issue that shrank the task field of the job windows to a single row.
+- Fixed an issue that refused a helper at the wrong count when the limit was one.
+- We improved the schedule form, which now says in a sentence what a typed schedule means and when it runs next.
+
+### Tools, files and MCP
+
+- We improved the detail card of a tool, which now says "active" or "inactive".
+
+### Settings and layout
+
+- We improved the cloud window, which now lists every provider you created, also the unreachable ones, with their state and a way to remove them.
+- Fixed an issue that rewrote config.yaml without its comments when a provider was added, changed or removed.
+- Fixed an issue where a cloud model named vendor/model could not keep its parameters.
+- Fixed an issue that showed the Exe look for a moment before the chosen look at start.
+- We improved long folder paths, which are now cut at the front so the folder name stays visible.
+- Fixed an issue that painted the area under the first row of cards black when a card menu was open.
+- Fixed an issue where the German manual called the appearance by two names.
+
+### App, updates and Windows
+
+- Fixed an issue that reported a failed download or installation of an update as a failed look.
+- Fixed an issue where a script on Windows failed to start without saying why.
+
+### CLI (still in development)
+
+- Added /setup and exe setup, which guide through four steps, and a question at the first start whether to set up.
+- Added /provider to add and remove cloud providers and set their context size, time limit and capabilities.
+- Added /compact, and the skills in the list behind the slash.
+- Added /memory and /system, which open the memory and the instructions in the text editor of the computer.
+- Added /dir to show, share and stop sharing working folders.
+- Added exe -p, which sends one message and writes only the answer, for scripts.
+- Added @path to attach a file or an image, with Tab to complete the path; a file dropped on the terminal becomes a mention.
+- Added /agents and /agents edit for the tasks of the agents and the agents themselves, and exe agents from outside.
+- Added /cron for scheduled tasks, with weekly schedules, and exe cron from outside.
+- Added search in the chat list, the archive, and /rename, /delete and /archive.
+- Added /project and exe --continue.
+- Added /tools and /ps.
+- Added /mcp for MCP servers; their tools read "active", "asks" and "inactive".
+- Added /skills for skills.
+- Added /settings, which replaces /set.
+- Added /files for the files of the open chat.
+- Added /image and /server image.
+- We improved the look of the CLI: the cursor and the mark carry the accent of the theme, and a selection in the CLI tab stays readable in Heaven and Moune.
+- Fixed an issue that left empty rows in the CLI after a list closed.
+- We improved the CLI tab in the window: addresses open in the browser, a dropped file types its path, and a missing client is named.
+
 ## 0.6.13 — Windows Hotfix
 
 ### Windows

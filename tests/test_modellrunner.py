@@ -1312,7 +1312,7 @@ def test_ein_echter_start_ueber_die_app_landet_als_messung(config, client):
     )
 
     runner = client.app.state.modellrunner
-    runner._ordner = modellordner
+    runner._ordner_quelle = lambda: modellordner
     runner._programm_vorgabe = str(programm)
     runner.starten("klein.gguf", port=18106)
     try:

@@ -24,10 +24,12 @@ import logging
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
 from app.no_console import no_window
+from app.voice_worker import VOICE_CONTEXT_SIZE
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +98,47 @@ def _stimmprobe_pruefen(ordner: Path, name: str) -> Path:
     return ziel
 
 
+class SpeakCancelled(Exception):
+    """The sentence was asked for no longer: the program was ended."""
+
+
+# How often a running program is looked at for the cancel.
+_CANCEL_POLL_SECONDS = 0.25
+
+
+def _laufen(
+    befehl: list[str], *, cancel: threading.Event | None, timeout: float
+) -> subprocess.CompletedProcess:
+    """Runs the program to its end, or ends it: when ``cancel`` is set, or
+    when ``timeout`` runs out (raised as ``subprocess.TimeoutExpired``)."""
+    prozess = subprocess.Popen(
+        befehl, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        encoding="utf-8", errors="replace", **no_window(),
+    )
+    start = time.monotonic()
+    while True:
+        try:
+            ausgabe, fehler = prozess.communicate(timeout=_CANCEL_POLL_SECONDS)
+            return subprocess.CompletedProcess(befehl, prozess.returncode, ausgabe, fehler)
+        except subprocess.TimeoutExpired:
+            pass
+        if cancel is not None and cancel.is_set():
+            prozess.kill()
+            prozess.communicate()
+            raise SpeakCancelled()
+        if time.monotonic() - start >= timeout:
+            prozess.kill()
+            prozess.communicate()
+            raise subprocess.TimeoutExpired(befehl, timeout)
+
+
+def sample_path(ordner: Path, name: str) -> Path:
+    """The voice sample as a path inside the voice folder, or a refusal —
+    for the one who loads the voice once for a whole conversation
+    (app/voice_service.py) and so does not go through ``sprechen``."""
+    return _stimmprobe_pruefen(ordner, name)
+
+
 def sprechen(
     programm: Path,
     modell: Path,
@@ -106,10 +149,12 @@ def sprechen(
     ordner: Path,
     stimmprobe: str | None = None,
     sampling: dict[str, float] | None = None,
-    schichten: int = 99,
+    schichten: int | None = None,
     faeden: int = 0,
+    cancel: threading.Event | None = None,
 ) -> bytes:
-    """One sentence, spoken once, as WAV bytes.
+    """One sentence, spoken once, as WAV bytes. ``cancel``, once set, ends the
+    program and raises ``SpeakCancelled``.
 
     ``llama-tts`` only writes to a file (``-o``), never to standard output,
     so a temporary target is unavoidable — read back and removed before
@@ -141,8 +186,13 @@ def sprechen(
             # beaten by whatever the settings carry (app/diktatsprachewahl.py),
             # in the engine's own flag order. The layer flag spells its long
             # name: llama-tts knows -ngl, --gpu-layers and --n-gpu-layers,
-            # and --ngl is not one of them.
-            "--n-gpu-layers", str(schichten),
+            # and --ngl is not one of them. No count named is the engine's
+            # own "auto": the flag is left out.
+            *(["--n-gpu-layers", str(schichten)] if schichten is not None else []),
+            # The context is named, as the kept voice names its own: without
+            # it the engine takes the model's (32768) and a Mac with 8 GB
+            # cannot hold the cache of one sentence.
+            "-c", str(VOICE_CONTEXT_SIZE),
             "--temp", str(werte["temperature"]),
             "--top-k", str(int(werte["top_k"])),
             "--top-p", str(werte["top_p"]),
@@ -157,10 +207,7 @@ def sprechen(
             befehl += ["--tts-speaker-file", str(probe)]
         start = time.monotonic()
         try:
-            antwort = subprocess.run(
-                befehl, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=ZEITGRENZE,
-                **no_window(),
-            )
+            antwort = _laufen(befehl, cancel=cancel, timeout=ZEITGRENZE)
         except subprocess.TimeoutExpired:
             raise SprechenNichtMoeglich("stimme_zeitueberschreitung") from None
         dauer = time.monotonic() - start
@@ -186,8 +233,10 @@ __all__ = [
     "TOP_P",
     "WIEDERHOLUNGSSTRAFE",
     "ZEITGRENZE",
+    "SpeakCancelled",
     "SprechenNichtMoeglich",
     "proben_auflisten",
     "programm_finden",
+    "sample_path",
     "sprechen",
 ]

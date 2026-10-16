@@ -424,6 +424,18 @@ def mmproj_auflisten(ordner: Path) -> list[str]:
     return sorted(p.name for p in unter.glob("*.gguf") if p.is_file() and ist_mmproj(p.name))
 
 
+def vision_file_sizes(ordner: Path) -> dict[str, float]:
+    """The size in gigabytes of each vision projector in ``vision/``, by name
+    — what the memory estimate adds when a model starts with one. The same
+    rounding the model and draft listings carry."""
+    unter = ordner / VISION_ORDNER
+    return {
+        name: round((unter / name).stat().st_size / 1e9, 1)
+        for name in mmproj_auflisten(ordner)
+        if (unter / name).is_file()
+    }
+
+
 def passende_mmproj(ordner: Path, modell: str) -> Path | None:
     """The projector that belongs to this model, or nothing.
 
@@ -460,7 +472,8 @@ class Lauf:
 
     modell: str
     kontext: int
-    schichten: int
+    # None: no layer count was named and the engine placed the layers itself.
+    schichten: int | None
     port: int
     # The draft model for speculative decoding, when one was chosen — a
     # small model guesses ahead, the big one only checks.
@@ -473,6 +486,11 @@ class Lauf:
     # a form that cannot show them makes the user set them again from
     # scratch — or, worse, believe the defaults are what is running.
     fein: Feineinstellungen | None = None
+    # The thread count and the generation values this server was started
+    # with, kept so that a restart can start it again with exactly them
+    # (app/server_restart.py).
+    faeden: int | None = None
+    sampling: dict[str, float] | None = None
 
 
 # The engine's own names for the five generation values the speech settings
@@ -506,7 +524,7 @@ class Modellrunner:
 
     def __init__(
         self,
-        modelle_ordner: Path,
+        modelle_ordner: Path | Callable[[], Path],
         programm: str | None = None,
         *,
         port: int = 8080,
@@ -527,6 +545,11 @@ class Modellrunner:
         them as module constants, and a second server would have taken the
         first one's port and overwritten its key on start.
 
+        ``modelle_ordner`` is a folder or a function that names it: with a
+        function every reading, start and listing asks again, so a folder
+        the user moved a moment ago is the one it sees. A server that is up
+        keeps the model it loaded.
+
         ``bereit_callback`` (model, load time in seconds) fires
         once per start, the moment the server's own log says it is ready —
         never for the embedding or vision-encoder runners, which have
@@ -540,7 +563,12 @@ class Modellrunner:
         worth announcing — every server of the program hands one in, each
         under its own name (app/runnerzustand.py).
         """
-        self._ordner = Path(modelle_ordner).expanduser()
+        self._ordner_quelle: Callable[[], Path] = (
+            modelle_ordner if callable(modelle_ordner) else (lambda: Path(modelle_ordner))
+        )
+        # The folder the running server's note was written into: the note is
+        # dropped from there even when the folder was moved in the meantime.
+        self._pid_ordner: Path | None = None
         self._programm_vorgabe = programm
         self._port = port
         self._pid_datei = pid_datei
@@ -588,6 +616,10 @@ class Modellrunner:
     # --- What can be seen without starting anything ------------------------
 
     @property
+    def _ordner(self) -> Path:
+        return Path(self._ordner_quelle()).expanduser()
+
+    @property
     def programm(self) -> Path | None:
         return programm_finden(self._programm_vorgabe)
 
@@ -613,6 +645,9 @@ class Modellrunner:
     def mtp(self) -> list[Modelldatei]:
         return mtp_auflisten(self._ordner)
 
+    def projector_sizes(self) -> dict[str, float]:
+        return vision_file_sizes(self._ordner)
+
     def laeuft(self) -> bool:
         # Read once into a local. Two loads of the field is a hole a thread
         # can fall through: the reader thread asks this while a stop clears
@@ -623,6 +658,10 @@ class Modellrunner:
 
     def lauf(self) -> Lauf | None:
         return self._lauf if self.laeuft() else None
+
+    def bereit(self) -> bool:
+        """Whether the running server has said that its model is loaded."""
+        return self.laeuft() and self._bereit_gesehen
 
     def von_hand_gestoppt(self) -> bool:
         """Whether the last server this runner held was ended through
@@ -819,7 +858,7 @@ class Modellrunner:
         self,
         modell: str,
         kontext: int,
-        schichten: int,
+        schichten: int | None,
         port: int,
         drafter: str | None = None,
         fein: Feineinstellungen | None = None,
@@ -832,11 +871,20 @@ class Modellrunner:
         Building it in one place is the point: what the window shows cannot
         drift away from what actually starts.
         """
+        # One reading of the folder for the whole command: it may be moved
+        # while the command is put together.
+        ordner = self._ordner
         zeile = [
             str(self.programm or "llama-server"),
-            "--model", str(self._ordner / modell),
+            "--model", str(ordner / modell),
             "--ctx-size", str(kontext),
-            "--n-gpu-layers", str(schichten),
+        ]
+        # No layer count is the engine's own "auto": it fits the layers (and,
+        # with them, the experts of a MoE model) to the memory it finds. A
+        # number is passed as named.
+        if schichten is not None:
+            zeile += ["--n-gpu-layers", str(schichten)]
+        zeile += [
             "--host", "127.0.0.1",
             "--port", str(port),
             # Without this the engine's load report never appears, and the
@@ -862,7 +910,7 @@ class Modellrunner:
         # as it did before the section existed.
         zeile += feinflags(fein)
         if drafter:
-            draft = draft_path(self._ordner, modell, drafter)
+            draft = draft_path(ordner, modell, drafter)
             if draft is None:
                 raise RunnerFehler("kein_modell")
             zeile += ["--model-draft", str(draft)]
@@ -872,7 +920,7 @@ class Modellrunner:
             # draft path it fails to build a context — and a small sibling
             # model is the plain path, named as such.
             zeile += ["--spec-type", "draft-mtp" if ist_mtp(draft) else "draft-simple"]
-        elif traegt_eingebettetes_mtp(self._ordner / modell):
+        elif traegt_eingebettetes_mtp(ordner / modell):
             # No separate draft file chosen, and the model's own header
             # says it carries its prediction layers already — the engine
             # drafts against itself, no --model-draft needed. Never both
@@ -889,7 +937,7 @@ class Modellrunner:
         # paired by hand. The name obeys the same folder boundary as every
         # other file a start may reach.
         if vision:
-            basis = _begleiter_ordner(self._ordner, "mmproj").resolve()
+            basis = _begleiter_ordner(ordner, "mmproj").resolve()
             gewaehlt = (basis / vision).resolve()
             augen = gewaehlt if gewaehlt.parent == basis and gewaehlt.is_file() else None
         elif vision == "":
@@ -904,7 +952,7 @@ class Modellrunner:
         else:
             augen = self._manifest_pfad(modell, "mmproj")
             if augen is None:
-                augen = passende_mmproj(self._ordner, modell)
+                augen = passende_mmproj(ordner, modell)
         if augen is not None:
             zeile += ["--mmproj", str(augen)]
         return zeile
@@ -916,12 +964,13 @@ class Modellrunner:
         resolve check here is the same folder boundary a start obeys, so a
         hand-edited note can never point a flag outside the model folder.
         """
-        name = modellzuordnung.fuer(self._ordner, modell).get(rolle)
+        ordner = self._ordner
+        name = modellzuordnung.fuer(ordner, modell).get(rolle)
         if not name:
             return None
         # The companion lives in its own sub-folder; the boundary check is that
         # sub-folder, so a hand-edited note can still never point outside it.
-        basis = _begleiter_ordner(self._ordner, rolle).resolve()
+        basis = _begleiter_ordner(ordner, rolle).resolve()
         pfad = (basis / name).resolve()
         if pfad.parent != basis or not pfad.is_file():
             return None
@@ -936,7 +985,7 @@ class Modellrunner:
                 return None
             return rss_gb(self._prozess.pid)
 
-    def starten(self, modell: str, *, kontext: int = 16384, schichten: int = 99,
+    def starten(self, modell: str, *, kontext: int = 16384, schichten: int | None = 99,
                 port: int | None = None, drafter: str | None = None,
                 fein: Feineinstellungen | None = None,
                 vision: str | None = None,
@@ -944,6 +993,7 @@ class Modellrunner:
                 sampling: dict[str, float] | None = None) -> Lauf:
         port = self._port if port is None else port
         with self._schloss:
+            ordner = self._ordner
             if self.laeuft():
                 raise RunnerFehler("laeuft_schon")
             # A new start answers for itself, also when it is refused below:
@@ -956,8 +1006,8 @@ class Modellrunner:
 
             # A name, never a path: whatever is in the folder can start, and
             # nothing else can be reached by writing ../ in front of it.
-            ziel = (self._ordner / modell).resolve()
-            if ziel.parent != self._ordner.resolve() or not ziel.is_file():
+            ziel = (ordner / modell).resolve()
+            if ziel.parent != ordner.resolve() or not ziel.is_file():
                 raise RunnerFehler("kein_modell")
 
             # No draft chosen by the caller: fall back to the one the manifest
@@ -965,18 +1015,18 @@ class Modellrunner:
             # status reports it. The manifest returns a validated, existing
             # name; the guard below is the same folder boundary either way.
             if drafter is None:
-                drafter = modellzuordnung.fuer(self._ordner, modell).get("mtp")
+                drafter = modellzuordnung.fuer(ordner, modell).get("mtp")
 
             # The draft model obeys the same rule as the main one: a name
             # from its folders (mtp/ or, for a sibling model, the model
             # folder) or nothing.
-            if drafter and draft_path(self._ordner, modell, drafter) is None:
+            if drafter and draft_path(ordner, modell, drafter) is None:
                 raise RunnerFehler("kein_modell")
 
             # The chosen projector, if any, obeys the same rule: a name from
             # the vision folder or nothing.
             if vision:
-                vbasis = (self._ordner / VISION_ORDNER).resolve()
+                vbasis = (ordner / VISION_ORDNER).resolve()
                 vziel = (vbasis / vision).resolve()
                 if vziel.parent != vbasis or not vziel.is_file():
                     raise RunnerFehler("kein_modell")
@@ -1041,6 +1091,8 @@ class Modellrunner:
                 drafter=drafter,
                 vision=vision,
                 fein=fein,
+                faeden=faeden,
+                sampling=sampling,
             )
             self._pid_merken(self._prozess.pid)
             # Before the reader thread, not after: that thread announces the
@@ -1150,18 +1202,24 @@ class Modellrunner:
     # --- The orphan after a service restart --------------------------------
 
     def _pid_merken(self, pid: int) -> None:
+        ordner = self._ordner
         try:
-            self._ordner.mkdir(parents=True, exist_ok=True)
-            (self._ordner / self._pid_datei).write_text(
+            ordner.mkdir(parents=True, exist_ok=True)
+            (ordner / self._pid_datei).write_text(
                 json.dumps({"pid": pid}), encoding="utf-8"
             )
+            self._pid_ordner = ordner
         except OSError:
             # A note that cannot be written costs the cleanup after a crash,
             # never the start itself.
             pass
 
     def _pid_vergessen(self) -> None:
-        (self._ordner / self._pid_datei).unlink(missing_ok=True)
+        # From the folder the note went into, which is not the folder in
+        # force when the user moved the location while the server ran.
+        ordner = self._pid_ordner or self._ordner
+        self._pid_ordner = None
+        (ordner / self._pid_datei).unlink(missing_ok=True)
 
     def aufraeumen(self, ist_unserer=_ist_llama_server) -> bool:
         """Ends the server a previous service run left behind.

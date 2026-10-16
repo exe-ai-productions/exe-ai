@@ -82,7 +82,8 @@ def test_eine_bestandsinstallation_bekommt_die_vorgabe(client: TestClient):
     agentenmodell_setzen(client, "klein.gguf", sorte="slot")
     werte = agentenmodellwahl.slot_startwerte(client.app.state.repositories)
     assert werte["kontext"] == agentenmodellwahl.KONTEXT_VORGABE
-    assert werte["schichten"] == agentenmodellwahl.SCHICHTEN_VORGABE
+    # No layer count named: the slot is started without the flag (auto).
+    assert werte["schichten"] is None
     # None means "the slot's own port" — the number belongs to the server.
     assert werte["port"] is None
 
@@ -123,8 +124,9 @@ async def test_der_autostart_nimmt_dieselben_werte(client: TestClient, monkeypat
     client.put(
         "/api/v1/settings/global/agentenmodell",
         json={"wert": {"an": True, "sorte": "slot", "wert": "klein.gguf",
-                       "kontext": 65536, "drafter": "mtp-klein.gguf",
-                       "vision": "seher.gguf", "port": 8099}},
+                       "kontext": 65536, "port": 8099,
+                       "module": {"klein.gguf": {"drafter": "mtp-klein.gguf",
+                                                 "vision": "seher.gguf"}}}},
     )
     gesehen: list[dict] = []
     runner = client.app.state.agentenrunner

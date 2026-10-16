@@ -16,13 +16,15 @@
   import { t, texte } from '../lib/texte.svelte.js'
   import { fractionDigits, formatNumber } from '../lib/numberDisplay.js'
   import { katalogOeffnen, melde } from '../lib/zustand.svelte.js'
-  import { diktat, standLaden, werteSetzen } from '../lib/diktat.svelte.js'
+  import { diktat, schreibenAbwarten, standLaden, werteSetzen } from '../lib/diktat.svelte.js'
+  import { createDelayedWriter } from '../lib/delayedWriter.js'
   import Servertafel from './Servertafel.svelte'
   import Serverregler from './Serverregler.svelte'
   import Startknopf from './Startknopf.svelte'
   import Startfehler from './Startfehler.svelte'
   import Serverabschnitt from './Serverabschnitt.svelte'
   import Serverlogkopf from './Serverlogkopf.svelte'
+  import LlamaCppSection from './LlamaCppSection.svelte'
   import Schieberegler from './Schieberegler.svelte'
   import Zahlenfeld from './Zahlenfeld.svelte'
   import {
@@ -86,6 +88,8 @@
      default back over a number somebody just typed. */
   let port = $state(8085)
   let portGesetzt = false
+  /* The server's own port, frozen when the field is filled. */
+  let werkPort = 8085
 
   /* The file the panel's entry means, mirrored from the setting. */
   let putzwahl = $state('')
@@ -96,7 +100,7 @@
      replaces `auskunft` every three seconds, and a value read from it while
      the hand is on a slider would move under it. */
   let regler = $state({ temperatur: 0, top_k: 0, top_p: 1, min_p: 0, strafe: 1 })
-  let speicher = $state({ kontext: 2048, schichten: MAX_SCHICHTEN, faeden: 0 })
+  let speicher = $state({ kontext: 2048, schichten: null, faeden: 0 })
   let werkZahlen = null
   let werkSpeicher = null
   let gespiegelt = false
@@ -139,6 +143,11 @@
     if (gespiegelt || !diktat.geladen || !auskunft) return
     const werk = auskunft.diktat_vorgaben ?? {}
     putzwahl = diktat.putzmodell || werk.putzmodell || putzwahl
+    /* The port: what is stored, else what the server answers idle — and
+       from now on the field is the hand's, the poll leaves it alone. */
+    werkPort = auskunft.port ?? 8085
+    if (!auskunft.laeuft) port = diktat.cleanup_port ?? werkPort
+    portGesetzt = true
     werkZahlen = {
       temperatur: werk.putztemperatur,
       top_k: werk.putztop_k,
@@ -148,7 +157,7 @@
     }
     werkSpeicher = {
       kontext: werk.putzkontext,
-      schichten: werk.putzschichten,
+      schichten: werk.putzschichten ?? null,
       faeden: werk.putzfaeden,
     }
     regler = {
@@ -167,8 +176,37 @@
   })
 
   function sichern(werte) {
-    werteSetzen(werte).catch(() => melde(t('fehler.einstellung_speichern'), 'fehler'))
+    return werteSetzen(werte).catch(() => melde(t('fehler.einstellung_speichern'), 'fehler'))
   }
+
+  /* Every field here writes itself a beat after the last change. The beat is
+     kept by key and made at once — when the window goes away, and before
+     "Start" — so a value typed a moment before closing or starting is not
+     dropped with its timer. */
+  const writer = createDelayedWriter(400)
+  async function alleSichern() {
+    await writer.flush()
+    await schreibenAbwarten()
+  }
+  $effect(() => () => {
+    writer.flush()
+  })
+
+  /* The port, written as it is touched; a value nobody moved off the
+     server's own is not stored, and one that could not be stored goes back. */
+  $effect(() => {
+    const wert = port
+    writer.cancel('port')
+    if (!gespiegelt || auskunft?.laeuft) return
+    const stand = diktat.cleanup_port
+    if (wert === (stand ?? werkPort)) return
+    writer.plan('port', () =>
+      werteSetzen({ cleanup_port: wert }).catch(() => {
+        melde(t('fehler.einstellung_speichern'), 'fehler')
+        port = stand ?? werkPort
+      }),
+    )
+  })
 
   /* The five generation values, written a beat after the hand stops — a
      slider dragged across the track would otherwise write every step it
@@ -176,7 +214,7 @@
   $effect(() => {
     const _ = JSON.stringify(regler)
     if (!gespiegelt) return
-    const uhr = setTimeout(() => {
+    writer.plan('regler', () => {
       const nachtrag = {}
       for (const { knopf, schluessel } of PARAMETER) {
         const wert = regler[knopf]
@@ -189,7 +227,7 @@
         nachtrag[schluessel] = wert
       }
       if (!Object.keys(nachtrag).length) return
-      werteSetzen(nachtrag).catch(() => {
+      return werteSetzen(nachtrag).catch(() => {
         melde(t('fehler.einstellung_speichern'), 'fehler')
         // Back to what is stored: left standing, the value would differ
         // from the store again and the effect would retry for ever.
@@ -201,54 +239,47 @@
           strafe: diktat.putzstrafe ?? werkZahlen.strafe,
         }
       })
-    }, 400)
-    return () => clearTimeout(uhr)
+    })
   })
 
   /* The memory numbers, the same beat and the same rule. Its own timer per
      value, and each keeps the works-answer guard: a value nobody moved is
      not stored. */
-  let stiftKontext = null
   $effect(() => {
     const wert = speicher.kontext
-    if (stiftKontext) clearTimeout(stiftKontext)
+    writer.cancel('kontext')
     if (!gespiegelt || wert === diktat.putzkontext) return
     if (diktat.putzkontext === null && wert === werkSpeicher.kontext) return
-    stiftKontext = setTimeout(() => {
+    writer.plan('kontext', () =>
       werteSetzen({ putzkontext: wert }).catch(() => {
         melde(t('fehler.einstellung_speichern'), 'fehler')
         speicher.kontext = diktat.putzkontext ?? werkSpeicher.kontext
-      })
-    }, 400)
-    return () => clearTimeout(stiftKontext)
+      }),
+    )
   })
-  let stiftSchichten = null
   $effect(() => {
     const wert = speicher.schichten
-    if (stiftSchichten) clearTimeout(stiftSchichten)
+    writer.cancel('schichten')
     if (!gespiegelt || wert === diktat.putzschichten) return
     if (diktat.putzschichten === null && wert === werkSpeicher.schichten) return
-    stiftSchichten = setTimeout(() => {
+    writer.plan('schichten', () =>
       werteSetzen({ putzschichten: wert }).catch(() => {
         melde(t('fehler.einstellung_speichern'), 'fehler')
         speicher.schichten = diktat.putzschichten ?? werkSpeicher.schichten
-      })
-    }, 400)
-    return () => clearTimeout(stiftSchichten)
+      }),
+    )
   })
-  let stiftFaeden = null
   $effect(() => {
     const wert = speicher.faeden
-    if (stiftFaeden) clearTimeout(stiftFaeden)
+    writer.cancel('faeden')
     if (!gespiegelt || wert === diktat.putzfaeden) return
     if (diktat.putzfaeden === null && wert === werkSpeicher.faeden) return
-    stiftFaeden = setTimeout(() => {
+    writer.plan('faeden', () =>
       werteSetzen({ putzfaeden: wert }).catch(() => {
         melde(t('fehler.einstellung_speichern'), 'fehler')
         speicher.faeden = diktat.putzfaeden ?? werkSpeicher.faeden
-      })
-    }, 400)
-    return () => clearTimeout(stiftFaeden)
+      }),
+    )
   })
 
   /* The log is read when it is asked for — opening the drawer fetches it
@@ -268,6 +299,9 @@
     if (arbeitet) return
     arbeitet = true
     try {
+      /* What was typed a moment ago is written before the start is asked:
+         the server reads its numbers from what is stored. */
+      await alleSichern()
       auskunft = auskunft?.laeuft
         ? await api.bereinigungStoppen()
         : await api.bereinigungStarten(putzwahl, port)
@@ -375,6 +409,7 @@
         </div>
       {/each}
     </Serverabschnitt>
+    <LlamaCppSection {auskunft} onrefresh={laden} />
   {/snippet}
 
   {#snippet unten()}

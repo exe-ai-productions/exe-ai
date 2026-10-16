@@ -11,7 +11,9 @@
      the shell has said which version runs. */
   import { tick } from 'svelte'
   import { t } from '../lib/texte.svelte.js'
-  import { updates, checkForUpdates, downloadUpdate, installUpdate } from '../lib/updates.svelte.js'
+  import {
+    updates, checkForUpdates, downloadUpdate, failedKey, installUpdate,
+  } from '../lib/updates.svelte.js'
 
   /* What a look brings stands under the button, at the very foot of a list
      that scrolls: it is rolled into sight once it is there, or it would
@@ -59,7 +61,7 @@
       </div>
     {:else if updates.state === 'error'}
       <div class="row">
-        <span class="result failed">{t('updates.failed', { reason: updates.reason })}</span>
+        <span class="result failed">{t(failedKey(), { reason: updates.reason })}</span>
       </div>
     {:else if updates.state === 'none' && updates.looked}
       <div class="row">

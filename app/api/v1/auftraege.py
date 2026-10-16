@@ -850,7 +850,9 @@ def auftrag_anstossen(
     if helper.is_helper(agent.name) and cronjob_id is None:
         reached = helper.limit_reached(repositories)
         if reached:
-            raise Refusal(status.HTTP_409_CONFLICT, "jobs.helper_limit", sprache, **reached)
+            raise Refusal(
+                status.HTTP_409_CONFLICT, helper.limit_key(**reached), sprache, **reached
+            )
     # The run the work began with, looked up once: the folders below and the
     # stop note further down both read it.
     origin = None
@@ -1145,15 +1147,12 @@ def auftrag_anstossen(
         werkzeugwahl.anwenden(registry, repositories)
         genannt = set(agent.werkzeuge) if agent.werkzeuge is not None else None
         below_a_run = run_chain.started_by_a_run(eltern_id, origin)
-        # The chat this run came from, and its picture window: a job draws
-        # with the same image model a question in that chat would use, and
-        # the description has to say which one that is (one reading, see
-        # `bild_werkzeug.fenster_familie`).
+        # A job draws with the default image model, the same one a question
+        # in a chat uses, and the description has to say which one that is
+        # (one reading, see `bild_werkzeug.fensterbild`).
         angeboten_werkzeuge = registry.als_openai_werkzeuge(
             nur=genannt, shell_zeitgrenze=befehl_zeitgrenze,
-            bild_fenster=lambda: bild_werkzeug.fensterbild(
-                repositories, auftrag.chat_id, config
-            ),
+            bild_fenster=lambda: bild_werkzeug.fensterbild(repositories, config),
             # The note tool belongs to a cron entry, so only a run
             # a cron entry started is offered it. A job somebody launched by
             # hand has nothing for it to write to — and unlike `goal`, which
@@ -1445,7 +1444,7 @@ def auftrag_anstossen(
         anfrage.werkzeuge = angeboten_werkzeuge
         # What the agent named and this run does not get — measured against
         # what the run is really OFFERED (the list right above), not against
-        # every name the program knows: `draw_image` at a picture window that
+        # every name the program knows: `draw_image` with a default model that
         # cannot draw from text is known here and still not offered, and a
         # run that starts without it and says nothing leaves nobody able to
         # tell why it never drew.
@@ -2227,6 +2226,10 @@ def _auftragslauf(
         # actually writes one, the context-full handoff with a decision to
         # carry on. Read once, at the end path, by the failure counter.
         fortsetzung_geplant = False
+        # The cron entry that carries that continuation, and whether this run
+        # created it: a stop that lands after it was written takes it back.
+        fortsetzung_eintrag: str | None = None
+        fortsetzung_neu = False
         abgebrochen = False
         quelle = None
         start_zeit = time.monotonic()
@@ -2940,6 +2943,8 @@ def _auftragslauf(
                         # the ceiling case in the branch below is a real
                         # ending with nothing behind it and keeps counting.
                         fortsetzung_geplant = True
+                        fortsetzung_eintrag = ziel_id
+                        fortsetzung_neu = not zwischenstand.ist_kette(vorheriger)
                     elif zwischenstand.ist_kette(vorheriger):
                         # The absolute ceiling shared with the outage retry — a
                         # permanently gone endpoint stops being retried too.
@@ -3217,6 +3222,8 @@ def _auftragslauf(
                             # scheduled and about to run. The failure counter
                             # must not see it — see the end path below.
                             fortsetzung_geplant = True
+                            fortsetzung_eintrag = ziel_id
+                            fortsetzung_neu = not zwischenstand.ist_kette(vorheriger)
                         else:
                             # Three restarts running in place, or the
                             # absolute ceiling reached — this chain stops
@@ -3812,6 +3819,23 @@ def _auftragslauf(
             if quelle is not None:
                 await quelle.aclose()
 
+            if fortsetzung_geplant and generierung.soll_abbrechen:
+                # A stop that came in after the continuation was written —
+                # the stop route runs on its own thread, so it can land
+                # between the last read of the signal and the write, or
+                # while the stream is being closed above. The run ends as
+                # stopped, so nothing is handed on: the entry that was
+                # created for the continuation goes, and a chain's own
+                # entry is switched off, as the end path does for any
+                # stopped chain run.
+                if fortsetzung_eintrag:
+                    if fortsetzung_neu:
+                        repositories.cronjobs.loeschen(fortsetzung_eintrag)
+                    else:
+                        repositories.cronjobs.aktiv_setzen(fortsetzung_eintrag, False)
+                fortsetzung_geplant = False
+                abgebrochen = True
+
             if abgebrochen:
                 # The stop button's reason, unless whoever stopped the run
                 # named another: the run above it, or its deleted chat.
@@ -3937,11 +3961,7 @@ def _auftragslauf(
                         "status",
                         t("jobs.keine_datei_geschrieben", sprache),
                     )
-                if (
-                    cronjob_id
-                    and not fortsetzung_geplant
-                    and zustand_ende != "abgebrochen"
-                ):
+                if cronjob_id and not fortsetzung_geplant:
                     # A restart chain's cron entry
                     # exists only to fire the SAME job again — once the job
                     # actually finishes, there is nothing left to continue.
@@ -3968,10 +3988,13 @@ def _auftragslauf(
                     # tomorrow, which is wanted and untouched: ``ist_kette``
                     # is exactly that line.
                     #
-                    # An abort is left out for the same reason it is left out
-                    # of the failure count below — the user stopped this run
-                    # a second ago, and what happens to the chain after that
-                    # is theirs to decide.
+                    # A stopped run retires it as well: the row carries a
+                    # continuation text that stopping the run made stale,
+                    # and it would fire with it tomorrow. Only the chain's
+                    # own row — a schedule somebody made themselves has no
+                    # ``basisaufgabe``, stays on, and is not counted as a
+                    # failure either (the failure count below leaves a
+                    # stop out).
                     kette = repositories.cronjobs.holen(cronjob_id)
                     if zwischenstand.ist_kette(kette) and kette.aktiv:
                         repositories.cronjobs.aktiv_setzen(kette.id, False)

@@ -574,11 +574,16 @@ The user has shared these working folders with you:
 # files are kept — not a folder the user shared, and no place for an exe.md.
 # Named apart for the same reason as the chat's own folder, and last, so a
 # relative path still resolves against a folder the user shared.
-DOCK_FOLDER = """The dock folder holds finished files delivered to the user, who can find
-them in the Doc folder. It belongs to the program, rather than the folders
+DOCK_FOLDER = """The dock folder holds finished files delivered to the user{finds}. It belongs to the program, rather than the folders
 shared by the user. Do not create an `exe.md` file in it:
 
 - {ordner}"""
+
+# The half-sentence a run is told about where its delivered files are seen.
+# A chat is not told it: the Doc folder shows a chat only its own folder, and
+# a file in the dock is not there to be found.
+DOCK_FOLDER_FINDS = """, who can find
+them in the Doc folder"""
 
 # The picture folder rides along with every run beside the dock, and is the
 # program's as well: where the pictures drawn here and the ones attached to
@@ -1306,7 +1311,13 @@ def bauen(
                 ORDNER_GETEILT.format(ordner="\n".join(f"- {p}" for p in shared))
             )
         if dock and dock in ordner:
-            sections.append(DOCK_FOLDER.format(ordner=dock))
+            sections.append(
+                DOCK_FOLDER.format(
+                    ordner=dock,
+                    # A chat has no run description; a run always has one.
+                    finds="" if agentenlauf is None else DOCK_FOLDER_FINDS,
+                )
+            )
         if images and images in ordner:
             sections.append(IMAGE_FOLDER.format(ordner=images))
         teile.append(

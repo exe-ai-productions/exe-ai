@@ -14,9 +14,9 @@ it and looks up what it needs at the moment it needs it, never earlier.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 
     from cli.client import ServiceClient
     from cli.texts import Texts
+
+_T = TypeVar("_T")
 
 # One event of a stream, as the service sent it: ``typ`` plus its own fields.
 Event = Mapping[str, Any]
@@ -109,6 +111,19 @@ class Screen(Protocol):
         """Writes the history as it was shown since it was last written
         again, as an HTML page, to ``path``."""
         return None
+
+    def queue(self, work: Callable[[], None]) -> None:
+        """Hands ``work`` to the worker, behind what already waits: it runs
+        in its turn, like a message typed now."""
+        return None
+
+    def hand_over(self, work: Callable[[], _T]) -> _T:
+        """Gives the terminal to ``work`` for as long as it runs — a program
+        that draws on it itself, such as an editor — and takes it back
+        afterwards: the fixed block steps aside and is drawn again, and
+        what would be added to the history meanwhile is written after it.
+        Returns what ``work`` returns."""
+        return work()
 
     def rows_for_question(self) -> int | None:
         """How many rows the window has above the rest of the fixed block,
@@ -204,6 +219,10 @@ class Entry:
     # True for the entry that is in force right now: the selection opens
     # with its mark on it.
     in_use: bool = False
+    # What the entry stands for, carried along for whoever made it: a
+    # selection that searches replaces its entries, and the one that is
+    # picked comes back with its value instead of a position.
+    value: Any = None
 
 
 class Asker(Protocol):
@@ -238,11 +257,50 @@ class Asker(Protocol):
         entries: the question the selection answers."""
         return None
 
-    def ask_text(self, head: str, *, secret: bool = False) -> str | None:
+    def search(
+        self,
+        entries: Sequence[Entry],
+        find: Callable[[str], Sequence[Entry]],
+        head: str = "",
+        empty: str = "",
+    ) -> Entry | None:
+        """Shows ``entries`` as a selection that searches while the user
+        types: a word that is no number is handed to ``find`` once the
+        typing paused, and what it returns takes the place of the entries —
+        renumbered, with ``empty`` standing where nothing was found; an
+        empty field or a number shows ``entries`` again. Returns the entry
+        that was picked, as ``find`` or the caller made it — ``None``
+        where the selection was closed. Without a search of its own an
+        asker shows the entries as any selection."""
+        picked = self.choose(entries, head)
+        return None if picked is None else list(entries)[picked]
+
+    def typed(self, text: str) -> None:
+        """The input field holds ``text`` now. Called on every change; a
+        selection that searches takes it up, anything else lets it go."""
+
+    def check(
+        self, entries: Sequence[Entry], head: str = "", checked: Collection[int] = ()
+    ) -> list[int] | None:
+        """Shows ``entries`` as a checklist, with the positions in
+        ``checked`` ticked, and returns the positions that are ticked once
+        the user confirmed — ``None`` where the list was closed instead:
+        nothing is to change then. Otherwise it is asked and closed like a
+        selection."""
+        return None
+
+    def ask_text(
+        self, head: str, *, secret: bool = False, default: str | None = None
+    ) -> str | None:
         """Asks for a line of text under ``head`` and returns what was
         typed — ``None`` where the question was closed, nothing was typed or
         none can be asked. With ``secret`` the typed text is not shown, and
-        it goes into no line of the history."""
+        it goes into no line of the history.
+
+        With ``default`` the question shows it as the value that stands, and
+        nothing typed takes it: the answer is then ``default`` itself, which
+        may be empty — an empty line is an answer of its own there, and only
+        closing the question gives ``None``."""
         return None
 
     def secret(self) -> bool:
@@ -286,6 +344,13 @@ class CommandSet(Protocol):
 
     def completer(self) -> Completer | None:
         """Completes a command while it is typed, or ``None`` for none."""
+        return None
+
+    def pick_model(self, leading: Sequence[Entry]) -> int | None:
+        """The selection of ``/model`` with ``leading`` entries above its
+        own. Returns the position of the leading entry that was picked and
+        does nothing else for it; a model that was picked is chosen as
+        ``/model`` chooses it, and ``None`` is returned."""
         return None
 
 
@@ -347,11 +412,22 @@ class Session:
     # True for a new chat nobody has written into yet: its first message
     # gives it its name.
     unnamed: bool = False
+    # The name given to a new chat before it exists at the service: it goes
+    # out with the creation of the chat.
+    pending_title: str | None = None
     # The chats as they were last shown with numbers, in the head or in the
     # list of chats: a number the user types counts into what stood on the
     # screen, not into what the service would list now. ``None`` before any
     # were shown.
     shown_chats: list[dict[str, Any]] | None = None
+    # The projects the selection of ``/project`` showed last, in order.
+    shown_projects: list[dict[str, Any]] | None = None
+    # The names of the tools ``/tools`` showed last, in order.
+    shown_tools: list[str] | None = None
+    # The MCP servers ``/mcp`` showed last, in order.
+    shown_mcp: list[dict[str, Any]] | None = None
+    # The skills ``/skills`` showed last, in order.
+    shown_skills: list[dict[str, Any]] | None = None
     # The models the service listed last (``id``, ``name``, ``erreichbar`` …).
     models: list[dict[str, Any]] = field(default_factory=list)
     # The model the next message goes to; ``None`` leaves the choice to the

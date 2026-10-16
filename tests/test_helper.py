@@ -133,8 +133,62 @@ def test_a_helper_over_the_limit_is_refused(client, chat_id):
     assert result["fehlgeschlagen"]
     # The window's copy, in the language the test service is set to.
     language = client.app.state.config.app.language
-    assert t("jobs.helper_limit", language, running=1, limit=1) in result["text"]
+    assert t("jobs.helper_limit_both_one", language, running=1, limit=1) in result["text"]
     assert len(client.get("/api/v1/jobs").json()) == 1
+
+
+# Each of the two numbers is bent on its own, in both languages.
+LIMIT_SENTENCES = [
+    (
+        (1, 1),
+        "No helper was started: 1 is already running, and the limit is 1 concurrent helper. "
+        "Wait for one to finish, or specify an agent instead.",
+        "Es wurde kein Helfer gestartet: Bereits 1 Helfer ist aktiv; höchstens 1 darf "
+        "gleichzeitig arbeiten. Warte, bis einer fertig ist, oder gib stattdessen einen Agenten an.",
+    ),
+    (
+        (1, 3),
+        "No helper was started: 1 is already running, and the limit is 3 concurrent helpers. "
+        "Wait for one to finish, or specify an agent instead.",
+        "Es wurde kein Helfer gestartet: Bereits 1 Helfer ist aktiv; höchstens 3 dürfen "
+        "gleichzeitig arbeiten. Warte, bis einer fertig ist, oder gib stattdessen einen Agenten an.",
+    ),
+    (
+        (2, 1),
+        "No helper was started: 2 are already running, and the limit is 1 concurrent helper. "
+        "Wait for one to finish, or specify an agent instead.",
+        "Es wurde kein Helfer gestartet: Bereits 2 Helfer sind aktiv; höchstens 1 darf "
+        "gleichzeitig arbeiten. Warte, bis einer fertig ist, oder gib stattdessen einen Agenten an.",
+    ),
+    # The silence side: both many reads as it always did.
+    (
+        (3, 3),
+        "No helper was started: 3 are already running, and the limit is 3 concurrent helpers. "
+        "Wait for one to finish, or specify an agent instead.",
+        "Es wurde kein Helfer gestartet: Bereits 3 Helfer sind aktiv; höchstens 3 dürfen "
+        "gleichzeitig arbeiten. Warte, bis einer fertig ist, oder gib stattdessen einen Agenten an.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("numbers", "english", "german"),
+    LIMIT_SENTENCES,
+    ids=["one-one", "one-many", "many-one", "many-many"],
+)
+def test_the_limit_sentence_is_right_for_every_pair_of_numbers(numbers, english, german):
+    running, limit = numbers
+    key = helper.limit_key(running, limit)
+
+    assert t(key, "en", running=running, limit=limit) == english
+    assert t(key, "de", running=running, limit=limit) == german
+
+
+def test_the_plain_key_is_taken_only_when_both_numbers_are_many():
+    assert helper.limit_key(2, 3) == "jobs.helper_limit"
+    assert helper.limit_key(1, 1) == "jobs.helper_limit_both_one"
+    assert helper.limit_key(1, 2) == "jobs.helper_limit_running_one"
+    assert helper.limit_key(2, 1) == "jobs.helper_limit_limit_one"
 
 
 def test_the_chat_model_reads_what_each_agent_is_for():

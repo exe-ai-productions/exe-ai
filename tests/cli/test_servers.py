@@ -720,3 +720,137 @@ def test_the_overview_changes_nothing(tool, folder, agent):
     tool.commands.run("/status")
     asked = folder.requests[before:]
     assert asked and all(request.startswith("GET") for request in asked)
+
+
+# --- the image server's program ----------------------------------------------------------
+
+IMAGE_FILES = [{"name": "draw.safetensors", "groesse_gb": 3.4}]
+FETCHING = [
+    {"geladen": 4, "gesamt": 10, "anteil": 0.4, "fertig": False, "fehler": None},
+    {"geladen": 10, "gesamt": 10, "anteil": 1.0, "fertig": True, "fehler": None},
+]
+
+
+def image_without_program(folder: StubService) -> None:
+    folder.image.files = [dict(entry) for entry in IMAGE_FILES]
+    folder.image.program = False
+    folder.image.program_steps = [dict(step) for step in FETCHING]
+
+
+def test_the_image_server_without_its_program_offers_it_fetches_it_and_starts(tool, folder):
+    image_without_program(folder)
+    tool.asker.queue = [0, 0]
+    tool.commands.run("/server start image")
+    # The offer is one entry, as the window's button is, and no question.
+    assert tool.asker.heads == ["", ""]
+    assert [[text for _, text in entry.cells] for entry in tool.asker.shown[0]] == [
+        [texts().t("bildserver.generator_holen")]
+    ]
+    assert texts().t("cli.program_missing_ask") not in tool.asker.heads
+    assert folder.image.program_posts == [None]
+    said = [text for text in tool.screen.activities if isinstance(text, str)]
+    assert f"{texts().t('bildserver.generator_laedt')} 40 %" in said
+    assert folder.image.starts == ["draw.safetensors"]
+    assert count(folder, "POST /api/v1/runner/programm") == 0
+
+
+def test_where_the_system_offers_builds_each_stands_with_its_size_or_installed(tool, folder):
+    image_without_program(folder)
+    folder.image.builds = [
+        {"variante": "cuda", "groesse": 150 * 1024 * 1024},
+        {"variante": "vulkan", "groesse": 40 * 1024 * 1024},
+    ]
+    tool.asker.queue = [1, 0]
+    tool.commands.run("/server start image")
+    assert [[text for _, text in entry.cells] for entry in tool.asker.shown[0]] == [
+        ["cuda", texts().t("bildserver.variante_holen", groesse="150 MB")],
+        ["vulkan", texts().t("bildserver.variante_holen", groesse="40 MB")],
+    ]
+    assert folder.image.program_posts == [{"variante": "vulkan"}]
+
+
+def test_a_build_that_is_installed_is_shown_so_and_picking_it_fetches_nothing(tool, folder):
+    image_without_program(folder)
+    folder.image.builds = [{"variante": "cuda", "groesse": 150 * 1024 * 1024}]
+    folder.image.installed = "cuda"
+    tool.asker.queue = [0]
+    tool.commands.run("/server start image")
+    assert [[text for _, text in entry.cells] for entry in tool.asker.shown[0]] == [
+        ["cuda", texts().t("bildserver.variante_installiert")]
+    ]
+    assert folder.image.program_posts == [] and folder.image.starts == []
+
+
+def test_closing_the_offer_fetches_nothing_and_starts_nothing(tool, folder):
+    image_without_program(folder)
+    tool.asker.queue = [None]
+    tool.commands.run("/server start image")
+    assert folder.image.program_posts == [] and folder.image.starts == []
+
+
+def test_a_fetch_that_fails_says_so_in_the_windows_words_and_starts_nothing(tool, folder):
+    image_without_program(folder)
+    folder.image.program_steps = [{"geladen": 0, "gesamt": 0, "anteil": 0.0, "fertig": False, "fehler": "net"}]
+    tool.asker.queue = [0, 0]
+    tool.commands.run("/server start image")
+    assert tool.renderer.errors == [texts().t("bildserver.generator_fehler")]
+    assert folder.image.starts == []
+
+
+def test_the_menu_of_the_image_server_offers_the_program_where_it_is_not_there(tool, folder):
+    image_without_program(folder)
+    tool.asker.queue = [None]
+    tool.commands.run("/server image")
+    assert [text for entry in tool.asker.shown[0] for _, text in entry.cells] == [
+        texts().t("modell.server_starten"),
+        texts().t("modell.protokoll"),
+        texts().t("bildserver.generator_holen"),
+    ]
+
+
+def test_where_the_program_is_there_the_menu_has_the_check_and_no_fetch(tool, folder):
+    folder.image.files = [dict(entry) for entry in IMAGE_FILES]
+    tool.asker.queue = [None]
+    tool.commands.run("/server image")
+    labels = [text for entry in tool.asker.shown[0] for _, text in entry.cells]
+    assert texts().t("bildserver.nach_updates_suchen") in labels
+    assert texts().t("bildserver.generator_holen") not in labels
+
+
+def test_the_check_says_up_to_date_where_it_is(tool, folder):
+    folder.image.update = {"verfuegbar": False, "aktuell": True}
+    tool.asker.queue = [2]
+    tool.commands.run("/server image")
+    assert tool.renderer.notices == [texts().t("bildserver.aktuell")]
+
+
+def test_a_newer_program_brings_the_update_and_fetches_the_newest(tool, folder):
+    folder.image.update = {"verfuegbar": True, "bau": "master-999"}
+    folder.image.program_steps = [dict(step) for step in FETCHING]
+    # The check, then — the menu again with the update in its place — the
+    # update; the check that follows it says nothing more.
+    tool.asker.queue = [2, 2]
+    tool.commands.run("/server image")
+    labels = [text for entry in tool.asker.shown[1] for _, text in entry.cells]
+    assert texts().t("bildserver.generator_aktualisieren") in labels
+    assert folder.image.program_posts == [{"aktualisieren": True}]
+    assert count(folder, "POST /api/v1/runner/programm") == 0
+
+
+def test_a_release_page_that_cannot_be_read_is_not_taken_for_up_to_date(tool, folder):
+    folder.image.update = {"verfuegbar": False, "aktuell": False, "unreadable": True}
+    tool.asker.queue = [2]
+    tool.commands.run("/server image")
+    assert tool.renderer.notices == [texts().t("bildserver.updates_nicht_pruefbar")]
+
+
+def test_the_model_server_still_fetches_its_program_over_its_own_route(tool, folder):
+    folder.runner_program = False
+    original = folder.program_steps
+    folder.program_steps = [dict(step) for step in FETCHING]
+    tool.asker.queue = [0]
+    tool.asker.yes = True
+    tool.commands.run("/server start")
+    assert count(folder, "POST /api/v1/runner/programm") == 1
+    assert folder.image.program_posts == []
+    folder.program_steps = original

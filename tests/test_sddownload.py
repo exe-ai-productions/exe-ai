@@ -148,7 +148,8 @@ def test_installierte_variante_liest_den_standardordner(tmp_path, monkeypatch):
     assert sddownload.installierte_variante(tmp_path) is None
 
 
-def test_installierte_variante_liest_den_variantenordner(tmp_path):
+def test_installierte_variante_liest_den_variantenordner(tmp_path, monkeypatch):
+    _play_windows(monkeypatch)
     ordner = tmp_path / ORDNER / f"{BAU}-cuda12"
     ordner.mkdir(parents=True)
     (ordner / sddownload.program_name()).write_bytes(b"x")
@@ -187,8 +188,10 @@ def test_shown_and_started_build_are_the_same_on_every_system(tmp_path, monkeypa
     assert sddownload.installierte_variante(tmp_path) is None
     assert gefundenes_programm(tmp_path) == newer
 
+    # The folder named for a backend is the one that is started, as on every
+    # system; the system with no variants does not name it.
     named = _runnable_build(tmp_path, "master-989-c678dfe-vulkan")
-    assert sddownload.installierte_variante(tmp_path) == "vulkan"
+    assert sddownload.installierte_variante(tmp_path) is None
     assert gefundenes_programm(tmp_path) == named
 
 
@@ -237,6 +240,7 @@ def test_nothing_vanishing_reads_the_same(tmp_path):
 
 
 def test_installierte_variante_reads_the_root_once(tmp_path, monkeypatch):
+    _play_windows(monkeypatch)
     _runnable_build(tmp_path, f"{BAU}-cuda12")
     root = tmp_path / ORDNER
     calls: list[str] = []
@@ -1097,7 +1101,7 @@ def test_playing_macos_searches_for_the_plain_name(tmp_path, monkeypatch):
 def test_playing_windows_an_existing_exe_build_is_already_there(tmp_path, monkeypatch):
     """The fetch guard reads the same name: with Windows played, a runnable
     ``sd-cli.exe`` in the build folder blocks a second fetch."""
-    monkeypatch.setattr(sddownload.sys, "platform", "win32")
+    _play_windows(monkeypatch)
     folder = tmp_path / ORDNER / BAU
     folder.mkdir(parents=True)
     program = folder / "sd-cli.exe"
@@ -1193,3 +1197,217 @@ def test_only_a_fetched_build_other_than_the_pinned_one_can_be_restored(tmp_path
     loose.write_bytes(b"x")
     loose.chmod(0o755)
     assert sddownload.restorable(tmp_path) is False
+
+
+# --- One fetched build: server and generator, the fitting package, whole ----
+
+
+def test_an_old_variant_folder_on_a_mac_is_not_a_variant_to_ask_for(tmp_path, monkeypatch):
+    """macOS has one package without a backend in its name. A folder named
+    for one that an earlier version left behind is the build that is started
+    — but it is not named, or an update would ask for a package that does
+    not exist and be refused for good."""
+    monkeypatch.setattr(sddownload.sys, "platform", "darwin")
+    _runnable_build(tmp_path, "master-820-de298c2-vulkan")
+
+    assert sddownload.installierte_variante(tmp_path) is None
+    assert sddownload.installierter_bau(tmp_path) == "master-820-de298c2"
+
+
+def test_a_variant_without_a_package_here_is_refused_before_it_is_called_there(
+    tmp_path, monkeypatch
+):
+    """A Mac asked for a backend it has no package for, with an old folder of
+    that backend standing at the pinned build number: the answer is that
+    there is no package — not 'already there', which would read as a
+    variant that exists and is installed."""
+    monkeypatch.setattr(sddownload.sys, "platform", "darwin")
+    monkeypatch.setattr(sddownload.platform, "machine", lambda: "arm64")
+    _runnable_build(tmp_path, f"{BAU}-vulkan")
+
+    with pytest.raises(SddownloadFehler) as fehler:
+        Sddownload(tmp_path).starten("vulkan")
+    assert fehler.value.grund == "kein_paket"
+
+
+def test_a_variant_that_exists_here_and_is_installed_is_already_there(tmp_path, monkeypatch):
+    """Silence probe: on Windows the same folder is a variant that exists."""
+    _play_windows(monkeypatch)
+    _runnable_build(tmp_path, f"{BAU}-vulkan")
+    # Windows names the program with its extension; the build folder holds it.
+    for datei in (tmp_path / ORDNER / f"{BAU}-vulkan").iterdir():
+        datei.rename(datei.with_name("sd-cli.exe"))
+
+    with pytest.raises(SddownloadFehler) as fehler:
+        Sddownload(tmp_path).starten("vulkan")
+    assert fehler.value.grund == "schon_da"
+
+
+def _zip_with(files: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        for name, content in files.items():
+            zf.writestr(name, content)
+    return buffer.getvalue()
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_fetch_cut_off_while_unpacking_leaves_no_folder_that_counts(tmp_path, monkeypatch):
+    """The unpacking is the step that can break half way. When the program
+    itself ends there (the thread is gone, nothing runs a clean-up), what
+    was written must not be a build folder the search takes for installed —
+    nor one the next fetch calls 'already there'."""
+    import threading
+
+    monkeypatch.setattr(sddownload.sys, "platform", "darwin")
+    monkeypatch.setattr(sddownload.platform, "machine", lambda: "arm64")
+    archive = _zip_with({"sd-cli": b"x", "libsd.dylib": b"y", "sd-server": b"z"})
+    real_extract = zipfile.ZipFile.extractall
+
+    def cut_off(self, path=None, members=None, pwd=None):
+        # Two of the three files are on disk, then the program ends.
+        os.makedirs(path, exist_ok=True)
+        for name in ("sd-cli", "libsd.dylib"):
+            with open(os.path.join(path, name), "wb") as handle:
+                handle.write(b"half")
+        raise SystemExit
+
+    monkeypatch.setattr(zipfile.ZipFile, "extractall", cut_off)
+    monkeypatch.setattr(sddownload.httpx, "stream", FalscherStrom(archive))
+    before = threading.active_count()
+    Sddownload(tmp_path).starten()
+    deadline = time.time() + 5
+    while time.time() < deadline and threading.active_count() > before:
+        time.sleep(0.01)
+
+    assert (tmp_path / ORDNER).is_dir()
+    assert sddownload.installierter_bau(tmp_path) is None
+    assert gefundenes_programm(tmp_path) is None
+    assert Sddownload(tmp_path)._bau_vorhanden(sddownload.BAU) is None
+
+    # The next fetch is not turned away as already there, and lands whole.
+    monkeypatch.setattr(zipfile.ZipFile, "extractall", real_extract)
+    again = Sddownload(tmp_path)
+    again.starten()
+    _warten(again)
+    assert again.stand().fertig is True
+    assert sddownload.installierter_bau(tmp_path) == BAU
+    assert [p.name for p in (tmp_path / ORDNER).iterdir() if p.is_dir()] == [BAU]
+    assert (tmp_path / ORDNER / BAU / "sd-server").is_file()
+
+
+def _every_file_runs(monkeypatch) -> None:
+    """Windows has no exec bit: ``os.access`` calls any file runnable."""
+    monkeypatch.setattr(sddownload.sys, "platform", "darwin")
+    monkeypatch.setattr(sddownload.os, "access", lambda *args, **kwargs: True)
+
+
+def test_a_build_still_unpacking_is_never_found_where_every_file_runs(tmp_path, monkeypatch):
+    """A fetch cut off half way leaves its unpacking folder with half-written
+    files. Where nothing keeps them from counting as runnable, the search
+    must still not take them for the generator."""
+    _every_file_runs(monkeypatch)
+    half = tmp_path / ORDNER / f"{sddownload.UNFERTIG}-{BAU}"
+    half.mkdir(parents=True)
+    (half / "sd-cli").write_bytes(b"half")
+
+    assert gefundenes_programm(tmp_path) is None
+    assert sddownload.installierter_bau(tmp_path) is None
+
+
+def test_a_finished_build_beside_one_still_unpacking_is_found_as_before(tmp_path, monkeypatch):
+    """Silence probe: the folder still unpacking is passed over, the finished
+    build next to it is the one that is found."""
+    _every_file_runs(monkeypatch)
+    half = tmp_path / ORDNER / f"{sddownload.UNFERTIG}-master-999-bbbbbbb"
+    half.mkdir(parents=True)
+    (half / "sd-cli").write_bytes(b"half")
+    whole = tmp_path / ORDNER / BAU
+    whole.mkdir(parents=True)
+    (whole / "sd-cli").write_bytes(b"whole")
+
+    assert gefundenes_programm(tmp_path) == whole / "sd-cli"
+    assert sddownload.installierter_bau(tmp_path) == BAU
+
+
+def test_a_whole_unpacking_gives_the_build_folder_as_before(tmp_path, monkeypatch):
+    """Silence probe: nothing about a fetch that went through changed — the
+    folder carries the build's name, holds what the archive held, and the
+    program in it can run."""
+    monkeypatch.setattr(sddownload.sys, "platform", "darwin")
+    monkeypatch.setattr(sddownload.platform, "machine", lambda: "arm64")
+    archive = _zip_with({"sd-cli": b"x", "libsd.dylib": b"y", "sd-server": b"z"})
+    monkeypatch.setattr(sddownload.httpx, "stream", FalscherStrom(archive))
+    download = Sddownload(tmp_path)
+    download.starten()
+    _warten(download)
+
+    folder = tmp_path / ORDNER / BAU
+    assert download.stand().fertig is True
+    assert sorted(p.name for p in folder.iterdir()) == ["libsd.dylib", "sd-cli", "sd-server"]
+    assert os.access(folder / "sd-cli", os.X_OK)
+    assert gefundenes_programm(tmp_path) == folder / "sd-cli"
+
+
+# --- the variant somebody picked ------------------------------------------
+
+_NEWER_CPU = "master-889-aaaaaaa"
+_OLDER_VULKAN = "master-820-de298c2-vulkan"
+
+
+def test_the_picked_variant_runs_beside_a_newer_build_of_another(tmp_path, monkeypatch):
+    """Vulkan was picked; a newer CPU build stands beside it. The folder of
+    the picked variant is the one that starts and the one that is named —
+    the newer build of a variant nobody asked for does not count."""
+    _play_windows(monkeypatch)
+    cpu = _runnable_build(tmp_path, _NEWER_CPU)
+    vulkan = _runnable_build(tmp_path, _OLDER_VULKAN)
+
+    assert sddownload.gefundenes_programm(tmp_path, "vulkan") == vulkan
+    assert sddownload.installierter_bau(tmp_path, "vulkan") == "master-820-de298c2"
+    assert sddownload.installierte_variante(tmp_path, variante="vulkan") == "vulkan"
+    # Nothing picked: the former rule, the newest build runs.
+    assert sddownload.gefundenes_programm(tmp_path) == cpu
+    assert sddownload.installierte_variante(tmp_path) == "cpu"
+
+
+def test_the_pick_of_a_variant_that_is_not_on_disk_changes_nothing(tmp_path, monkeypatch):
+    """A fetch that failed or a folder somebody removed leaves the pick
+    without a build: the former rule runs, not a program that is not there."""
+    _play_windows(monkeypatch)
+    cpu = _runnable_build(tmp_path, _NEWER_CPU)
+
+    assert sddownload.gefundenes_programm(tmp_path, "cuda12") == cpu
+    assert sddownload.installierte_variante(tmp_path, variante="cuda12") == "cpu"
+
+
+def test_the_newest_number_of_the_picked_variant_runs(tmp_path, monkeypatch):
+    _play_windows(monkeypatch)
+    _runnable_build(tmp_path, "master-800-1111111-vulkan")
+    newest = _runnable_build(tmp_path, "master-850-2222222-vulkan")
+    _runnable_build(tmp_path, _NEWER_CPU)
+
+    assert sddownload.gefundenes_programm(tmp_path, "vulkan") == newest
+
+
+def test_a_pick_means_nothing_off_windows(tmp_path, monkeypatch):
+    """Silence probe: the other systems have one package and no variants; a
+    pick stored for them (a data folder moved over) does not steer the choice."""
+    monkeypatch.setattr(sddownload.sys, "platform", "darwin")
+    monkeypatch.setattr(sddownload.platform, "machine", lambda: "arm64")
+    newer = _runnable_build(tmp_path, _NEWER_CPU)
+    _runnable_build(tmp_path, _OLDER_VULKAN)
+
+    assert sddownload.gefundenes_programm(tmp_path, "vulkan") == newer
+    assert sddownload.installierte_variante(tmp_path, variante="vulkan") is None
+    assert not sddownload.variante_installiert(tmp_path, "vulkan")
+
+
+def test_a_variant_is_installed_when_a_runnable_folder_of_it_stands(tmp_path, monkeypatch):
+    _play_windows(monkeypatch)
+    _runnable_build(tmp_path, _OLDER_VULKAN)
+    (tmp_path / ORDNER / "master-830-3333333-cuda12").mkdir()  # no program in it
+
+    assert sddownload.variante_installiert(tmp_path, "vulkan")
+    assert not sddownload.variante_installiert(tmp_path, "cuda12")
+    assert not sddownload.variante_installiert(tmp_path, "cpu")

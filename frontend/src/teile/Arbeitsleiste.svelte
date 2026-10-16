@@ -33,6 +33,7 @@
   import { t } from '../lib/texte.svelte.js'
   import { eineSeiteOffen } from '../lib/zustand.svelte.js'
   import { flaeche } from '../lib/flaeche.svelte.js'
+  import { restoreFocus, hasTrigger } from '../lib/callSelection.svelte.js'
 
   /* Whether this surface carries its drawing; the window decides, the
      surface knows which drawing belongs to it. */
@@ -52,6 +53,23 @@
     return t(MODULE.find(([modul]) => modul === name)?.[1] ?? 'terminal.titel')
   }
   const titel = $derived(titelVon(leiste.modul))
+
+  /* The column was opened from a line of an answer: its button and Esc close
+     it and the focus goes back to that line. Esc is taken only where nothing
+     else has taken it (a dialog, the picture viewer) and only for a column
+     that a line opened — otherwise the key is left alone. */
+  async function closeWithFocus() {
+    await schliessen()
+    restoreFocus()
+  }
+  function onKey(event) {
+    if (event.key !== 'Escape' || event.defaultPrevented) return
+    if (!leiste.offen || !hasTrigger()) return
+    // A key that belongs to a field or to a terminal's own program stays there.
+    if (event.target?.closest?.('input, textarea, select, [contenteditable="true"], .xterm')) return
+    event.preventDefault()
+    closeWithFocus()
+  }
 
   /* While the picture studio is open the column shows its details under a
      head of their own; the row of tool signs at the foot stays. A tool the
@@ -78,6 +96,8 @@
     <Modulzeichen modul={name} {groesse} />
   {/if}
 {/snippet}
+
+<svelte:window onkeydown={onKey} />
 
 {#if leiste.offen}
   <aside class="leiste" class:unterseite={eineSeiteOffen()} class:eng={flaeche.eng}
@@ -106,7 +126,7 @@
            mirrored, as the column is. -->
       <button
         class="zk gespiegelt"
-        onclick={schliessen}
+        onclick={closeWithFocus}
         title={t('seitenleiste.ausblenden')}
         aria-label={t('seitenleiste.ausblenden')}
       >

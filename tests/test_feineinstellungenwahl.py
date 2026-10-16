@@ -36,6 +36,7 @@ def test_was_die_schublade_schickt_kommt_auch_an():
         "moe_schichten": 12,
         "festnageln": True,
         "parallel": 4,
+        "kv_unified": False,
     }
     assert wahl.wahl_pruefen(geschickt) == geschickt
 

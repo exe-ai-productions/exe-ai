@@ -154,7 +154,7 @@ def test_a_picture_off_the_picture_wall_is_laid_on_the_surface():
     endings = "|".join(e.lstrip(".") for e in BILDENDUNGEN)
     assert f"const FOLDER_NAME = /^[0-9a-f]{{32}}\\.(?:{endings})$/" in source
     by_name = _rumpf("setFromFolder")
-    assert "if (!FOLDER_NAME.test(name)) return" in by_name and "startbildWaehlen(name)" in by_name
+    assert "if (!FOLDER_NAME.test(name)) return" in by_name and "pictureFromOutside(name)" in by_name
     assert "bildHochladen" not in by_name
     # The empty area's plaque hands the same on.
     assert "<Bildablage waehlen={setFile} named={setFromFolder} fill />" in source
@@ -163,7 +163,7 @@ def test_a_picture_off_the_picture_wall_is_laid_on_the_surface():
     # The silence check: a picture file from outside is still uploaded and set.
     assert "else setFile(" in dropped
     upload = _body(QUELLE, "setFile")
-    assert "await api.bildHochladen(datei)" in upload and "startbildWaehlen(ergebnis.bild)" in upload
+    assert "await api.bildHochladen(datei)" in upload and "pictureFromOutside(ergebnis.bild)" in upload
 
 
 def test_a_file_laid_down_in_the_studio_does_not_hang_on_the_chat_field():
@@ -180,11 +180,11 @@ def test_a_file_laid_down_in_the_studio_does_not_hang_on_the_chat_field():
     assert drop.index(gate) < drop.index("for (const datei of [...(ereignis.dataTransfer?.files || [])])")
 
 
-def test_only_the_open_chat_s_mask_holds_its_layers():
+def test_only_the_mask_of_the_picture_in_the_area_holds_its_layers():
     """A mask layer is as many bytes as four times its picture's pixels.
-    Only the open chat's mask keeps its layers: the others give theirs back
-    when another chat's values are filled in, and keep the stored mask's
-    name and the steps, from which the surface paints the layer again."""
+    Only the mask of the picture in the area keeps its layers: the one for
+    another picture gives theirs back and keeps the stored mask's name and
+    the steps, from which the surface paints the layer again."""
     studio = (WURZEL / "frontend/src/lib/studio.svelte.js").read_text(encoding="utf-8")
     release = studio.split("export function releaseLayers(mask) {", 1)[1].split("\n}\n", 1)[0]
     # Given back at once: a canvas of no size holds no pixels.
@@ -193,13 +193,12 @@ def test_only_the_open_chat_s_mask_holds_its_layers():
     # What the layer was is remembered; what it is made of is not touched.
     assert "mask.size = [mask.flaeche.width, mask.flaeche.height]" in release
     assert "verlauf" not in release and "zukunft" not in release and "stored" not in release
-    others = studio.split("function releaseOtherMasks(chat) {", 1)[1].split("\n}\n", 1)[0]
-    assert "if (owner !== chat) releaseLayers(mask)" in others
-    filled = studio.split("export function werteFuellen() {", 1)[1].split("\n}\n", 1)[0]
-    assert "releaseOtherMasks(chatanzeige.chatId)" in filled
-    # A chat's mask for another picture replaces the old one, whose layers go.
-    fetched = studio.split("export function maskeDesChats(chat, bild) {", 1)[1].split("\n}\n", 1)[0]
-    assert fetched.index("if (da && da.bild === bild) return da") < fetched.index("if (da) releaseLayers(da)")
+    # The studio holds one mask; a mask for another picture replaces the old
+    # one, whose layers go.
+    fetched = studio.split("export function studioMask(bild) {", 1)[1].split("\n}\n", 1)[0]
+    assert fetched.index("if (maske && maske.bild === bild) return maske") < fetched.index(
+        "if (maske) releaseLayers(maske)")
+    assert "releaseOtherMasks" not in studio and "masken" not in studio
 
     # The surface paints a layer that was given back from what it is made of.
     fetch = _rumpf("maskeHolen")
@@ -215,6 +214,6 @@ def test_only_the_open_chat_s_mask_holds_its_layers():
     loaded = _rumpf("gespeicherteLaden")
     assert loaded.index("maske.grund = base") < loaded.index("paintLayer()")
     # The silence check: painting a layer again changes no mask — the mask
-    # the chat has stored stays named — while a step back or forward does.
+    # the studio has stored stays named — while a step back or forward does.
     assert "geaendert()" not in paint and "geaendert()" not in fetch and "geaendert()" not in loaded
     assert "geaendert()" in _rumpf("neuZeichnen")

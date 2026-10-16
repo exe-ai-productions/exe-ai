@@ -1,4 +1,4 @@
-"""``/settings`` and ``/set`` against the service itself, not a stand-in:
+"""``/settings`` and ``/settings`` against the service itself, not a stand-in:
 the client carries no list of settings, every value shown names its scope,
 and a permission mode outside the global scope is refused in the service's
 words."""
@@ -16,7 +16,7 @@ from cli import commands
 from cli.client import ServiceClient, ServiceError
 from cli.interfaces import Context
 from cli.texts import Texts
-from test_commands import Lines, Shown, Silent
+from test_commands import Lines, Shown, Silent, Walking
 
 CHAT = "chat-of-this-test"
 MODEL = "model-of-this-test"
@@ -38,14 +38,24 @@ def ctx(client: TestClient, tmp_path: Path) -> Context:
     return ctx
 
 
+def scope_rows(ctx: Context, area: int) -> dict[str, tuple[str, str]]:
+    """Opens ``/settings`` and then the scope at ``area``: each setting
+    shown with its origin and its value, by name."""
+    ctx.asker = Walking(area)
+    ctx.commands.run("/settings")
+    rows = ctx.asker.rows()
+    return {
+        row[0]: (row[1], note) for row, note in zip(rows, ctx.asker.remarks(), strict=True)
+    }
+
+
 def test_a_setting_that_stands_only_in_the_services_table_shows_in_settings(
     ctx, client, monkeypatch
 ):
     monkeypatch.setitem(einstellungen.PRUEFER, "only_in_the_table", lambda value: value)
     client.put("/api/v1/settings/global/only_in_the_table", json={"wert": "here"})
 
-    ctx.commands.run("/settings")
-    assert "only_in_the_table here global" in ctx.screen.lines()
+    assert scope_rows(ctx, 0)["only_in_the_table"] == ("global", "here")
 
 
 def test_every_single_value_stands_with_the_scope_it_comes_from(ctx, client):
@@ -56,39 +66,36 @@ def test_every_single_value_stands_with_the_scope_it_comes_from(ctx, client):
     client.put(f"/api/v1/settings/chat:{CHAT}/werkzeug_runden", json={"wert": 20})
     client.put("/api/v1/settings/global/berechtigungsmodus_chat", json={"wert": "auto"})
 
-    ctx.commands.run("/settings")
-    lines = ctx.screen.lines()
+    rows = scope_rows(ctx, 2)
     # The service keeps this share as a decimal number.
-    assert "verdichtung_schwelle 70.0 global" in lines
-    assert "berechtigungsmodus_chat auto global" in lines
-    assert "weck_runden 4 model" in lines
-    assert "werkzeug_runden 20 chat" in lines
+    assert rows["verdichtung_schwelle"] == ("global", "70.0")
+    assert rows["berechtigungsmodus_chat"] == ("global", "auto")
+    assert rows["weck_runden"] == ("model", "4")
+    assert rows["werkzeug_runden"] == ("chat", "20")
     # In the order of the scopes: everywhere, then the model, then the chat.
-    order = [line.split()[0] for line in lines]
+    order = list(rows)
     assert order.index("verdichtung_schwelle") < order.index("weck_runden")
     assert order.index("weck_runden") < order.index("werkzeug_runden")
     # No value a scope has set stands without that scope.
     held = {"verdichtung_schwelle", "weck_runden", "werkzeug_runden", "berechtigungsmodus_chat"}
-    for line in lines:
-        name, *_, scope = line.split()
+    for name, (scope, _) in rows.items():
         if name in held:
-            assert scope in ("global", "model", "chat"), line
+            assert scope in ("global", "model", "chat"), name
 
 
 def test_a_value_no_scope_has_set_stands_with_the_word_for_the_default(ctx, client):
     client.put("/api/v1/settings/global/weck_runden", json={"wert": 3})
 
-    ctx.commands.run("/settings")
-    lines = ctx.screen.lines()
+    rows = scope_rows(ctx, 0)
     # The service answers with two values nobody has set, and these say so.
-    assert "scrollstelle.am_boden true default" in lines
-    assert "scrollstelle.versatz 0 default" in lines
-    # Every line says where its value comes from: none ends in the value.
-    origins = [line.split()[-1] for line in lines]
+    assert rows["scrollstelle.am_boden"] == ("default", "true")
+    assert rows["scrollstelle.versatz"] == ("default", "0")
+    # Every row says where its value comes from.
+    origins = [origin for origin, _ in rows.values()]
     assert set(origins) <= {"global", "model", "chat", "default"}
     # Silence probe: a value a scope has set names that scope as before,
     # and stands above the ones no scope has set.
-    assert "weck_runden 3 global" in lines
+    assert rows["weck_runden"] == ("global", "3")
     assert origins.index("global") < origins.index("default")
 
 
@@ -97,7 +104,7 @@ def test_set_of_a_permission_mode_outside_the_global_scope_shows_the_services_se
     ctx, client, scope
 ):
     with pytest.raises(ServiceError) as refused:
-        ctx.commands.run(f"/set {scope}.berechtigungsmodus_chat manuell")
+        ctx.commands.run(f"/settings {scope}.berechtigungsmodus_chat manuell")
     assert refused.value.status == 400
     assert refused.value.detail == t(
         "fehler.setting_only_global", "en", name="berechtigungsmodus_chat"
@@ -109,7 +116,7 @@ def test_set_of_a_permission_mode_outside_the_global_scope_shows_the_services_se
 
 def test_set_of_a_permission_mode_in_the_global_scope_is_taken(ctx, client):
     """The quiet case."""
-    ctx.commands.run("/set global.berechtigungsmodus_chat restricted")
+    ctx.commands.run("/settings global.berechtigungsmodus_chat restricted")
     settings = client.app.state.repositories.einstellungen
     assert settings.holen("global", "berechtigungsmodus_chat") == "restricted"
     assert ctx.screen.lines()[-1].startswith("global.berechtigungsmodus_chat null")

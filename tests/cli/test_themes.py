@@ -373,16 +373,48 @@ def test_a_look_that_names_no_colours_keeps_the_terminals_own():
 # --- The terminal's ground ------------------------------------------------------
 
 
+# The colour of the program's mark and of the cursor in each look: the text
+# colour with a fifth of the accent in it (the values of the preview), and
+# the text colour itself in the look that has no accent.
+MARKS = {
+    "exe": "#ecebe6",
+    "darkmatter": "#ded4f9",
+    "moune": "#2e402d",
+    "heaven": "#2b3f60",
+    "pearl": "#373021",
+}
+
+
 @pytest.mark.parametrize("name", LOOKS)
-def test_a_look_asks_the_terminal_for_its_ground_its_text_colour_and_a_cursor_in_that_colour(name):
+def test_a_look_asks_the_terminal_for_its_ground_its_text_colour_and_a_cursor_in_the_mark_colour(name):
     theme = themes.get(name)
     ground, text = theme.colours["ground"], theme.colours["text"]
     assert theme.ground() == (
-        f"{ESCAPE}]12;{text}{ESCAPE}\\{ESCAPE}]11;{ground}{ESCAPE}\\{ESCAPE}]10;{text}{ESCAPE}\\"
+        f"{ESCAPE}]12;{MARKS[name]}{ESCAPE}\\{ESCAPE}]11;{ground}{ESCAPE}\\{ESCAPE}]10;{text}{ESCAPE}\\"
     )
 
 
-def test_the_cursor_takes_the_text_colour_of_every_look_switched_to_and_the_terminals_own_at_the_end(
+@pytest.mark.parametrize("name", LOOKS)
+def test_the_mark_and_the_cursor_carry_a_fifth_of_the_accent_in_the_text_colour(name):
+    theme = themes.get(name)
+    assert theme.mark_colour() == MARKS[name]
+    assert theme.styles()["mark"] == MARKS[name]
+    # One colour for both: the cursor's request names the mark's.
+    assert theme.cursor() == f"{ESCAPE}]12;{MARKS[name]}{ESCAPE}\\"
+    if name == "exe":
+        assert theme.mark_colour() == theme.colours["text"]
+    else:
+        assert theme.mark_colour() != theme.colours["text"]
+        assert theme.mark_colour() != theme.colours["accent"]
+
+
+def test_a_look_without_a_text_colour_has_no_mark_colour_and_asks_for_no_cursor():
+    bare = themes.Theme("bare")
+    assert bare.mark_colour() is None
+    assert bare.cursor() == ""
+
+
+def test_the_cursor_takes_the_mark_colour_of_every_look_switched_to_and_the_terminals_own_at_the_end(
     monkeypatch,
 ):
     terminal = Terminal()
@@ -391,7 +423,7 @@ def test_the_cursor_takes_the_text_colour_of_every_look_switched_to_and_the_term
         themes.set_look(name)
         themes.paint()
         assert terminal.getvalue().endswith(themes.get(name).ground())
-        assert f"{ESCAPE}]12;{themes.get(name).colours['text']}{ESCAPE}\\" in terminal.getvalue()
+        assert f"{ESCAPE}]12;{MARKS[name]}{ESCAPE}\\" in terminal.getvalue()
     assert OWN_CURSOR_BACK not in terminal.getvalue()
     themes.unpaint()
     assert terminal.getvalue().count(OWN_CURSOR_BACK) == 1
@@ -421,16 +453,43 @@ def test_a_switch_asks_the_terminal_for_the_new_looks_ground(monkeypatch):
     assert terminal.getvalue().endswith(OWN_GROUND_BACK)
 
 
-@pytest.mark.parametrize("environment", [{"NO_COLOR": "1"}, {themes.WINDOW_VARIABLE: "1"}])
-def test_in_the_window_and_without_colours_the_terminal_keeps_its_ground(
-    environment, tmp_path, monkeypatch
-):
-    for name, value in environment.items():
-        monkeypatch.setenv(name, value)
+def test_without_colours_the_terminal_keeps_its_ground_and_its_cursor(tmp_path, monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
     terminal = Terminal()
     monkeypatch.setattr(sys, "stdout", terminal)
     assert start("--theme", "moune", prefs_path=tmp_path / "cli.json") == 0
     assert ESCAPE + "]1" not in terminal.getvalue()
+    # Nothing in the mark's own style either.
+    assert themes.get("moune").styles()["mark"] == ""
+    assert themes.get("moune").rich_theme().styles["exe.mark"].color is None
+
+
+def test_in_the_window_the_terminal_keeps_its_ground_and_takes_only_the_cursor(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(themes.WINDOW_VARIABLE, "1")
+    terminal = Terminal()
+    monkeypatch.setattr(sys, "stdout", terminal)
+    assert start("--theme", "moune", prefs_path=tmp_path / "cli.json") == 0
+    written = terminal.getvalue()
+    # No ground and no text colour — the window paints those …
+    assert ESCAPE + "]11;" not in written and ESCAPE + "]10;" not in written
+    assert ESCAPE + "]111" not in written and ESCAPE + "]110" not in written
+    # … but the cursor in the look's mark colour, taken once and given back.
+    assert written.count(themes.get("moune").cursor()) == 1
+    assert written.count(OWN_CURSOR_BACK) == 1
+
+
+def test_in_the_window_a_look_switched_to_asks_for_the_cursor_of_the_new_look(monkeypatch):
+    monkeypatch.setenv(themes.WINDOW_VARIABLE, "1")
+    terminal = Terminal()
+    monkeypatch.setattr(sys, "stdout", terminal)
+    for name in ("heaven", "pearl"):
+        themes.set_look(name)
+        terminal.truncate(0)
+        terminal.seek(0)
+        themes.paint()
+        assert terminal.getvalue() == f"{ESCAPE}]12;{MARKS[name]}{ESCAPE}\\"
 
 
 def test_an_output_that_is_no_terminal_is_not_painted():

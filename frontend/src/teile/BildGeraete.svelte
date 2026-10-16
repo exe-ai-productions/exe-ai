@@ -27,11 +27,31 @@
   // The split's own choice for "one mode per module", beside the two modes.
   const JE_MODUL = 'modul'
 
+  // The fields that are one value each; the switches are a set of their own.
+  const FIELDS = ['vram_limit', 'offload_to_cpu', 'threads', 'split_mode', 'backend', 'zeitgrenze']
+
+  /* A field as the page holds it, read from what the service keeps: the
+     same reading at the page's opening and after every write, so the window
+     shows what acts and not what was typed. */
+  function asHeld(name, v) {
+    switch (name) {
+      case 'vram_limit': return v.vram_limit ?? ''
+      case 'offload_to_cpu': return v.offload_to_cpu === true
+      case 'threads': return v.threads > 0 ? v.threads : null
+      case 'split_mode': return v.split_mode ?? ''
+      case 'backend': return v.backend ?? ''
+      case 'zeitgrenze': return Number.isInteger(v.zeitgrenze) && v.zeitgrenze > 0 ? v.zeitgrenze : null
+      default: return undefined
+    }
+  }
+
   let w = $state(null)
   let devices = $state([])
   let schalterOffen = $state(false)
   let vramFokus = $state(false)
   let zeitFokus = $state(false)
+  let splitFocus = $state(false)
+  let backendFocus = $state(false)
   // The budget as the service keeps it: one it would not read is not kept,
   // and the field goes back to this once it is left.
   let vramGespeichert = ''
@@ -51,13 +71,8 @@
       const antwort = await api.einstellungAufgeloest(SCHLUESSEL)
       const v = antwort?.wert ?? {}
       w = {
-        vram_limit: v.vram_limit ?? '',
-        offload_to_cpu: v.offload_to_cpu === true,
-        threads: v.threads > 0 ? v.threads : null,
-        split_mode: v.split_mode ?? '',
-        backend: v.backend ?? '',
+        ...Object.fromEntries(FIELDS.map((name) => [name, asHeld(name, v)])),
         switches: v.switches ?? {},
-        zeitgrenze: Number.isInteger(v.zeitgrenze) && v.zeitgrenze > 0 ? v.zeitgrenze : null,
       }
       showSplit(w.split_mode)
       vramGespeichert = w.vram_limit
@@ -132,6 +147,7 @@
     return geaendert
   }
 
+  let waiting = 0
   $effect(() => {
     const jetzt = w ? $state.snapshot(w) : null
     if (!jetzt || !gesendet) return
@@ -139,11 +155,69 @@
     clearTimeout(zeit)
     ausstehend = true
     const write = ++writes
+    waiting = write
     zeit = setTimeout(() => {
+      waiting = 0
       line = line.then(() => store(write))
     }, 350)
     return () => clearTimeout(zeit)
   })
+
+  /* A change still waiting for its moment when the window goes is kept at
+     once, not dropped with the timer. */
+  $effect(() => () => {
+    if (!waiting) return
+    clearTimeout(zeit)
+    const write = waiting
+    waiting = 0
+    line = line.then(() => store(write))
+  })
+
+  /* What a write left in the service, taken over: every field shows the
+     value the service keeps, so a text it corrected (a split it does not
+     read becomes "Auto") stands as it acts, and a switch value it refused
+     shows the value that is kept — and says so. A field still under the
+     fingers is put right when it is left. Returns whether a switch value
+     was refused. */
+  function adopt(geaendert, jetzt, stored) {
+    const focused = {
+      vram_limit: vramFokus, zeitgrenze: zeitFokus, split_mode: splitFocus, backend: backendFocus,
+    }
+    let refused = false
+    for (const name of Object.keys(geaendert)) {
+      if (name === 'switches') {
+        const kept = stored.switches ?? {}
+        const known = { ...(gesendet.switches ?? {}) }
+        const shown = { ...w.switches }
+        for (const key of Object.keys(geaendert.switches)) {
+          const sent = jetzt.switches[key]
+          const unset = sent === '' || sent === null || sent === false || sent === undefined
+          if (key in kept) known[key] = kept[key]
+          else if (unset) known[key] = sent
+          else delete known[key]
+          if (unset || JSON.stringify(sent) === JSON.stringify(kept[key])) continue
+          refused = true
+          // Only a field still showing what this write sent is put back.
+          if (JSON.stringify(w.switches[key]) !== JSON.stringify(sent)) continue
+          if (key in kept) shown[key] = kept[key]
+          else delete shown[key]
+        }
+        gesendet.switches = known
+        w.switches = shown
+        continue
+      }
+      const held = asHeld(name, stored)
+      gesendet[name] = held
+      if (name === 'vram_limit') vramGespeichert = held
+      if (name === 'zeitgrenze') zeitGespeichert = held
+      if (JSON.stringify(held) === JSON.stringify(jetzt[name])) continue
+      // Not over a change made since, and not under the fingers.
+      if (JSON.stringify(w[name]) !== JSON.stringify(jetzt[name]) || focused[name]) continue
+      w[name] = held
+      if (name === 'split_mode') showSplit(held)
+    }
+    return refused
+  }
 
   /* Never fails: whatever goes wrong in a write is said and ends with that
      write, so the line behind it goes on. */
@@ -156,20 +230,13 @@
       if (!Object.keys(geaendert).length) return
       const antwort = await api.einstellungMischen('global', SCHLUESSEL, geaendert)
       gesendet = { ...gesendet, ...Object.fromEntries(Object.keys(geaendert).map((n) => [n, jetzt[n]])) }
-      if ('vram_limit' in geaendert) {
-        vramGespeichert = antwort?.wert?.vram_limit ?? ''
-        gesendet.vram_limit = vramGespeichert
-        if (!vramFokus) w.vram_limit = vramGespeichert
-      }
-      if ('zeitgrenze' in geaendert) {
-        zeitGespeichert = Number.isInteger(antwort?.wert?.zeitgrenze) ? antwort.wert.zeitgrenze : null
-        gesendet.zeitgrenze = zeitGespeichert
-        if (!zeitFokus) w.zeitgrenze = zeitGespeichert
-      }
+      const refused = adopt(geaendert, jetzt, antwort?.wert ?? {})
+      if (refused) melde(t('fehler.einstellung_speichern'), 'fehler')
       /* A field of this write set back while it was under way asked for no
          write of its own — nothing differed from what was held then. It
-         goes out now, so the service holds what the page shows. The limit
-         is put right by its own field instead. */
+         goes out now, so the service holds what the page shows. A field
+         that is still being typed in is put right by its own field
+         instead. */
       const undone = Object.keys(geaendert).some(
         (name) => name !== 'vram_limit' && name !== 'zeitgrenze'
           && JSON.stringify(w[name]) !== JSON.stringify(jetzt[name]))
@@ -233,7 +300,14 @@
       <span class="name mitmarke">{t('bild.split_mode')}<InfoMark text={t('bild.info_split_mode')} /></span>
       {#if splitWahl === JE_MODUL}
         <input class="eingabe" aria-label={t('bildserver.split_je_modul')} autocomplete="off"
-               spellcheck="false" bind:value={splitText} />
+               spellcheck="false" bind:value={splitText}
+               onfocus={() => (splitFocus = true)}
+               onblur={() => {
+                 splitFocus = false
+                 if (!ausstehend && splitText.trim() && gesendet.split_mode !== splitText.trim()) {
+                   showSplit(gesendet.split_mode)
+                 }
+               }} />
       {/if}
       <div class="wahl">
         <Auswahlfeld bind:wert={splitWahl} beschriftung={t('bild.split_mode')}
@@ -246,7 +320,12 @@
     <div class="zeile">
       <span class="name mitmarke">{t('bild.backend')}<InfoMark text={t('bild.info_backend')} /></span>
       <input class="eingabe" aria-label={t('bild.backend')} autocomplete="off" spellcheck="false"
-             bind:value={w.backend} />
+             bind:value={w.backend}
+             onfocus={() => (backendFocus = true)}
+             onblur={() => {
+               backendFocus = false
+               if (!ausstehend) w.backend = gesendet.backend
+             }} />
     </div>
     {#if devices.length}
       <div class="zeile liste">

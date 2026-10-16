@@ -27,7 +27,7 @@ def _funktionen() -> str:
     stuecke = []
     for name in (
         "scrollGeprueft", "gescrollt", "radGedreht", "tasteHoch",
-        "beruehrungBeginnt", "beruehrungZieht", "beruehrungEndet", "runter",
+        "beruehrungBeginnt", "beruehrungZieht", "beruehrungEndet", "runter", "gleiteZumBoden",
     ):
         treffer = re.search(rf"\n  function {name}\(.*?\n  \}}\n", quelle, re.S)
         assert treffer, f"{name}() not found"
@@ -41,19 +41,41 @@ def _funktionen() -> str:
     treffer = re.search(r"\n  const FANG_WEG = (\d+)\n", quelle)
     assert treffer, "FANG_WEG not found"
     stuecke.insert(2, f"const FANG_WEG = {treffer.group(1)};\nlet fangSumme = 0;\nlet fangZuletzt = 0;\nlet hochSumme = 0;\nlet runterSumme = 0;\n")
+    treffer = re.search(r"\n  const GLEIT_HALB_MS = (\d+)\n", quelle)
+    assert treffer, "GLEIT_HALB_MS not found"
+    stuecke.insert(2, f"const GLEIT_HALB_MS = {treffer.group(1)};\nlet gleitet = false;\n")
+    reduziert = re.search(r"\n  const bewegungReduziert = \(\) =>\n[^\n]*\n", quelle)
+    assert reduziert, "bewegungReduziert not found"
+    stuecke.insert(2, reduziert.group(0).replace("const bewegungReduziert", "const bewegungReduziert"))
     tasten = re.search(r"\n  const TASTEN_HOCH = new Set\(.*?\)\n", quelle)
     assert tasten, "TASTEN_HOCH not found"
     stuecke.insert(1, tasten.group(0))
     return "".join(stuecke)
 
 
-def _lauf(schritte: str) -> dict:
-    """Run the lifted functions against a stand-in scroll box."""
+def _lauf(schritte: str, bilder: str = "sofort") -> dict:
+    """Run the lifted functions against a stand-in scroll box.
+
+    `bilder="sofort"`: every animation frame runs straight through, so the
+    ordering the tests are about (wheel before scroll) is not blurred by
+    frame timing. `bilder="getaktet"`: frames wait in a queue and
+    `takt(n)` runs n of them, 16 ms apart on a clock the code reads."""
     skript = f"""
 let folgtMit = true, beruehrungY = 0;
 const zustand = {{ aktiverChat: 'c1' }};
 let selbstGerolltChat = null;
-const performance = {{ now: () => 1000 }};
+let uhr = 1000;
+const performance = {{ now: () => uhr }};
+const wartend = [];
+const zeitgeber = [];
+const takt = (n = 1) => {{
+  for (let k = 0; k < n; k += 1) {{
+    uhr += 16;
+    for (const e of wartend.splice(0)) if (!e.tot) e.f();
+    for (const t of zeitgeber) if (!t.tot && !t.lief && t.um <= uhr) {{ t.lief = true; t.f(); }}
+  }}
+}};
+const GETAKTET = {json.dumps(bilder == "getaktet")};
 // A real element CLAMPS what is written to scrollTop; a plain object does
 // not, and runter() writes scrollHeight into it on purpose. Without the
 // clamp this stand-in would answer for a box that does not exist.
@@ -77,13 +99,21 @@ const scrolleAuf = (oben) => {{
 // requestAnimationFrame runs straight through here: the ordering this test
 // is about is wheel-before-scroll, not frame timing. `let`, so a test can
 // kill the frames and prove the straggler timer still takes the snap.
-let requestAnimationFrame = (f) => {{ f(); return 1 }};
-let cancelAnimationFrame = () => {{}};
-let setTimeout = (f) => {{ f(); return 1 }};
-let clearTimeout = () => {{}};
+let requestAnimationFrame = (f) => {{
+  if (GETAKTET) {{ const e = {{ f }}; wartend.push(e); return e }}
+  f();
+  return 1;
+}};
+let cancelAnimationFrame = (e) => {{ if (e && typeof e === 'object') e.tot = true }};
+let setTimeout = (f, ms) => {{
+  if (GETAKTET) {{ const t = {{ f, um: uhr + ms }}; zeitgeber.push(t); return t }}
+  f();
+  return 1;
+}};
+let clearTimeout = (t) => {{ if (t && typeof t === 'object') t.tot = true }};
 {_funktionen()}
 {schritte}
-console.log(JSON.stringify({{ folgtMit, abstand: abstand(), scrollTop: verlauf.scrollTop }}));
+console.log(JSON.stringify({{ folgtMit, abstand: abstand(), scrollTop: verlauf.scrollTop, wege: globalThis.wege, bewegt: globalThis.bewegt }}));
 """
     lauf = subprocess.run(["node", "-e", skript], capture_output=True, text=True)
     assert lauf.returncode == 0, f"{lauf.stderr}\n{lauf.stdout}"
@@ -178,7 +208,7 @@ def test_die_laufende_antwort_wird_an_ort_und_stelle_gezeichnet():
         re.S,
     )
     assert antwort, "the answer box was not found"
-    assert 'use:lebendHtml={stueck.wert}' in antwort.group(0), "the answer is no longer drawn in place"
+    assert "use:lebendHtml={{ html: stueck.wert," in antwort.group(0), "the answer is no longer drawn in place"
     assert "{@html stueck.wert}" not in antwort.group(0), "the rebuild is back"
 
 
@@ -662,3 +692,57 @@ def test_the_hand_ends_the_wait_before_the_frames_run_out():
         """
     )
     assert stand == {"ziel": False, "bilder": 0, "gemerkt": []}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_das_mitlaufen_gleitet_ueber_mehrere_bilder_statt_in_einem_schritt():
+    """A line of text arrives: the floor moves by a line's height at once.
+    The view reaches it over several frames, each a part of the way, the way
+    a spring does, and ends exactly at the floor (before: one write, the
+    whole way, in the next frame)."""
+    stand = _lauf(
+        """
+        verlauf.scrollHeight = 3026;   // one line of 26 px came in
+        runter();
+        const wege = [];
+        for (let k = 0; k < 40 && abstand() > 0; k += 1) {
+          const vorher = verlauf.scrollTop;
+          takt();
+          wege.push(verlauf.scrollTop - vorher);
+        }
+        globalThis.wege = wege;
+        """,
+        bilder="getaktet",
+    )
+    # The report line carries the end state; the frames are read below.
+    assert stand["abstand"] == 0 and stand["folgtMit"] is True
+    assert stand["wege"][0] < 26, "the whole line was taken in one frame"
+    assert len([w for w in stand["wege"] if w > 0]) >= 4, stand["wege"]
+    # Each frame takes less than the one before: a spring, not a ramp.
+    positive = [w for w in stand["wege"] if w > 0]
+    assert all(a >= b for a, b in zip(positive, positive[1:])), positive
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_nach_dem_hochscrollen_bewegt_eine_neue_zeile_die_ansicht_nicht():
+    """Silence probe: the reader scrolled up; a new line moves nothing, not
+    even a part of the way — and a glide that was running stops with the
+    wheel."""
+    stand = _lauf(
+        """
+        verlauf.scrollHeight = 3100;
+        runter();
+        takt();                         // the glide is under way
+        radGedreht({ deltaY: -30 });    // the reader turns the wheel up
+        const dort = verlauf.scrollTop;
+        scrolleAuf(dort - 30);
+        const gelesen = verlauf.scrollTop;
+        verlauf.scrollHeight = 3200;    // another line
+        runter();
+        takt(10);
+        globalThis.bewegt = verlauf.scrollTop - gelesen;
+        """,
+        bilder="getaktet",
+    )
+    assert stand["folgtMit"] is False
+    assert stand["bewegt"] == 0, "the view moved under a reader who scrolled away"

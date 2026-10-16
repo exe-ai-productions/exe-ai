@@ -239,16 +239,16 @@ def test_the_window_names_a_chat_the_same_as_the_terminal_client() -> None:
     assert json.loads(run.stdout.strip().splitlines()[-1]) == [name for _, name in NAME_CASES]
 
 
-def test_the_window_holds_the_rule_once_and_both_its_ways_to_a_new_chat_call_it() -> None:
-    """The message field and the picture studio name the chat they open by
-    the one function; neither carries a cut of its own."""
+def test_the_window_holds_the_rule_once_and_the_studio_opens_no_chat() -> None:
+    """The message field names the chat it opens by the one function and
+    carries no cut of its own; the picture studio opens no chat, so it
+    names none."""
     window = WINDOW.read_text(encoding="utf-8")
     studio = STUDIO.read_text(encoding="utf-8")
     assert "import { chatNameFrom } from './lib/chatName.js'" in window
     assert "chatNameFrom(fuerTitel)" in window
     assert "function chatNameFrom" not in window and "CHAT_NAME_LIMIT" not in window
-    assert "import { chatNameFrom } from './chatName.js'" in studio
-    assert "const title = chatNameFrom(w.prompt) || t('eingabe.bild_titel')" in studio
+    assert "chatName" not in studio and "openNewChat" not in studio
     assert "slice(0, 40)" not in studio
 
 

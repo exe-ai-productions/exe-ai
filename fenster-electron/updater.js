@@ -46,7 +46,8 @@ if (trialConfig) {
 // copy the Store keeps current. `found`, `notes` and `date` describe the
 // newer release of the last look that found one — the notes as the release
 // carries them, which from a GitHub release is HTML. `progress` is set while
-// a download runs, `reason` while the state is error.
+// a download runs, `reason` and `step` while the state is error: `step` says
+// which of the three steps failed — check, download or install.
 const status = {
   version: app.getVersion(),
   found: '',
@@ -55,10 +56,14 @@ const status = {
   state: storeManaged ? 'store' : 'none',
   progress: null,
   reason: '',
+  step: '',
 }
 
 let mainWindow = () => null
 let installing = false
+// The step under way. The library's error event carries a failure and its
+// text but no step, so the call that starts one writes it down here.
+let step = 'check'
 
 // What an installation asks of the service, handed in by the shell (start).
 // The release about to be installed replaces the service's own files, and a
@@ -97,7 +102,7 @@ function fail(error) {
   // An installation that failed is over; the next try starts from a new look.
   installing = false
   const reason = reasonOf(error)
-  change({ state: 'error', reason, progress: null }, `error: ${reason}`)
+  change({ state: 'error', reason, step, progress: null }, `error: ${reason}`)
   if (serviceEnded) {
     serviceEnded = false
     service.restartService()
@@ -162,12 +167,14 @@ async function settle(call) {
 function check() {
   if (storeManaged) return snapshot()
   if (status.state === 'downloading' || status.state === 'downloaded') return snapshot()
+  step = 'check'
   return settle(() => autoUpdater.checkForUpdates())
 }
 
 // Fetches the release the last look found, and nothing without one.
 function download() {
   if (status.state !== 'available') return snapshot()
+  step = 'download'
   change({ state: 'downloading', progress: null }, `downloading ${status.found}`)
   return settle(() => autoUpdater.downloadUpdate())
 }
@@ -182,6 +189,7 @@ function download() {
 async function install() {
   if (status.state !== 'downloaded' || installing) return snapshot()
   installing = true
+  step = 'install'
   console.log(`Update: installing ${status.found}`)
   try {
     await service.endService()

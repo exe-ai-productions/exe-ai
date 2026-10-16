@@ -17,38 +17,48 @@ the list into the history.
 
 from __future__ import annotations
 
-import json
 import os
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from prompt_toolkit.completion import CompleteEvent, Completer, Completion
 from prompt_toolkit.document import Document
-from rich.console import RenderableType
-from rich.table import Table
 from rich.text import Text
 
-from cli import chat, downloads, glyphs, prefs, servers, themes
+from cli import (
+    agents,
+    chat,
+    chat_actions,
+    compact,
+    cron,
+    downloads,
+    files,
+    folders,
+    glyphs,
+    image,
+    mcp_servers,
+    prefs,
+    projects,
+    prompt_texts,
+    providers,
+    runs,
+    servers,
+    settings,
+    setup_steps,
+    skills,
+    themes,
+    tools,
+)
 from cli.client import ServiceError
 from cli.interfaces import CommandSet, Context, Entry
-from cli.render import local_time
+from cli.tables import grid as _grid
 from cli.texts import Texts, available_languages
 
 # The setting the service keeps a chat's or a model's thinking stage in.
 _THINKING_KEY = "denken"
-
-# Where a scope stands in the list of settings: what applies everywhere
-# first, then what the model sets over it, then what the chat sets over
-# both. A value the service names no scope for stands last.
-_SCOPE_ORDER = (("global", 0), ("modell:", 1), ("chat:", 2))
-_UNNAMED_SCOPE = 3
-# What the list says a value comes from that no scope has set: it is the
-# one the service starts out with.
-_NO_SCOPE = "default"
 
 # The ending that makes an export a Markdown transcript; any other ending
 # is the history as it was shown, as an HTML page.
@@ -73,9 +83,8 @@ _NOT_OUTSIDE = ("stop",)
 # The two kinds of thinking nothing can switch, and the sentence for each.
 _FIXED_THINKING = {"immer": "denken.immer", "nie": "denken.nie"}
 
-# The word after `/tools` that takes a standing permission back, and the two
-# after `/theme nerd` that switch the icon font's signs.
-_FORGET = "forget"
+# The word after `/theme` that opens the icon font's signs, and the two after
+# it that switch them.
 _NERD = "nerd"
 _SWITCH = {"on": True, "off": False}
 # The same two as they are typed in the client's other language.
@@ -97,16 +106,32 @@ def _table(commands: Commands) -> tuple[Command, ...]:
     return (
         Command("new", "chat.neu", commands.new_chat),
         Command("chats", "cli.cmd_chats", commands.chats),
+        Command("rename", "cli.cmd_rename", chat_actions.rename),
+        Command("delete", "cli.cmd_delete", chat_actions.delete),
+        Command("archive", "cli.cmd_archive", chat_actions.archive),
+        Command("project", "cli.cmd_project", projects.run_command),
         Command("model", "cli.cmd_model", commands.model),
         Command("server", "cli.cmd_server", commands.server),
         Command("download", "cli.cmd_download", commands.download),
+        Command("provider", "cli.cmd_provider", commands.provider),
         Command("status", "cli.cmd_status", commands.status),
         Command("theme", "cli.cmd_theme", commands.theme),
         Command("lang", "cli.cmd_lang", commands.language),
-        Command("settings", "cli.cmd_settings", commands.settings),
-        Command("set", "cli.cmd_set", commands.set_setting),
-        Command("tools", "cli.cmd_tools", commands.tools),
+        Command("setup", "cli.cmd_setup", commands.setup),
+        Command("settings", "cli.cmd_settings", settings.run_command),
+        Command("agents", "cli.cmd_agents", commands.agents),
+        Command("cron", "cli.cmd_cron", commands.cron),
+        Command("tools", "cli.cmd_tools", tools.run_command),
+        Command("ps", "cli.cmd_ps", runs.run_command),
+        Command("mcp", "cli.cmd_mcp", mcp_servers.run_command),
+        Command("skills", "cli.cmd_skills", commands.manage_skills),
+        Command("files", "cli.cmd_files", files.run_command),
+        Command("image", "cli.cmd_image", image.run_command),
+        Command("memory", "cli.cmd_memory", commands.memory),
+        Command("system", "cli.cmd_system", commands.system),
+        Command("dir", "cli.cmd_dir", commands.directory),
         Command("think", "cli.cmd_think", commands.think),
+        Command("compact", "cli.cmd_compact", commands.compact),
         Command("export", "cli.cmd_export", commands.export),
         Command("stop", "eingabe.abbrechen", _stop),
         Command("clear", "cli.cmd_clear", _clear),
@@ -152,34 +177,6 @@ def _stop(ctx: Context, argument: str) -> None:
 # --- Shapes shared by the lists ---------------------------------------------------
 
 
-def _grid(rows: Iterable[Iterable[RenderableType]], *, wide: int | None = None) -> Table:
-    """Rows in columns, every column as wide as its widest cell.
-
-    ``wide`` names the one column that gives way where the window is too
-    narrow for all of them: its cells are carried on below, in their own
-    column, so nothing of them is lost and the columns beside it keep their
-    width. Without one, a row that does not fit is cut.
-    """
-    table = Table.grid(padding=(0, 2))
-    for row in rows:
-        cells = list(row)
-        while len(table.columns) < len(cells):
-            if len(table.columns) == wide:
-                table.add_column(overflow="fold")
-            else:
-                table.add_column(no_wrap=True, overflow=glyphs.overflow())
-        table.add_row(*cells)
-    return table
-
-
-def _one_line(value: Any) -> str:
-    """A value as it stands in one cell. A word stands as itself; an empty
-    one is written out, so its cell does not look like a missing value."""
-    if isinstance(value, str) and value.strip():
-        return " ".join(value.split())
-    return json.dumps(value, ensure_ascii=False)
-
-
 def _saved_page(ctx: Context) -> Path:
     """The file ``/export`` writes without a name: in the client's own
     folder, named by the moment — and never one that is already there, so
@@ -201,26 +198,12 @@ def _first_word(text: str) -> tuple[str, str]:
     return (parts[0] if parts else "", parts[1].strip() if len(parts) > 1 else "")
 
 
-def _no_number(name: str) -> Any:
-    """Refuses the words a JSON reader takes for numbers that no JSON text
-    can carry back out."""
-    raise ValueError(name)
-
-
 def _numbered(wanted: str, listed: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The entry ``wanted`` counts to, or ``None`` where it is no number of
     the list."""
     if wanted.isdecimal() and 1 <= int(wanted) <= len(listed):
         return listed[int(wanted) - 1]
     return None
-
-
-def _scope_rank(scope: str) -> int:
-    """Where a value of that scope stands in the list of settings."""
-    for beginning, rank in _SCOPE_ORDER:
-        if scope == beginning or scope.startswith(beginning):
-            return rank
-    return _UNNAMED_SCOPE
 
 
 class SlashCompleter(Completer):
@@ -244,6 +227,14 @@ class SlashCompleter(Completer):
                 start_position=-len(typed),
                 display_meta=self._commands.summary(command).split("\n", 1)[0],
             )
+        # The skills stand behind the commands, as far as they are known.
+        for skill in self._commands.skills_matching(typed[1:]):
+            description = str(skill.get("beschreibung") or "")
+            yield Completion(
+                f"/{skill['name']}",
+                start_position=-len(typed),
+                display_meta=description.split("\n", 1)[0],
+            )
 
 
 class Commands(CommandSet):
@@ -253,6 +244,8 @@ class Commands(CommandSet):
         self._ctx = ctx
         self._commands: dict[str, Command] = {}
         self._completer = SlashCompleter(self)
+        # The skills the service offers, read once and only when needed.
+        self._skills = skills.Skills(ctx)
         # The models as they were last shown. A number the user types
         # counts into what stood on the screen, not into what the service
         # would list now. The chats last shown are kept with the session:
@@ -278,6 +271,16 @@ class Commands(CommandSet):
     def summary(self, command: Command) -> str:
         return self._ctx.texts.t(command.summary_key)
 
+    def manage_skills(self, ctx: Context, argument: str) -> None:
+        """``/skills``; the list behind the slash is read again after a
+        change."""
+        skills.run_command(ctx, argument, self._skills)
+
+    def skills_matching(self, beginning: str) -> list[dict[str, Any]]:
+        """The skills whose name holds ``beginning``, those that start with
+        it first — without waiting for the service."""
+        return skills.matching(self._skills.known(), beginning, set(self._commands))
+
     def completer(self) -> Completer:
         return self._completer
 
@@ -285,9 +288,27 @@ class Commands(CommandSet):
         name, argument = _first_word(line.strip()[1:])
         command = self._commands.get(name.lower())
         if command is None:
-            self._ctx.renderer.error(self._ctx.texts.t("cli.unbekannt", name=name))
+            skill = self._skills.find(name) if name else None
+            if skill is None:
+                self._ctx.renderer.error(self._ctx.texts.t("cli.unbekannt", name=name))
+                return
+            self._send_skill(str(skill["name"]), line.strip(), argument)
             return
         command.handler(self._ctx, argument)
+
+    def _send_skill(self, name: str, text: str, rest: str) -> None:
+        """A line that begins with the name of a skill goes out as a message:
+        its content as it was typed, and the skill's name with it. During an
+        answer it waits its turn like any message."""
+        ctx = self._ctx
+
+        def send() -> None:
+            chat.send(ctx, text, skill=name, title_from=rest)
+
+        if ctx.session.answering:
+            ctx.screen.queue(send)
+        else:
+            send()
 
     # --- /help ---
 
@@ -324,6 +345,9 @@ class Commands(CommandSet):
         ctx.screen.new_chat()
 
     def chats(self, ctx: Context, argument: str) -> None:
+        if argument.strip().casefold() == chat_actions.ARCHIVE:
+            chat_actions.show_archive(ctx)
+            return
         if argument:
             found = self._named_chat(argument)
         else:
@@ -364,21 +388,8 @@ class Commands(CommandSet):
         ctx.session.shown_chats = listed
         if not listed:
             return None
-        open_id = ctx.session.chat_id()
-        picked = ctx.asker.choose(
-            [
-                Entry(
-                    cells=[
-                        ("text", " ".join(str(entry.get("title") or "").split())),
-                        ("muted", local_time(entry.get("updated_at"))),
-                        ("blue", ctx.texts.t("cli.laeuft") if entry.get("laeuft") else ""),
-                    ],
-                    in_use=entry.get("id") == open_id,
-                )
-                for entry in listed
-            ]
-        )
-        return None if picked is None else self._as_it_is_now(listed[picked])
+        picked = chat_actions.choose(ctx, listed)
+        return None if picked is None else self._as_it_is_now(picked)
 
     def _as_it_is_now(self, shown: dict[str, Any]) -> dict[str, Any] | None:
         """An entry is as old as the list it stood in. The chat is read
@@ -402,6 +413,7 @@ class Commands(CommandSet):
     # --- /model ---
 
     def model(self, ctx: Context, argument: str) -> None:
+        found: dict[str, Any] | None
         if not argument:
             found = self._picked_model()
         else:
@@ -424,6 +436,25 @@ class Commands(CommandSet):
                     found = named[0]
                 else:
                     ctx.renderer.error(ctx.texts.t("cli.modell_unbekannt", name=argument))
+        self._use_model(found)
+
+    def pick_model(self, leading: Sequence[Entry]) -> int | None:
+        """The selection of ``/model`` with ``leading`` entries above its own
+        — the guided setup puts its own two there. A leading entry that is
+        picked is handed back by its position; a model is chosen as
+        ``/model`` chooses it."""
+        picked = self._picked_model(leading)
+        if isinstance(picked, int):
+            return picked
+        self._use_model(picked)
+        return None
+
+    def _use_model(self, found: dict[str, Any] | None) -> None:
+        """Makes the model that was found the one the next message goes to:
+        starts the model server where it is a file, keeps the choice with
+        the open chat and remembers it. Nothing was found: nothing
+        changes."""
+        ctx = self._ctx
         if found is not None and found.get("datei"):
             # A file of the model folder: the model server is brought up
             # with it, and the choice is the model it connects as. Where
@@ -458,6 +489,34 @@ class Commands(CommandSet):
         )
         ctx.renderer.notice(ctx.texts.t("cli.modell_gewaehlt", name=found.get("name")))
 
+    # --- /cron ---
+
+    def cron(self, ctx: Context, argument: str) -> None:
+        cron.run_command(ctx, argument)
+
+    # --- /agents ---
+
+    def agents(self, ctx: Context, argument: str) -> None:
+        agents.run_command(ctx, argument)
+
+    # --- /dir ---
+
+    def directory(self, ctx: Context, argument: str) -> None:
+        folders.run_command(ctx, argument)
+
+    # --- /memory, /system ---
+
+    def memory(self, ctx: Context, argument: str) -> None:
+        prompt_texts.run_command(ctx, prompt_texts.MEMORY)
+
+    def system(self, ctx: Context, argument: str) -> None:
+        prompt_texts.run_command(ctx, prompt_texts.SYSTEM)
+
+    # --- /compact ---
+
+    def compact(self, ctx: Context, argument: str) -> None:
+        compact.run_command(ctx, argument)
+
     # --- /server, /status ---
 
     def server(self, ctx: Context, argument: str) -> None:
@@ -465,6 +524,12 @@ class Commands(CommandSet):
 
     def download(self, ctx: Context, argument: str) -> None:
         downloads.run_command(ctx, argument)
+
+    def provider(self, ctx: Context, argument: str) -> None:
+        providers.run_command(ctx, argument)
+
+    def setup(self, ctx: Context, argument: str) -> None:
+        setup_steps.run_command(ctx, argument)
 
     def status(self, ctx: Context, argument: str) -> None:
         """What runs and how full the memory is, written into the history:
@@ -490,17 +555,19 @@ class Commands(CommandSet):
         marked by ``datei``, which no model of the service has."""
         return [*self._models(), *servers.not_carried(self._ctx)]
 
-    def _picked_model(self) -> dict[str, Any] | None:
+    def _picked_model(self, leading: Sequence[Entry] = ()) -> Any:
         """The model picked from the selection: the models as the service
         lists them now, under the numbers a word behind the command counts
-        into from here on. Where it lists none, that is said instead."""
+        into from here on. Where it lists none, that is said instead.
+        ``leading`` entries stand above the models; one of them picked comes
+        back as its position."""
         ctx = self._ctx
         self._shown_models = self._listing()
         listed = self._shown_models
-        if not listed:
+        if not listed and not leading:
             ctx.renderer.notice(ctx.texts.t("cli.keine_modelle"))
             return None
-        entries = []
+        entries: list[Entry] = list(leading)
         for model in listed:
             if model.get("datei"):
                 entries.append(self._file_entry(model))
@@ -522,7 +589,11 @@ class Commands(CommandSet):
                 )
             )
         picked = ctx.asker.choose(entries)
-        return None if picked is None else listed[picked]
+        if picked is None:
+            return None
+        if picked < len(leading):
+            return picked
+        return listed[picked - len(leading)]
 
     def _file_entry(self, model: dict[str, Any]) -> Entry:
         """A file of the model folder as a row of the selection: where it
@@ -585,7 +656,7 @@ class Commands(CommandSet):
         value = resolved.get("wert") if isinstance(resolved, dict) else None
         return value.get("stufe") if isinstance(value, dict) else None
 
-    # --- /settings, /set ---
+    # --- the scope of the open chat ---
 
     def _scope_of_chat(self) -> dict[str, Any]:
         """What a resolving request names: the open chat and its model."""
@@ -596,114 +667,6 @@ class Commands(CommandSet):
         if session.endpoint_id:
             scope["modell"] = session.endpoint_id
         return scope
-
-    def settings(self, ctx: Context, argument: str) -> None:
-        """Every setting that has a value, with the scope it comes from —
-        in the order of the scopes: what applies everywhere, then what the
-        model sets over it, then what the chat sets over both. Which
-        settings there are is the service's to say: asked without a list,
-        it answers with all of them."""
-        resolved = ctx.client.get("/settings/resolved", params=self._scope_of_chat())
-        resolved = resolved if isinstance(resolved, dict) else {}
-        # This chat's scope and this model's are named the way /set
-        # takes them: their full names are long enough to leave the
-        # values no room, and they say nothing the open chat does not.
-        named = {
-            f"chat:{(ctx.session.chat or {}).get('id')}": "chat",
-            f"modell:{ctx.session.endpoint_id}": "model",
-        }
-        rows: list[tuple[int, str, Any, str]] = []
-        for key, entry in resolved.items():
-            if not isinstance(entry, dict):
-                continue
-            value, origin = entry.get("wert"), entry.get("herkunft")
-            origin = origin if isinstance(origin, dict) else {}
-            # A set of values is shown value by value, each with the scope
-            # the service names for it. Anything else is one value under the
-            # setting's own name, with the scope the service names for the
-            # value as a whole. A value no scope has set says so in the
-            # place of one. A setting nothing is set for has no row.
-            fields = (
-                [(f"{key}.{name}", part, str(origin.get(name) or "")) for name, part in value.items()]
-                if isinstance(value, dict)
-                else [(key, value, str(entry.get("scope") or ""))]
-            )
-            for name, part, scope in fields:
-                if part is None:
-                    continue
-                rows.append((_scope_rank(scope), name, part, named.get(scope, scope) or _NO_SCOPE))
-        # A stable sort: within a scope the settings keep their own order.
-        rows.sort(key=lambda row: row[0])
-        ctx.screen.print_above(
-            _grid(
-                (
-                    (
-                        Text(name, style="exe.accent"),
-                        Text(_one_line(part), style="exe.text"),
-                        Text(scope, style="exe.muted"),
-                    )
-                    for _, name, part, scope in rows
-                ),
-                wide=1,
-            )
-        )
-
-    def set_setting(self, ctx: Context, argument: str) -> None:
-        """``/set <scope>.<key> <value>`` sets the whole value; a third part
-        names one field of a set of values and sets that field alone. The
-        line that answers sets what the scope held against what it holds
-        now."""
-        target, written = _first_word(argument)
-        parts = target.split(".")
-        if not written or len(parts) not in (2, 3) or not all(parts):
-            ctx.renderer.error(ctx.texts.t("cli.set_form"))
-            return
-        scope, key = parts[0], parts[1]
-        field = parts[2] if len(parts) == 3 else None
-        session = ctx.session
-        # The two scopes nobody can be asked to type out: this chat's and
-        # this model's. Every other word goes to the service as it stands.
-        # A value set for a new chat is the first thing written into it,
-        # and what creates it on the service.
-        if scope == "chat":
-            scope = f"chat:{chat.service_chat(ctx)['id']}"
-        elif scope in ("model", "modell") and session.endpoint_id:
-            scope = f"modell:{session.endpoint_id}"
-        try:
-            value = json.loads(written, parse_constant=_no_number)
-        except ValueError:
-            # No JSON: a bare word is the word itself.
-            value = written
-        address = f"/settings/{quote(scope, safe=':')}/{quote(key, safe='')}"
-        # What the scope held before, read first: the write replaces it.
-        held = ctx.client.get(address)
-        before = held.get("wert") if isinstance(held, dict) else None
-        if field is None:
-            stored = ctx.client.put(address, json={"wert": value})
-        else:
-            # Only this one field; the rest of the set stays as it is.
-            stored = ctx.client.patch(address, json={"wert": {field: value}})
-        stored = stored if isinstance(stored, dict) else {}
-        after = stored.get("wert")
-        name = f"{stored.get('bereich')}.{stored.get('schluessel')}"
-        if field is not None:
-            before = before.get(field) if isinstance(before, dict) else None
-            after = after.get(field) if isinstance(after, dict) else None
-            name = f"{name}.{field}"
-        # Before and after, as the service read them back.
-        ctx.screen.print_above(
-            _grid(
-                [
-                    (
-                        Text(name, style="exe.accent"),
-                        Text(_one_line(before), style="exe.muted"),
-                        Text(glyphs.glyph("arrow"), style="exe.muted"),
-                        Text(_one_line(after), style="exe.text"),
-                    )
-                ],
-                wide=3,
-            )
-        )
 
     # --- /export ---
 
@@ -752,42 +715,6 @@ class Commands(CommandSet):
             listed.extend(got)
             if len(got) < _PAGE:
                 return listed
-
-    # --- /tools ---
-
-    def tools(self, ctx: Context, argument: str) -> None:
-        word, name = _first_word(argument)
-        if word.lower() == _FORGET and name:
-            ctx.client.delete(f"/permissions/always-allow/{quote(name, safe='')}")
-            ctx.renderer.notice(ctx.texts.t("cli.tool_asks_again", name=name))
-            return
-        if argument:
-            ctx.renderer.error(ctx.texts.t("cli.werkzeug_syntax"))
-            return
-        answer = ctx.client.get("/tools")
-        answer = answer if isinstance(answer, dict) else {}
-        always = ctx.client.get("/permissions/always-allow")
-        always = always if isinstance(always, dict) else {}
-        offered = [tool for tool in answer.get("werkzeuge") or [] if isinstance(tool, dict)]
-        if not offered and not always:
-            ctx.renderer.notice(ctx.texts.t("cli.keine_werkzeuge"))
-            return
-        standing = ctx.texts.t("werkzeug.yes_dont_ask_again")
-        # A standing permission for a tool that is not offered right now is
-        # still on file and can still be taken back: it gets a row as well.
-        offered_names = {tool.get("name") for tool in offered}
-        listed = offered + [{"name": name} for name in always if name not in offered_names]
-        ctx.screen.print_above(
-            _grid(
-                (
-                    Text(glyphs.tool_glyph(str(tool.get("name") or "")), style="exe.tool"),
-                    Text(str(tool.get("name") or ""), style="exe.tool"),
-                    Text(str(tool.get("server") or ""), style="exe.muted"),
-                    Text(standing if tool.get("name") in always else "", style="exe.green"),
-                )
-                for tool in listed
-            )
-        )
 
     # --- /theme, /lang ---
 

@@ -42,9 +42,11 @@ import threading
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import httpx
 
+from app import atomic_file
 from app.no_console import no_window
 
 log = logging.getLogger(__name__)
@@ -444,13 +446,33 @@ def _groesse(url: str) -> int:
         return int(antwort.headers.get("content-length") or 0)
 
 
-class Serverdownload:
-    """One fetch of the model server, watchable while it runs."""
+class ServerRestart(Protocol):
+    """What a fetch asks of the servers that run while a new build comes in
+    (``app/server_restart.py``): end them, start them again once the new
+    build is the one that starts — False when that failed — and forget them
+    when the fetch is over."""
 
-    def __init__(self, ordner: Path) -> None:
+    def stop(self) -> None: ...
+
+    def start(self) -> bool: ...
+
+    def forget(self) -> None: ...
+
+
+class Serverdownload:
+    """One fetch of the model server, watchable while it runs.
+
+    ``restart`` stands for the servers that run when a build comes in: they
+    start again on it, and the build that ran until then stays on disk until
+    every one of them has loaded its model. Without one the old builds go as
+    soon as the new one is unpacked.
+    """
+
+    def __init__(self, ordner: Path, restart: ServerRestart | None = None) -> None:
         self._ordner = Path(ordner).expanduser() / ORDNER
         self._stand: Fortschritt | None = None
         self._schloss = threading.Lock()
+        self._restart = restart
 
     def stand(self) -> Fortschritt | None:
         return self._stand
@@ -560,13 +582,70 @@ class Serverdownload:
             with _unpacking_lock:
                 _unpacking.discard(hidden)
 
-        self._remove_other_builds(folder.name)
+        if not self._install(folder):
+            log.warning(
+                "Model server program: build %s (%s) did not start the servers, build %s stays",
+                build, variante, previous or "none",
+            )
+            if self._stand:
+                self._stand.fehler = "fehlgeschlagen"
+            return
         log.info(
             "Model server program: build %s replaced by build %s (%s)",
             previous or "none", build, variante,
         )
         if self._stand:
             self._stand.fertig = True
+
+    def _install(self, folder: Path) -> bool:
+        """Makes the unpacked build the one that starts and starts the servers
+        that ran on it. The builds that ran until now are kept — with their
+        server put aside by name, so that the new build is the one found — and
+        go only once every server has loaded its model. When a server does
+        not start, the new build goes instead, the old one is the program
+        again and the servers start on it.
+        """
+        restart = self._restart
+        if restart is None:
+            self._remove_other_builds(folder.name)
+            return True
+        parked: list[tuple[Path, Path]] = []
+        try:
+            try:
+                restart.stop()
+                self._park_other_builds(folder.name, parked)
+                started = restart.start()
+            except Exception:  # noqa: BLE001 - the way back is the same for every reason
+                log.warning("Model server program: the new build could not be put in place", exc_info=True)
+                started = False
+            if started:
+                self._remove_other_builds(folder.name)
+                return True
+            try:
+                restart.stop()
+                shutil.rmtree(folder, ignore_errors=True)
+                for before, after in parked:
+                    atomic_file.rename_onto(after, before)
+                restart.start()
+            except Exception:  # noqa: BLE001 - nothing is left to fall back on, the log says so
+                log.warning("Model server program: the old build could not be put back", exc_info=True)
+            return False
+        finally:
+            restart.forget()
+
+    def _park_other_builds(self, current: str, parked: list[tuple[Path, Path]]) -> None:
+        """Puts the server of every other build aside by name, so that the
+        highest build that holds a server is ``current`` whatever its number.
+        The folders stay. Each rename is added to ``parked`` as (name, name
+        aside) the moment it is made, so a failure half way leaves the list
+        of what to put back."""
+        for entry in self._ordner.iterdir():
+            if entry.name == current or _bauordner_teile(entry.name) is None or not entry.is_dir():
+                continue
+            for server in sorted(entry.rglob(_server_name())):
+                aside = server.with_name(server.name + ".old")
+                atomic_file.rename_onto(server, aside)
+                parked.append((server, aside))
 
     def _laden(self, build: str, name: str, ziel: Path, fest: bool = False) -> None:
         """One archive, streamed to disk. Called once for the package and,

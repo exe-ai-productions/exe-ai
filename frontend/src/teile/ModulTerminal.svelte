@@ -23,9 +23,12 @@
   import Hauszeichen from './Hauszeichen.svelte'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import { slide } from 'svelte/transition'
+  import { tick, untrack } from 'svelte'
+  import { callSelection } from '../lib/callSelection.svelte.js'
   import { slideIfDrawn } from '../lib/slideIfDrawn.js'
   import { ansiZuHtml, withoutAnsi } from '../lib/ansi.js'
   import { hervorheben } from '../lib/einfaerben.js'
+  import { werkzeugErgebnisHtml } from '../lib/toolResult.js'
   import { KOPIER_ZEICHEN } from '../lib/markdown.js'
   import { melde } from '../lib/zustand.svelte.js'
   import { rollfade } from '../lib/rollfade.js'
@@ -38,13 +41,54 @@
   import { stopRun, terminal } from '../lib/terminalfenster.svelte.js'
   import { historie } from '../lib/werkzeughistorie.js'
   import Werkzeugzeichen from './Werkzeugzeichen.svelte'
+  import { serverLogo } from '../lib/serverlogo.svelte.js'
   import { nachrichtenAnzeige } from '../lib/zustand.svelte.js'
+  import { pictureFieldName } from '../lib/pictureFieldNames.js'
 
   /* Calls and runs in one list, in the order they happened. The messages
      carry the order; the runs are threaded in where they were started. */
   const eintraege = $derived(historie(nachrichtenAnzeige(), terminal.laeufe))
 
   let spur = $state(null)
+
+  /* The call that was clicked in the answer (lib/callSelection.svelte.js):
+     its line stands open and marked, in view, with the focus on it. The key
+     is the one the list gives a call (`lib/werkzeughistorie.js`): a shell
+     command with a run by the run's number, every other call by its
+     message and its place there. */
+  let selected = $state(null)
+  $effect(() => {
+    const counter = callSelection.counter
+    const key = callSelection.key
+    if (!key || !counter) return
+    untrack(() => {
+      // Read once: coming back to this tool later does not unfold it again.
+      callSelection.key = null
+      showCall(key)
+    })
+  })
+  const keyOf = (eintrag) =>
+    eintrag.art === 'aufruf' ? eintrag.schluessel : eintrag.art === 'lauf' ? `l${eintrag.lauf.lauf}` : null
+  async function showCall(key) {
+    const at = eintraege.findIndex((eintrag) => keyOf(eintrag) === key)
+    if (at === -1) {
+      selected = null
+      return
+    }
+    selected = key
+    if (eintraege[at].art === 'aufruf') {
+      if (!offene.has(`a${at}`)) klappen(`a${at}`)
+    } else {
+      const lauf = eintraege[at].lauf
+      if (!isBlockOpen(lauf)) toggleBlock(lauf)
+    }
+    // The list stays where the reader put it; the call is brought into view.
+    terminal.klebt = false
+    await tick()
+    const button = spur?.querySelector(`[data-key="${CSS.escape(key)}"]`)
+    button?.scrollIntoView({ block: 'nearest' })
+    button?.focus({ preventScroll: true })
+  }
 
   /* Which lines are unfolded — the same construction the chat's tool rows
      use (Nachricht.svelte, werkzeugKlappen): a Set, renewed on every
@@ -140,7 +184,7 @@
     {#if eintrag.art === 'trennung'}
       <div class="trennung"></div>
     {:else if eintrag.art === 'lauf'}
-      <div class="lauf">
+      <div class="lauf" class:selected={selected === `l${eintrag.lauf.lauf}`}>
         <div class="lkopf">
           <Leuchtpunkt
             farbe={punktfarbe(eintrag.lauf)}
@@ -153,6 +197,7 @@
                  prompt and not a command, so it is not syntax-coloured. -->
             <span class="bildzeichen"><Hauszeichen zeichen="bild" groesse="klein" /></span>
             <button class="befehl klartext" class:umbruch={isBlockOpen(eintrag.lauf)}
+                    data-key={`l${eintrag.lauf.lauf}`}
                     aria-expanded={isBlockOpen(eintrag.lauf)}
                     onclick={() => toggleBlock(eintrag.lauf)}>{eintrag.lauf.befehl}</button>
           {:else}
@@ -161,6 +206,7 @@
                  and its folder and output stand below — or folds it to
                  this one line again. -->
             <button class="befehl" class:umbruch={isBlockOpen(eintrag.lauf)}
+                    data-key={`l${eintrag.lauf.lauf}`}
                     aria-expanded={isBlockOpen(eintrag.lauf)}
                     onclick={() => toggleBlock(eintrag.lauf)}>{@html hervorheben(eintrag.lauf.befehl, 'bash')}</button>
           {/if}
@@ -215,10 +261,14 @@
           <!-- The same shape a tool call's own arguments already use
                (.aufruf-text/.wz-argumente, below) — a drawing job is a call
                too, field by field, not a paragraph of prose. -->
-          <div class="aufruf-text" use:rollfade transition:slide={{ duration: 200 }}>
+          <!-- Every line shows in full: the card is as tall as its dials
+               and the history around it scrolls, so no box of its own cuts
+               the lower ones off. The names are the words the studio and
+               the picture server carry for the same fields. -->
+          <div class="aufruf-text picture-values" transition:slide={{ duration: 200 }}>
             <dl class="wz-argumente">
               {#each Object.entries(eintrag.lauf.regler) as [schluessel, wert] (schluessel)}
-                <dt>{schluessel}</dt>
+                <dt>{pictureFieldName(schluessel, t)}</dt>
                 <dd>{@html wertHtml(wert)}</dd>
               {/each}
             </dl>
@@ -231,9 +281,11 @@
            "work", red the moment it failed. A click unfolds the full
            arguments and the result, coloured the same way any code block
            in the program is. -->
-      <div class="werkzeugblock" class:misslungen={eintrag.fehlgeschlagen}>
-        <button class="aufruf" class:offen={offene.has(`a${i}`)} onclick={() => klappen(`a${i}`)}>
-          <span class="zeichen"><Werkzeugzeichen name={eintrag.name} server={eintrag.server} /></span>
+      <div class="werkzeugblock" class:misslungen={eintrag.fehlgeschlagen}
+           class:selected={selected === eintrag.schluessel}>
+        <button class="aufruf" class:offen={offene.has(`a${i}`)} data-key={eintrag.schluessel}
+                aria-expanded={offene.has(`a${i}`)} onclick={() => klappen(`a${i}`)}>
+          <span class="zeichen"><Werkzeugzeichen name={eintrag.name} server={eintrag.server} logo={serverLogo(eintrag.server)} /></span>
           <span class="name werkzeugname">{eintrag.name}</span>
           {#if eintrag.kurz}<span class="kurz">{eintrag.kurz}</span>{/if}
           <!-- Duration and the outcome mark share the row's far end — one
@@ -258,7 +310,7 @@
               </dl>
             {/if}
             {#if eintrag.ergebnis}
-              <pre class="wz-ergebnis"><code>{@html hervorheben(eintrag.ergebnis)}</code></pre>
+              <pre class="wz-ergebnis"><code>{@html werkzeugErgebnisHtml(eintrag.ergebnis)}</code></pre>
             {:else}
               <p class="wz-leer">
                 {eintrag.ergebnis === null ? t('werkzeug.laeuft_noch') : t('werkzeug.nichts_mitgeschrieben')}
@@ -325,6 +377,12 @@
     overflow-x: hidden;
     font-size: 12px;
   }
+  /* A picture's dials are the whole of the card, not a part of a longer
+     answer: no height cap, no scrolling box inside the scrolling list. */
+  .aufruf-text.picture-values {
+    max-height: none;
+    overflow-y: visible;
+  }
   .wz-argumente {
     margin: 0 0 8px;
     display: grid;
@@ -363,6 +421,33 @@
   .wz-leer {
     margin: 0;
     color: var(--text-still);
+  }
+  /* A change block's own rows, inside the same <pre> — the block-level
+     element is what lets the tinted ground reach the full width. */
+  .wz-ergebnis :global(.diff-zeile) {
+    display: block;
+  }
+  .wz-ergebnis :global(.diff-entfernt) {
+    color: var(--rot);
+    background: color-mix(in srgb, var(--rot) 12%, transparent);
+  }
+  .wz-ergebnis :global(.diff-hinzu) {
+    color: var(--gruen);
+    background: color-mix(in srgb, var(--gruen) 12%, transparent);
+  }
+  .wz-ergebnis :global(.diff-kopf) {
+    color: var(--code-komm);
+  }
+  .wz-ergebnis :global(.diff-hinweis) {
+    color: var(--code-komm);
+    font-style: italic;
+  }
+  /* The call that was clicked in the answer stands marked: the glass
+     under the pointer and its fine edge, no colour of its own. */
+  .werkzeugblock.selected,
+  .lauf.selected {
+    background: var(--glass-hover);
+    box-shadow: inset 0 0 0 1px var(--glass-card-line);
   }
   .aufruf .zeichen {
     flex: none;

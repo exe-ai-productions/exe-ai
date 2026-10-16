@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-from cli import commands, render
+from cli import chat_actions, commands, render
 from cli.interfaces import Asker, Context, Entry, Screen
 from tests.cli.stub_service import StubService
 
@@ -42,7 +42,7 @@ class Listed(Asker):
     def __init__(self) -> None:
         self.entries: list[Entry] = []
 
-    def choose(self, entries: Any) -> int | None:
+    def choose(self, entries: Any, head: str = "") -> int | None:
         self.entries = list(entries)
         return None
 
@@ -99,5 +99,5 @@ def test_a_stamp_that_is_no_time_stands_as_it_came_in_both(
 
 
 def test_one_function_formats_the_time_for_both() -> None:
-    assert commands.local_time is render.local_time
+    assert chat_actions.local_time is render.local_time
     assert render.local_time(None) == ""

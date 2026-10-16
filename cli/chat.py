@@ -13,10 +13,11 @@ import re
 import threading
 import time
 from collections.abc import Iterator, Mapping
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
-from cli import service, themes
+from cli import attachments, service, themes
 from cli.client import ServiceError, ServiceUnreachable
 from cli.interfaces import Context, Event
 from cli.render import clock
@@ -47,6 +48,7 @@ def new_chat(ctx: Context) -> None:
     """
     ctx.session.chat = None
     ctx.session.unnamed = True
+    ctx.session.pending_title = None
     ctx.screen.update_status(chat_title=fresh_title(ctx))
 
 
@@ -60,8 +62,9 @@ def service_chat(ctx: Context) -> dict[str, Any]:
     """The open chat as the service has it — created there now, where the
     open one is a new chat: something is about to be written into it.
 
-    No title is sent: the service names a fresh chat itself, in the language
-    of the request, and its first message names it after that. The model
+    No title is sent unless the user named the chat already: the service
+    names a fresh chat itself, in the language of the request, and its first
+    message names it after that. The model
     goes along, so the window shows the chat with the same one. The folder
     the client was started in follows at once, as the folder the chat
     works in (``_work_in_start_folder``).
@@ -69,7 +72,11 @@ def service_chat(ctx: Context) -> dict[str, Any]:
     session = ctx.session
     if session.chat is None:
         wanted = {"endpoint_id": session.endpoint_id} if session.endpoint_id else {}
+        if session.pending_title:
+            # A name given before the chat existed goes out with it.
+            wanted["title"] = session.pending_title
         created: dict[str, Any] = ctx.client.post("/chats", json=wanted)
+        session.pending_title = None
         session.chat = created
         ctx.screen.update_status(chat_title=created.get("title"))
         _work_in_start_folder(ctx, created)
@@ -121,6 +128,27 @@ def _work_in_start_folder(ctx: Context, created: Mapping[str, Any]) -> None:
     except ServiceUnreachable:
         # If the service is really gone, the message that follows says so.
         return
+
+
+def latest_chat(ctx: Context) -> dict[str, Any] | None:
+    """The chat that was used last: the one with the newest change of all
+    that are not archived — not the first the service lists, which is a
+    pinned one. Returns ``None`` where there is no chat."""
+    listed = ctx.client.get("/chats", params={"limit": _CHAT_PAGE})
+    chats = [entry for entry in listed if isinstance(entry, dict)] if isinstance(listed, list) else []
+    return max(chats, key=_changed_at) if chats else None
+
+
+def _changed_at(entry: Mapping[str, Any]) -> float:
+    """When a chat was last changed, as a number that can be compared; a
+    stamp that reads as no time sorts last."""
+    try:
+        stamp = datetime.fromisoformat(str(entry.get("updated_at")))
+    except ValueError:
+        return float("-inf")
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp.timestamp()
 
 
 def find_chat(ctx: Context, wanted: str) -> dict[str, Any] | None:
@@ -333,13 +361,33 @@ def _name_after(ctx: Context, text: str) -> None:
 # --- One round ----------------------------------------------------------------
 
 
-def send(ctx: Context, text: str) -> None:
+def send(
+    ctx: Context,
+    text: str,
+    *,
+    skill: str | None = None,
+    title_from: str | None = None,
+    attach: bool = True,
+) -> None:
     """Sends one message and follows the answer to its end. The first one
-    of a new chat is what creates that chat on the service."""
+    of a new chat is what creates that chat on the service.
+
+    ``skill`` names the skill the message starts with: the content stays as
+    it was typed and the name goes along. A new chat is named after
+    ``title_from`` — the words behind the skill — where there are any.
+    The files the text names behind an ``@`` go along (``attach``)."""
     session = ctx.session
     ctx.renderer.user_message(text)
     chat = service_chat(ctx)
     message: dict[str, Any] = {"chat_id": chat["id"], "content": text}
+    if skill:
+        message["skill"] = skill
+    if attach:
+        attached = attachments.attach(ctx, text, chat["id"])
+        if attached.images:
+            message["bilder"] = attached.images
+        if attached.documents:
+            message["dokumente"] = attached.documents
     if session.endpoint_id:
         message["endpoint_id"] = session.endpoint_id
     if session.thinking is not None:
@@ -347,7 +395,7 @@ def send(ctx: Context, text: str) -> None:
     session.answering = True
     ctx.screen.set_activity(ctx.texts.t("status.erzeugt_antwort"))
     try:
-        _Round(ctx, text).follow(ctx.client.stream("/chat/completions", message))
+        _Round(ctx, title_from or text).follow(ctx.client.stream("/chat/completions", message))
     finally:
         session.answering = False
         session.generation_id = None

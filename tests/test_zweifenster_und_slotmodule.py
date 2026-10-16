@@ -268,11 +268,15 @@ def test_der_slot_haelt_die_beiden_leeren_auseinander():
     The slot's key folded the first into the second, which is what let the
     name heuristic put a projector back that had been switched off by hand.
     """
-    sauber = agentenmodellwahl.wahl_pruefen({"drafter": "", "vision": ""})
-    assert sauber == {"drafter": "", "vision": ""}
+    sauber = agentenmodellwahl.wahl_pruefen(
+        {"module": {"klein.gguf": {"drafter": "", "vision": ""}}}
+    )
+    assert sauber == {"module": {"klein.gguf": {"drafter": "", "vision": ""}}}
 
-    sauber = agentenmodellwahl.wahl_pruefen({"drafter": None, "vision": None})
-    assert sauber == {"drafter": None, "vision": None}
+    sauber = agentenmodellwahl.wahl_pruefen(
+        {"module": {"klein.gguf": {"drafter": None, "vision": None}}}
+    )
+    assert sauber == {"module": {"klein.gguf": {"drafter": None, "vision": None}}}
 
     # A key that was not sent still does not appear — the row is written in
     # pieces, and a missing piece is not an answer.
@@ -285,9 +289,11 @@ def test_die_startwerte_des_slots_tragen_das_ausdrueckliche_keins(client: TestCl
     client.put(
         "/api/v1/settings/global/agentenmodell",
         json={"wert": {"an": True, "sorte": "slot", "wert": "klein.gguf",
-                       "drafter": "", "vision": ""}},
+                       "module": {"klein.gguf": {"drafter": "", "vision": ""}}}},
     )
-    werte = agentenmodellwahl.slot_startwerte(client.app.state.repositories)
+    werte = agentenmodellwahl.slot_startwerte(
+        client.app.state.repositories, "klein.gguf"
+    )
     assert werte["drafter"] == ""
     assert werte["vision"] == ""
 
@@ -317,8 +323,8 @@ def test_die_slotzeilen_zeigen_erst_das_gemerkte_dann_das_erklaerte():
     koerper = quelle.split("function moduleUebernehmen()", 1)[1].split("\n  }", 1)[0]
     # The remembered answer first (a remembered "" counts, hence ??), then
     # what the manifest declared for this file.
-    assert "agentenmodell.drafter ?? z?.mtp" in koerper
-    assert "agentenmodell.vision ?? z?.mmproj" in koerper
+    assert "modul.drafter ?? z?.mtp" in koerper
+    assert "modul.vision ?? z?.mmproj" in koerper
     # And re-read when the file changes, because the manifest speaks per file.
     assert quelle.count("moduleUebernehmen()") >= 3
 
@@ -346,9 +352,12 @@ def test_ein_abgewaehlter_projektor_des_slots_bleibt_von_der_zeile_weg(
     def zeile(**werte) -> str:
         client.put(
             "/api/v1/settings/global/agentenmodell",
-            json={"wert": {"an": True, "sorte": "slot", "wert": "klein.gguf", **werte}},
+            json={"wert": {"an": True, "sorte": "slot", "wert": "klein.gguf",
+                           "module": {"klein.gguf": werte}}},
         )
-        start = agentenmodellwahl.slot_startwerte(client.app.state.repositories)
+        start = agentenmodellwahl.slot_startwerte(
+            client.app.state.repositories, "klein.gguf"
+        )
         return " ".join(
             runner.befehl(
                 "klein.gguf", start["kontext"], start["schichten"], 8099,
@@ -387,9 +396,12 @@ def test_ein_abgewaehltes_tempomodul_des_slots_bleibt_von_der_zeile_weg(
     def gestartet_mit(**werte) -> str | None:
         client.put(
             "/api/v1/settings/global/agentenmodell",
-            json={"wert": {"an": True, "sorte": "slot", "wert": "klein.gguf", **werte}},
+            json={"wert": {"an": True, "sorte": "slot", "wert": "klein.gguf",
+                           "module": {"klein.gguf": werte}}},
         )
-        start = agentenmodellwahl.slot_startwerte(client.app.state.repositories)
+        start = agentenmodellwahl.slot_startwerte(
+            client.app.state.repositories, "klein.gguf"
+        )
         runner = Modellrunner(ordner, programm=str(programm))
         try:
             return runner.starten(

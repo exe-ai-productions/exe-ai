@@ -20,7 +20,7 @@
   /* `eingebaut` is `null` where the caller cannot know — a tool row in a
      chat sees a server name and nothing else. Then the catalogue answers
      the way it answers a name it was not told the kind of. */
-  let { name = '', server = '', eingebaut = null, laeuft = false } = $props()
+  let { name = '', server = '', eingebaut = null, laeuft = false, logo = null } = $props()
 
   /* Minimum drawing time: fast calls (SearXNG in
      under a second) were done before the first stroke stood — the icon
@@ -62,7 +62,12 @@
   const istWerkzeug = $derived(Boolean(name))
 </script>
 
-{#if zeichen === 'globus'}
+{#if logo}
+  <!-- The logo a server of one's own sent along, already checked and
+       handed over as a picture of its own: it takes the place of the mark,
+       in the same box. An <img>, so a vector one runs nothing. -->
+  <img class="zeichen serverlogo" class:laeuft={animiert} src={logo} alt="" />
+{:else if zeichen === 'globus'}
   <svg
     class="zeichen"
     class:laeuft={animiert}
@@ -408,6 +413,9 @@
      sits with the failure, not here. */
   .zeichen.werkzeug {
     color: var(--werkzeug);
+  }
+  .serverlogo {
+    object-fit: contain;
   }
   /* The house's sign brings a size of its own; here it fills the box every
      mark has. */

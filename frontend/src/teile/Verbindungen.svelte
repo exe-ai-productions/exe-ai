@@ -1,5 +1,6 @@
 <script>
   import { rollfade } from '../lib/rollfade.js'
+  import { toRoot } from '../lib/rootPortal.js'
   /* The MCP server gallery — one card per server, and each card says what
      the server is for.
 
@@ -142,6 +143,10 @@
      for the table's own entries only: a server may be called any word, also
      one every object answers to. */
   const logoVon = (k) => (istKatalogName(k) && Object.hasOwn(LOGOS, nameVon(k)) ? LOGOS[nameVon(k)] : null)
+  /* The logo a server of one's own sent along (checked by the service, a
+     data URL), or nothing. Never for a shipped server's card: that one
+     wears its maker's vector above. */
+  const eigenLogoVon = (k) => (!k.katalog && k.eintrag?.logo) || null
   const kachelVon = (schluessel) => alle.find((k) => schluesselVon(k) === schluessel) || null
   const offeneKachel = $derived(menue ? kachelVon(menue.schluessel) : null)
 
@@ -267,6 +272,8 @@
       <span class="logo" aria-hidden="true">
         {#if logo}
           <svg viewBox={logo.vb} width="40" height="40">{@html logo.html}</svg>
+        {:else if eigenLogoVon(k)}
+          <img class="eigenlogo" src={eigenLogoVon(k)} width="40" height="40" alt="" />
         {:else}
           <Bereichszeichen zeichen="stecker" groesse={40} />
         {/if}
@@ -336,49 +343,56 @@
   {@const stand = zustand(k)}
   {@const name = menue.name}
   {@const logo = logoVon(k)}
-  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="schirm" onclick={schliessen}></div>
-  <div class="menue" class:oben={menue.nachOben}
-       style="top:{menue.top}px; left:{menue.left}px; {menue.nachOben ? 'transform:translateY(-100%);' : ''}">
-    <div class="mkopf">
-      <span class="mlogo" aria-hidden="true">
-        {#if logo}
-          <svg viewBox={logo.vb} width="20" height="20">{@html logo.html}</svg>
-        {:else}<Bereichszeichen zeichen="stecker" groesse={18} />{/if}
-      </span>
-      <span class="mtitel">{titelVon(k)}</span>
-      <span class="mstand" data-stand={stand}>{t(`verbindungen.stand_${stand}`)}</span>
-    </div>
+  <!-- The menu and its click-away shield stand at the root of the page, not
+       inside the scroller above: drawn inside the scroller's scroll-fade
+       mask they painted the area under the first row of cards black. -->
+  <div class="menu-layer" use:toRoot>
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div class="schirm" onclick={schliessen}></div>
+    <div class="menue" class:oben={menue.nachOben}
+         style="top:{menue.top}px; left:{menue.left}px; {menue.nachOben ? 'transform:translateY(-100%);' : ''}">
+      <div class="mkopf">
+        <span class="mlogo" aria-hidden="true">
+          {#if logo}
+            <svg viewBox={logo.vb} width="20" height="20">{@html logo.html}</svg>
+          {:else if eigenLogoVon(k)}
+            <img class="eigenlogo" src={eigenLogoVon(k)} width="20" height="20" alt="" />
+          {:else}<Bereichszeichen zeichen="stecker" groesse={18} />{/if}
+        </span>
+        <span class="mtitel">{titelVon(k)}</span>
+        <span class="mstand" data-stand={stand}>{t(`verbindungen.stand_${stand}`)}</span>
+      </div>
 
-    <!-- Reached once a server is connected or at least configured: a
-         card that still needs connecting carries the button into the MCP
-         sheet instead. A server on file whose key is missing comes here,
-         and the sheet is one row away. The sheet opens before the menu
-         closes: `k` follows the open menu and is gone once it closes. -->
-    {#if stand === 'schluessel_fehlt'}
-      <button class="mzeile alsknopf" onclick={() => { maskeOeffnen(k); schliessen() }}>
-        <span>{t('verbindungen.verbinden')}</span>
-        <span class="mwert">›</span>
-      </button>
-    {/if}
-    <div class="mzeile">
-      <span>{t('verbindungen.aktiv')}</span>
-      <Schalter an={k.eintrag.enabled} beschriftung={t('verbindungen.aktiv')}
-                onschalten={() => kippen(k.eintrag)} />
+      <!-- Reached once a server is connected or at least configured: a
+           card that still needs connecting carries the button into the MCP
+           sheet instead. A server on file whose key is missing comes here,
+           and the sheet is one row away. The sheet opens before the menu
+           closes: `k` follows the open menu and is gone once it closes. -->
+      {#if stand === 'schluessel_fehlt'}
+        <button class="mzeile alsknopf" onclick={() => { maskeOeffnen(k); schliessen() }}>
+          <span>{t('verbindungen.verbinden')}</span>
+          <span class="mwert">›</span>
+        </button>
+      {/if}
+      <div class="mzeile">
+        <span>{t('verbindungen.aktiv')}</span>
+        <Schalter an={k.eintrag.enabled} beschriftung={t('verbindungen.aktiv')}
+                  onschalten={() => kippen(k.eintrag)} />
+      </div>
+      {#if werkzeugzahl(k.eintrag)}
+        <button class="mzeile alsknopf" onclick={() => { schliessen(); zuWerkzeugen() }}>
+          <span>{t('verbindungen.werkzeuge')}</span>
+          <span class="mwert">{werkzeugzahl(k.eintrag)} ›</span>
+        </button>
+      {/if}
+      {#if status[name]?.verbunden}
+        <button class="mleise" onclick={() => vergessen(k.eintrag)}>{t('verbindungen.vergessen')}</button>
+      {/if}
+      <!-- Every server on file can be removed, a catalogue one too: removing
+           it takes its entry out of the file and leaves the card to be
+           connected again, with or without a key. -->
+      <button class="mleise gefahr" onclick={() => entfernen(k.eintrag)}>{t('verbindungen.entfernen')}</button>
     </div>
-    {#if werkzeugzahl(k.eintrag)}
-      <button class="mzeile alsknopf" onclick={() => { schliessen(); zuWerkzeugen() }}>
-        <span>{t('verbindungen.werkzeuge')}</span>
-        <span class="mwert">{werkzeugzahl(k.eintrag)} ›</span>
-      </button>
-    {/if}
-    {#if status[name]?.verbunden}
-      <button class="mleise" onclick={() => vergessen(k.eintrag)}>{t('verbindungen.vergessen')}</button>
-    {/if}
-    <!-- Every server on file can be removed, a catalogue one too: removing
-         it takes its entry out of the file and leaves the card to be
-         connected again, with or without a key. -->
-    <button class="mleise gefahr" onclick={() => entfernen(k.eintrag)}>{t('verbindungen.entfernen')}</button>
   </div>
 {/if}
 
@@ -449,6 +463,10 @@
     display: flex;
     align-items: center;
     gap: 12px;
+  }
+  .eigenlogo {
+    object-fit: contain;
+    display: block;
   }
   .logo {
     width: 40px;
@@ -562,15 +580,23 @@
     color: var(--text-leise);
   }
 
-  /* The click-away shield sits under the menu and over everything else. */
+  /* Only the carrier that moves the two layers to the root; it draws
+     nothing and takes no room. */
+  .menu-layer {
+    display: contents;
+  }
+  /* The click-away shield sits under the menu. Both stand at the root, at
+     the level the settings page itself has (20) plus one and two: over
+     the page, under the notifications (25), every window's veil (70) and the
+     status strip (80). */
   .schirm {
     position: fixed;
     inset: 0;
-    z-index: 80;
+    z-index: 21;
   }
   .menue {
     position: fixed;
-    z-index: 81;
+    z-index: 22;
     width: 236px;
     /* It floats over the page, so it wears the dense glass of every
        drop-down list, not the page's thin card glass. */
@@ -592,7 +618,9 @@
     align-items: center;
     gap: 8px;
     padding-bottom: 8px;
-    border-bottom: 1px solid var(--linie);
+    /* The page's card line: the menu stands at the root, where the page's
+       own --linie (set in Seitenrahmen.svelte) no longer reaches it. */
+    border-bottom: 1px solid var(--glass-card-line);
   }
   .mlogo {
     width: 20px;

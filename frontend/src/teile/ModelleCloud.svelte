@@ -30,9 +30,9 @@
   import { LOGOS } from '../lib/logos.js'
   import { t } from '../lib/texte.svelte.js'
   import { api } from '../lib/api.js'
-  import { frage, melde, modelleLaden } from '../lib/zustand.svelte.js'
+  import { frage, melde, modelleLaden, zustand } from '../lib/zustand.svelte.js'
   import {
-    modellwahl, auswahlLaden, istAn, schalten, anbieter,
+    modellwahl, auswahlLaden, istAn, schalten, anbieterAlle, alleAnbieterLaden,
     istGewaehlt, katalogVon, katalogSchalten, katalogAlle,
   } from '../lib/modelle.svelte.js'
 
@@ -58,7 +58,7 @@
      from the configuration, this is a word of ours. */
   const HINZU = 'hinzufuegen'
 
-  const haeuser = $derived(anbieter())
+  const haeuser = $derived(anbieterAlle())
   const gewaehltesHaus = $derived(
     haeuser.find((h) => h.id === gezeigt) ?? (gezeigt ? null : haeuser[0] ?? null),
   )
@@ -85,6 +85,16 @@
   $effect(() => {
     if (!offen) return
     auswahlLaden()
+  })
+
+  /* The full list — the unreachable providers too — is read when the menu
+     opens and again whenever the chat's list was read anew (every add,
+     removal or switch ends in such a read), so a provider that went down
+     or was just created shows here at once. */
+  $effect(() => {
+    if (!offen) return
+    void zustand.modelle
+    alleAnbieterLaden()
   })
 
   /* The vision word, by hand: a cloud provider's model list says nothing

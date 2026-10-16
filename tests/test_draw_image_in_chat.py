@@ -147,7 +147,7 @@ def test_the_answer_names_a_path_that_points_at_the_drawn_file(
     ))
     in_job = asyncio.run(bild_werkzeug.ausfuehren(
         {"prompt": "a dog"}, "/api/v1", ort(config, "images"), key,
-        job_id="a-job-no-chat-started", deliver_with="deliver_file",
+        deliver_with="deliver_file",
     ))
     assert "attached to this response, and saved as " in in_chat
     assert in_job.endswith(
@@ -206,7 +206,7 @@ def test_a_job_draws_into_the_pictures_folder_not_into_a_chat(tmp_path, monkeypa
     """A job has no answer for a picture to stand under: even with an answer
     named, the registry hands none on, and the request names no chat and no
     run."""
-    dienst = Bilddienst({})
+    dienst = Bilddienst()
     monkeypatch.setattr(bild_werkzeug.httpx, "AsyncClient", lambda timeout, headers: dienst)
     registry = WerkzeugRegistry([], bild_zugang=("http://x", tmp_path, "testschluessel"))
     text = asyncio.run(
@@ -223,7 +223,7 @@ def test_a_job_draws_into_the_pictures_folder_not_into_a_chat(tmp_path, monkeypa
 def test_a_chat_draw_names_its_chat_and_answer(tmp_path, monkeypatch):
     """In a chat the registry hands the answer on, and the request names the
     chat and the answer as its run."""
-    dienst = Bilddienst({})
+    dienst = Bilddienst()
     monkeypatch.setattr(bild_werkzeug.httpx, "AsyncClient", lambda timeout, headers: dienst)
     registry = WerkzeugRegistry([], bild_zugang=("http://x", tmp_path, "testschluessel"))
     text = asyncio.run(
@@ -335,7 +335,7 @@ def _draw_from(tmp_path, monkeypatch, named: str, *, folders, family: str = "sdx
     the picture ``named`` to draw from and ``folders`` as the run's own."""
     model = "model.safetensors"
     dienst = Bilddienst(
-        {"c1": {"modell": model}}, modelle=[model], familien={model: family},
+        modelle=[model], familien={model: family},
         vorgaben={"family": family, "standalone": False, "parts": {}},
     )
     monkeypatch.setattr(bild_werkzeug.httpx, "AsyncClient", lambda timeout, headers: dienst)
@@ -354,13 +354,11 @@ def _draw_from(tmp_path, monkeypatch, named: str, *, folders, family: str = "sdx
 def test_a_named_picture_goes_to_the_route_as_its_content(tmp_path, monkeypatch):
     """With an input picture the route is asked to draw from it: its bytes
     are handed in — not copied into the pictures folder — and the request
-    names it as the picture to start from. The window's own starting
-    picture and mask never travel."""
+    names it as the picture to start from. No mask travels."""
     shared = tmp_path / "shared"
     shared.mkdir()
     (shared / "dog.png").write_bytes(b"PNG-bytes-of-a-dog")
     dienst, call = _draw_from(tmp_path, monkeypatch, str(shared / "dog.png"), folders=[shared])
-    dienst._fenster["c1"].update({"startbild": "window.png", "maske": "mask.png"})
     text = asyncio.run(call())
     assert dienst.handed_in == [b"PNG-bytes-of-a-dog"]
     body = dienst.gezeichnet[-1]
@@ -417,27 +415,24 @@ def test_a_family_that_draws_from_no_picture_says_so(tmp_path, monkeypatch):
 
 
 def test_a_family_that_draws_from_no_text_names_where_the_user_changes_it(tmp_path, monkeypatch):
-    """A chat whose model cannot draw from text draws nothing, and the model
-    reads the two places the user can pick another one — neither of them
-    a part of the interface that is not there."""
+    """A default model that cannot draw from text draws nothing, and the
+    model reads the one place the user can pick another one."""
     family = image_families.get("wan")
     dienst, call = _draw_from(tmp_path, monkeypatch, "", folders=[], family="wan")
     text = asyncio.run(call())
     assert text == (
         f"The image was not generated: the selected model, {family.label}, cannot "
         "generate images from text. It edits existing images or creates videos. Ask the "
-        "user to select a text-to-image model and try again: under Images for this chat, "
-        "or as the default on the picture server page if the run has no chat."
+        "user to select a text-to-image model as the default on the picture server page and "
+        "try again."
     )
     assert "picture window" not in text
     assert dienst.gezeichnet == []
 
 
 def test_without_a_named_picture_the_draw_is_what_it_was(tmp_path, monkeypatch):
-    """Silence: no input picture, nothing handed in, no picture field — also
-    when the window itself keeps a starting picture."""
+    """Silence: no input picture, nothing handed in, no picture field."""
     dienst, call = _draw_from(tmp_path, monkeypatch, "", folders=[])
-    dienst._fenster["c1"].update({"startbild": "window.png"})
     asyncio.run(call())
     assert dienst.handed_in == []
     body = dienst.gezeichnet[-1]
@@ -467,36 +462,40 @@ def test_a_picture_outside_the_run_s_folders_is_refused(tmp_path, monkeypatch):
 # --- What the model is told a value is, is what the picture is drawn with ----
 
 
-def _chat_set_to(client: TestClient, chat_id: str, **values) -> None:
-    """This chat's own picture values: the folder's model, read as SDXL, and
-    what the test sets beside it — written the way the interface writes them."""
-    answer = client.put(
-        f"/api/v1/settings/chat:{chat_id}/bildfenster",
-        json={"wert": {"modell": "base.safetensors", "familie": "sdxl", **values}},
+def _model_values(client: TestClient, **values) -> None:
+    """The values the user set for the folder's model on the picture server
+    page — the one place the tool's defaults come from besides its family's
+    start."""
+    from app import bildmodellwerte
+
+    client.app.state.repositories.einstellungen.setzen(
+        "global", bildmodellwerte.SCHLUESSEL, {"base.safetensors": values},
     )
-    assert answer.status_code == 200, answer.text
 
 
-def _fields(client: TestClient, config: Config, chat_id: str | None) -> dict:
-    """The fields of the tool as this chat's run is offered it."""
-    window = bild_werkzeug.fensterbild(client.app.state.repositories, chat_id, config)
+def _fields(client: TestClient, config: Config) -> dict:
+    """The fields of the tool as a run is offered it."""
+    window = bild_werkzeug.fensterbild(client.app.state.repositories, config)
     tool = bild_werkzeug.werkzeug_beschreibung(window.familie, values=window.values)
     return tool.schema["properties"]
 
 
 def test_each_field_defaults_to_the_value_the_next_picture_is_drawn_with(
-    painter, client, config, chat_id, tmp_path
+    painter, client, config, chat_id, tmp_path, monkeypatch
 ):
-    """A chat set to 512 × 512 and 8 steps: the schema says so, field by
-    field, and a call that names no value is drawn with exactly those. A
-    sampler nobody chose has nothing to default to, the seed is random, and
-    what the chat never set starts where its family starts."""
-    _chat_set_to(client, chat_id, breite=512, hoehe=512, schritte=8, sampler="")
-    fields = _fields(client, config, chat_id)
+    """A model set to 512 × 512 and 8 steps: the schema says so, field by
+    field, and a call that names no value is drawn with exactly those. The
+    seed is random, and what the model has no value of its own for starts
+    where its family starts."""
+    from app import bildinhalt
+
+    monkeypatch.setattr(bildinhalt, "family", lambda path: "sdxl")
+    _model_values(client, breite=512, hoehe=512, schritte=8)
+    fields = _fields(client, config)
     assert [fields[name]["default"] for name in ("width", "height", "steps")] == [512, 512, 8]
-    assert "default" not in fields["sampler"]
     assert "default" not in fields["seed"]
     assert fields["cfg"]["default"] == image_families.get("sdxl").start.cfg
+    assert fields["sampler"]["default"] == image_families.get("sdxl").start.sampler
 
     answer = _answer_being_written(client, chat_id)
     text = _draw(client, tmp_path, chat_id, answer.id)
@@ -504,16 +503,18 @@ def test_each_field_defaults_to_the_value_the_next_picture_is_drawn_with(
     job = painter["jobs"][-1]
     assert (job.breite, job.hoehe, job.schritte) == (512, 512, 8)
     assert job.cfg == fields["cfg"]["default"]
-    assert job.sampler == ""
 
 
 def test_a_size_the_user_asked_for_is_still_drawn_and_changes_no_setting(
-    painter, client, config, chat_id, tmp_path
+    painter, client, config, chat_id, tmp_path, monkeypatch
 ):
     """Silence: a value the model does send goes to the painter for that one
-    picture, and the chat's own values — and with them the defaults the
+    picture, and the model's own values — and with them the defaults the
     model reads next — stay what they were."""
-    _chat_set_to(client, chat_id, breite=512, hoehe=512, schritte=8)
+    from app import bildinhalt
+
+    monkeypatch.setattr(bildinhalt, "family", lambda path: "sdxl")
+    _model_values(client, breite=512, hoehe=512, schritte=8)
     answer = _answer_being_written(client, chat_id)
     text = asyncio.run(
         bild_werkzeug.ausfuehren(
@@ -524,26 +525,23 @@ def test_a_size_the_user_asked_for_is_still_drawn_and_changes_no_setting(
     assert text.startswith("The image was generated"), text
     job = painter["jobs"][-1]
     assert (job.breite, job.hoehe, job.schritte) == (768, 512, 8)
-    fields = _fields(client, config, chat_id)
+    fields = _fields(client, config)
     assert (fields["width"]["default"], fields["height"]["default"]) == (512, 512)
 
 
-def test_a_value_set_for_the_model_itself_is_the_default_where_the_chat_sets_none(
+def test_a_value_set_for_the_model_itself_is_the_default(
     painter, client, config, chat_id, tmp_path, monkeypatch
 ):
-    """A chat that names no model draws with the default model, and that
-    model's own values — set for it on the picture server page — lie over
-    its family's start. The model reads those, the sentence about the
-    negative prompt follows the CFG in force, and the picture is drawn with
-    them."""
-    from app import bildinhalt, bildmodellwerte
+    """The default model's own values — set for it on the picture server
+    page — lie over its family's start. The model reads those, the sentence
+    about the negative prompt follows the CFG in force, and the picture is
+    drawn with them."""
+    from app import bildinhalt
 
     monkeypatch.setattr(bildinhalt, "family", lambda path: "sdxl")
+    _model_values(client, cfg=1, schritte=6)
     repositories = client.app.state.repositories
-    repositories.einstellungen.setzen(
-        "global", bildmodellwerte.SCHLUESSEL, {"base.safetensors": {"cfg": 1, "schritte": 6}},
-    )
-    window = bild_werkzeug.fensterbild(repositories, chat_id, config)
+    window = bild_werkzeug.fensterbild(repositories, config)
     tool = bild_werkzeug.werkzeug_beschreibung(window.familie, values=window.values)
     fields = tool.schema["properties"]
     assert (fields["steps"]["default"], fields["cfg"]["default"]) == (6, 1)
@@ -563,9 +561,39 @@ def test_a_value_set_for_the_model_itself_is_the_default_where_the_chat_sets_non
     assert (job.breite, job.hoehe) == (start.width, start.height)
 
 
+def test_a_chat_s_own_picture_values_are_not_read(
+    painter, client, config, chat_id, tmp_path, monkeypatch
+):
+    """The picture studio and the chats share nothing: what an older chat
+    stored for its picture window changes neither the description the model
+    reads nor the picture it draws — the default model and its start do."""
+    from app import bildinhalt
+
+    monkeypatch.setattr(bildinhalt, "family", lambda path: "sdxl")
+    stored = client.put(
+        f"/api/v1/settings/chat:{chat_id}/bildfenster",
+        json={"wert": {"modell": "base.safetensors", "familie": "sdxl", "breite": 640,
+                       "hoehe": 384, "schritte": 3, "cfg": 2}},
+    )
+    assert stored.status_code == 200, stored.text
+    fields = _fields(client, config)
+    start = image_families.get("sdxl").start
+    assert [fields[name]["default"] for name in ("width", "height", "steps", "cfg")] == [
+        start.width, start.height, start.steps, start.cfg,
+    ]
+    answer = _answer_being_written(client, chat_id)
+    text = _draw(client, tmp_path, chat_id, answer.id)
+    assert text.startswith("The image was generated"), text
+    job = painter["jobs"][-1]
+    assert (job.breite, job.hoehe, job.schritte, job.cfg) == (
+        start.width, start.height, start.steps, start.cfg,
+    )
+
+
 def test_the_list_a_run_is_offered_carries_the_defaults():
-    """The registry hands the values of the window reading on to the list
-    the model reads; a caller that read none gets the fields without one."""
+    """The registry hands the values of the default model's reading on to the
+    list the model reads; a caller that read none gets the fields without
+    one."""
     registry = WerkzeugRegistry([], bild_zugang=("http://x", None, "testschluessel"))
     window = bild_werkzeug.FensterBild(
         image_families.get("sdxl"), {"width": 512, "height": 512, "steps": 8},
@@ -586,7 +614,7 @@ def test_the_sentences_and_fields_of_draw_image_stand_word_for_word(tmp_path, mo
     part of the interface that is not there."""
     family = image_families.get("flux")
     tool = bild_werkzeug.werkzeug_beschreibung(family)
-    setting = "Uses this chat's current setting by default."
+    setting = "Uses the image model's start value by default."
     assert {name: entry["description"] for name, entry in tool.schema["properties"].items()
             if name not in ("prompt", "negative_prompt", "image")} == {
         "width": f"Image width in pixels. {setting} Omit unless the user requests a specific width.",
@@ -598,9 +626,9 @@ def test_the_sentences_and_fields_of_draw_image_stand_word_for_word(tmp_path, mo
         "seed": "Seed. Random by default. Omit unless the user specifies a seed.",
         "guidance": f"Distilled guidance (Flux only). {setting} Omit unless the user requests a specific value.",
     }
-    assert f"Generates an image using {family.label}, the image model selected for this chat." in tool.beschreibung
+    assert f"Generates an image using {family.label}, the default image model." in tool.beschreibung
     assert (
-        "Size, steps, CFG, sampler, and seed use this chat's current settings by default. "
+        "Size, steps, CFG, sampler, and seed use the image model's start values by default. "
         "Specify a value only when the user requests it. It applies to this image only and "
         "does not change the settings."
     ) in tool.beschreibung
@@ -616,10 +644,10 @@ def test_the_sentences_and_fields_of_draw_image_stand_word_for_word(tmp_path, mo
             bild_werkzeug.ausfuehren(arguments, "http://x", tmp_path, "testschluessel")
         )
 
-    assert answer(Bilddienst({}), {"prompt": "a dog", "width": "wide", "steps": "many"}) == (
+    assert answer(Bilddienst(), {"prompt": "a dog", "width": "wide", "steps": "many"}) == (
         "The image was not generated because these values were invalid: width, steps. "
-        "Provide numbers and a supported sampler or scheduler, or omit them to use this "
-        "chat's current settings."
+        "Provide numbers and a supported sampler or scheduler, or omit them to use the "
+        "image model's start values."
     )
     assert answer(Bilddienst(modelle=[], programm_da=False), {"prompt": "a dog"}) == (
         "No image generator is installed. The user can download it from the plus menu under Images."

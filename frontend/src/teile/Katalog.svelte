@@ -230,11 +230,14 @@
         if (art === 'zubehoer' || art === 'bild') {
           try {
             const bild = await api.bildmodelle()
-            partLists = { vae: bild.vaes ?? [], text_encoders: bild.textversteher ?? [] }
+            partLists = {
+              vae: bild.vaes ?? [],
+              text_encoders: [...(bild.textversteher ?? []), ...(bild.sehteile ?? [])],
+            }
             liste.push(
               ...(bild.modelle ?? []),
               ...(bild.vaes ?? []), ...(bild.loras ?? []), ...(bild.yolos ?? []),
-              ...(bild.textversteher ?? []),
+              ...(bild.textversteher ?? []), ...(bild.sehteile ?? []),
             )
           } catch {
             // No picture server yet — cards just show as not installed.

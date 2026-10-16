@@ -8,6 +8,8 @@ round's 99 % beside a waiting time that was the first round's.
 
 from __future__ import annotations
 
+import pytest
+
 from app.api.v1.generierung import _messwerte_mergen
 from app.cache_over_rounds import cache_halves, cache_over_rounds
 from app.providers import mock_endpunkt
@@ -15,8 +17,11 @@ from app.providers.base import Stueck, Werkzeugaufruf
 from app.tempo_without_text import without_tempo
 from tests.conftest import GrosseWerkzeugkette, GrossesErgebnis, provider_setzen, senden
 from tests.test_auftraege_api import mcp_client as _mcp_client
+from tests.test_openai_provider import _einsammeln, _provider
+from tests.test_openai_provider import modellserver as _modellserver
 
 mcp_client = _mcp_client
+modellserver = _modellserver
 
 
 def _tool_round(**more) -> dict:
@@ -242,3 +247,103 @@ def test_the_numbers_under_a_tool_answer_come_from_the_text_and_from_every_round
     # 16100 cached of 24250 read over all three rounds, not the last one's 99 %.
     assert (stats["cache_tokens"], stats["eingelesen_tokens"]) == (16100, 8150)
     assert stats["prompt_cache_percent"] == 66
+
+
+# --- Off a llama.cpp stream, round by round ----------------------------------
+
+
+def _tool_stream(cache: int | None, fresh: int | None, whole: int | None) -> list[dict]:
+    """What llama.cpp sends for a round that ends in a tool call: the call,
+    the packet naming why it stopped, and then — in a packet of its own,
+    without a choice — the usage and the timings of the round. A round of a
+    server that names no cache sends no closing numbers at all."""
+    pakete: list[dict] = [
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "call_1", "function": {"name": "lookup", "arguments": "{}"}}
+        ]}, "index": 0}]},
+        {"choices": [{"delta": {}, "finish_reason": "tool_calls", "index": 0}]},
+    ]
+    if cache is not None:
+        pakete.append(_closing_packet(cache, fresh, whole))
+    return pakete
+
+
+def _text_stream(cache: int, fresh: int, whole: int) -> list[dict]:
+    return [
+        {"choices": [{"delta": {"content": "done"}, "index": 0}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop", "index": 0}]},
+        _closing_packet(cache, fresh, whole),
+    ]
+
+
+def _closing_packet(cache: int, fresh: int | None, whole: int | None) -> dict:
+    return {
+        "choices": [],
+        "usage": {
+            "completion_tokens": 20,
+            "prompt_tokens": whole,
+            "prompt_tokens_details": {"cached_tokens": cache},
+        },
+        "timings": {
+            "cache_n": cache,
+            "prompt_n": fresh,
+            "prompt_ms": 1000.0,
+            "predicted_n": 20,
+            "predicted_ms": 400.0,
+        },
+    }
+
+
+async def _answer(modellserver, rounds: list[list[dict]]) -> dict:
+    """The stats an answer ends with: each round read off the wire by the
+    provider, then summed the way the chat sums them."""
+    merged: dict | None = None
+    for pakete in rounds:
+        modellserver.pakete = pakete
+        stuecke = await _einsammeln(_provider(modellserver.basis))
+        stats = next(s.daten for s in stuecke if s.sorte == "stats")
+        wrote_text = any(s.sorte == "content" for s in stuecke)
+        merged = _messwerte_mergen(merged, stats, wrote_text=wrote_text)
+    assert merged is not None
+    return merged
+
+
+@pytest.mark.asyncio
+async def test_the_closing_packet_of_every_tool_round_goes_into_the_share(modellserver):
+    stats = await _answer(
+        modellserver,
+        [
+            _tool_stream(cache=0, fresh=8000, whole=8000),
+            _tool_stream(cache=8000, fresh=120, whole=8120),
+            _text_stream(cache=8120, fresh=90, whole=8210),
+        ],
+    )
+    # 16120 of 24330 read came out of the cache: all three rounds, not the
+    # first and the last alone (8120 of 16210 would read 50).
+    assert (stats["cache_tokens"], stats["eingelesen_tokens"]) == (16120, 8210)
+    assert stats["prompt_cache_percent"] == 66
+    # What the speed and the wait say is unchanged by the share.
+    assert stats["tokens_pro_sekunde"] == 50.0
+    assert stats["einlese_sekunden"] == 3.0
+
+
+@pytest.mark.asyncio
+async def test_a_single_round_answer_shows_the_share_it_always_did(modellserver):
+    stats = await _answer(modellserver, [_text_stream(cache=900, fresh=100, whole=1000)])
+    assert (stats["cache_tokens"], stats["eingelesen_tokens"]) == (900, 100)
+    assert stats["prompt_cache_percent"] == 90
+
+
+@pytest.mark.asyncio
+async def test_a_round_whose_server_names_no_cache_is_no_miss(modellserver):
+    stats = await _answer(
+        modellserver,
+        [
+            _tool_stream(cache=0, fresh=1000, whole=1000),
+            _tool_stream(cache=None, fresh=None, whole=None),
+            _text_stream(cache=1100, fresh=100, whole=1200),
+        ],
+    )
+    # The middle round counts as nothing, not as a round of zero cache.
+    assert (stats["cache_tokens"], stats["eingelesen_tokens"]) == (1100, 1100)
+    assert stats["prompt_cache_percent"] == 50

@@ -37,7 +37,7 @@
   the shell, or tells it a word for its menu or a colour for its window.
 */
 
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 contextBridge.exposeInMainWorld('exeHuelle', {
   /* Calls back every time the shortcut fires. The page decides what that
@@ -121,7 +121,10 @@ contextBridge.exposeInMainWorld('exeHuelle', {
      with the drawing's size (`cols`, `rows`), the look and the language the
      page shows and the chat it has open, and answers with the process id —
      or with an `error` where no client could start. `write` sends what was
-     typed, `resize` the new size, `stop` ends the client. `onData` and
+     typed, `resize` the new size, `stop` ends the client. `pathOf` names
+     where a file dropped on the page lies on the disk — empty for one that
+     does not lie there; the page cannot read it off the file itself since
+     Electron 32. `onData` and
      `onExit` call back with the output and with the end, and hand back the
      way to stop listening. */
   terminal: {
@@ -129,6 +132,13 @@ contextBridge.exposeInMainWorld('exeHuelle', {
     write: (data) => ipcRenderer.send('terminal-write', String(data ?? '')),
     resize: (cols, rows) => ipcRenderer.send('terminal-resize', Number(cols) || 0, Number(rows) || 0),
     stop: () => ipcRenderer.send('terminal-stop'),
+    pathOf(file) {
+      try {
+        return String(webUtils.getPathForFile(file) || '')
+      } catch {
+        return ''
+      }
+    },
     onData(callback) {
       if (typeof callback !== 'function') return undefined
       const listener = (event, data) => callback(String(data ?? ''))

@@ -5,9 +5,9 @@ It goes the way the drawing tool goes (app/tools/bild_werkzeug.py): it calls
 this very service's picture route, which decides who paints, holds the
 one-picture lock and puts the finished file into the pictures folder — and,
 in a chat, into the answer being written. The route is asked for a video;
-everything else about the request is the video model's own start, with the
-values of the chat's picture window laid over where that window stands at
-this model.
+everything else about the request is the video model's own start. The
+picture studio's values are not read: the studio and the chats share
+nothing.
 
 A video has no time limit. It ends when it is finished or when the run that
 asked for it is stopped.
@@ -26,7 +26,7 @@ from typing import Any
 
 import httpx
 
-from app import bildfensterwahl, bildinhalt, bildrunner, image_families
+from app import bildinhalt, bildrunner, image_families
 from app.tools import bild_werkzeug
 from app.tools.mcp_client import MCPWerkzeug
 
@@ -61,8 +61,8 @@ NO_VIDEO_MODEL = (
 )
 # Nothing chooses among several video models by itself.
 MODEL_NOT_CHOSEN = (
-    "The video was not generated: several video models are installed, but none is selected "
-    "for this chat. Ask the user to select one under Images › Video."
+    "The video was not generated: several video models are installed, but none is the "
+    "default model. Ask the user to select one as the default on the picture server page."
 )
 
 # The start values of a video model the request carries, by their name in
@@ -146,14 +146,13 @@ async def ausfuehren(
     schluessel: str,
     antwort_id: str | None = None,
     chat_id: str | None = None,
-    job_id: str | None = None,
     deliver_with: str | None = None,
     abbruch: asyncio.Event | None = None,
     input_picture: Path | None = None,
 ) -> str:
     """Makes the video and reports what happened. The arguments are the
     drawing tool's own (``bild_werkzeug.ausfuehren``): the service's API
-    root and session key, the chat and its answer or the job, the tool this
+    root and session key, the chat and its answer, the tool this
     run hands files on with, the run's stop signal, and the picture to
     start from, already checked against the folders this run may read."""
     prompt = str(argumente.get("prompt") or "").strip()
@@ -167,7 +166,7 @@ async def ausfuehren(
         # No time limit: a video ends by itself or with the run's stop.
         async with httpx.AsyncClient(timeout=None, headers=headers) as client:
             made = await _make(
-                client, basis, prompt, negative, chat_id, job_id,
+                client, basis, prompt, negative, chat_id,
                 antwort_id if in_chat else None, abbruch, input_picture,
             )
     except (httpx.HTTPError, httpx.InvalidURL) as error:
@@ -200,16 +199,6 @@ async def ausfuehren(
     )
 
 
-def _whole_number(value: Any) -> int | None:
-    """A count the window stored — it keeps what was typed, so a number may
-    stand there as text. None for anything that is no count of at least one."""
-    try:
-        number = int(float(value))
-    except (TypeError, ValueError):
-        return None
-    return number if number >= 1 else None
-
-
 def _refused(answer: httpx.Response, body: dict[str, Any] | None) -> str:
     """What the model reads when a call on the way to the video failed: the
     route's own sentence, as it wrote it."""
@@ -222,7 +211,6 @@ async def _make(
     prompt: str,
     negative: str,
     chat_id: str | None,
-    job_id: str | None,
     antwort_id: str | None,
     abbruch: asyncio.Event | None,
     input_picture: Path | None,
@@ -255,17 +243,10 @@ async def _make(
     ]
     if not video_models:
         return NO_VIDEO_MODEL
-    if chat_id is None and job_id:
-        chat_id, refusal = await bild_werkzeug._chat_of_job(client, basis, job_id, VIDEO)
-        if refusal is not None:
-            return refusal
-    window, refusal = await bild_werkzeug._window_of_chat(client, basis, chat_id, VIDEO)
-    if refusal is not None:
-        return refusal
-    # The model: the one the chat's picture window stands at when that is a
+    # The model: the default model of the picture server when that is a
     # video model; else the one video model there is. Among several, nothing
     # chooses by itself.
-    standing = window.get("modell")
+    standing = state.get("standardmodell")
     if isinstance(standing, str) and standing in video_models:
         model = standing
     elif len(video_models) == 1:
@@ -294,17 +275,6 @@ async def _make(
     body: dict[str, Any] = {
         name: start[name] for name in _START_FIELDS if start.get(name) not in (None, "", {})
     }
-    if model == standing:
-        # The window stands at this very model: its own values are the
-        # person's, and win over the model's start — the video's length and
-        # rate among them. A video model the window does not stand at runs
-        # on its family's start alone, never on the size, steps or guidance
-        # of the picture model the window holds.
-        body.update(bildfensterwahl.draw_request(window))
-        for name in ("video_frames", "fps"):
-            count = _whole_number(window.get(name))
-            if count is not None:
-                body[name] = count
     body.update({"modell": model, "familie": family.name, "video": True, "prompt": prompt})
     if negative:
         body["negativ"] = negative

@@ -89,6 +89,7 @@
     /* An edit still waiting for its moment is kept for the family it was
        made in before the list moves on. */
     clearTimeout(stift)
+    pendingEdit = null
     if (stand && text !== stand.anweisungen[familie]) anweisungSichern(familie, text)
     familie = neu
     text = stand?.anweisungen[neu] ?? ''
@@ -98,13 +99,28 @@
      text travels as "none of the user's own", so a family set back to it
      follows the works text from then on. */
   let stift
+  // The edit that waits for its moment; the window going away does not wait.
+  let pendingEdit = null
   $effect(() => {
     const jetzt = text
     const name = familie
     if (!stand || jetzt === stand.anweisungen[name]) return
     clearTimeout(stift)
-    stift = setTimeout(() => anweisungSichern(name, jetzt), 600)
+    pendingEdit = { name, jetzt }
+    stift = setTimeout(() => {
+      pendingEdit = null
+      anweisungSichern(name, jetzt)
+    }, 600)
     return () => clearTimeout(stift)
+  })
+
+  // Kept at once when the window goes, not dropped with the timer.
+  $effect(() => () => {
+    if (!pendingEdit) return
+    clearTimeout(stift)
+    const { name, jetzt } = pendingEdit
+    pendingEdit = null
+    anweisungSichern(name, jetzt)
   })
 
   function anweisungSichern(name, jetzt) {

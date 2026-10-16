@@ -18,16 +18,22 @@ Three ways to name a picture, each with its own path:
   its first bytes — before the file itself is opened. A path that is
   outside, refused, missing or no picture is skipped; the rest still travel.
 * **A ``data:image/…`` URL** — the picture itself, sent as it is.
-* **An ``http(s)`` URL** — named, never fetched: every provider of this
-  house is handed pictures as data URLs, and fetching a page the model named
-  would be a request out of the house nobody asked for. The agent reads the
-  line and can fetch it with its own tools.
+* **An ``http(s)`` URL** — fetched here, once, when the job is sent, and
+  sent as a picture like the others: every provider of this house is handed
+  pictures as data URLs, and the agent's run never saw the page. The fetch
+  is the narrow kind: no more than the payload ceiling is read (counted as
+  it streams in), the kind is decided on the first bytes and not on the
+  address or the server's word, and an address that leads to a private,
+  local or link-local place — also by a redirect, each hop is looked at
+  again — is not fetched at all. A fetch that fails leaves the address
+  named, as a line: ``[Image attached: <url>]``.
 
 A model that cannot see gets a line per picture instead, so it knows there
 is one and where: ``[Image attached at: <path>]`` for a file,
 ``[Image attached: <url>]`` for an address. A data URL has no place to name
 and is left out for it. A picture whose payload is still above the vision
-payload ceiling after the smaller copy is made is not attached for any
+payload ceiling after the smaller copy is made — or an address whose
+picture is larger than the ceiling to begin with — is not attached for any
 model; a sentence says which one and why. Whatever goes wrong on the way
 leaves the task as plain text: a broken picture must not keep the agent
 from starting.
@@ -37,8 +43,13 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import tempfile
 from pathlib import Path
 from typing import Any, Callable
+
+import httpx
+
+from app.public_host import is_public
 
 log = logging.getLogger(__name__)
 
@@ -155,14 +166,90 @@ def _local(
     return _capped(TaskImage(source=str(path), kind="path", data_url=data_url))
 
 
+class _Refused(Exception):
+    """An address the fetch is not to go to."""
+
+
+class _TooLarge(Exception):
+    """The picture behind an address is larger than the ceiling."""
+
+
+def _look_at(request: httpx.Request) -> None:
+    """Runs before every request of a fetch, a redirect's next hop included."""
+    if request.url.scheme not in ("http", "https") or not is_public(request.url.host):
+        raise _Refused
+
+
+def _download(url: str, transport: httpx.BaseTransport | None) -> bytes:
+    """What the address serves, up to the ceiling. Raises ``_TooLarge`` over
+    it — told by the header where there is one, counted as the bytes arrive
+    where there is not — and ``_Refused`` or an ``httpx`` error where the
+    fetch is not to be or cannot be made."""
+    # No proxy from the environment: the address that was looked at must be
+    # the place the request goes to, not a proxy that reaches further.
+    with httpx.Client(
+        follow_redirects=True,
+        transport=transport,
+        trust_env=False,
+        event_hooks={"request": [_look_at]},
+    ) as client, client.stream("GET", url) as response:
+        response.raise_for_status()
+        announced = response.headers.get("content-length", "")
+        if announced.isdigit() and int(announced) > MAX_PAYLOAD_BYTES:
+            raise _TooLarge
+        body = bytearray()
+        for chunk in response.iter_bytes():
+            body.extend(chunk)
+            if len(body) > MAX_PAYLOAD_BYTES:
+                raise _TooLarge
+    return bytes(body)
+
+
+def _remote(name: str, transport: httpx.BaseTransport | None) -> TaskImage:
+    """The picture behind an address, or the address as it was named where
+    it cannot be fetched."""
+    from app.tools.datei_lesen import _bild_bereiten, medientyp
+
+    named = TaskImage(source=name, kind="url")
+    try:
+        raw = _download(name, transport)
+    except _TooLarge:
+        log.info("A picture for a job is not attached: the address serves more than the ceiling")
+        return dataclasses.replace(named, too_large=True)
+    except (_Refused, httpx.HTTPError, httpx.InvalidURL, ValueError):
+        # An address that is no address (a bad port, a host no name can be
+        # made of) is the same as one that cannot be fetched: the rest of the
+        # job's pictures must not go with it.
+        log.info("A picture for a job is only named: the address was not fetched")
+        return named
+    suffix = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}.get(medientyp(raw))
+    if suffix is None:
+        log.info("A picture for a job is only named: the address serves no png, jpeg or webp")
+        return named
+    # The picture is made ready where a file's is — the strip, the smaller
+    # copy, the data URL — so it goes through a file; the folder it lies in
+    # is also the data folder, so the copy goes away with it.
+    with tempfile.TemporaryDirectory() as folder:
+        file = Path(folder) / f"picture{suffix}"
+        file.write_bytes(raw)
+        data_url, _size = _bild_bereiten(file, folder)
+    return _capped(dataclasses.replace(named, data_url=data_url))
+
+
 def prepare(
-    names: list[str], folders: list[str], data_dir, may_read: Callable[[str], bool]
+    names: list[str],
+    folders: list[str],
+    data_dir,
+    may_read: Callable[[str], bool],
+    *,
+    transport: httpx.BaseTransport | None = None,
 ) -> list[TaskImage]:
     """Reads what is to be read. Blocking — reads files and may make a
     smaller copy — so a caller on the event loop runs it in a thread.
 
     ``folders`` are the folders the agent's run gets; ``may_read`` answers
     whether the permission check lets ``read_file`` read a path there.
+    ``transport`` is how an address is fetched; none is the real network.
 
     A picture that cannot be read is skipped on its own, and anything
     unexpected leaves no pictures at all rather than no job."""
@@ -181,7 +268,7 @@ def prepare(
                     log.info("A picture for a job is skipped: not a png, jpeg or webp data URL")
                 continue
             if kind == "url":
-                images.append(TaskImage(source=name, kind="url", position=position))
+                images.append(dataclasses.replace(_remote(name, transport), position=position))
                 continue
             try:
                 image = _local(name, folders, data_dir, may_read)
@@ -204,10 +291,10 @@ def for_model(images: list[TaskImage], vision: bool) -> tuple[list[str], list[st
     for image in images:
         if image.too_large:
             lines.append(_too_large_sentence(image, image.position))
-        elif image.kind == "url":
-            lines.append(f"[Image attached: {image.source}]")
         elif vision and image.data_url:
             urls.append(image.data_url)
+        elif image.kind == "url":
+            lines.append(f"[Image attached: {image.source}]")
         elif image.kind == "path":
             lines.append(f"[Image attached at: {image.source}]")
     return urls, lines

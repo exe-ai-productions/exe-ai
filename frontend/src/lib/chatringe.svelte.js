@@ -60,6 +60,17 @@ export function fragtNach(chatId) {
   )
 }
 
+/* The three lists a row looks itself up in, each turned into a set ONCE per
+   change. A row used to search the chat list and two id lists on its own;
+   with a couple of thousand rows that is millions of reads of reactive
+   arrays every time the list changes, and the page stood still for
+   seconds. */
+const laeuftInDerListe = $derived.by(
+  () => new Set(zustand.chats.filter((c) => c.laeuft).map((c) => c.id)),
+)
+const fehlerMenge = $derived(new Set(fehlerChats.liste))
+const fertigMenge = $derived(new Set(zustand.fertigeChats))
+
 export function ringFarbe(chatId) {
   if (!chatId) return 'leer'
   /* `zustand.laeuft` only ever hears about a run THIS window started or
@@ -67,15 +78,14 @@ export function ringFarbe(chatId) {
      next chat list reload, never sets it. The chat list itself now carries
      the service's own answer, so a run neither started nor
      watched here still lights the row up the moment the list is current. */
-  const inDerListe = zustand.chats.find((c) => c.id === chatId)
   return ringAus({
     /* An agent this chat started, standing on a question of its own, lights
        the row too: its box stands only in this chat, so from any other one
        the row is where it shows. Not part of `fragtNach` — that one names
        what stops the chat's own run, and the agent's question does not. */
     fragt: fragtNach(chatId) || agentAsks(chatId),
-    laeuft: Boolean(zustand.laeuft[chatId]) || Boolean(inDerListe?.laeuft),
-    fehler: fehlerChats.liste.includes(chatId),
-    fertig: zustand.fertigeChats.includes(chatId),
+    laeuft: Boolean(zustand.laeuft[chatId]) || laeuftInDerListe.has(chatId),
+    fehler: fehlerMenge.has(chatId),
+    fertig: fertigMenge.has(chatId),
   })
 }

@@ -701,8 +701,7 @@ def test_the_answer_draws_the_written_call_as_a_running_tool_row():
     """Read off the answer's component: a section still being written is
     drawn from its name and count as a call without a result — the running
     row's dot — and says the notice's own sentence, no new text; the count
-    stands in figures of one width. A bundle names the call being written
-    instead of calling it running."""
+    stands in figures of one width."""
     message = MESSAGE.read_text(encoding="utf-8")
     assert "? { ...a, werkzeug: unbegunCall(a.writing) }" in message
     unbegun_call = _cut(message, "  function unbegunCall(writing) {", "\n  }\n")
@@ -710,20 +709,15 @@ def test_the_answer_draws_the_written_call_as_a_running_tool_row():
         assert field in unbegun_call, field
     snippet = _cut(message, "{#snippet beingWritten(werkzeug)}", "{/snippet}")
     assert "textPieces('werkzeug.schreibt', { name: werkzeug.name, zeichen: werkzeug.written })" in snippet
-    assert '<span class="werkzeugname">{piece.wert}</span>' in snippet
+    assert '<span class="wz-name">{piece.wert}</span>' in snippet
     assert '<span class="wz-count">{piece.wert}</span>' in snippet
-    row = _cut(message, "{#snippet werkzeugEintrag(teil, i, imBuendel)}", "{/snippet}")
-    assert "{#if teil.werkzeug.written != null}\n        {@render beingWritten(teil.werkzeug)}" in row
-    # Nothing to unfold before the call has begun.
-    assert "disabled={teil.werkzeug.unbegun}" in row
-    assert "{#if offeneTeile.has(i) && !teil.werkzeug.unbegun}" in row
-    count = _cut(message, "  .werkzeug-kopf .wz-count {", "}")
+    row = _cut(message, "{#snippet callRow(teil, i)}", "{/snippet}")
+    assert "{#if werkzeug.written != null}\n      {@render beingWritten(werkzeug)}" in row
+    # Nothing to open in the terminal before the call has begun.
+    assert "disabled={werkzeug.unbegun}" in row
+    count = _cut(message, "  .wz-count {", "}")
     assert "font-variant-numeric: tabular-nums" in count
     assert "font-family: var(--schrift-fest)" in count
-    bundle = _cut(message, "{#if eintrag.art === 'buendel'}", "{#if offen}")
-    assert "openCall(\n            eintrag.eintraege.filter(({ teil }) => !teil.werkzeug?.unbegun),\n" in bundle
-    assert "            wartetAufNutzer,\n" in bundle
-    assert "{#if written}\n                {@render beingWritten(written)}" in bundle
     # The sentence is the one the notice over the input says, in both languages.
     for language in ("de", "en"):
         catalogue = json.loads((WURZEL / "app" / "locales" / f"{language}.json").read_text(encoding="utf-8"))
@@ -731,129 +725,41 @@ def test_the_answer_draws_the_written_call_as_a_running_tool_row():
         assert "{name}" in sentence and "{zeichen}" in sentence, sentence
 
 
-# --- The bundle row does not say "running" for a call that waits ------------
-
-BUENDEL = FRONTEND / "src" / "lib" / "werkzeugbuendel.js"
-
-
-def _bundle_run(js: str) -> dict:
-    """Run a piece of JS against the shipped bundle module and read its report."""
-    with _pruefordner() as ordner:
-        treiber = ordner / "pruefung.mjs"
-        treiber.write_text(
-            f"import * as b from {BUENDEL.as_uri()!r}\n{js}\n"
-            "console.log('---BERICHT---' + JSON.stringify(report))\n",
-            encoding="utf-8",
-        )
-        result = subprocess.run(
-            ["node", treiber.name], cwd=ordner, capture_output=True, text=True, timeout=120
-        )
-    assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]
-    return json.loads(result.stdout.split("---BERICHT---", 1)[1].strip())
-
-
-_BUNDLE_ENTRIES = """
-const call = (id, name, result = null) => ({
-  teil: { art: 'werkzeug', werkzeug: { aufruf_id: id, name, ergebnis: result, fehlgeschlagen: false } },
-})
-"""
-
-
-@node_da
-def test_a_call_that_waits_for_the_reader_is_named_without_running():
-    report = _bundle_run(_BUNDLE_ENTRIES + """
-    const entries = [call('a', 'read_file', 'ok'), call('b', 'run_command')]
-    const report = { open: b.openCall(entries, (id) => id === 'b') }
-    """)
-
-    assert report["open"] == {"name": "run_command", "going": False, "background": False}
-
-
-@node_da
-def test_silence_a_call_that_goes_is_running_and_so_is_one_that_was_answered():
-    report = _bundle_run(_BUNDLE_ENTRIES + """
-    const entries = [call('a', 'read_file', 'ok'), call('b', 'run_command')]
-    const report = {
-      none: b.openCall(entries, () => false),
-      other: b.openCall(entries, (id) => id === 'a'),
-    }
-    """)
-
-    assert report["none"] == {"name": "run_command", "going": True, "background": False}
-    # A question standing for another call does not touch this one.
-    assert report["other"] == {"name": "run_command", "going": True, "background": False}
-
-
-@node_da
-def test_silence_a_bundle_where_everything_is_done_names_nothing():
-    report = _bundle_run(_BUNDLE_ENTRIES + """
-    const entries = [call('a', 'read_file', 'ok'), call('b', 'run_command', 'ok')]
-    const report = { open: b.openCall(entries, () => true) }
-    """)
-
-    assert report["open"] is None
-
-
-def test_the_row_says_running_only_for_a_call_that_goes():
-    """Source guard of ``Nachricht.svelte``: the word stands inside the
-    ``going`` branch, the name beside it stands either way."""
+def test_the_row_of_a_call_says_its_word_only_to_who_does_not_see_the_dot():
+    """Source guard of ``Nachricht.svelte``: no word stands at the end of a
+    call's row, so none of them wanders with the width of the answer. The
+    words are the label of the row, in this order: running in the
+    background, finished and unread, the exit code, failed, waiting,
+    running."""
     message = MESSAGE.read_text(encoding="utf-8")
-    bundle = _cut(message, "{#if eintrag.art === 'buendel'}", "{#if offen}")
-
-    assert '<span class="wz-vorschau werkzeugname">{open.name}</span>\n' in bundle
-    assert (
-        "{#if open.going}\n"
-        "                  <span class=\"wz-rechts\"><span class=\"wz-dauer\">"
-        "{t(open.background ? 'werkzeug.hintergrund_laeuft' : 'werkzeug.buendel_laeuft')}</span></span>\n"
-        "                {/if}"
-    ) in bundle
-
-
-@node_da
-def test_a_command_that_runs_in_the_background_is_named_and_goes_while_its_run_does():
-    """The defect: a call that already has its result (the run's number) is
-    no open call, so the closed row said nothing of the run behind it. The
-    row now names the newest call whose run still goes, and says so with the
-    background word — the run is asked by the caller, which reads the
-    terminal's list."""
-    report = _bundle_run(_BUNDLE_ENTRIES + """
-    const entries = [call('a', 'read_file', 'ok'), call('b', 'run_command', 'job 3 started')]
-    const goes = (werkzeug) => werkzeug.aufruf_id === 'b'
-    const report = { open: b.openCall(entries, () => false, goes) }
-    """)
-
-    assert report["open"] == {"name": "run_command", "going": True, "background": True}
-
-
-@node_da
-def test_silence_the_run_that_has_ended_leaves_no_hint_and_an_open_call_goes_first():
-    report = _bundle_run(_BUNDLE_ENTRIES + """
-    const finished = [call('a', 'read_file', 'ok'), call('b', 'run_command', 'job 3 started')]
-    const withOpen = [...finished, call('c', 'web_search')]
-    const goes = (werkzeug) => werkzeug.aufruf_id === 'b'
-    const report = {
-      ended: b.openCall(finished, () => false, () => false),
-      noQuestion: b.openCall(finished, () => false),
-      open: b.openCall(withOpen, () => false, goes),
-    }
-    """)
-
-    assert report["ended"] is None
-    # The third argument is optional: callers that know no runs get what they got.
-    assert report["noQuestion"] is None
-    # A call being made right now is the one the row names; the run behind it waits.
-    assert report["open"] == {"name": "web_search", "going": True, "background": False}
-
-
-def test_the_row_asks_the_run_through_the_state_every_other_row_reads():
-    """One reading of "goes": the bundle asks ``hintergrundStand`` like the
-    single row and its dot do, so the three cannot disagree."""
-    message = MESSAGE.read_text(encoding="utf-8")
-    bundle = _cut(message, "{#if eintrag.art === 'buendel'}", "{#if offen}")
-    assert "(werkzeug) => Boolean(hintergrundStand(werkzeug)?.laeuft)," in bundle
+    row = _cut(message, "{#snippet callRow(teil, i)}", "{/snippet}")
+    assert "aria-label={callLabel(werkzeug, stand)}" in row
+    for gone in ("wz-rechts", "wz-dauer", "wz-code", "wz-marke"):
+        assert gone not in message, gone
+    word = _cut(message, "  function callWord(werkzeug, stand) {", "\n  }\n")
+    keys = [
+        "stand?.laeuft",
+        "werkzeug.hintergrund_ungelesen",
+        "werkzeug.exit_code",
+        "werkzeug.marke_fehlgeschlagen",
+        "jobs.zustand.wartet",
+        "werkzeug.buendel_laeuft",
+    ]
+    places = [word.index(key) for key in keys]
+    assert places == sorted(places)
     for language in ("de", "en"):
         catalogue = json.loads((WURZEL / "app" / "locales" / f"{language}.json").read_text(encoding="utf-8"))
         assert "{" not in catalogue["werkzeug"]["hintergrund_laeuft"]
+
+
+def test_the_row_and_the_dot_ask_the_run_through_the_state_every_other_row_reads():
+    """One reading of "goes": the row, its dot and the block's dot ask
+    ``hintergrundStand``, so the three cannot disagree."""
+    message = MESSAGE.read_text(encoding="utf-8")
+    row = _cut(message, "{#snippet callRow(teil, i)}", "{/snippet}")
+    assert "{@const stand = hintergrundStand(werkzeug)}" in row
+    block_stand = _cut(message, "  function blockState(eintrag) {", "\n  }\n")
+    assert "(werkzeug) => werkzeugPunkt(werkzeug, hintergrundStand(werkzeug))" in block_stand
 
 
 # --- The mark of a server's tool on the notice -----------------------------

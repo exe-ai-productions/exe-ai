@@ -7,10 +7,9 @@ opens one in the file manager. The checking and the writing live in the
 module; this only speaks HTTP.
 
 Moving the FILES that already sit in the old folder is a later step — this
-one changes only where NEW things are written. For the picture folder that
-is felt at once (pictures are written fresh each time); for the model
-folders a running server was handed the old path at startup, so the move
-takes full hold after the next restart, which the list says plainly.
+one changes only where NEW things are written. Every location is read fresh
+where it is needed (a listing, a start, a download), so a move is felt at
+once; a server that is up keeps the model it loaded.
 """
 
 from __future__ import annotations
@@ -21,8 +20,13 @@ from pydantic import BaseModel
 from app.api.abhaengigkeiten import hole_config, hole_sprache
 from app.config import Config
 from app.i18n import t
+from app.modellrunner import begleiter_einsortieren
 from app.ordner_oeffnen import OeffnenNichtMoeglich, ordner_oeffnen
 from app import speicherorte
+
+# The locations that hold model files: a folder taking hold gets its loose
+# companions sorted once, as the folder at service start does.
+_MODEL_LOCATIONS = frozenset({"models", "speech_models"})
 
 router = APIRouter(prefix="/speicherorte", tags=["speicherorte"])
 
@@ -32,7 +36,6 @@ class OrtAntwort(BaseModel):
     pfad: str
     standard: str
     ist_standard: bool
-    neustart_noetig: bool
 
 
 class PfadWunsch(BaseModel):
@@ -59,6 +62,7 @@ def setzen(
         speicherorte.setzen(config, name, wunsch.pfad)
     except speicherorte.SpeicherortFehler as fehler:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, t(fehler.grund, sprache)) from fehler
+    _takes_hold(config, name)
     return _zeile(config, name)
 
 
@@ -71,6 +75,7 @@ def zuruecksetzen(
     """Back to the installed default — the override is dropped."""
     _bekannt(name, sprache)
     speicherorte.loeschen(config, name)
+    _takes_hold(config, name)
     return _zeile(config, name)
 
 
@@ -93,6 +98,11 @@ def zeigen(
             status.HTTP_501_NOT_IMPLEMENTED, t("fehler.ordner_oeffnen", sprache)
         ) from fehler
     return True
+
+
+def _takes_hold(config: Config, name: str) -> None:
+    if name in _MODEL_LOCATIONS:
+        begleiter_einsortieren(speicherorte.ort(config, name))
 
 
 def _bekannt(name: str, sprache: str) -> None:

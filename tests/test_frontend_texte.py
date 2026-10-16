@@ -77,7 +77,7 @@ def test_die_texte_des_cli_reiters_stehen_in_beiden_katalogen():
         for schluessel in _benutzte_schluessel(datei)
         if schluessel.startswith("cli.window.")
     }
-    assert {"cli.window.browser", "cli.window.ended"} <= gelesen
+    assert {"cli.window.browser", "cli.window.ended", "cli.window.not_found"} <= gelesen
     # The tab's name is no call of its own: the column and the sign row each
     # look it up in their table of names.
     for source in (QUELLEN / "teile" / "Arbeitsleiste.svelte", QUELLEN / "teile" / "ToolSigns.svelte"):
@@ -129,8 +129,16 @@ LOOK_BLOCKS = {
 # against the ground beside it, measured in the picture.
 FAINT_BEFORE = {"exe": 1.08, "darkmatter": 1.61}
 
-# The share of the look's ink in the tone under a selection.
+# The share of the look's ink in the tone under a selection, and the least
+# contrast a selection keeps against every colour its column lies on.
 INK_IN_A_SELECTION = 0.25
+MIN_SELECTION_CONTRAST = 1.5
+# The looks whose share is measured against their gradient, not a quarter.
+MEASURED_SHARE_LOOKS = ("heaven", "moune")
+
+# What `data-modus` says in each look (the look of the first block, the
+# light one, is set by the absence of the dark ones: it is `hell`).
+MODUS_OF = {"pearl": "hell", "exe": "dunkel", "darkmatter": "darkmatter", "heaven": "heaven", "moune": "moune"}
 
 # Runs the module's `theme()` once per look, with the sheet's two colours of
 # that look in place of the page. The imports go: they pull in the drawing
@@ -141,12 +149,16 @@ import { pathToFileURL } from 'url'
 const [source, built, looks] = process.argv.slice(2)
 writeFileSync(built, readFileSync(source, 'utf-8').replace(/^import .*$/gm, ''))
 let sheet = {}
-globalThis.document = { documentElement: {} }
+let modus = ''
+globalThis.document = { documentElement: { getAttribute: (name) => (name === 'data-modus' ? modus : null) } }
+globalThis.window = { matchMedia: () => ({ matches: true }) }
 globalThis.getComputedStyle = () => ({ getPropertyValue: (name) => sheet[name] ?? '' })
 const { theme } = await import(pathToFileURL(built).href)
 const themes = {}
 for (const [name, colours] of Object.entries(JSON.parse(looks))) {
-  sheet = colours
+  const { '--modus': own, ...values } = colours
+  sheet = values
+  modus = own
   themes[name] = theme()
 }
 console.log(JSON.stringify(themes))
@@ -164,6 +176,12 @@ def _look_colours() -> dict[str, dict[str, str]]:
             name: re.search(rf"^\s*{name}:\s*(#[0-9a-fA-F]{{6}});", block, re.M).group(1)
             for name in ("--bg", "--text")
         }
+        looks[look]["--modus"] = MODUS_OF[look]
+        # The column's gradient as the page computes it: the look's own three
+        # default stops where it names them (`--rahmen-vorgabe-N`).
+        stops = re.findall(r"^\s*--rahmen-vorgabe-[123]:\s*(#[0-9a-fA-F]{6});", block, re.M)
+        if len(stops) == 3:
+            looks[look]["--frame"] = f"linear-gradient(160deg, {stops[0]} 0%, {stops[1]} 50%, {stops[2]} 100%)"
     return looks
 
 
@@ -189,7 +207,7 @@ def _channels(colour: str) -> tuple[int, ...]:
     return tuple(int(colour[at : at + 2], 16) for at in range(1, len(colour), 2))
 
 
-def _luminance(colour: tuple[int, ...]) -> float:
+def _luminance(colour: tuple[float, ...]) -> float:
     def linear(value: int) -> float:
         share = value / 255
         return share / 12.92 if share <= 0.03928 else ((share + 0.055) / 1.055) ** 2.4
@@ -198,9 +216,45 @@ def _luminance(colour: tuple[int, ...]) -> float:
     return 0.2126 * red + 0.7152 * green + 0.0722 * blue
 
 
-def _contrast(one: tuple[int, ...], other: tuple[int, ...]) -> float:
+def _contrast(one: tuple[float, ...], other: tuple[float, ...]) -> float:
     lighter, darker = sorted((_luminance(one), _luminance(other)), reverse=True)
     return (lighter + 0.05) / (darker + 0.05)
+
+
+def _tone(ground: tuple[int, ...], ink: tuple[int, ...], share: float) -> tuple[int, ...]:
+    """The ground with that share of the ink mixed in, channel by channel."""
+    return tuple(
+        math.floor(below + (above - below) * share + 0.5) for below, above in zip(ground, ink, strict=True)
+    )
+
+
+def _stops(colours: dict[str, str]) -> list[tuple[float, ...]]:
+    """The colours the column's gradient shows, from its computed value: its
+    stops, and sixteen steps between each two neighbours, each taken down to
+    whole steps of a channel (a blend of two stops can be darker than
+    either, and the screen may show the lower step)."""
+    stops = [_channels(stop) for stop in re.findall(r"#[0-9a-fA-F]{6}", colours.get("--frame", ""))]
+    shown: list[tuple[float, ...]] = [*stops]
+    for before, after in zip(stops, stops[1:], strict=False):
+        for step in range(1, 16):
+            shown.append(
+                tuple(math.floor(b + (a - b) * step / 16) for b, a in zip(before, after, strict=True))
+            )
+    return shown
+
+
+def _share_of(look: str, colours: dict[str, str]) -> float:
+    """The share of ink the tone under a selection is made with: a quarter,
+    and in Heaven and Moune the smallest (in hundredths) that keeps 1.5 : 1
+    off every colour of the gradient."""
+    if look not in MEASURED_SHARE_LOOKS:
+        return INK_IN_A_SELECTION
+    ground, ink = _channels(colours["--bg"]), _channels(colours["--text"])
+    for hundredths in range(25, 101):
+        tone = _tone(ground, ink, hundredths / 100)
+        if all(_contrast(tone, stop) >= MIN_SELECTION_CONTRAST for stop in _stops(colours)):
+            return hundredths / 100
+    raise AssertionError("no share of ink reaches the contrast")
 
 
 needs_node = pytest.mark.skipif(
@@ -228,21 +282,55 @@ def test_a_selection_in_the_cli_tab_lies_on_a_solid_tone_and_its_text_keeps_its_
     assert "selectionInactiveBackground" not in theme
     assert re.fullmatch(r"#[0-9a-f]{6}", theme["selectionBackground"]), theme["selectionBackground"]
     under = _channels(theme["selectionBackground"])
-    assert under == tuple(
-        math.floor(below + (above - below) * INK_IN_A_SELECTION + 0.5)
-        for below, above in zip(ground, ink, strict=True)
-    )
+    assert under == _tone(ground, ink, _share_of(look, colours))
     assert (_luminance(under) > _luminance(ground)) == (_luminance(ink) > _luminance(ground))
     stands_out, reads = _contrast(under, ground), _contrast(ink, under)
     assert reads > stands_out > FAINT_BEFORE.get(look, 1.0), (look, stands_out, reads)
 
 
 @needs_node
+@pytest.mark.parametrize("look", MEASURED_SHARE_LOOKS)
+def test_in_heaven_and_moune_a_selection_stands_at_least_one_and_a_half_to_one_off_every_colour_it_lies_on(
+    terminal_themes, look
+):
+    """The column of Heaven lies on a gradient whose darkest colour is as
+    light as a quarter-ink tone — the two differ in hue only (1.0 : 1
+    measured) — and the one of Moune is close behind (1.3 : 1). The tone is
+    mixed with the smallest share of ink that lifts it to 1.5 : 1 against
+    every colour of the gradient, so it stands that far off at the top, in
+    the middle and at the bottom of the tab. With a quarter it falls short."""
+    colours, theme = terminal_themes[look]
+    stops = _stops(colours)
+    assert len(stops) == 3 + 2 * 15
+    under = _channels(theme["selectionBackground"])
+    assert min(_contrast(under, stop) for stop in stops) >= MIN_SELECTION_CONTRAST
+    # A quarter — what every other look keeps — would not do there.
+    ground, ink = _channels(colours["--bg"]), _channels(colours["--text"])
+    quarter = _tone(ground, ink, INK_IN_A_SELECTION)
+    assert min(_contrast(quarter, stop) for stop in stops) < MIN_SELECTION_CONTRAST
+    # And the share is the smallest one: one hundredth less does not reach it.
+    share = _share_of(look, colours)
+    less = _tone(ground, ink, round(share - 0.01, 2))
+    assert min(_contrast(less, stop) for stop in stops) < MIN_SELECTION_CONTRAST
+
+
+@needs_node
+@pytest.mark.parametrize("look", [name for name in LOOK_BLOCKS if name not in MEASURED_SHARE_LOOKS])
+def test_in_every_other_look_the_selection_keeps_its_quarter_of_ink(terminal_themes, look):
+    """The silence side: nothing but Heaven and Moune changes."""
+    colours, theme = terminal_themes[look]
+    ground, ink = _channels(colours["--bg"]), _channels(colours["--text"])
+    assert _channels(theme["selectionBackground"]) == _tone(ground, ink, INK_IN_A_SELECTION)
+
+
+@needs_node
 @pytest.mark.parametrize("look", LOOK_BLOCKS)
 def test_the_cli_tabs_terminal_keeps_the_looks_ink_and_no_ground(terminal_themes, look):
     colours, theme = terminal_themes[look]
-    # See-through: the column's surface is the ground.
-    assert theme["background"] == "#00000000" and theme["cursorAccent"] == "#00000000"
+    # See-through: the column's surface is the ground. Where the look has a
+    # gradient the drawing's ground carries its mean colour, at no opacity.
+    assert re.fullmatch(r"#[0-9a-f]{6}00", theme["background"]), theme["background"]
+    assert theme["cursorAccent"] == "#00000000"
     assert theme["foreground"] == theme["cursor"] == colours["--text"]
     assert "allowTransparency: true" in WINDOW_TERMINAL.read_text(encoding="utf-8")
 
@@ -356,15 +444,16 @@ const [source, resizeSource, built, scenes] = process.argv.slice(2)
 const standIns = `
 const world = globalThis.world
 class Xterm {
-  constructor() {
+  constructor(options) {
     this.cols = 80
     this.rows = 24
     this.options = {}
     this.buffer = { active: { viewportY: 0, baseY: 0 } }
     this.parser = { registerCsiHandler: (id, handler) => { world.handlers.unshift({ id, handler }) } }
+    this.constructed = options
     world.xterm = this
   }
-  loadAddon() {}
+  loadAddon(addon) { world.addons.push(addon) }
   open() {}
   focus() {}
   attachCustomKeyEventHandler() {}
@@ -390,6 +479,7 @@ class FitAddon {
   fit() { world.xterm.resize(world.box.cols, world.box.rows) }
 }
 class WebglAddon { onContextLoss() {} }
+class WebLinksAddon { constructor(handler) { this.handler = handler } }
 const t = (key) => key
 const texte = { sprache: 'en' }
 const zustand = { aktiverChat: '' }
@@ -402,10 +492,14 @@ const ANSWER = '\x1b[1;1R'
 const results = {}
 let run = 0
 for (const [name, allSteps] of Object.entries(JSON.parse(scenes))) {
-  const named = allSteps[0][0] === 'system'
-  const steps = named ? allSteps.slice(1) : allSteps
-  const world = { handlers: [], typed: null, sent: [], told: [], starts: 0, output: null, exit: null, box: { cols: 80, rows: 24 } }
-  world.system = named ? allSteps[0][1] : 'mac'
+  const world = { addons: [], opened: [], handlers: [], typed: null, sent: [], told: [], starts: 0, output: null, exit: null, box: { cols: 80, rows: 24 }, system: 'mac', frame: '' }
+  // Leading steps that set the world the scene runs in: the system, and the
+  // colour of what lies under the drawing.
+  let steps = allSteps
+  while (steps.length && ['system', 'frame'].includes(steps[0][0])) {
+    world[steps[0][0]] = steps[0][1]
+    steps = steps.slice(1)
+  }
   world.draw = (data) => {
     for (const [, prefix, numbers, final] of String(data).matchAll(/\x1b\[(\??)([0-9;]*)([A-Za-z])/g)) {
       const params = numbers.split(';').filter(Boolean).map(Number)
@@ -425,12 +519,13 @@ for (const [name, allSteps] of Object.entries(JSON.parse(scenes))) {
       onExit: (listener) => { world.exit = listener },
     } },
     matchMedia: () => ({ matches: true, addEventListener() {} }),
+    open: (...given) => world.opened.push(given),
   }
   globalThis.document = {
     documentElement: { getAttribute: () => 'dunkel' },
     createElement: () => ({ isConnected: true, style: {} }),
   }
-  globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' })
+  globalThis.getComputedStyle = () => ({ getPropertyValue: (name) => (name === '--frame' ? world.frame : '') })
   globalThis.MutationObserver = class { observe() {} }
   globalThis.ResizeObserver = class { constructor(listener) { world.observer = listener } observe() {} disconnect() {} }
   run += 1
@@ -457,6 +552,10 @@ for (const [name, allSteps] of Object.entries(JSON.parse(scenes))) {
     // The person scrolled this many rows up.
     else if (kind === 'scrolled') world.xterm.buffer.active.viewportY -= data
     else if (kind === 'hide') hide()
+    // A click on a link the client wrote (OSC 8) and on an address the
+    // drawing found in the text.
+    else if (kind === 'link') world.xterm.constructed.linkHandler.activate({}, data, {})
+    else if (kind === 'address') world.addons.find((addon) => addon.handler).handler({}, data)
     else if (kind === 'show') hide = terminal.show(root)
     await Promise.resolve()
     seen.push([...world.sent])
@@ -464,7 +563,7 @@ for (const [name, allSteps] of Object.entries(JSON.parse(scenes))) {
     told.push(world.told.map((size) => [...size]))
     view.push([world.xterm.buffer.active.viewportY, world.xterm.buffer.active.baseY])
   }
-  results[name] = { sent: world.sent, seen, sizes, told, view, starts: world.starts }
+  results[name] = { sent: world.sent, seen, sizes, told, view, starts: world.starts, opened: world.opened, ground: world.xterm.constructed.theme.background }
 }
 console.log(JSON.stringify(results))
 """
@@ -506,6 +605,22 @@ GATE_SCENES = {
     "typed_late": [
         ["client", HEAD + ASKS_FOR_THE_CURSOR + FIRST_DRAWING],
         ["typed", "x"],
+    ],
+    # The colour of the column under the drawing, a plain one and a gradient.
+    "ground_plain": [["frame", "#353634"], ["client", HEAD]],
+    "ground_gradient": [
+        ["frame", "linear-gradient(135deg, #102030 0%, rgb(30, 50, 70) 50%, #405060 100%)"],
+        ["client", HEAD],
+    ],
+    "ground_unknown": [["client", HEAD]],
+    # A click on a link the client wrote, on an address the drawing found
+    # itself, and on two that must not open.
+    "clicked_addresses": [
+        ["client", HEAD + ASKS_FOR_THE_CURSOR + FIRST_DRAWING],
+        ["link", "https://docs.example.com/guides/getting-started/installation?lang=en"],
+        ["address", "https://docs.example.com/a/very/long/path?x=1"],
+        ["link", "file:///etc/passwd"],
+        ["address", "javascript:alert(1)"],
     ],
     "never_asks": [
         ["typed", "a"],
@@ -822,3 +937,39 @@ def test_a_drawing_shown_again_with_another_height_stands_on_the_last_row(gate_s
 def test_a_drawing_shown_again_keeps_the_view_the_person_scrolled_up(gate_scenes):
     scene = gate_scenes["shown_again_lower_with_the_view_scrolled_up"]
     assert scene["view"][-1] == [20, 34]
+
+
+@needs_node
+def test_a_click_on_an_address_of_the_history_opens_it_once_in_the_browser(gate_scenes):
+    """An address the client wrote as a link and one the drawing found in the
+    text each go to the window's switch as the whole address, once, in a tab
+    of its own; nothing but http and https goes."""
+    scene = gate_scenes["clicked_addresses"]
+    assert scene["opened"] == [
+        ["https://docs.example.com/guides/getting-started/installation?lang=en", "_blank"],
+        ["https://docs.example.com/a/very/long/path?x=1", "_blank"],
+    ]
+
+
+@needs_node
+def test_the_drawing_is_given_both_ways_to_open_an_address():
+    """The drawing asks no browser dialog and opens no empty window: it is
+    given its own handler for a link the client wrote, and the add-on that
+    finds addresses is given one as well."""
+    source = WINDOW_TERMINAL.read_text(encoding="utf-8")
+    assert "linkHandler: { activate:" in source
+    assert "new WebLinksAddon((_event, address) => openAddress(address))" in source
+    assert "confirm(" not in source
+    assert "window.open()" not in source
+
+
+@needs_node
+def test_the_drawing_is_given_the_colour_of_the_column_under_it_without_opacity(gate_scenes):
+    """A cell with a link or an underline is painted on a solid ground made
+    of the drawing's ground colour: black where that is none. Given the
+    column's colour with no opacity, the box under an address cannot be
+    seen — and a ground that is none stays none where the column's colour
+    is unknown."""
+    assert gate_scenes["ground_plain"]["ground"] == "#35363400"
+    assert gate_scenes["ground_gradient"]["ground"] == "#25364700"
+    assert gate_scenes["ground_unknown"]["ground"] == "#00000000"

@@ -69,6 +69,11 @@ class Feineinstellungen:
     # lever existed. The context is split evenly across the slots, which is
     # why this is a choice and not simply "more".
     parallel: int | None = None
+    # Whether the slots share ONE cache of the window's size (`--kv-unified`)
+    # or each gets the window divided by their number (`--no-kv-unified`).
+    # Only said on the command line together with a slot count: with the
+    # engine's own "auto" count it switches itself on.
+    kv_unified: bool = True
 
     @classmethod
     def aus_daten(cls, daten: dict | None) -> "Feineinstellungen":
@@ -103,6 +108,8 @@ class Feineinstellungen:
             )
         except (TypeError, ValueError):
             parallel = None
+        # Missing is the shipped answer (on); only a stored false turns it off.
+        unified = d.get("kv_unified")
         return cls(
             kv_cache=kv if kv in KV_TYPEN else KV_VORGABE,
             flash_attention=fa if fa in FA_WERTE else FA_VORGABE,
@@ -111,6 +118,7 @@ class Feineinstellungen:
             moe_schichten=schichten,
             festnageln=bool(d.get("festnageln")),
             parallel=parallel,
+            kv_unified=True if unified is None else bool(unified),
         )
 
     def als_daten(self) -> dict:
@@ -122,6 +130,7 @@ class Feineinstellungen:
             "moe_schichten": self.moe_schichten,
             "festnageln": self.festnageln,
             "parallel": self.parallel,
+            "kv_unified": self.kv_unified,
         }
 
 
@@ -158,6 +167,20 @@ def flags(einstellungen: Feineinstellungen | None) -> list[str]:
     # Unset stays unsaid: the engine then picks its own slot count ("auto"),
     # which is what every start before this lever did.
     if einstellungen.parallel:
-        zeile += ["--parallel", str(einstellungen.parallel)]
+        zeile += [
+            "--parallel", str(einstellungen.parallel),
+            "--kv-unified" if einstellungen.kv_unified else "--no-kv-unified",
+        ]
 
     return zeile
+
+
+def context_per_request(context: int, einstellungen: Feineinstellungen | None) -> int | None:
+    """The context one request gets, where it is not the whole window: with
+    a slot count and the cache not shared, the window is divided by the
+    slots. None where every request may use all of it."""
+    if einstellungen is None or not einstellungen.parallel or einstellungen.parallel < 2:
+        return None
+    if einstellungen.kv_unified:
+        return None
+    return context // einstellungen.parallel

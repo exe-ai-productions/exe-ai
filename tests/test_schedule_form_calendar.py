@@ -421,12 +421,11 @@ def test_a_daily_time_reads_as_it_was(client):
 # --- The line under a typed cron expression ----------------------------------
 
 
-def test_the_preview_names_the_next_runs(client):
+def test_the_preview_names_the_next_run(client):
     answer = client.get("/api/v1/cronjobs/preview", params={"zeitplan": "*/15 * * * *"})
     assert answer.status_code == 200, answer.text
-    moments = [datetime.fromisoformat(m) for m in answer.json()]
-    assert len(moments) == 3
-    assert {b - a for a, b in zip(moments, moments[1:], strict=False)} == {timedelta(minutes=15)}
+    (moment,) = [datetime.fromisoformat(m) for m in answer.json()]
+    assert moment.minute % 15 == 0 and moment.second == 0
 
 
 def test_the_preview_refuses_what_cannot_be_read(client):

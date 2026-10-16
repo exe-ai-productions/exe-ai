@@ -15,7 +15,7 @@
   import { begruessung, erststartNoetig } from '../lib/begruessung.svelte.js'
   import { releaseNotesHtml } from '../lib/releaseNotes.js'
   import {
-    updates, cardShown, chooseLater, downloadUpdate, installUpdate, releaseDate,
+    updates, cardShown, chooseLater, downloadUpdate, failedKey, installUpdate, releaseDate,
   } from '../lib/updates.svelte.js'
 
   const wanted = $derived(cardShown() && begruessung.geladen && !erststartNoetig())
@@ -28,7 +28,7 @@
   $effect(() => {
     const stands = cardShown()
     if (stood && !stands && updates.state === 'error') {
-      meldeText('updates.failed', { reason: updates.reason }, 'fehler')
+      meldeText(failedKey(), { reason: updates.reason }, 'fehler')
     }
     stood = stands
   })

@@ -1008,18 +1008,16 @@ def _system_bauen(
     # Which of the new sentences apply: each one only when the tool it talks
     # about is actually being offered to this model right now.
     #
-    # Asked with this chat's picture window, the same one the offer itself is
-    # built with (further down): where the window stands at a family that
-    # cannot draw from text, draw_image is offered to nobody — and this
-    # sentence must not promise it either. The overview names the tools of
-    # THIS run, no more and no less.
+    # Asked with the default image model, the same one the offer itself is
+    # built with (further down): where it is a family that cannot draw from
+    # text, draw_image is offered to nobody — and this sentence must not
+    # promise it either. The overview names the tools of THIS run, no more
+    # and no less.
     angeboten = {
         w["function"]["name"]
         for w in (
             registry.als_openai_werkzeuge(
-                bild_fenster=lambda: bild_werkzeug.fensterbild(
-                    repositories, chat.id, config
-                ),
+                bild_fenster=lambda: bild_werkzeug.fensterbild(repositories, config),
             )
             if werkzeuge_da
             else []
@@ -1820,18 +1818,16 @@ async def _antwort_aufsetzen(
     # what still fits. Built after the off-list was handed in above, so it
     # is the offer this request really carries.
     #
-    # The image model comes from THIS chat's picture window: the drawing
+    # The image model is the picture server's default model: the drawing
     # tool's description names the model that will draw, and the values it
     # may send depend on what that family reads (app/tools/bild_werkzeug.py).
     # Read here, not at startup — the registry outlives a chat and several
-    # of them, and the window can change between two questions.
+    # of them, and the default model can change between two questions.
     angebot = (
         registry.als_openai_werkzeuge(
             shell_zeitgrenze=befehl_zeitgrenze,
             # A callable: read only if draw_image is really offered here.
-            bild_fenster=lambda: bild_werkzeug.fensterbild(
-                repositories, chat.id, app.state.config
-            ),
+            bild_fenster=lambda: bild_werkzeug.fensterbild(repositories, app.state.config),
             # memory_save promises only what holds for this model's side.
             memory_shown=gedaechtnis.mitschicken(repositories, zustand),
         )

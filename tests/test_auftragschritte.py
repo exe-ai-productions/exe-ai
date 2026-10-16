@@ -160,7 +160,7 @@ def test_the_agent_row_stands_in_columns():
     longest name among the answer's agents, and the clock's and the
     state's cells keep a width of their own and are there in every row."""
     markup, css = MESSAGE.read_text("utf-8").split("<style>", 1)
-    row = markup.split('<div class="ereignis agent-row">', 1)[1].split("\n          </div>", 1)[0]
+    row = markup.split('<div class="ereignis helper">', 1)[1].split("\n          </div>", 1)[0]
 
     # Every name of the answer's agents lies in the name's cell.
     assert "{#each agentNames as other (other)}" in row
@@ -168,10 +168,12 @@ def test_the_agent_row_stands_in_columns():
     # The cells stand whether or not the agent's run is known, in this order.
     time = "<span class=\"agent-time\">{job ? agentRuntime(job) : ''}</span>"
     places = [row.index(piece) for piece in (
-        '<span class="agent-name">', time, '<span class="agent-status">', '<button class="agent-transcript"',
+        '<span class="agent-name">', time, '<span class="agent-status">',
     )]
     assert places == sorted(places)
-    status = row.split('<span class="agent-status">', 1)[1].split('<button class="agent-transcript"', 1)[0]
+    # No word of its own at the far end: the whole row is the way to the card.
+    assert "agent-transcript" not in row
+    status = row.split('<span class="agent-status">', 1)[1].split("</button>", 1)[0]
     assert "agent-step" in status and "agent-state" in status
 
     name = _rule(css, ".agent-name")
@@ -205,17 +207,12 @@ def test_the_columns_fit_what_the_program_itself_shows(client, config):
     assert len(f"{int(STANDARD_MINUTEN)}:59") <= _width(_rule(css, ".agent-time"), "min-width")
 
 
-def test_the_tool_rows_and_the_readings_under_the_answer_stay_as_they_are():
-    """Silence probe: only the agent's row changed. A tool row still pushes
-    one item to its far end and gives its mark no width of its own, and the
-    readings under the answer still stand in the fixed face."""
+def test_the_readings_under_the_answer_and_the_helper_row_stay_as_they_are():
+    """Silence probe: the readings under the answer still stand in the fixed
+    face, and the helper's row is the loose row it was — no grid; what it
+    lost is the word at its far end."""
     css = MESSAGE.read_text("utf-8").split("<style>", 1)[1]
-    far_end = _rule(css, ".werkzeug-kopf .wz-rechts")
-    assert "margin-left: auto" in far_end and "flex: none" in far_end
-    marks = css.split("\n  .werkzeug-kopf .wz-marke,\n  .werkzeug-kopf .wz-code {", 1)[1].split("}", 1)[0]
-    assert marks.split() == "flex: none; color: var(--rot);".split()
     assert _rule(css, ".messung").split() == "font-family: var(--schrift-fest);".split()
-    # The row itself is the loose row it was: no grid, the transcript at its far end.
     row = _rule(css, ".agent-row")
     assert "display: flex" in row and "gap: 8px" in row
-    assert "margin-left: auto" in _rule(css, ".agent-transcript")
+    assert ".agent-transcript" not in css

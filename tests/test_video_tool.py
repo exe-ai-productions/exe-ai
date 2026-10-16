@@ -36,13 +36,12 @@ START = {
 }
 
 
-def _service(window: dict | None = None, *, models=None, families=None, **more) -> Bilddienst:
+def _service(*, standard=PICTURE, models=None, families=None, **more) -> Bilddienst:
     """The picture service with one picture model and one video model, and
-    the chat's picture window standing at ``window``."""
+    the picture server's default model standing at ``standard``."""
     families = families or {PICTURE: "sdxl", VIDEO: "wan22_ti2v"}
     return Bilddienst(
-        {"c1": window if window is not None else {"modell": PICTURE}},
-        modelle=models or list(families), familien=families,
+        modelle=models or list(families), familien=families, standardmodell=standard,
         vorgaben=lambda model: dict(START), **more,
     )
 
@@ -77,11 +76,11 @@ def _call(tmp_path, monkeypatch, service, arguments=None, *, folders=(), **more)
 
 
 def test_a_video_from_words_runs_on_the_video_model_s_own_start(tmp_path, monkeypatch):
-    """The window stands at a picture model: the one installed video model
+    """The default model is a picture model: the one installed video model
     makes the video, with its family's start — never with the size, steps or
-    guidance of the picture model. The route is asked for a video, the answer
-    names the file's path, and the window is left as it stands."""
-    service = _service({"modell": PICTURE, "breite": 1024, "hoehe": 1024, "schritte": 8, "cfg": 1})
+    guidance of the picture model. The route is asked for a video and the
+    answer names the file's path."""
+    service = _service()
     text = _call(tmp_path, monkeypatch, service)
 
     body = service.gezeichnet[-1]
@@ -100,28 +99,25 @@ def test_a_video_from_words_runs_on_the_video_model_s_own_start(tmp_path, monkey
     assert service.client_made_with == {"timeout": None}
 
 
-def test_the_window_s_own_video_model_runs_with_the_window_s_values(tmp_path, monkeypatch):
-    """Two video models installed and the window stands at one of them: that
-    one is taken, and what the person set at it wins over the model's start —
-    the video's length among it. A start picture and a mask of the window
-    never travel."""
+def test_a_default_model_that_is_a_video_model_makes_the_video(tmp_path, monkeypatch):
+    """Two video models installed and the default model is one of them: that
+    one is taken, at its own start — the video's length and rate among it."""
     service = _service(
-        {"modell": SECOND, "breite": 640, "hoehe": 384, "schritte": 12, "video_frames": "33",
-         "startbild": "window.png", "maske": "mask.png"},
+        standard=SECOND,
         families={PICTURE: "sdxl", VIDEO: "wan22_ti2v", SECOND: "wan22_ti2v"},
     )
     text = _call(tmp_path, monkeypatch, service)
     body = service.gezeichnet[-1]
     assert body["modell"] == SECOND
-    assert (body["breite"], body["hoehe"], body["schritte"], body["video_frames"]) == (640, 384, 12, 33)
-    assert body["fps"] == 24  # not set at the window: the model's start
+    assert (body["breite"], body["hoehe"], body["schritte"], body["video_frames"]) == (832, 480, 30, 81)
+    assert body["fps"] == 24
     assert "startbild" not in body and "maske" not in body
-    assert f"model {SECOND}" in text and "33 frames" in text
+    assert f"model {SECOND}" in text and "81 frames" in text
 
 
 def test_among_several_video_models_nothing_chooses_by_itself(tmp_path, monkeypatch):
-    """Silence: several video models and the window names none of them — no
-    video, and the model reads what the user has to do."""
+    """Silence: several video models and the default model is none of them —
+    no video, and the model reads what the user has to do."""
     service = _service(families={PICTURE: "sdxl", VIDEO: "wan22_ti2v", SECOND: "ltx"})
     assert _call(tmp_path, monkeypatch, service) == video_tool.MODEL_NOT_CHOSEN
     assert service.gezeichnet == []
@@ -191,7 +187,7 @@ def test_a_picture_outside_the_run_s_folders_is_refused(tmp_path, monkeypatch):
 def test_in_a_job_the_video_is_saved_and_named_but_not_attached(tmp_path, monkeypatch):
     """A job has no answer a video could hang on: the sentence names the
     path in the pictures folder and says it is not attached."""
-    service = _service(jobs={"job-1": "c1"})
+    service = _service()
     text = _call(
         tmp_path, monkeypatch, service, chat_id="job-1", antwort_id=None, herkunft="agent",
     )
@@ -222,11 +218,11 @@ def test_a_refusal_of_the_route_reaches_the_model_as_the_route_wrote_it(tmp_path
 
 def test_a_failed_call_on_the_way_is_said_of_the_video(tmp_path, monkeypatch):
     """The calls shared with the drawing tool speak of what this tool makes:
-    a window that could not be read stops the video, in the video's words."""
+    a start that could not be read stops the video, in the video's words."""
     service = _service(
-        answers={"/settings/resolved/bildfenster": Antwort({"detail": "No such chat."}, 500)}
+        answers={"/bild/vorgaben": Antwort({"detail": "No such model."}, 500)}
     )
-    assert _call(tmp_path, monkeypatch, service) == "The video could not be generated: No such chat."
+    assert _call(tmp_path, monkeypatch, service) == "The video could not be generated: No such model."
     assert service.gezeichnet == []
 
 
@@ -266,8 +262,8 @@ def test_the_sentences_the_model_reads_stand_word_for_word():
         "The response includes its filename. " + seen
     )
     assert video_tool.MODEL_NOT_CHOSEN == (
-        "The video was not generated: several video models are installed, but none is selected "
-        "for this chat. Ask the user to select one under Images › Video."
+        "The video was not generated: several video models are installed, but none is the "
+        "default model. Ask the user to select one as the default on the picture server page."
     )
     assert video_tool.NO_VIDEO_MODEL == (
         "No video model is installed. The user can add one under Images or from the "

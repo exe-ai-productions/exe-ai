@@ -38,6 +38,60 @@ def test_das_binary_wird_im_build_ordner_gefunden(tmp_path: Path):
     assert os.access(gefunden, os.X_OK)
 
 
+def _program_in(folder: Path, name: str) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    program = folder / name
+    program.write_text("#!/bin/sh\n")
+    program.chmod(0o755)
+    return program
+
+
+def test_the_server_comes_from_the_build_folder_the_generator_starts_from(tmp_path: Path):
+    """Two build folders stay on disk (the cleanup after a fetch leaves a
+    newer one standing): an older one named for a backend and the newer
+    plain one. The generator starts from the newer; the server must be that
+    build's too, not the first one in name order."""
+    from app.sddownload import gefundenes_programm, program_name
+
+    root = tmp_path / "stable-diffusion.cpp"
+    older = root / "master-820-de298c2-vulkan"
+    newer = root / "master-889-c678dfe"
+    _program_in(older, program_name())
+    _program_in(older, PROGRAMM)
+    cli = _program_in(newer, program_name())
+    server = _program_in(newer, PROGRAMM)
+
+    assert gefundenes_programm(tmp_path) == cli
+    assert programm_finden(tmp_path) == server
+    assert programm_finden(tmp_path).parent == cli.parent
+
+
+def test_a_server_by_hand_in_the_bare_folder_still_goes_first(tmp_path: Path):
+    """Silence probe: what somebody put loose into the folder is theirs and
+    runs ahead of every build folder, as before."""
+    from app.sddownload import program_name
+
+    root = tmp_path / "stable-diffusion.cpp"
+    _program_in(root / "master-889-c678dfe", program_name())
+    _program_in(root / "master-889-c678dfe", PROGRAMM)
+    loose = _program_in(root, PROGRAMM)
+
+    assert programm_finden(tmp_path) == loose
+
+
+def test_no_server_beside_the_generator_is_none_not_one_of_another_build(tmp_path: Path):
+    """The newer build carries no server; an older one does. Taking the
+    older one's would pair two builds — better none, which the window says."""
+    from app.sddownload import program_name
+
+    root = tmp_path / "stable-diffusion.cpp"
+    _program_in(root / "master-820-de298c2-vulkan", program_name())
+    _program_in(root / "master-820-de298c2-vulkan", PROGRAMM)
+    _program_in(root / "master-889-c678dfe", program_name())
+
+    assert programm_finden(tmp_path) is None
+
+
 def test_der_turbo_body_traegt_nur_die_basis():
     """Without extras the body stays the bare basics — nothing is invented.
     The fields are those of the server's own route ``img_gen``."""

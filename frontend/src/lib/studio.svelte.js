@@ -5,6 +5,10 @@
   the column on the right shows the details — and the chat itself stays
   loaded underneath, so closing the studio shows it exactly as it was.
 
+  The studio belongs to no chat: its picture, mask, model and every value
+  are kept once, for the studio (lib/studioStore.svelte.js), and opening,
+  switching, creating or deleting a chat changes none of them.
+
   One shared state that every part reads (Seitenleiste.svelte, App.svelte,
   Arbeitsleiste.svelte). A menu page opened from the sidebar lies over the
   studio the way it lies over the chat; closing the page shows the studio
@@ -16,29 +20,26 @@ import { api } from './api.js'
 import { familyOf, imageFamilies, loadImageFamilies } from './imageFamilies.svelte.js'
 import { loadImageSwitches } from './imageSwitches.svelte.js'
 import { columnsForStudio, columnsBack } from './studioColumns.svelte.js'
-import { chatanzeige, bildfensterAusDemStudio } from './chatanzeige.svelte.js'
+import { studioStore, writeStudioStore } from './studioStore.svelte.js'
 
 /* `rechts`: what the right column shows while the studio is open — its
    details, or the tool picked from the row of signs at its foot. */
 export const studio = $state({ offen: false, rechts: 'feinheiten' })
 
 /* A video the user laid down for a draw: the file and the address it is
-   shown from. Not kept with a chat — a file from the user's disk is no
-   name on the service; `chat` is the chat it was laid down in, and it
-   counts for that chat only. */
+   shown from. Not kept in the store — a file from the user's disk is no
+   name on the service — so it stays for the session only. */
 function laidVideo() {
-  const video = $state({ datei: null, url: '', chat: null })
+  const video = $state({ datei: null, url: '' })
   function release() {
     if (video.url) URL.revokeObjectURL(video.url)
     video.datei = null
     video.url = ''
-    video.chat = null
   }
   function set(datei) {
     release()
     video.datei = datei
     video.url = URL.createObjectURL(datei)
-    video.chat = chatanzeige.chatId
     return true
   }
   return { video, set, release }
@@ -77,16 +78,16 @@ export function studioSchliessen() {
   columnsBack()
 }
 
-/* The studio opened on a picture of the chat: it stands in the generation
+/* The studio opened on a picture of a chat: it stands in the generation
    area, the picture to start from. The left column fills the values from
-   the chat's store when it comes up, so a picture handed over before that
+   the studio's store when it comes up, so a picture handed over before that
    is noted like one chosen before the store arrived, and the filling keeps
    it. */
 export function studioWithPicture(name) {
   const columnUp = studioSichtbar()
   studioOeffnen()
   startbildWaehlen(name)
-  if (!columnUp) vorgemerkt = { chat: chatanzeige.chatId, startbild: name }
+  if (!columnUp) vorgemerkt = { startbild: name }
 }
 
 /* The studio's search: one field, at the top of the left column, over the
@@ -144,9 +145,9 @@ export function studioSchalten() {
   else studioOeffnen()
 }
 
-/* The picture values of the open chat as the studio shows them: the
-   fields the service keeps for a chat (app/bildfensterwahl.py, key
-   "bildfenster"), read from and written to that one store. What the chat
+/* The picture values as the studio shows them: the fields the service
+   keeps for the studio (app/bildfensterwahl.py, key "bildfenster" in the
+   global scope), read from and written to that one store. What the studio
    has no value of its own for starts at these. */
 export const ANFANG = {
   /* The prompt bar: the prompt, its negative and the style it is drawn
@@ -173,7 +174,7 @@ export const ANFANG = {
   lora_modus: 'at_runtime',
   switches: {},
   /* Not shown in the basics, but set with the model: the family said by
-     hand, and what a model change starts the chat at beside the measures,
+     hand, and what a model change starts the studio at beside the measures,
      so a new model is never drawn with the old one's flow shift or CLIP
      skip. */
   familie: '',
@@ -187,6 +188,9 @@ export const ANFANG = {
      '' or false, as sd-cli's own value; a number with a start of its own
      carries it. */
   startbild: '',
+  /* The picture that last came from outside (a file, the picture folder):
+     its tile stands on top of the row of pictures and stays there. */
+  original: '',
   maske: '',
   end_bild: '',
   ref_bilder: [],
@@ -259,7 +263,7 @@ export function art() {
 export const werte = $state(structuredClone(ANFANG))
 
 /* What kind of picture is drawn and which half of the kinds is offered.
-   Not stored: a chat opens on the mode that was standing, or, with a
+   Not stored: the studio opens on the mode that was standing, or, with a
    picture in its area, on one that draws from it (`pictureInArea`).
    `art` is 'auto' or a value of KINDS above, `medium` 'bild' or 'video'.
    `klasse` is the family the service read off the chosen model's header,
@@ -267,12 +271,15 @@ export const werte = $state(structuredClone(ANFANG))
    sets). */
 export const auswahl = $state({ art: 'auto', medium: 'bild', klasse: '', startKante: 0 })
 
-/* Whether a mask is painted on the picture in the generation area, as the
-   drawing surface holds it (StudioCanvas keeps it; false while no surface
-   is mounted). */
-export const surface = $state({ masked: false })
+/* What the drawing surface tells the studio (StudioCanvas keeps it; false
+   while no surface is mounted): `masked` — whether a mask is painted on the
+   picture in the generation area — and `maskOn` — the switch "Mask". The
+   switch starts off and the person turns it on: off, the mask is not shown
+   and goes nowhere, not into a request and not into what "auto" goes by;
+   on, it is shown and acts. */
+export const surface = $state({ masked: false, maskOn: false })
 
-/* The family the chat draws with: one said by hand, else the header's. */
+/* The family the studio draws with: one said by hand, else the header's. */
 export function familie() {
   return familyOf(werte.familie || auswahl.klasse)
 }
@@ -283,15 +290,15 @@ export function takesRefVideo(kind, family) {
   return Boolean(kind.video) && family?.name === 'minimax_h3'
 }
 
-/* The kinds of one half the chat's family can draw; every kind of it while
-   the family is unknown. A family that says it edits only with a LoRA
+/* The kinds of one half the studio's family can draw; every kind of it
+   while the family is unknown. A family that says it edits only with a LoRA
    (`edit_needs_lora` of the family table) has its edit among them only
    while a LoRA is chosen in the studio — once the values shown are the
-   open chat's own (`filledFor`): until then the LoRAs are not the chat's yet,
-   and none chosen says nothing. */
+   studio's own (`filledFor`): until then the LoRAs are not read yet, and
+   none chosen says nothing. */
 export function kindsOf(video) {
   const family = familie()
-  const lorasKnown = !chatanzeige.chatId || (filledFor.chat === chatanzeige.chatId && filledFor.read)
+  const lorasKnown = filledFor.read
   const noEdit = Boolean(family?.edit_needs_lora) && lorasKnown
     && !werte.stapel.some((entry) => entry.name)
   return KINDS.filter((k) => k.video === video && (!family || family.tasks.includes(k.task))
@@ -309,7 +316,7 @@ export function autoKind() {
   const video = auswahl.medium === 'video'
   const kinds = kindsOf(video)
   const [fromText, fromPicture] = autoPair(kinds, video)
-  const masked = surface.masked || Boolean(werte.maske)
+  const masked = surface.maskOn && (surface.masked || Boolean(werte.maske))
   if (fromPicture && werte.startbild && (masked || Number(werte.staerke) < 1)) return fromPicture
   return fromText ?? kinds.find((k) => FROM_AREA.includes(k.value)) ?? kinds[0]
     ?? KINDS.find((k) => k.video === video)
@@ -378,17 +385,16 @@ export function listenLaden() {
 
 /* The start values of the chosen model: what the picture server holds for
    it over its family's (GET /bild/vorgaben). Only the newest request
-   counts, and only for the chat it was asked in. */
+   counts. */
 let vorgabenLauf = 0
 // The model whose header `auswahl.klasse` was read off.
 let headerModel = ''
 export async function vorgabenHolen() {
   const lauf = ++vorgabenLauf
-  const chat = chatanzeige.chatId
   const model = werte.modell
   try {
     const [v] = await Promise.all([api.bildVorgaben(model), loadImageFamilies()])
-    if (lauf !== vorgabenLauf || chat !== chatanzeige.chatId || !v || typeof v !== 'object') return null
+    if (lauf !== vorgabenLauf || !v || typeof v !== 'object') return null
     auswahl.klasse = v.family || ''
     headerModel = model
     /* A picture that came into the area before this model's family was
@@ -396,10 +402,10 @@ export async function vorgabenHolen() {
     const due = kindDue
     kindDue = null
     const dueModel = due && (due.model || listen.standardmodell)
-    if (due && dueModel === model && due.chat === chat && werte.startbild) kindOntoPicture()
+    if (due && dueModel === model && werte.startbild) kindOntoPicture()
     return v
   } catch (fehler) {
-    if (lauf === vorgabenLauf && chat === chatanzeige.chatId) melde(String(fehler.message || fehler), 'fehler')
+    if (lauf === vorgabenLauf) melde(String(fehler.message || fehler), 'fehler')
     return null
   }
 }
@@ -418,7 +424,7 @@ export const ontoGrid = (edge) =>
    value that acts. */
 const VAE_FORMATS_OFFERED = ['auto', 'flux', 'sd3', 'flux2']
 
-/* What a chat starts at for its model: the family table's start values
+/* What the studio starts at for its model: the family table's start values
    when a family was said by hand, else the answer above — the measures,
    the CFG and what goes with them, the VAE format, the RNG and the switch
    rows a family starts with, and what the model itself sets. */
@@ -466,7 +472,7 @@ export function startwerte(v) {
 }
 
 /* The shown model's start values on their way into the studio's values.
-   Whatever fetches them and lays them in — the filling for a chat, a model
+   Whatever fetches them and lays them in — the filling of the studio, a model
    or a family picked, "Standard" — does it inside `layingStartValues` and
    answers whether it laid them in. A draw waits until none of these is
    left (`startValuesThere`): the values the fields start at are not a
@@ -499,7 +505,7 @@ export async function startValuesThere() {
   return startValuesLaid
 }
 
-/* A family said by hand (or "automatic") starts the chat at its values,
+/* A family said by hand (or "automatic") starts the studio at its values,
    the same rule a model change follows. */
 export async function familieWaehlen(name) {
   werte.familie = name
@@ -514,38 +520,27 @@ export async function familieWaehlen(name) {
 /* The values the studio last read or wrote, so only a change is written. */
 let geschrieben = structuredClone(ANFANG)
 
-/* Whose values the studio shows: the chat they were last filled for, and
-   whether that chat's store was read by then. Between a chat's opening and
-   the filling from its read store the values are not that chat's own. */
-const filledFor = $state({ chat: null, read: false })
+/* Whether the values the studio shows were filled from its store: until
+   then they are the fields' own starts, not what the studio was left at. */
+const filledFor = $state({ read: false, done: false })
 
-/* Fills the values from the open chat's store; returns the measures the
-   chat has none of its own for — those start at the model's own values.
+/* Whether the values still have to be filled: never yet, or the store was
+   read since. */
+export const fillDue = () => !filledFor.done || filledFor.read !== studioStore.loaded
+// Whether what the values stand at was filled from the read store.
+export const filledFromStore = () => filledFor.read
 
-   A store that arrives after its chat was opened fills only what is
+/* Fills the values from the studio's store; returns the measures the store
+   has none of its own for — those start at the model's own values.
+
+   A store that arrives after the studio was opened fills only what is
    untouched since: what was typed or set meanwhile stays, is no measure to
-   start at the model's value, and is the chat's own from here on — written
-   like any value set by hand. Opening another chat starts the count anew.
-
-   A chat opened while none was open takes the picture and the model that
-   were laid in or chosen there along, whichever chat it is: they stay in
-   the studio and count as set in that chat, like what is set after it
-   opened — also when its store only arrives later. Nothing else is taken
-   along: the other values are the chat's, and between two chats each one
-   keeps its own. */
-const CARRIED = ['startbild', 'modell']
+   start at the model's value, and is the studio's own from here on —
+   written like any value set by hand. */
 export function werteFuellen() {
-  const stand = chatanzeige.geladen ? chatanzeige.bildfenster : {}
-  const late = chatanzeige.geladen && !filledFor.read && filledFor.chat === chatanzeige.chatId
-  const fromWindow = filledFor.chat === null && chatanzeige.chatId !== null
-  const carried = {}
-  if (fromWindow) {
-    const set = setValues()
-    for (const name of CARRIED) if (set[name]) carried[name] = set[name]
-    /* The mask painted on that picture goes with it, under the chat. */
-    if (carried.startbild && masken.get(null)?.bild === carried.startbild) maskIntoChat(chatanzeige.chatId)
-  }
-  const touched = late ? setValues() : carried
+  const stand = studioStore.loaded ? studioStore.value : {}
+  const late = studioStore.loaded && !filledFor.read
+  const touched = late ? setValues() : {}
   const fehlen = []
   const read = {}
   for (const [name, start] of Object.entries(ANFANG)) {
@@ -556,33 +551,28 @@ export function werteFuellen() {
     werte[name] = structuredClone(read[name])
   }
   geschrieben = read
-  Object.assign(filledFor, { chat: chatanzeige.chatId, read: chatanzeige.geladen })
-  // Another chat is open: the masks of the others give their layers back.
-  releaseOtherMasks(chatanzeige.chatId)
+  Object.assign(filledFor, { read: studioStore.loaded, done: true })
   /* The family read off a header is that model's: with another model to
-     show it is unknown until its own arrives, not the one before. A chat
+     show it is unknown until its own arrives, not the one before. A studio
      without a model of its own shows the picture server's default model. */
   if ((werte.modell || listen.standardmodell) !== headerModel) auswahl.klasse = ''
-  /* A start picture chosen before the chat's store arrived outlives it: it
-     stands over the stored one and, unlike what was read, is written. */
-  if (vorgemerkt && vorgemerkt.chat === chatanzeige.chatId) {
+  /* A start picture chosen before the store arrived outlives it: it stands
+     over the stored one and, unlike what was read, is written. */
+  if (vorgemerkt) {
     werte.startbild = vorgemerkt.startbild
     werte.maske = ''
     pictureInArea()
-    if (chatanzeige.geladen) vorgemerkt = null
-  } else {
-    vorgemerkt = null
-    /* A chat that opens with a picture in its area: shown, not written —
-       opening a chat writes nothing. */
-    if (werte.startbild) {
-      pictureInArea()
-      geschrieben.staerke = werte.staerke
-    }
+    if (studioStore.loaded) vorgemerkt = null
+  } else if (werte.startbild) {
+    /* The studio opens with a picture in its area: shown, not written —
+       opening writes nothing. */
+    pictureInArea()
+    geschrieben.staerke = werte.staerke
   }
   newestWhereNone()
   /* Written once the store is read: before that nothing can be written, and
      what is set stays set until the store arrives and finds it. */
-  if (Object.keys(touched).length && chatanzeige.geladen) werteSchreiben()
+  if (Object.keys(touched).length && studioStore.loaded) werteSchreiben()
   return fehlen
 }
 
@@ -599,7 +589,7 @@ let kindDue = null
 export function pictureInArea() {
   if (Number(werte.staerke) >= 1) werte.staerke = art().video ? 0.75 : 0.6
   kindOntoPicture()
-  kindDue = familie() ? null : { model: werte.modell, chat: chatanzeige.chatId }
+  kindDue = familie() ? null : { model: werte.modell }
 }
 
 function kindOntoPicture() {
@@ -611,19 +601,29 @@ function kindOntoPicture() {
 }
 
 /* The start picture is the picture in the generation area. One chosen
-   while the chat's store is still on its way is noted, so the store's late
-   answer cannot take it back (werteFuellen above). A new picture leaves
-   the old picture's mask behind, and sets the kind and the strength it is
-   drawn from with (`pictureInArea`) — here, for every way into the area. */
+   while the studio's store is still on its way is noted, so the store's
+   late answer cannot take it back (werteFuellen above). A new picture
+   leaves the old picture's mask behind, and sets the kind and the strength
+   it is drawn from with (`pictureInArea`) — here, for every way into the
+   area. */
 let vorgemerkt = null
 export function startbildWaehlen(name) {
-  // A picture the area showed by itself is the chat's own once it is chosen.
+  // A picture the area showed by itself is the studio's own once it is chosen.
   if (geschrieben.startbild === name) geschrieben.startbild = ''
-  emptied.delete(chatanzeige.chatId)
+  emptied = false
   werte.startbild = name
   werte.maske = ''
   pictureInArea()
-  vorgemerkt = chatanzeige.geladen ? null : { chat: chatanzeige.chatId, startbild: name }
+  vorgemerkt = studioStore.loaded ? null : { startbild: name }
+}
+
+/* A picture from outside — a file chosen or dropped, one off the picture
+   folder — is the studio's original: it stands in the area like any start
+   picture and its tile stays on top of the row, whatever is drawn or
+   clicked afterwards, until the next picture from outside takes its place. */
+export function pictureFromOutside(name) {
+  werte.original = name
+  startbildWaehlen(name)
 }
 
 /* What the drawing surface hands over when a picture is drawn: the start
@@ -634,30 +634,30 @@ export function startbildWaehlen(name) {
    replaces. */
 export const leinwand = { ausgeben: null, keepView: '' }
 
-/* The chat's newest picture stands in its generation area by itself: every
-   picture drawn for the chat once it is finished — the newest wins, also
-   over a picture laid in by hand — and, for a chat that opens with no
-   picture of its own there, the newest it has. It is the picture of the
-   area like any other, the one the next press draws from if its mode does;
-   but it is shown, not written — the chat's store keeps only a picture
-   that was laid in — and it changes neither the mode nor the strength.
+/* The studio's newest picture stands in its generation area by itself:
+   every picture it draws once it is finished — the newest wins, also over a
+   picture laid in by hand — and, for a studio that opens with no picture of
+   its own there, the newest it has. It is the picture of the area like any
+   other, the one the next press draws from if its mode does; but it is
+   shown, not written — the store keeps only a picture that was laid in —
+   and it changes neither the mode nor the strength.
 
-   Kept for the session, per chat: the newest picture last seen, whether a
-   draw was asked for since, and whether the area was emptied by hand — it
-   then stays empty until the next picture is finished or one is laid in. */
-const newestSeen = new Map()
-const drawAskedFor = new Set()
-const emptied = new Set()
+   Kept for the session: the newest picture last seen, whether a draw was
+   asked for since, and whether the area was emptied by hand — it then
+   stays empty until the next picture is finished or one is laid in. */
+let newestSeen
+let drawAskedSince = false
+let emptied = false
 let areaLook = 0
 
-/* The open chat's pictures, newest first, as last read — the one reading
-   of that list: the area takes its newest from it, the row of pictures
-   shows it. */
-export const chatPictures = $state({ chat: null, names: [] })
+/* The studio's pictures, newest first, as last read — the one reading of
+   that list: the area takes its newest from it, the row of pictures shows
+   it. */
+export const studioPictures = $state({ names: [] })
 
-// A picture is about to be drawn for this chat (studiozeichnen).
-export function drawAsked(chat) {
-  drawAskedFor.add(chat)
+// A picture is about to be drawn (studiozeichnen).
+export function drawAsked() {
+  drawAskedSince = true
 }
 
 /* The generation area emptied by hand: no picture and no mask on it, the
@@ -667,62 +667,54 @@ export function emptyArea() {
   werte.startbild = ''
   werte.maske = ''
   werte.staerke = 1
-  emptied.add(chatanzeige.chatId)
+  emptied = true
 }
 
 function showInArea(name) {
   werteVorschlagen({ startbild: name, maske: '' })
 }
 
-/* For a chat with no picture of its own in the area: the newest it has —
-   once the chat's store is read, so a picture of its own comes first. */
+/* For a studio with no picture of its own in the area: the newest it has —
+   once the store is read, so a picture of its own comes first. */
 function newestWhereNone() {
-  const chat = chatanzeige.chatId
-  if (!chatanzeige.geladen || werte.startbild || emptied.has(chat)) return
-  const newest = newestSeen.get(chat)
-  if (newest) showInArea(newest)
+  if (!studioStore.loaded || werte.startbild || emptied) return
+  if (newestSeen) showInArea(newestSeen)
 }
 
-/* Reads the open chat's pictures, newest first, whenever the chat opens,
-   its line of pictures to draw changes or a message arrives. A newer
-   picture than the last one seen, after a draw was asked for, is a
-   finished one. Only the newest answer counts, and only for the chat it
-   was asked for; a failed read leaves what was read before. */
+/* Reads the studio's pictures, newest first, whenever the studio opens or
+   its line of pictures to draw changes. A newer picture than the last one
+   seen, after a draw was asked for, is a finished one. Only the newest
+   answer counts; a failed read leaves what was read before. */
 export async function newestIntoArea() {
-  const chat = chatanzeige.chatId
   const look = ++areaLook
-  if (!chat) {
-    Object.assign(chatPictures, { chat: null, names: [] })
-    return
-  }
   let names
   try {
-    names = (await api.bilderListe({ chat })).bilder ?? []
+    names = (await api.bilderListe({ studio: true })).bilder ?? []
   } catch {
     return
   }
-  if (look !== areaLook || chat !== chatanzeige.chatId) return
-  Object.assign(chatPictures, { chat, names })
+  if (look !== areaLook) return
+  studioPictures.names = names
   const newest = names[0] ?? ''
-  const before = newestSeen.get(chat)
-  newestSeen.set(chat, newest)
-  if (newest && before !== undefined && newest !== before && drawAskedFor.has(chat)) {
-    emptied.delete(chat)
+  const before = newestSeen
+  newestSeen = newest
+  if (newest && before !== undefined && newest !== before && drawAskedSince) {
+    emptied = false
     leinwand.keepView = newest
     showInArea(newest)
   } else {
     newestWhereNone()
   }
-  // Nothing of this chat left to draw: what comes next is not a finished draw.
-  if (!zustand.pictureQueue.some((w) => w.chat_id === chat)) drawAskedFor.delete(chat)
+  // Nothing left to draw: what comes next is not a finished draw.
+  if (!zustand.pictureQueue.length) drawAskedSince = false
 }
 
-/* The picture styles, the same for every chat (app/bildstile.py): read
-   once, written whole whenever one changes. Every style has an id that
-   never changes, and a chat keeps its style by it — a new name reaches
-   every chat that draws through the style. Styles stored before they had
-   ids get theirs from the service when the list is written; that is done
-   here once, so no chat is ever handed a style without one. */
+/* The picture styles (app/bildstile.py): read once, written whole whenever
+   one changes. Every style has an id that never changes, and the studio
+   keeps its style by it — a new name reaches the style it draws through.
+   Styles stored before they had ids get theirs from the service when the
+   list is written; that is done here once, so the studio is never handed a
+   style without one. */
 export const stile = $state({ liste: [], geladen: false })
 let stileAnfrage = null
 export function stileLaden() {
@@ -752,7 +744,7 @@ export function stileSpeichern() {
    HTTP the page is no secure context. */
 export const newStyleId = () =>
   [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, '0')).join('')
-/* The style a chat's choice stands for: the one with that id, else — for a
+/* The style the studio's choice stands for: the one with that id, else — for a
    choice made before styles had ids — the one called that. A style whose
    name is emptied is on its way out (StudioStyles.svelte) and is none. */
 export function stilVon(chosen) {
@@ -761,25 +753,23 @@ export function stilVon(chosen) {
   return named.find((s) => s.id === chosen) ?? named.find((s) => s.name === chosen) ?? null
 }
 
-/* The mask painted on the drawing surface, per chat: the layer at the start
-   picture's own size, the mask the chat had stored for it (`grund`, read
-   from the file called `stored`) and the steps painted since, so a chat
-   opened again in this session finds its mask as it was left. It leaves the
-   surface as a file only when a picture is drawn.
+/* The mask painted on the drawing surface: the layer at the start
+   picture's own size, the mask the studio had stored for it (`grund`, read
+   from the file called `stored`) and the steps painted since, so the studio
+   opened again in this session finds its mask as it was left. It leaves
+   the surface as a file only when a picture is drawn.
 
-   Only the open chat's mask holds its layers — each as many bytes as four
-   times the picture's pixels. The others give theirs back and keep what
-   they are made of, the stored mask's name and the steps; from these the
-   surface paints the layer again when their chat is opened (`size` tells
-   it the layer that was given back). */
-const masken = new Map()
-export function maskeDesChats(chat, bild) {
-  const da = masken.get(chat)
-  if (da && da.bild === bild) return da
-  if (da) releaseLayers(da)
-  const neu = { bild, flaeche: null, grund: null, stored: '', size: null, verlauf: [], zukunft: [] }
-  masken.set(chat, neu)
-  return neu
+   Only the mask of the picture in the area holds its layers — each as many
+   bytes as four times the picture's pixels. A mask for another picture
+   gives them back and keeps what they are made of, the stored mask's name
+   and the steps; from these the surface paints the layer again (`size`
+   tells it the layer that was given back). */
+let maske = null
+export function studioMask(bild) {
+  if (maske && maske.bild === bild) return maske
+  if (maske) releaseLayers(maske)
+  maske = { bild, flaeche: null, grund: null, stored: '', size: null, verlauf: [], zukunft: [] }
+  return maske
 }
 
 /* A canvas holds its pixels for as long as it has a size: one of no size
@@ -795,31 +785,15 @@ export function releaseLayers(mask) {
   mask.grund = null
 }
 
-function releaseOtherMasks(chat) {
-  for (const [owner, mask] of masken) {
-    if (owner !== chat) releaseLayers(mask)
-  }
-}
-
-/* The mask painted while no chat was open goes with the chat created from
-   the window: the layer is kept under that chat, where the surface finds it
-   again once the chat's own values are read. */
-export function maskIntoChat(chatId) {
-  const held = masken.get(null)
-  if (!held) return
-  masken.delete(null)
-  masken.set(chatId, held)
-}
-
 /* Sets values without writing them: what the model starts with, shown for
-   a chat that has none of its own. */
+   a value the studio has none of its own for. */
 export function werteVorschlagen(teil) {
   Object.assign(werte, teil)
   Object.assign(geschrieben, structuredClone(teil))
 }
 
 /* What was set here: the values that are neither what was read from the
-   chat's store nor a start value shown for it, nor written since. */
+   studio's store nor a start value shown for it, nor written since. */
 export function setValues() {
   const set = {}
   for (const [name, value] of Object.entries($state.snapshot(werte))) {
@@ -828,10 +802,10 @@ export function setValues() {
   return set
 }
 
-/* Writes what changed since the last read or write into the chat's store. */
+/* Writes what changed since the last read or write into the studio's store. */
 export function werteSchreiben() {
   const teil = setValues()
   if (!Object.keys(teil).length) return
   Object.assign(geschrieben, structuredClone(teil))
-  bildfensterAusDemStudio(teil)
+  writeStudioStore(teil)
 }

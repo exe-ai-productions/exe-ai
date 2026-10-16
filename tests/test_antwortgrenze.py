@@ -1171,12 +1171,16 @@ def test_jedes_feld_mit_wort_zeigt_dasselbe_wort():
     # Two of them are the helpers' limits in the settings (app/helper.py);
     # one is the model page's MoE layer count, the same word for the same
     # emptiness (the drawing's slider; 0 would be a count, the empty field
-    # says Auto); one is the picture server's thread count, where the
+    # says Auto); one is the GPU layer count of the llama.cpp servers (empty
+    # means no count is sent and the engine places the layers); one is the
+    # picture server's thread count, where the
     # generator counts its cores itself; three are the picture studio's
     # guidance, frame count and frame rate, ten are its details (image CFG,
     # detection threshold, highres steps, denoise and target edges, skip
-    # layer, preview rhythm, eta, flow shift, CLIP skip).
-    assert gefunden == 26
+    # layer, preview rhythm, eta, flow shift, CLIP skip); one is the speech
+    # server's pause before sending, which says "Auto" while the service
+    # goes by its works number.
+    assert gefunden == 28
 
 
 def test_ein_geleertes_feld_verliert_seine_herkunft():

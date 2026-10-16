@@ -34,8 +34,8 @@ route reads a falsy value as "nothing set" and lets the scope above take
 over, so a bare ``False`` could never switch anything OFF.
 
 The same object also carries HOW the slot runs — window, layers, port, the
-speed module, the projector and the engine levers. That is deliberate and it
-is the one place they may live:
+speed module and projector of each model file, and the engine levers. That
+is deliberate and it is the one place they may live:
 
   * The slot starts by itself at every program start (app/main.py), and at
     that moment there is no browser. A value only a page knows is a value the
@@ -64,6 +64,7 @@ from __future__ import annotations
 from typing import Any
 
 from app import modellkennung
+from app.db.repositories.einstellungen import GLOBAL, WriteRefused
 from app.feineinstellungen import Feineinstellungen
 
 SCHLUESSEL = "agentenmodell"
@@ -88,21 +89,30 @@ KONTEXT_VORGABE = 16384
 # value can come from anywhere — an old version, a hand-edited database, a
 # direct call on the settings route.
 KONTEXT_MIN, KONTEXT_MAX = 512, 1_048_576
-SCHICHTEN_VORGABE = 99
+# No layer count is named: llama.cpp places the layers itself ("auto"), the
+# same rule as the main server's key (app/runnermodellwahl.py).
+SCHICHTEN_VORGABE = None
 SCHICHTEN_MIN, SCHICHTEN_MAX = 0, 999
 PORT_MIN, PORT_MAX = 1024, 65535
 
+# How many model files may carry a remembered module pair — the same cap the
+# main server's key holds (app/runnermodellwahl.py). A write that would grow
+# the row past it is refused, never shortened.
+MODULE_PAIR_LIMIT = 500
+
 VORGABE: dict[str, Any] = {
     "kontext": KONTEXT_VORGABE,
-    # 99 is llama.cpp's own way of saying "all of them" — the same value the
-    # runner has always started this slot with.
     "schichten": SCHICHTEN_VORGABE,
     # None means "the slot's own port" (app/agentenserver.py). The number is not
     # repeated here: the slot owns its port, this key only records a hand
     # that moved it.
     "port": None,
-    "drafter": None,
-    "vision": None,
+    # ``{datei: {"drafter": …, "vision": …}}``, kept per model file: this
+    # server is switched between files, and the projector that belongs to a
+    # vision model is nonsense for the one next to it. Inside an entry
+    # ``None`` means "never chosen for this file" and ``""`` means "chosen:
+    # none".
+    "module": {},
     "fein": Feineinstellungen().als_daten(),
     # Whether the program may bring the slot up by itself at program start,
     # ahead of anybody asking for it (the same lever the main model's own
@@ -170,8 +180,10 @@ def wahl_pruefen(wert: Any) -> dict[str, Any]:
             wert["kontext"], KONTEXT_MIN, KONTEXT_MAX, KONTEXT_VORGABE
         )
     if "schichten" in wert:
-        sauber["schichten"] = _zahl(
-            wert["schichten"], SCHICHTEN_MIN, SCHICHTEN_MAX, SCHICHTEN_VORGABE
+        # None survives as None: "no count named" is a real answer here.
+        sauber["schichten"] = (
+            None if wert["schichten"] is None
+            else _zahl(wert["schichten"], SCHICHTEN_MIN, SCHICHTEN_MAX, None)
         )
     if "port" in wert:
         # None survives as None: "the slot's own port" is a real answer here,
@@ -180,11 +192,24 @@ def wahl_pruefen(wert: Any) -> dict[str, Any]:
             None if wert["port"] in (None, "", 0)
             else _zahl(wert["port"], PORT_MIN, PORT_MAX, None)
         )
-    # A file name, never a path — the runner checks the folder boundary again
-    # before it starts anything.
-    for name in ("drafter", "vision"):
-        if name in wert:
-            sauber[name] = _modulname(wert[name])
+    if "module" in wert:
+        roh = wert["module"] if isinstance(wert["module"], dict) else {}
+        module: dict[str, dict[str, str | None]] = {}
+        for datei, eintrag in roh.items():
+            if not isinstance(eintrag, dict):
+                continue
+            # Only the role that was sent survives: a row writes one of the
+            # two, and filling the other in with ``None`` would make "speed
+            # module changed" read as "projector never chosen" the moment
+            # the two are merged rather than replaced. A file name, never a
+            # path — the runner checks the folder boundary again before it
+            # starts anything.
+            module[str(datei)[:WERT_HOECHSTLAENGE]] = {
+                rolle: _modulname(eintrag[rolle])
+                for rolle in ("drafter", "vision")
+                if rolle in eintrag
+            }
+        sauber["module"] = module
     if "fein" in wert:
         # Checked by building the real thing and reading it back, exactly as
         # app/feineinstellungenwahl.py does — the clamping rules live next to
@@ -224,6 +249,21 @@ def _modulname(roh: Any) -> str | None:
     if roh is None:
         return None
     return str(roh).strip()[:WERT_HOECHSTLAENGE]
+
+
+def _module_count(row: Any) -> int:
+    module = row.get("module") if isinstance(row, dict) else None
+    return len(module) if isinstance(module, dict) else 0
+
+
+def row_check(old: Any, new: Any) -> None:
+    """Refuses a row that a write would grow past ``MODULE_PAIR_LIMIT``
+    module pairs, by raising ``WriteRefused``; nothing is written then. Only
+    growth is refused, so a row stored larger before the cap was enforced
+    still takes a write that adds no module."""
+    count = _module_count(new)
+    if count > MODULE_PAIR_LIMIT and count > _module_count(old):
+        raise WriteRefused("More module pairs are stored than a row can hold.")
 
 
 def wahl(repositories) -> dict[str, Any]:
@@ -512,7 +552,24 @@ def slot_datei(repositories) -> str | None:
     return str(stand.get("wert") or "").strip() or None
 
 
-def slot_startwerte(repositories) -> dict[str, Any]:
+def module_choice(repositories, datei: str) -> dict[str, str | None]:
+    """What was last chosen for exactly this file — speed module, projector.
+
+    ``None`` per entry means "never chosen", which is not the same as
+    "chosen: none": the folder manifest's pairing and the name rule step in
+    for the first and stay out for the second.
+    """
+    module = wahl(repositories).get("module")
+    eintrag = module.get(datei) if isinstance(module, dict) else None
+    if not isinstance(eintrag, dict):
+        return {"drafter": None, "vision": None}
+    return {
+        "drafter": _modulname(eintrag.get("drafter")),
+        "vision": _modulname(eintrag.get("vision")),
+    }
+
+
+def slot_startwerte(repositories, datei: str | None = None) -> dict[str, Any]:
     """HOW the slot runs — everything but the file itself.
 
     The one answer both start paths take: the switch-on in the window
@@ -534,21 +591,54 @@ def slot_startwerte(repositories) -> dict[str, Any]:
     """
     stand = wahl(repositories)
     fein = stand.get("fein")
+    # The file the modules belong to: the one being started, or — for the
+    # start at program launch, which has no request — the one the field
+    # names.
+    modul = module_choice(repositories, datei or slot_datei(repositories) or "")
     return {
         "kontext": _zahl(
             stand.get("kontext"), KONTEXT_MIN, KONTEXT_MAX, KONTEXT_VORGABE
         ),
-        "schichten": _zahl(
-            stand.get("schichten"), SCHICHTEN_MIN, SCHICHTEN_MAX, SCHICHTEN_VORGABE
+        # Nothing named stays nothing: the runner then sends no layer flag.
+        "schichten": (
+            None if stand.get("schichten") is None
+            else _zahl(stand.get("schichten"), SCHICHTEN_MIN, SCHICHTEN_MAX, None)
         ),
         "port": (
             None if stand.get("port") in (None, "", 0)
             else _zahl(stand.get("port"), PORT_MIN, PORT_MAX, None)
         ),
-        "drafter": _modulname(stand.get("drafter")),
-        "vision": _modulname(stand.get("vision")),
+        "drafter": modul["drafter"],
+        "vision": modul["vision"],
         "fein": Feineinstellungen.aus_daten(fein if isinstance(fein, dict) else None),
     }
+
+
+def remember_file(repositories, datei: str) -> None:
+    """Records the file that was just started as the slot's chosen one — when
+    the field already names a slot file.
+
+    The window writes the choice the moment it is picked, which covers the
+    page. This covers every other way a start happens — the command line
+    above all, which used to start a file and leave the field naming the one
+    before it, so the window said the wrong model about a server that was up.
+
+    Only a field that names a slot file follows the file that runs. Starting
+    the slot from outside is no decision about which model the unattended
+    runs use: a field that names the main model or a cloud model keeps
+    naming it, and the window then says what the runs really go to.
+    Written key by key (``zusammenlegen``), never as a whole object: a start
+    and a slider are two writers on one row.
+    """
+    stand = repositories.einstellungen.holen(GLOBAL, SCHLUESSEL)
+    if not (isinstance(stand, dict) and stand.get("sorte") == SORTE_SLOT):
+        return
+    if stand.get("wert") == datei:
+        return
+    repositories.einstellungen.zusammenlegen(
+        GLOBAL, SCHLUESSEL,
+        {"sorte": SORTE_SLOT, "wert": datei[:WERT_HOECHSTLAENGE]},
+    )
 
 
 def vorladen_erlaubt(repositories) -> bool:

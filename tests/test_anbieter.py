@@ -488,3 +488,151 @@ def test_the_question_names_the_key_in_both_languages():
     # The sentence for a shared key is the one that already stood there.
     assert "key remains in .env" in t("modell.anbieter_loeschen_frage", "en", name="Acme")
     assert "bleibt in der .env erhalten" in t("modell.anbieter_loeschen_frage", "de", name="Acme")
+
+
+# --- config.yaml is written back as it was, only the entry changes -----------
+
+HAND_WRITTEN = """\
+# Exe AI — configuration, written by hand.
+# The comments say why a value stands where it does.
+
+app:
+  port: 8090   # the service port
+  data_dir: "./data"
+  runner_programm: null
+
+endpoints:
+  # The model server on this machine.
+  - id: omlx
+    group: local
+    provider: openai_compatible
+    base_url: "http://127.0.0.1:8001/v1"   # oMLX
+    modell: 'Qwen3.5-4B'
+
+  # The server in the cellar.
+  - id: cellar
+    group: local
+    base_url: https://cellar.example/v1
+"""
+
+
+def _lines_changed(before: str, after: str) -> tuple[list[str], list[str]]:
+    """The lines only the old text has, and the lines only the new one has."""
+    import difflib
+
+    gone, added = [], []
+    for line in difflib.ndiff(before.splitlines(), after.splitlines()):
+        if line.startswith("- "):
+            gone.append(line[2:])
+        elif line.startswith("+ "):
+            added.append(line[2:])
+    return gone, added
+
+
+def test_adding_a_provider_keeps_comments_quotes_and_blank_lines(client, eigener_ordner):
+    datei = eigener_ordner / "config.yaml"
+    datei.write_text(HAND_WRITTEN, encoding="utf-8")
+
+    assert _add_own(client, "eigene").status_code == 200
+
+    nachher = datei.read_text(encoding="utf-8")
+    # Everything that stood there still stands there, byte for byte; the
+    # new entry is the only thing that came.
+    assert nachher.startswith(HAND_WRITTEN)
+    gone, added = _lines_changed(HAND_WRITTEN, nachher)
+    assert gone == []
+    assert "  - id: eigene" in added
+    # The entry came in the file's own list style (dash two in).
+    assert yaml.safe_load(nachher)["endpoints"][-1]["id"] == "eigene"
+
+
+def test_a_provider_added_and_removed_again_leaves_the_file_byte_equal(client, eigener_ordner):
+    datei = eigener_ordner / "config.yaml"
+    datei.write_text(HAND_WRITTEN, encoding="utf-8")
+    _add_own(client, "eigene")
+
+    assert client.delete("/api/v1/providers/eigene").status_code == 204
+
+    assert datei.read_text(encoding="utf-8") == HAND_WRITTEN
+
+
+def test_changing_a_providers_word_touches_only_its_own_lines(client, eigener_ordner):
+    datei = eigener_ordner / "config.yaml"
+    datei.write_text(HAND_WRITTEN, encoding="utf-8")
+    _add_own(client, "eigene")
+    vorher = datei.read_text(encoding="utf-8")
+
+    assert client.put(
+        "/api/v1/providers/eigene/capabilities", json={"vision": True}
+    ).status_code == 200
+    mitte = datei.read_text(encoding="utf-8")
+    gone, added = _lines_changed(vorher, mitte)
+    assert gone == []
+    assert any("vision: true" in line for line in added)
+    assert mitte.startswith(HAND_WRITTEN)
+
+    assert client.put(
+        "/api/v1/providers/eigene/timeout", json={"timeout_enabled": False}
+    ).status_code == 200
+    ende = datei.read_text(encoding="utf-8")
+    assert ende.startswith(HAND_WRITTEN)
+    assert yaml.safe_load(ende)["endpoints"][-1]["timeout_enabled"] is False
+
+
+def test_removing_a_provider_in_the_middle_keeps_the_comment_of_the_next_one(
+    client, eigener_ordner
+):
+    """The comment lines in front of an entry hang on the entry before it
+    in the parser: removing one must not take the next one's comment along,
+    nor leave its own standing over a stranger."""
+    _add_own(client, "eigene")
+    _add_own(client, "zweite", schluessel="sk-test-5678")
+    datei = eigener_ordner / "config.yaml"
+    datei.write_text(
+        HAND_WRITTEN
+        + "\n  # Mine, the first one.\n  - id: eigene\n    group: cloud   # cloud\n"
+        + "    provider: openai_compatible\n"
+        + "\n  # Mine, the second one.\n  - id: zweite\n    group: cloud\n"
+        + "    provider: openai_compatible\n"
+        + "# The end of the list.\n",
+        encoding="utf-8",
+    )
+
+    assert client.delete("/api/v1/providers/eigene").status_code == 204
+
+    nachher = datei.read_text(encoding="utf-8")
+    assert "# Mine, the second one." in nachher
+    assert "# Mine, the first one." not in nachher
+    assert "# The end of the list." in nachher
+    assert "# The server in the cellar." in nachher
+    assert nachher.index("# Mine, the second one.") < nachher.index("id: zweite")
+
+
+def test_a_file_with_the_other_list_style_keeps_it(client, eigener_ordner):
+    """Dash flush with its key, the way this program has always written the
+    file: the entry comes in that style, not in the other one."""
+    flach = "endpoints:\n- id: omlx\n  group: local\n  base_url: http://127.0.0.1:8001/v1\n"
+    datei = eigener_ordner / "config.yaml"
+    datei.write_text(flach, encoding="utf-8")
+
+    assert _add_own(client, "eigene").status_code == 200
+
+    nachher = datei.read_text(encoding="utf-8")
+    assert nachher.startswith(flach)
+    assert "\n- id: eigene\n" in nachher
+    assert "  - id" not in nachher
+
+
+def test_a_file_without_comments_reads_back_the_same(client, eigener_ordner):
+    """Silence probe: nothing to keep, nothing changes but the new entry."""
+    plain = "app:\n  port: 8090\nendpoints:\n- id: omlx\n  group: local\n"
+    datei = eigener_ordner / "config.yaml"
+    datei.write_text(plain, encoding="utf-8")
+    before = yaml.safe_load(plain)
+
+    _add_own(client, "eigene")
+
+    after = yaml.safe_load(datei.read_text(encoding="utf-8"))
+    assert after["app"] == before["app"]
+    assert after["endpoints"][0] == before["endpoints"][0]
+    assert [e["id"] for e in after["endpoints"]] == ["omlx", "eigene"]

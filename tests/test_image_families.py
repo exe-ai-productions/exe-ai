@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from app import bildfensterwahl, bildinhalt, image_families, image_switches
 from app.config import Config
 from app.tools import bild_werkzeug
-from tests.conftest import Antwort, Bilddienst
+from tests.conftest import Bilddienst
 
 # --- Header dummies --------------------------------------------------------
 
@@ -363,7 +363,7 @@ _VORGABEN = {
 }
 
 
-def _dienst(fenster, **werte) -> Bilddienst:
+def _dienst(**werte) -> Bilddienst:
     """The shared stand-in, holding the two models of this file — and what
     this file knows about them. A test that wants another answer for
     ``/bild/vorgaben`` hands one in; it then wins over the table here."""
@@ -371,80 +371,50 @@ def _dienst(fenster, **werte) -> Bilddienst:
         "modelle": ["a.safetensors", "flux.gguf"],
         "vorgaben": lambda modell: _VORGABEN.get(modell, _VORGABEN["a.safetensors"]),
     }
-    return Bilddienst(fenster, **{**eigene, **werte})
+    return Bilddienst(**{**eigene, **werte})
 
 
-def _draw(tmp_path, monkeypatch, service, chat_id=None, job_id=None):
+def _draw(tmp_path, monkeypatch, service, chat_id=None):
     monkeypatch.setattr(bild_werkzeug.httpx, "AsyncClient", lambda timeout, headers: service)
     asyncio.run(
         bild_werkzeug.ausfuehren(
-            {"prompt": "a dog"}, "http://x", tmp_path, "testschluessel",
-            chat_id=chat_id, job_id=job_id,
+            {"prompt": "a dog"}, "http://x", tmp_path, "testschluessel", chat_id=chat_id,
         )
     )
     return service.gezeichnet[-1]
 
 
-_WINDOW_C1 = {
-    "modell": "a.safetensors", "breite": 768, "hoehe": 640, "schritte": 12, "cfg": 4.5,
-    "sampler": "dpm++2m", "negativ": "blur", "seed": "5", "seed_modus": "fest",
-    "stapel": [{"name": "detail.safetensors", "staerke": 0.6}],
-}
+def test_draw_image_draws_with_the_default_model_at_its_start_values(tmp_path, monkeypatch):
+    """Every caller — a chat, another chat, a run without one — gets the
+    picture server's default model at its family's start values."""
+    bodies = [
+        _draw(tmp_path, monkeypatch, _dienst(standardmodell="a.safetensors"), chat_id=chat)
+        for chat in ("c1", "c2", None)
+    ]
+    for body in bodies:
+        assert body["modell"] == "a.safetensors"
+        assert (body["breite"], body["hoehe"], body["schritte"], body["cfg"]) == (1024, 1024, 20, 5.0)
+        assert body["sampler"] == "euler"
+        # The route's own defaults stand for what is not sent.
+        assert "seed" not in body and "loras" not in body
+        assert body["prompt"] == "a dog"
+        for name in ("startbild", "maske", "pulid_id_embedding", "control_image"):
+            assert name not in body
 
 
-def test_draw_image_draws_with_the_window_values_of_its_chat(tmp_path, monkeypatch):
-    body = _draw(tmp_path, monkeypatch, _dienst({"c1": _WINDOW_C1}), chat_id="c1")
-    assert body["modell"] == "a.safetensors"
-    assert (body["breite"], body["hoehe"], body["schritte"], body["cfg"]) == (768, 640, 12, 4.5)
-    assert body["sampler"] == "dpm++2m"
-    assert body["seed"] == 5
-    assert body["loras"] == [{"name": "detail.safetensors", "staerke": 0.6}]
-    assert body["prompt"] == "a dog"
-
-
-def test_a_second_chat_draws_with_its_own_values(tmp_path, monkeypatch):
-    service = _dienst({"c1": _WINDOW_C1, "c2": {"modell": "a.safetensors", "cfg": 2.0}})
-    body = _draw(tmp_path, monkeypatch, service, chat_id="c2")
-    assert body["cfg"] == 2.0
-    # What the second chat never set starts at the family's own values.
-    assert (body["breite"], body["schritte"]) == (1024, 20)
-    assert body["loras"] == []
-
-
-def test_the_pictures_of_the_window_stay_with_the_person(tmp_path, monkeypatch):
-    """The silence probe: a start picture, its mask, a face photo or a
-    guide picture the window holds never reach the tool's request."""
-    window = {**_WINDOW_C1, "startbild": "s.png", "maske": "m.png",
-               "pulid_id_embedding": "p.bin", "control_image": "c.png"}
-    body = _draw(tmp_path, monkeypatch, _dienst({"c1": window}), chat_id="c1")
-    for name in ("startbild", "maske", "pulid_id_embedding", "control_image"):
-        assert name not in body
-
-
-def test_a_job_draws_with_the_window_of_the_chat_it_came_from(tmp_path, monkeypatch):
-    service = _dienst({"c1": _WINDOW_C1}, jobs={"job7": "c1"})
-    body = _draw(tmp_path, monkeypatch, service, job_id="job7")
-    assert (body["modell"], body["cfg"]) == ("a.safetensors", 4.5)
-
-
-def test_a_job_without_a_chat_draws_the_first_model_at_its_start_values(tmp_path, monkeypatch):
-    service = _dienst({"c1": _WINDOW_C1}, jobs={})
-    body = _draw(tmp_path, monkeypatch, service, job_id="scheduled")
-    assert body["modell"] == "a.safetensors"
-    assert (body["breite"], body["cfg"]) == (1024, 5.0)
-
-
-def test_a_flux_diffusion_model_goes_out_with_a_free_cfg_and_without_its_kit(tmp_path, monkeypatch):
+def test_a_flux_diffusion_model_goes_out_with_its_start_cfg_and_without_its_kit(
+    tmp_path, monkeypatch,
+):
     """The model's kit is the picture server's: the tool names the model and
     its family, the draw route adds the parts (app/api/v1/bild.py
     ``_model_kit``)."""
-    service = _dienst({"c1": {"modell": "flux.gguf", "cfg": 3.5}})
+    service = _dienst(standardmodell="flux.gguf")
     body = _draw(tmp_path, monkeypatch, service, chat_id="c1")
     assert body["modell"] == "flux.gguf"
     for part in ("diffusion_model", "t5xxl", "clip_l", "vae"):
         assert part not in body
     assert body["familie"] == "flux"
-    assert (body["cfg"], body["guidance"]) == (3.5, 3.5)
+    assert (body["cfg"], body["guidance"]) == (image_families.get("flux").start.cfg, 3.5)
 
 
 def _llm(path: Path, architecture: str, width: int) -> Path:
@@ -599,27 +569,12 @@ def test_the_studio_starts_a_chosen_model_at_its_own_values():
     assert "diffusionModell" not in source and "KIT_EXTRAS" not in source
 
 
-def test_the_photomaker_face_stays_with_the_person(tmp_path, monkeypatch):
-    window = {**_WINDOW_C1, "pm_klasse": "man"}
-    body = _draw(tmp_path, monkeypatch, _dienst({"c1": window}), chat_id="c1")
-    assert "pm_klasse" not in body
-
-
-def test_the_preparation_is_told_the_chosen_style_by_name(tmp_path, monkeypatch):
-    """The prompt preparation hears the style the chat draws through, by the
-    name that style has: the chat keeps the style's id, the list of styles
-    says what it is called. A free text kept beside it is no style: the
-    service keeps none."""
-    kept = "3" * 32
-    window = {**_WINDOW_C1, "stil": kept, "prompt_stil": "cinematic"}
-    styles = Antwort({"wert": [{"id": kept, "name": "Photo", "text": "{prompt}", "negativ": ""}]})
-    service = _dienst({"c1": window, "c2": _WINDOW_C1}, answers={"/settings/resolved/bildstile": styles})
-    _draw(tmp_path, monkeypatch, service, chat_id="c1")
-    _draw(tmp_path, monkeypatch, service, chat_id="c2")
-    asked = [body["stil"] for url, body in service.aufrufe if url.endswith("/bild/prompt")]
-    # The silence check: a chat that chose no style names none.
-    assert asked == ["Photo", ""]
-    assert bildfensterwahl.wahl_pruefen({"stil": "Photo", "prompt_stil": "cinematic"}) == {"stil": "Photo"}
+def test_a_free_prompt_style_text_is_no_stored_value():
+    """A free text kept beside the style's id is no style: the service keeps
+    none."""
+    assert bildfensterwahl.wahl_pruefen({"stil": "Photo", "prompt_stil": "cinematic"}) == {
+        "stil": "Photo",
+    }
 
 
 def test_the_chat_keeps_a_fractional_cfg():
@@ -735,11 +690,13 @@ def test_an_unknown_family_word_is_refused_even_when_the_header_knows(
     assert answer.status_code == 400
 
 
-def test_the_tool_takes_the_window_family_over_the_header(tmp_path, monkeypatch):
-    """The window says sdxl, the header of the file says flux and
-    standalone: the tool draws what the window says — sdxl start values,
-    no kit parts."""
-    service = _dienst({"c1": {"modell": "flux.gguf", "familie": "sdxl"}})
+def test_the_tool_takes_the_family_the_route_names(tmp_path, monkeypatch):
+    """The route names the family of the default model: the tool draws
+    with that family's start values and sends no kit parts."""
+    service = _dienst(
+        standardmodell="flux.gguf",
+        vorgaben=lambda modell: {**_VORGABEN["a.safetensors"], "family": "sdxl"},
+    )
     body = _draw(tmp_path, monkeypatch, service, chat_id="c1")
     assert body["familie"] == "sdxl"
     assert "diffusion_model" not in body
@@ -995,7 +952,9 @@ def test_every_family_with_a_kit_names_a_source_for_each_part():
         if not family.kit_parts:
             continue
         fields = {part.part for part in family.kit_parts}
-        assert fields - {"vae"} == set(family.encoders), family.name
+        # The text encoders, the VAE and the further parts the family
+        # declares (the vision half of an encoder).
+        assert fields - {"vae"} - set(family.parts) == set(family.encoders), family.name
         assert ("vae" in fields) == (family.name not in _NO_VAE), family.name
         for part in family.kit_parts:
             assert "/" in part.repo and part.file and part.source, family.name
@@ -1329,6 +1288,7 @@ _VARIANTS = [
      _values(1328, 1328, 8, 1.0, flow_shift=3.0)),
     ("wan", "lightx2v", "wan2.1_t2v_14B_lightx2v_4steps.safetensors",
      _values(832, 480, 4, 1.0, flow_shift=5.0, frames=81, fps=16)),
+    ("qwen_image_2_1", "turbo", "qwen-image-2.1-turbo-Q4_K_M.gguf", _values(2048, 2048, 8, 1.0)),
 ]
 
 
@@ -1386,6 +1346,28 @@ def test_a_file_named_for_a_variant_starts_at_the_variant_s_values(family, word,
     assert image_families.start_values(family, f"model-a{word}b-q4.gguf") is own.start
     assert image_families.start_values(family, f"model-{word}ed-q4.gguf") is own.start
     assert image_families.start_values(family) is own.start
+
+
+def test_the_turbo_model_of_qwen_image_2_1_names_the_card_it_starts_by():
+    start = image_families.start_values("qwen_image_2_1", "qwen-image-2.1-turbo-Q8_0.gguf")
+    assert "Qwen-Image-2.1-Turbo" in start.sources["steps"]
+    assert "Qwen-Image-2.1-Turbo" in start.sources["cfg"]
+    # The plain model, and the other Qwen-Image families, keep their start.
+    plain = image_families.get("qwen_image_2_1").start
+    assert image_families.start_values("qwen_image_2_1", "qwen_image_2.1-Q8_0.gguf") is plain
+    assert image_families.start_values("qwen_image", "qwen-image-turbo.gguf").steps == 20
+
+
+def test_the_kit_of_qwen_image_2_1_brings_the_vision_part_of_its_encoder():
+    kit = image_families.kit_of_file("qwen-image-2.1-Q4_K_M.gguf")
+    vision = [part for part in kit if part.part == "llm_vision"]
+    assert [(part.repo, part.file) for part in vision] == [
+        ("Qwen/Qwen3-VL-8B-Instruct-GGUF", "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf")
+    ]
+    assert vision[0].folder == "text_encoders"
+    # Another family that edits from references has no such part named.
+    assert not [p for p in image_families.kit_of_file("Qwen-Image-Q4_K_M.gguf")
+                if p.part == "llm_vision"]
 
 
 def test_the_first_variant_of_a_family_wins():

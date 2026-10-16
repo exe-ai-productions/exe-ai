@@ -51,8 +51,11 @@ export const agentenmodell = $state({
   schichten: null,
   /* Null is a real answer: "the slot's own port". */
   port: null,
-  drafter: null,
-  vision: null,
+  /* `{ datei: { drafter, vision } }` — the module pair remembered for exactly
+     that file, the way the model server keeps it (lib/runnermodell.svelte.js):
+     this server is switched between files, and a projector that belongs to
+     one is nonsense for the next. */
+  module: {},
   fein: null,
   /* Whether the program may bring the slot up by itself at program start,
      ahead of anybody asking for it (app/agentenmodellwahl.py —
@@ -136,8 +139,7 @@ async function einlesen(streng = false) {
         ? null
         : Number(w.schichten)
       agentenmodell.port = Number(w.port) || null
-      agentenmodell.drafter = typeof w.drafter === 'string' ? w.drafter : null
-      agentenmodell.vision = typeof w.vision === 'string' ? w.vision : null
+      agentenmodell.module = w.module && typeof w.module === 'object' ? w.module : {}
       agentenmodell.fein = w.fein && typeof w.fein === 'object' ? w.fein : null
       agentenmodell.vorladen = typeof w.vorladen === 'boolean' ? w.vorladen : null
       agentenmodell.geladen = true
@@ -185,8 +187,7 @@ function alsObjekt(aenderung = {}) {
     kontext: agentenmodell.kontext,
     schichten: agentenmodell.schichten,
     port: agentenmodell.port,
-    drafter: agentenmodell.drafter,
-    vision: agentenmodell.vision,
+    module: agentenmodell.module,
     fein: agentenmodell.fein,
     vorladen: agentenmodell.vorladen,
     ...aenderung,
@@ -213,6 +214,38 @@ export function werteSetzen(werte) {
       throw new Error('einstellung')
     }
   })
+}
+
+/* The module pair remembered for one file. Written when a row is changed by
+   hand and at no other moment: a pre-pick the form only offers is not yet an
+   answer, and storing it would freeze the folder manifest's pairing into a
+   choice nobody made.
+
+   Only the role that changed goes out, and only this file's entry — the table
+   is a set of sets, and the rest of it is this window's stale copy as much as
+   the numbers are. */
+export function setModules(datei, werte) {
+  return nacheinander(async () => {
+    if (!agentenmodell.geladen) await einlesen()
+    const vorher = agentenmodell.module
+    const alt = vorher[datei] ?? {}
+    agentenmodell.module = { ...vorher, [datei]: { ...alt, ...werte } }
+    try {
+      await api.einstellungMischen('global', SCHLUESSEL, { module: { [datei]: werte } })
+    } catch {
+      agentenmodell.module = vorher
+      throw new Error('einstellung')
+    }
+  })
+}
+
+/* What was chosen for this file — `null` per entry when nothing ever was. */
+export function modulesFor(datei) {
+  const eintrag = agentenmodell.module?.[datei]
+  return {
+    drafter: typeof eintrag?.drafter === 'string' ? eintrag.drafter : null,
+    vision: typeof eintrag?.vision === 'string' ? eintrag.vision : null,
+  }
 }
 
 /* Start and stop, as the page's foot button. The choice is what the program

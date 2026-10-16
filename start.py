@@ -66,6 +66,14 @@ def _mcp_bedienen(name: str) -> int:
     return 0
 
 
+def _voice_bedienen() -> int:
+    """The kept voice, in a process of its own: the program is its own
+    voice process (app/voice_service.py starts it with ``--voice``)."""
+    from app.voice_worker import main as voice_main
+
+    return voice_main()
+
+
 def _cli_bedienen(argumente: list[str]) -> int:
     """The terminal client, in this process: the command ``exe`` hands its
     arguments here, and the client takes them as its own command line."""
@@ -202,6 +210,8 @@ def main(argumente: list[str] | None = None) -> int:
             print("--mcp braucht einen Namen", file=sys.stderr)
             return 2
         return _mcp_bedienen(argv[1])
+    if argv and argv[0] == "--voice":
+        return _voice_bedienen()
     if argv and argv[0] == "--serve":
         return _terminal_bedienen(with_window=False)
     # After the service's own switches: the client program starts the

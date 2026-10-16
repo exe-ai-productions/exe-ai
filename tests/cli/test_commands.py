@@ -109,7 +109,13 @@ class Service:
         self.chats = {listed["id"]: dict(listed) for listed in CHATS}
         self.always = {"run_command": "ja", "gone_tool": "ja"}
         self.created = 0
-        # Scope → key → what the scope holds; what /set reads and writes.
+        # What GET /skills lists and what a fold answers with.
+        # ``None`` makes the listing fail.
+        self.skills: list[dict[str, Any]] | None = []
+        self.fold: dict[str, Any] = {"result": "folded", "replaced": 12}
+        # Called while a fold is under way, for a test that acts then.
+        self.while_folding: Callable[[], None] | None = None
+        # Scope → key → what the scope holds; what /settings reads and writes.
         self.settings: dict[str, dict[str, Any]] = {
             "chat:chat-1": {"parameter": {"temperature": 0.7, "top_p": 0.9}}
         }
@@ -161,6 +167,14 @@ class Service:
                 if wanted is None or wanted.casefold() in listed["title"].casefold()
             ]
             return httpx.Response(200, json=listed)
+        if path == "/skills":
+            if self.skills is None:
+                return httpx.Response(500, json={"detail": "The skills cannot be read"})
+            return httpx.Response(200, json=self.skills)
+        if path.startswith("/chats/") and path.endswith("/compact") and method == "POST":
+            if self.while_folding is not None:
+                self.while_folding()
+            return httpx.Response(200, json=self.fold)
         if path.startswith("/chats/") and path.endswith("/messages"):
             page = [
                 {"role": "user", "content": "Where to?"},
@@ -360,6 +374,33 @@ class Picking(Silent):
         return [number for number, entry in enumerate(self.shown[-1]) if entry.in_use]
 
 
+class Walking(Picking):
+    """Picks the entries a test names, one selection after the other; a
+    selection past the last one is closed. Text questions are answered from
+    ``typed`` in turn and kept in ``questions``."""
+
+    def __init__(self, *picks: int | None, typed: list[str | None] | None = None) -> None:
+        super().__init__()
+        self.picks = list(picks)
+        self.typed = list(typed or [])
+        self.questions: list[tuple[str, str | None]] = []
+
+    def choose(self, entries: Any, head: str = "") -> int | None:
+        self.shown.append(list(entries))
+        self.heads.append(head)
+        return self.picks.pop(0) if self.picks else None
+
+    def ask_text(
+        self, head: str, *, secret: bool = False, default: str | None = None
+    ) -> str | None:
+        self.questions.append((head, default))
+        return self.typed.pop(0) if self.typed else None
+
+    def remarks(self) -> list[str]:
+        """The remark of each entry of the selection shown last."""
+        return [entry.note for entry in self.shown[-1]]
+
+
 def context(service: Service, tmp_path: Path, language: str = "en") -> Context:
     """Everything the commands need, without a screen that runs."""
     client = ServiceClient(
@@ -452,14 +493,17 @@ def test_help_names_every_registered_command_with_its_one_line(ctx):
     lines = ctx.screen.lines()
     names = ctx.commands.names()
     assert names == [
-        "new", "chats", "model", "server", "download", "status", "theme", "lang", "settings", "set",
-        "tools", "think", "export", "stop", "clear", "help", "quit", "exit",
+        "new", "chats", "rename", "delete", "archive", "project", "model", "server", "download", "provider", "status", "theme", "lang", "setup",
+        "settings", "agents", "cron", "tools", "ps", "mcp", "skills", "files", "image", "memory", "system", "dir", "think", "compact", "export", "stop", "clear", "help", "quit", "exit",
     ]  # fmt: skip
     # A row begins with the command's name; whatever stands below it up to
-    # the next name belongs to it.
-    rows = []
+    # the next name belongs to it. A line that carries a sentence on may
+    # itself begin with a command's name, so only the name that is next
+    # opens a row.
+    rows: list[list[str]] = []
     for line in lines:
-        if line.startswith("/"):
+        following = names[len(rows)] if len(rows) < len(names) else None
+        if following is not None and line.startswith(f"/{following} "):
             rows.append([line])
         else:
             rows[-1].append(line)
@@ -502,7 +546,7 @@ def test_the_completer_shows_the_first_line_of_a_summary_that_has_two(ctx):
 def test_the_two_commands_that_went_are_unknown_and_do_nothing(ctx, service, line):
     ctx.commands.run(line)
     assert ctx.renderer.errors == [Texts("en").t("cli.unbekannt", name=line.split()[0][1:])]
-    assert service.seen == [] and ctx.asker.shown == []
+    assert service.paths() == ["GET /api/v1/skills"] and ctx.asker.shown == []
     assert ctx.session.chat["id"] == "chat-1"
     assert themes.current().name == themes.DEFAULT_LOOK
 
@@ -537,10 +581,11 @@ def test_a_chat_named_by_its_number_is_opened_and_only_its_own_history_is_writte
     assert ctx.screen.lines() == [f"2/7 {Texts('en').t('cli.messages')}"]
 
 
-def test_an_unknown_command_is_answered_and_asks_the_service_nothing(ctx, service):
+def test_an_unknown_command_is_answered_and_asks_the_service_only_for_its_skills(ctx, service):
     ctx.commands.run("/nope now")
     assert ctx.renderer.errors == [Texts("en").t("cli.unbekannt", name="nope")]
-    assert service.seen == []
+    # The word might name a skill: the list of them is the one thing asked.
+    assert service.paths() == ["GET /api/v1/skills"]
 
 
 def test_quit_and_exit_leave_the_client(ctx):
@@ -611,6 +656,181 @@ def test_a_line_without_a_slash_never_reaches_the_register(service, tmp_path):
     assert Texts("en").t("cli.cmd_help") not in shown
 
 
+# --- the skills behind the slash ---------------------------------------------------
+
+SKILLS = [
+    {"name": "summarise", "beschreibung": "Sums a text up.\nSecond line.", "auto": True},
+    {"name": "resume", "beschreibung": "Picks a thread up again.", "auto": False},
+    {"name": "export", "beschreibung": "Clashes with the command.", "auto": False},
+]
+
+
+def test_the_skills_stand_behind_the_commands_once_the_service_has_listed_them(ctx, service):
+    service.skills = SKILLS
+    offered(ctx, "/")  # starts the reading on a thread of its own
+    until(lambda: len(service.asked("GET", "/skills")) == 1)
+    until(lambda: any(c.text == "/summarise" for c in offered(ctx, "/")))
+    names = [completion.text for completion in offered(ctx, "/")]
+    assert names.index("/summarise") > names.index("/export")
+    assert names.count("/export") == 1
+    # The first line of the description is what stands beside the name.
+    found = {c.text: c.display_meta_text for c in offered(ctx, "/summ")}
+    assert found == {"/summarise": "Sums a text up."}
+    # Asked once, however often the list is opened.
+    assert len(service.asked("GET", "/skills")) == 1
+
+
+def test_skills_that_start_with_the_letters_come_before_those_that_hold_them(ctx, service):
+    service.skills = SKILLS
+    offered(ctx, "/")
+    until(lambda: any(c.text == "/resume" for c in offered(ctx, "/")))
+    # "su" starts summarise and sits inside resume.
+    assert [c.text for c in offered(ctx, "/su")] == ["/summarise", "/resume"]
+
+
+def test_a_line_with_a_skill_name_goes_out_as_a_message_with_the_skill(ctx, service):
+    service.skills = SKILLS
+    ctx.commands.run("/summarise the report on sails")
+    sent = service.bodies("POST", "/chat/completions")
+    assert len(sent) == 1
+    assert sent[0]["content"] == "/summarise the report on sails"
+    assert sent[0]["skill"] == "summarise"
+    assert sent[0]["chat_id"] == "chat-1"
+    assert ctx.renderer.errors == []
+
+
+def test_a_skill_name_is_found_whatever_its_case(ctx, service):
+    service.skills = SKILLS
+    ctx.commands.run("/SUMMARISE now")
+    assert service.bodies("POST", "/chat/completions")[0]["skill"] == "summarise"
+
+
+def test_the_first_skill_line_of_a_new_chat_names_it_after_the_words_behind_it(ctx, service):
+    service.skills = SKILLS
+    ctx.commands.run("/new")
+    ctx.commands.run("/summarise the report on sails")
+    assert service.chats["new-1"]["title"] == "the report on sails"
+
+
+def test_a_skill_named_like_a_command_is_the_command(ctx, service):
+    service.skills = SKILLS + [{"name": "Compact", "beschreibung": "Same word.", "auto": False}]
+    offered(ctx, "/")
+    until(lambda: any(c.text == "/summarise" for c in offered(ctx, "/")))
+    # Whatever its case, the skill with the name of a command is not listed.
+    assert [c.text for c in offered(ctx, "/")].count("/export") == 1
+    assert "/Compact" not in [c.text for c in offered(ctx, "/")]
+    ctx.commands.run("/export")
+    assert not service.asked("POST", "/chat/completions")
+
+
+def test_a_skill_line_waits_behind_a_running_answer(ctx, service):
+    service.skills = SKILLS
+    queued: list[Callable[[], None]] = []
+    ctx.screen.queue = queued.append  # type: ignore[method-assign]
+    ctx.session.answering = True
+    ctx.commands.run("/summarise it")
+    assert queued and not service.asked("POST", "/chat/completions")
+    ctx.session.answering = False
+    queued[0]()
+    assert service.bodies("POST", "/chat/completions")[0]["skill"] == "summarise"
+
+
+def test_the_commands_stand_without_an_error_line_when_the_skills_cannot_be_read(ctx, service):
+    service.skills = None
+    names = [completion.text for completion in offered(ctx, "/")]
+    assert "/export" in names
+    until(lambda: service.asked("GET", "/skills"))
+    assert ctx.renderer.errors == []
+    ctx.commands.run("/summarise it")
+    assert ctx.renderer.errors == [Texts("en").t("cli.unbekannt", name="summarise")]
+
+
+def test_a_message_without_a_slash_carries_no_skill(ctx, service):
+    service.skills = SKILLS
+    chat.send(ctx, "summarise this")
+    assert "skill" not in service.bodies("POST", "/chat/completions")[0]
+
+
+def test_an_unknown_word_is_still_unknown_when_the_skills_are_not_listed(ctx, service):
+    ctx.commands.run("/summarise it")
+    assert ctx.renderer.errors == [Texts("en").t("cli.unbekannt", name="summarise")]
+    assert not service.asked("POST", "/chat/completions")
+
+
+# --- /compact ----------------------------------------------------------------------
+
+
+def test_compact_asks_the_service_to_fold_with_the_topic_and_says_how_many(ctx, service):
+    ctx.commands.run("/compact the budget talk")
+    assert service.bodies("POST", "/chats/chat-1/compact") == [
+        {"endpoint_id": ctx.session.endpoint_id, "topic": "the budget talk"}
+    ]
+    assert ctx.renderer.remarks == [Texts("en").t("nachricht.verdichtet", anzahl=12)]
+
+
+def test_compact_without_words_sends_no_topic(ctx, service):
+    ctx.commands.run("/compact")
+    assert service.bodies("POST", "/chats/chat-1/compact")[0]["topic"] is None
+
+
+@pytest.mark.parametrize(
+    ("answer", "key"),
+    [
+        ({"result": "too_short", "replaced": 0}, "eingabe.compact_too_short"),
+        ({"result": "no_saving", "replaced": 0}, "eingabe.compact_no_saving"),
+    ],
+)
+def test_compact_says_why_it_did_not_fold(ctx, service, answer, key):
+    service.fold = answer
+    ctx.commands.run("/compact")
+    assert ctx.renderer.notices == [Texts("en").t(key)]
+    assert ctx.renderer.remarks == [] and ctx.renderer.errors == []
+
+
+def test_compact_that_was_stopped_says_nothing(ctx, service):
+    service.fold = {"result": "stopped", "replaced": 0}
+    ctx.commands.run("/compact")
+    assert ctx.renderer.notices == [] and ctx.renderer.errors == [] and ctx.renderer.remarks == []
+
+
+def test_the_interrupt_key_during_a_fold_asks_the_service_to_stop(ctx, service):
+    service.fold = {"result": "stopped", "replaced": 0}
+    service.while_folding = lambda: ctx.session.cancel_wait()
+    ctx.commands.run("/compact")
+    until(lambda: service.asked("POST", "/chat/stop"))
+    assert service.bodies("POST", "/chat/stop") == [{"chat_id": "chat-1"}]
+    assert ctx.renderer.notices == [] and ctx.renderer.errors == [] and ctx.renderer.remarks == []
+    # The key is the key of an answer again once the fold is over.
+    assert ctx.session.cancel_wait is None
+
+
+def test_compact_that_failed_says_so(ctx, service):
+    service.fold = {"result": "failed", "replaced": 0}
+    ctx.commands.run("/compact")
+    assert ctx.renderer.errors == [Texts("en").t("nachricht.komprimieren_fehlgeschlagen")]
+
+
+def test_compact_without_a_number_still_says_it_folded(ctx, service):
+    service.fold = {"result": "folded"}
+    ctx.commands.run("/compact")
+    assert ctx.renderer.remarks == [Texts("en").t("nachricht.verdichtet_ohne_zahl")]
+
+
+def test_compact_in_a_chat_the_service_does_not_have_yet_has_nothing_to_fold(ctx, service):
+    ctx.commands.run("/new")
+    service.seen.clear()
+    ctx.commands.run("/compact")
+    assert ctx.renderer.notices[-1] == Texts("en").t("eingabe.compact_too_short")
+    assert service.seen == []
+
+
+def test_compact_during_an_answer_is_refused_and_asks_nothing(ctx, service):
+    ctx.session.answering = True
+    ctx.commands.run("/compact")
+    assert ctx.renderer.notices == [Texts("en").t("fehler.antwort_laeuft_schon")]
+    assert not service.asked("POST", "/chats/chat-1/compact")
+
+
 def test_every_text_the_commands_and_questions_name_stands_in_both_catalogues():
     """A key written into the two modules and missing in a catalogue would
     stand on the screen as the key itself."""
@@ -664,7 +884,7 @@ def test_the_first_message_of_a_new_chat_creates_it_with_the_model_in_use(ctx, s
 def test_a_value_set_for_a_new_chat_creates_it(ctx, service):
     """A value that hangs on the chat is something written into it."""
     ctx.commands.run("/new")
-    ctx.commands.run('/set chat.parameter {"temperature": 0.3}')
+    ctx.commands.run('/settings chat.parameter {"temperature": 0.3}')
     assert service.bodies("POST", "/chats") == [{"endpoint_id": "local"}]
     assert service.bodies("PUT", "/settings/chat:new-1/parameter") == [{"wert": {"temperature": 0.3}}]
     assert ctx.session.chat["id"] == "new-1"
@@ -964,41 +1184,67 @@ def test_a_refused_model_leaves_everything_as_it_was(ctx, service):
     assert ctx.screen.status == {}
 
 
-# --- /settings, /set --------------------------------------------------------------
+# --- /settings --------------------------------------------------------------
 
 
-def test_settings_show_value_and_origin_for_the_open_chat_and_its_model(ctx, service):
+def scope_rows(ctx: Context, area: int) -> dict[str, tuple[str, str]]:
+    """Opens ``/settings`` and then the scope at ``area``: each setting
+    shown with its origin and its value, by name."""
+    ctx.asker = Walking(area)
     ctx.commands.run("/settings")
+    rows = ctx.asker.rows()
+    return {
+        row[0]: (row[1], note) for row, note in zip(rows, ctx.asker.remarks(), strict=True)
+    }
+
+
+def test_settings_offer_the_three_scopes_and_the_storage_locations(ctx, service):
+    ctx.asker = Walking()
+    ctx.commands.run("/settings")
+    assert ctx.asker.rows() == [["global"], ["model"], ["chat"], [Texts("en").t("cli.storage_title")]]
+    assert service.asked("GET", "/settings/resolved") == []
+
+
+def test_the_chat_scope_shows_value_and_origin_for_the_open_chat_and_its_model(ctx, service):
+    rows = scope_rows(ctx, 2)
     asked = service.asked("GET", "/settings/resolved")[0].url.params
     # No list of its own: which settings there are is the service's to say.
     assert "keys" not in asked
     assert (asked["chat"], asked["modell"]) == ("chat-1", "local")
-    lines = ctx.screen.lines()
-    # The open chat's scope is named the way /set takes it.
-    assert "parameter.temperature 0.7 chat" in lines
-    assert "parameter.top_p 0.9 model" in lines
-    assert "parameter.max_tokens 4096 global" in lines
+    # The open chat's scope is named the way a line takes it.
+    assert rows["parameter.temperature"] == ("chat", "0.7")
+    assert rows["parameter.top_p"] == ("model", "0.9")
+    assert rows["parameter.max_tokens"] == ("global", "4096")
     # Any other scope stands as the service names it.
-    assert "parameter.top_k 40 modell:another" in lines
+    assert rows["parameter.top_k"] == ("modell:another", "40")
     # A value that is no set of values stands under the setting's own
     # name, with the scope the service names for it as a whole.
-    assert "berechtigungsmodus_chat manuell global" in lines
-    assert "verdichtung_schwelle 70 chat" in lines
+    assert rows["berechtigungsmodus_chat"] == ("global", "manuell")
+    assert rows["verdichtung_schwelle"] == ("chat", "70")
     # A value of a set that no scope has set comes from the default; the
     # service names no scope for it, and the row says where it comes from.
-    assert "scrollstelle.am_boden true default" in lines
+    assert rows["scrollstelle.am_boden"] == ("default", "true")
     # A setting nothing is set for has no row.
-    assert not any(line.startswith("werkzeuge_aus") for line in lines)
+    assert not any(name.startswith("werkzeuge_aus") for name in rows)
+
+
+def test_the_global_scope_is_asked_without_the_chat_and_the_model(ctx, service):
+    scope_rows(ctx, 0)
+    asked = service.asked("GET", "/settings/resolved")[0].url.params
+    assert "chat" not in asked and "modell" not in asked
+
+
+def test_the_model_scope_is_asked_with_the_model_alone(ctx, service):
+    scope_rows(ctx, 1)
+    asked = service.asked("GET", "/settings/resolved")[0].url.params
+    assert asked["modell"] == "local" and "chat" not in asked
 
 
 def test_settings_stand_in_the_order_of_the_scopes_each_key_once(ctx, service):
-    ctx.commands.run("/settings")
-    lines = ctx.screen.lines()
-    scopes = [line.split()[-1] if len(line.split()) == 3 else "" for line in lines]
+    rows = scope_rows(ctx, 2)
     # What applies everywhere first, then the model's, then the chat's; what
     # the service names no scope for stands last.
-    assert scopes == ["global", "global", "model", "modell:another", "chat", "chat", "default"]
-    assert [line.split()[0] for line in lines] == [
+    assert list(rows) == [
         "parameter.max_tokens",
         "berechtigungsmodus_chat",
         "parameter.top_p",
@@ -1007,14 +1253,14 @@ def test_settings_stand_in_the_order_of_the_scopes_each_key_once(ctx, service):
         "verdichtung_schwelle",
         "scrollstelle.am_boden",
     ]
-    # Each key once: a setting with nothing set has no row, not an empty one.
-    assert len({line.split()[0] for line in lines}) == len(lines)
+    assert [origin for origin, _ in rows.values()] == [
+        "global", "global", "model", "modell:another", "chat", "chat", "default"
+    ]
 
 
 def test_a_whole_value_no_scope_has_set_says_that_it_is_the_default(ctx, service, monkeypatch):
     monkeypatch.setitem(RESOLVED, "page_size", {"wert": 50, "herkunft": {}, "scope": None})
-    ctx.commands.run("/settings")
-    assert "page_size 50 default" in ctx.screen.lines()
+    assert scope_rows(ctx, 2)["page_size"] == ("default", "50")
 
 
 def test_a_setting_the_client_has_never_heard_of_is_shown_as_the_service_names_it(
@@ -1025,12 +1271,38 @@ def test_a_setting_the_client_has_never_heard_of_is_shown_as_the_service_names_i
     monkeypatch.setitem(
         RESOLVED, "added_later", {"wert": "new", "herkunft": {}, "scope": "modell:local"}
     )
+    assert scope_rows(ctx, 2)["added_later"] == ("model", "new")
+
+
+def test_a_setting_picked_from_the_selection_is_asked_for_and_written_into_that_scope(ctx, service):
+    # The chat scope, the fifth row: parameter.temperature.
+    ctx.asker = Walking(2, 4, typed=["0.3"])
     ctx.commands.run("/settings")
-    assert "added_later new model" in ctx.screen.lines()
+    # The name stands over the input, as it stands in the row.
+    assert ctx.asker.questions == [("parameter.temperature", None)]
+    assert service.bodies("PATCH", "/settings/chat:chat-1/parameter") == [
+        {"wert": {"temperature": 0.3}}
+    ]
+    assert ctx.screen.lines() == [f"chat:chat-1.parameter.temperature 0.7 {glyphs.glyph('arrow')} 0.3"]
+
+
+def test_a_whole_value_picked_from_the_selection_is_put(ctx, service):
+    # The global scope, the second row: berechtigungsmodus_chat.
+    ctx.asker = Walking(0, 1, typed=["auto"])
+    ctx.commands.run("/settings")
+    assert service.bodies("PUT", "/settings/global/berechtigungsmodus_chat") == [{"wert": "auto"}]
+
+
+@pytest.mark.parametrize("typed", [None, "", "   "])
+def test_an_empty_answer_or_esc_writes_nothing(ctx, service, typed):
+    ctx.asker = Walking(2, 4, typed=[typed])
+    ctx.commands.run("/settings")
+    assert not service.asked("PATCH", "/settings/chat:chat-1/parameter")
+    assert ctx.screen.lines() == []
 
 
 def test_set_sends_the_value_to_the_scope_and_shows_before_and_after(ctx, service):
-    ctx.commands.run('/set chat.parameter {"temperature": 0.3}')
+    ctx.commands.run('/settings chat.parameter {"temperature": 0.3}')
     sent = service.asked("PUT", "/settings/chat:chat-1/parameter")
     assert [json.loads(request.content) for request in sent] == [{"wert": {"temperature": 0.3}}]
     assert not service.asked("PATCH", "/settings/chat:chat-1/parameter")
@@ -1042,7 +1314,7 @@ def test_set_sends_the_value_to_the_scope_and_shows_before_and_after(ctx, servic
 
 
 def test_set_with_a_third_part_sets_that_field_alone(ctx, service):
-    ctx.commands.run("/set chat.parameter.temperature 0.3")
+    ctx.commands.run("/settings chat.parameter.temperature 0.3")
     assert service.bodies("PATCH", "/settings/chat:chat-1/parameter") == [
         {"wert": {"temperature": 0.3}}
     ]
@@ -1053,7 +1325,7 @@ def test_set_with_a_third_part_sets_that_field_alone(ctx, service):
 
 
 def test_set_of_a_field_the_scope_did_not_hold_shows_null_before(ctx, service):
-    ctx.commands.run("/set global.parameter.top_k 40")
+    ctx.commands.run("/settings global.parameter.top_k 40")
     assert service.bodies("PATCH", "/settings/global/parameter") == [{"wert": {"top_k": 40}}]
     assert ctx.screen.lines() == [f"global.parameter.top_k null {glyphs.glyph('arrow')} 40"]
 
@@ -1061,13 +1333,13 @@ def test_set_of_a_field_the_scope_did_not_hold_shows_null_before(ctx, service):
 def test_set_of_a_field_of_a_value_that_is_no_set_is_refused_in_the_services_words(ctx, service):
     service.settings["global"] = {"sprache": "de"}
     with pytest.raises(ServiceError) as refused:
-        ctx.commands.run("/set global.sprache.code en")
+        ctx.commands.run("/settings global.sprache.code en")
     assert refused.value.detail == "Not a set of values"
     assert service.settings["global"] == {"sprache": "de"}
 
 
 def test_set_names_this_models_scope_and_takes_a_bare_word_as_it_stands(ctx, service):
-    ctx.commands.run("/set model.sprache en")
+    ctx.commands.run("/settings model.sprache en")
     assert service.bodies("PUT", "/settings/modell:local/sprache") == [{"wert": "en"}]
 
 
@@ -1076,18 +1348,18 @@ def test_set_of_the_permission_mode_outside_the_global_scope_is_refused_in_the_s
 ):
     for scope in ("chat", "model"):
         with pytest.raises(ServiceError) as refused:
-            ctx.commands.run(f"/set {scope}.berechtigungsmodus_chat manuell")
+            ctx.commands.run(f"/settings {scope}.berechtigungsmodus_chat manuell")
         assert refused.value.detail == ONLY_GLOBAL
     assert "berechtigungsmodus_chat" not in service.settings.get("chat:chat-1", {})
     assert "berechtigungsmodus_chat" not in service.settings.get("modell:local", {})
     # In the global scope it is taken as it always was.
-    ctx.commands.run("/set global.berechtigungsmodus_chat manuell")
+    ctx.commands.run("/settings global.berechtigungsmodus_chat manuell")
     assert service.settings["global"]["berechtigungsmodus_chat"] == "manuell"
 
 
 def test_set_with_a_number_sends_a_number_and_null_takes_the_value_back(ctx, service):
-    ctx.commands.run("/set global.verdichtung_schwelle 70")
-    ctx.commands.run("/set global.verdichtung_schwelle null")
+    ctx.commands.run("/settings global.verdichtung_schwelle 70")
+    ctx.commands.run("/settings global.verdichtung_schwelle null")
     assert service.bodies("PUT", "/settings/global/verdichtung_schwelle") == [
         {"wert": 70},
         {"wert": None},
@@ -1096,7 +1368,7 @@ def test_set_with_a_number_sends_a_number_and_null_takes_the_value_back(ctx, ser
 
 def test_set_sends_whatever_scope_is_typed_and_the_refusal_is_the_services_own(ctx, service):
     with pytest.raises(ServiceError) as refused:
-        ctx.commands.run("/set parameter.temperature 0.3")
+        ctx.commands.run("/settings parameter.temperature 0.3")
     # Refused where the scope is first read; nothing is written after that.
     assert service.asked("GET", "/settings/parameter/temperature")
     assert service.asked("PUT", "/settings/parameter/temperature") == []
@@ -1104,19 +1376,19 @@ def test_set_sends_whatever_scope_is_typed_and_the_refusal_is_the_services_own(c
 
 
 def test_set_sends_a_word_json_cannot_carry_as_the_word_it_is(ctx, service):
-    ctx.commands.run("/set global.verdichtung_schwelle NaN")
+    ctx.commands.run("/settings global.verdichtung_schwelle NaN")
     assert service.bodies("PUT", "/settings/global/verdichtung_schwelle") == [{"wert": "NaN"}]
 
 
 def test_a_line_break_or_a_tab_parts_a_command_from_its_value_like_a_space(ctx, service):
-    ctx.commands.run("/set\nglobal.verdichtung_schwelle\t70")
+    ctx.commands.run("/settings\nglobal.verdichtung_schwelle\t70")
     assert service.bodies("PUT", "/settings/global/verdichtung_schwelle") == [{"wert": 70}]
 
 
 def test_a_refused_setting_stands_in_the_history_in_the_services_words(service, tmp_path):
     shown = played(
         [
-            "/set global.verdichtung_schwelle 500" + ENTER,
+            "/settings global.verdichtung_schwelle 500" + ENTER,
             lambda: service.asked("PUT", "/settings/global/verdichtung_schwelle"),
             "/quit" + ENTER,
         ],
@@ -1129,13 +1401,12 @@ def test_a_refused_setting_stands_in_the_history_in_the_services_words(service, 
 @pytest.mark.parametrize(
     "line",
     [
-        "/set",
-        "/set global.parameter",
-        "/set parameter 0.3",
-        "/set .parameter 1",
-        "/set global.parameter.temperature",
-        "/set global.parameter..temperature 0.3",
-        "/set a.b.c.d 1",
+        "/settings global.parameter",
+        "/settings parameter 0.3",
+        "/settings .parameter 1",
+        "/settings global.parameter.temperature",
+        "/settings global.parameter..temperature 0.3",
+        "/settings a.b.c.d 1",
     ],
 )
 def test_set_without_scope_key_or_value_sends_nothing_and_names_the_form(ctx, service, line):
@@ -1147,17 +1418,22 @@ def test_set_without_scope_key_or_value_sends_nothing_and_names_the_form(ctx, se
 # --- /tools -----------------------------------------------------------------------
 
 
-def test_tools_lists_what_is_offered_and_what_is_always_allowed(ctx, service):
+def test_tools_shows_what_is_offered_with_its_state_and_what_is_always_allowed(ctx, service):
     ctx.commands.run("/tools")
-    assert service.paths() == ["GET /api/v1/tools", "GET /api/v1/permissions/always-allow"]
-    always = Texts("en").t("werkzeug.yes_dont_ask_again")
-    lines = [line.split(" ", 1)[1] for line in ctx.screen.lines()]
-    assert lines == [
-        "read_file files",
-        f"run_command shell {always}",
-        # Still on file, though no tool of that name is offered.
-        f"gone_tool {always}",
+    assert service.paths() == [
+        "GET /api/v1/tools",
+        "GET /api/v1/permissions/always-allow",
+        "GET /api/v1/settings/resolved",
     ]
+    always = Texts("en").t("werkzeug.yes_dont_ask_again")
+    active = Texts("en").t("status.aktiv")
+    # The tool that is on file but not offered has no row: there is nothing
+    # to switch.
+    assert [row[1:] for row in ctx.asker.rows()] == [
+        ["read_file", "files", "", active],
+        ["run_command", "shell", always, active],
+    ]
+    assert ctx.asker.heads == [Texts("en").t("cli.tools_count", active=2, total=2)]
 
 
 def test_tools_forget_takes_a_standing_permission_back(ctx, service):
@@ -1450,7 +1726,7 @@ def test_lang_switches_the_clients_sentences_and_the_services_and_is_remembered(
     # From now on the service is asked for its sentences in that language.
     ctx.commands.run("/tools")
     assert {request.headers[LANGUAGE_HEADER] for request in service.seen} == {"de"}
-    assert Texts("de").t("werkzeug.yes_dont_ask_again") in ctx.screen.text()
+    assert Texts("de").t("cli.tools_count", active=2, total=2) in ctx.asker.heads
 
 
 def test_a_language_without_a_catalogue_changes_nothing_and_says_so(ctx, tmp_path):

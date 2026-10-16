@@ -15,6 +15,8 @@
 // `store`: a copy from the Microsoft Store, which the Store keeps current —
 // the page offers no look and no download there.
 const STATES = ['none', 'checking', 'available', 'downloading', 'downloaded', 'error', 'store']
+// The steps a failure belongs to; a failure that names none is a look.
+const STEPS = ['check', 'download', 'install']
 
 export const updates = $state({
   // Whether the page runs in the shell at all.
@@ -28,8 +30,9 @@ export const updates = $state({
   state: 'none',
   // How far a running download is, in per cent.
   percent: 0,
-  // Why the last step failed, while the state is error.
+  // Why the last step failed, and which step it was, while the state is error.
   reason: '',
+  step: 'check',
   /* A look came back with nothing newer. Until one has, "none" only says
      that nothing is known yet — the page must not call that up to date. */
   looked: false,
@@ -53,6 +56,7 @@ function take(status) {
   updates.state = state
   updates.percent = Math.max(0, Math.min(100, Math.round(Number(status.progress?.percent) || 0)))
   updates.reason = String(status.reason ?? '')
+  updates.step = STEPS.includes(status.step) ? status.step : 'check'
 }
 
 let listening = false
@@ -79,7 +83,16 @@ async function request(name) {
   } catch (error) {
     updates.state = 'error'
     updates.reason = String(error?.message ?? error)
+    updates.step = STEPS.includes(name) ? name : 'check'
   }
+}
+
+/** The catalogue key of the sentence that tells the failure: each step has
+    its own, so a failed download is not told as a failed look. */
+export function failedKey() {
+  if (updates.step === 'download') return 'updates.failed_download'
+  if (updates.step === 'install') return 'updates.failed_install'
+  return 'updates.failed'
 }
 
 /** Looks for a newer version again. */

@@ -1034,10 +1034,10 @@
                         onbearbeiten={(agent) => (maske = { agent })}
                         onloeschen={(name) => agentLoeschen(name)} />
       {:else}
-        <!-- A floor of about six lines around the editor: where the page
-             gives no height to share out (a narrow window stacks everything
-             into one column), the field would otherwise shrink to its single
-             row. -->
+        <!-- The field carries its own floor of about six lines
+             (WachsendesFeld): where the page gives no height to share out (a
+             narrow window stacks everything into one column), it would
+             otherwise shrink to its single row. -->
         <div class="editorboden">
         <WachsendesFeld
           bind:this={feld}
@@ -1438,7 +1438,6 @@
 
   .editorboden {
     flex: 1;
-    min-height: 10rem;
     display: flex;
     flex-direction: column;
   }

@@ -1,6 +1,6 @@
 """What happens between the microphone and the input field.
 
-Twelve answers live here, and all twelve are the user's rather than the code's:
+Fourteen answers live here, and all fourteen are the user's rather than the code's:
 
   * ``sprache``   which language is being spoken, or "automatic"
   * ``anweisung`` the instruction the speech model is given
@@ -8,6 +8,10 @@ Twelve answers live here, and all twelve are the user's rather than the code's:
   * ``putzmodell`` which file the small tidy-up model runs from
   * ``bereinigung_anweisung`` the instruction that tidy-up is given
   * ``vorlesen`` whether a finished answer is read aloud in a conversation
+  * ``keep_model_in_memory`` whether the voice stays loaded for as long as a
+    conversation lasts, so a piece is spoken without loading it again
+  * ``conversation_pause_seconds`` how long the microphone must be silent
+    before a spoken sentence of a conversation is sent
   * ``stimme`` which file the voice speaks from
   * ``stimmprobe`` which file its voice sample is, if any
   * ``stimmsprache`` which language the voice speaks in, if chosen
@@ -43,6 +47,7 @@ microphone, and two answers in one row would be one answer too few.
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -51,6 +56,7 @@ from typing import Any
 from app.feineinstellungen import MAX_FAEDEN
 from app.parameter import pruefen as parameter_pruefen
 from app.runnermodellwahl import KONTEXT_MAX, KONTEXT_MIN, SCHICHTEN_MAX, SCHICHTEN_MIN
+from app.systemspeicher import gesamt_gb
 from app.stimme import (
     MIN_P as STIMME_MIN_P,
     TEMPERATUR as STIMME_TEMPERATUR,
@@ -122,6 +128,7 @@ GESPRAECHSANWEISUNG_VORGABE = (
 # the settings column holds JSON and cannot check anything by itself.
 TEXT_HOECHSTLAENGE = 4000
 NAME_HOECHSTLAENGE = 200
+PORT_MIN, PORT_MAX = 1024, 65535
 
 # The range the voice's temperature slider offers.
 TEMPERATUR_MIN = 0.0
@@ -144,6 +151,13 @@ VORGABE: dict[str, Any] = {
     # costs nothing until a voice is chosen, and without one there is
     # nothing to read aloud regardless of this switch.
     "vorlesen": True,
+    # Shipped switched on too: switched off, every piece of a conversation
+    # starts the voice program anew, which costs about two seconds each. On a
+    # small machine the works answer is off (``keep_model_default``); this
+    # entry is the one for every other machine.
+    "keep_model_in_memory": True,
+    # Seconds of silence that end a spoken sentence of a conversation.
+    "conversation_pause_seconds": 3.0,
     # Empty is "none chosen" for all three — the folder starts empty, the
     # same as "putzmodell" above.
     "stimme": "",
@@ -157,10 +171,10 @@ VORGABE: dict[str, Any] = {
     "stimmtop_p": STIMME_TOP_P,
     "stimmmin_p": STIMME_MIN_P,
     "stimmstrafe": STIMME_WIEDERHOLUNGSSTRAFE,
-    # The voice model's memory: layers on the card (99 = all of them, the
-    # flag's own meaning) and threads (0 = the engine decides), the same two
-    # levers the chat servers carry.
-    "stimmschichten": 99,
+    # The voice model's memory: layers on the card (None = no count named,
+    # the engine places them itself) and threads (0 = the engine decides),
+    # the same two levers the chat servers carry.
+    "stimmschichten": None,
     "stimmfaeden": 0,
     # The tidy-up server's memory and generation values. The memory starts
     # at the values it has always started with (app/sprachserver.py); the
@@ -169,8 +183,18 @@ VORGABE: dict[str, Any] = {
     # top-p cut-off off, and every one of them is a setting that can be
     # moved.
     "putzkontext": 2048,
-    "putzschichten": 99,
+    "putzschichten": None,
     "putzfaeden": 0,
+    # The speech server's start values — the file and the four numbers its
+    # window shows (app/api/v1/sprachserver.py): stored as they are touched
+    # and used by the next start. A port of None is the server's own.
+    "speech_model": "",
+    "speech_context": 4096,
+    "speech_gpu_layers": None,
+    "speech_threads": 0,
+    "speech_port": None,
+    # The clean-up server's port, beside its memory numbers above.
+    "cleanup_port": None,
     "putztemperatur": 0.0,
     "putztop_k": 0,
     "putztop_p": 1.0,
@@ -225,7 +249,7 @@ def _text(roh: Any, ersatz: str) -> str:
     return sauber or ersatz
 
 
-def _zahl(roh: Any, tief: int, hoch: int, ersatz: int) -> int | None:
+def _zahl(roh: Any, tief: int, hoch: int, ersatz: int | None) -> int | None:
     """A whole number inside its bounds, or the works value for anything
     unreadable. ``None`` stays ``None`` and means "not set"."""
     if roh is None:
@@ -291,6 +315,20 @@ def wahl_pruefen(wert: Any) -> dict[str, Any]:
         )
     if "vorlesen" in wert:
         sauber["vorlesen"] = bool(wert["vorlesen"])
+    if "keep_model_in_memory" in wert:
+        sauber["keep_model_in_memory"] = bool(wert["keep_model_in_memory"])
+    if "conversation_pause_seconds" in wert:
+        # Any number above zero is the user's own; zero, a negative number
+        # and anything that is no number are not stored, and the works
+        # answer stands in — a pause of nothing would send every breath.
+        roh = wert["conversation_pause_seconds"]
+        if (
+            isinstance(roh, (int, float))
+            and not isinstance(roh, bool)
+            and math.isfinite(roh)
+            and roh > 0
+        ):
+            sauber["conversation_pause_seconds"] = float(roh)
     if "stimme" in wert:
         roh = wert["stimme"]
         sauber["stimme"] = "" if roh is None else str(roh).strip()[:NAME_HOECHSTLAENGE]
@@ -324,6 +362,26 @@ def wahl_pruefen(wert: Any) -> dict[str, Any]:
         )
     if "stimmfaeden" in wert:
         sauber["stimmfaeden"] = _zahl(wert["stimmfaeden"], 0, MAX_FAEDEN, VORGABE["stimmfaeden"])
+    if "speech_model" in wert:
+        roh = wert["speech_model"]
+        sauber["speech_model"] = "" if roh is None else str(roh).strip()[:NAME_HOECHSTLAENGE]
+    if "speech_context" in wert:
+        sauber["speech_context"] = _zahl(
+            wert["speech_context"], KONTEXT_MIN, KONTEXT_MAX, VORGABE["speech_context"]
+        )
+    if "speech_gpu_layers" in wert:
+        sauber["speech_gpu_layers"] = _zahl(
+            wert["speech_gpu_layers"], SCHICHTEN_MIN, SCHICHTEN_MAX, VORGABE["speech_gpu_layers"]
+        )
+    if "speech_threads" in wert:
+        sauber["speech_threads"] = _zahl(wert["speech_threads"], 0, MAX_FAEDEN, VORGABE["speech_threads"])
+    for schluessel in ("speech_port", "cleanup_port"):
+        if schluessel in wert:
+            # A port outside the unprivileged range is not stored; the
+            # server's own port stands. None is "not set" like everywhere.
+            roh = wert[schluessel]
+            if isinstance(roh, int) and not isinstance(roh, bool) and PORT_MIN <= roh <= PORT_MAX:
+                sauber[schluessel] = roh
     if "putzkontext" in wert:
         sauber["putzkontext"] = _zahl(
             wert["putzkontext"], KONTEXT_MIN, KONTEXT_MAX, VORGABE["putzkontext"]
@@ -349,6 +407,20 @@ def wahl_pruefen(wert: Any) -> dict[str, Any]:
     return {name: wert for name, wert in sauber.items() if wert is not None}
 
 
+# A machine with this much memory or less cannot hold the speech model and
+# the kept voice next to the chat model: it stalls in the middle of a
+# conversation.
+SMALL_MACHINE_GB = 8
+
+
+def keep_model_default() -> bool:
+    """The works answer for "keep the model loaded": off on a machine with
+    ``SMALL_MACHINE_GB`` or less, on everywhere else — also where the memory
+    cannot be read. A choice the person stored beats it."""
+    gb = gesamt_gb()
+    return gb is None or gb > SMALL_MACHINE_GB
+
+
 def wahl(repositories) -> dict[str, Any]:
     """What the fields say right now, with the works answers behind them.
 
@@ -357,7 +429,11 @@ def wahl(repositories) -> dict[str, Any]:
     value depends on which window happens to be open.
     """
     stand = repositories.einstellungen.zusammengefuehrt(SCHLUESSEL, vorgabe={})
-    return {**VORGABE, **wahl_pruefen(stand if isinstance(stand, dict) else {})}
+    return {
+        **VORGABE,
+        "keep_model_in_memory": keep_model_default(),
+        **wahl_pruefen(stand if isinstance(stand, dict) else {}),
+    }
 
 
 def sprachcode(repositories) -> str | None:
@@ -407,6 +483,18 @@ def vorlesen(repositories) -> bool:
     return bool(wahl(repositories)["vorlesen"])
 
 
+def keep_model_in_memory(repositories, stand: dict[str, Any] | None = None) -> bool:
+    """Whether the voice stays loaded for the length of a conversation."""
+    stand = wahl(repositories) if stand is None else stand
+    return bool(stand["keep_model_in_memory"])
+
+
+def conversation_pause_seconds(repositories, stand: dict[str, Any] | None = None) -> float:
+    """Seconds of silence after which a spoken sentence of a conversation is sent."""
+    stand = wahl(repositories) if stand is None else stand
+    return float(stand["conversation_pause_seconds"])
+
+
 def stimme(repositories) -> str:
     """The voice model's file name, or an empty string for none chosen."""
     return wahl(repositories)["stimme"]
@@ -448,20 +536,29 @@ def stimmwerte(repositories, stand: dict[str, Any] | None = None) -> dict[str, f
     }
 
 
-def stimmspeicher(repositories, stand: dict[str, Any] | None = None) -> tuple[int, int]:
-    """The voice model's layers and threads, as the call wants them."""
+def _optional_int(wert: Any) -> int | None:
+    """A stored count, or None where none is named."""
+    return None if wert is None else int(wert)
+
+
+def stimmspeicher(
+    repositories, stand: dict[str, Any] | None = None
+) -> tuple[int | None, int]:
+    """The voice model's layers (None: none named, the engine places them)
+    and threads, as the call wants them."""
     stand = wahl(repositories) if stand is None else stand
-    return int(stand["stimmschichten"]), int(stand["stimmfaeden"])
+    return _optional_int(stand["stimmschichten"]), int(stand["stimmfaeden"])
 
 
 def putzspeicher(
     repositories, stand: dict[str, Any] | None = None
-) -> tuple[int, int, int]:
-    """The tidy-up server's context, layers and threads for its start."""
+) -> tuple[int, int | None, int]:
+    """The tidy-up server's context, layers (None: none named) and threads
+    for its start."""
     stand = wahl(repositories) if stand is None else stand
     return (
         int(stand["putzkontext"]),
-        int(stand["putzschichten"]),
+        _optional_int(stand["putzschichten"]),
         int(stand["putzfaeden"]),
     )
 
@@ -482,6 +579,22 @@ def putzsampling(
         if stand[schluessel] is not None
     }
     return werte or None
+
+
+def sprachstart(
+    repositories, stand: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """The speech server's stored start values for its next start: the file
+    ("" for none), context, GPU layers, threads, and the port (None for the
+    server's own)."""
+    stand = wahl(repositories) if stand is None else stand
+    return {
+        "modell": stand["speech_model"],
+        "kontext": int(stand["speech_context"]),
+        "schichten": _optional_int(stand["speech_gpu_layers"]),
+        "threads": int(stand["speech_threads"]),
+        "port": stand["speech_port"],
+    }
 
 
 def gespraechsanweisung(repositories) -> str:
@@ -514,7 +627,7 @@ def vorgaben() -> dict[str, Any]:
     back exactly what the service would use, and a second copy in the page
     would agree with this one only until somebody changed one of them.
     """
-    return dict(VORGABE)
+    return {**VORGABE, "keep_model_in_memory": keep_model_default()}
 
 
 __all__ = [
@@ -524,16 +637,20 @@ __all__ = [
     "BEREINIGUNG_ANWEISUNG_VORGABE",
     "GESPRAECHSANWEISUNG_VORGABE",
     "SCHLUESSEL",
+    "SMALL_MACHINE_GB",
     "SPRACHEN",
     "STIMMSPRACHEN",
     "UNTERBRECHUNGSHINWEIS",
     "VORGABE",
     "anweisung",
     "automatik",
+    "keep_model_default",
     "bereinigung",
     "bereinigung_anweisung",
+    "conversation_pause_seconds",
     "gespraechsanweisung",
     "gespraechsvorsatz",
+    "keep_model_in_memory",
     "putzmodell",
     "putzsampling",
     "putzspeicher",
@@ -542,6 +659,7 @@ __all__ = [
     "stimmprobe",
     "stimmspeicher",
     "stimmsprache",
+    "sprachstart",
     "stimmwerte",
     "vorgaben",
     "vorlesen",

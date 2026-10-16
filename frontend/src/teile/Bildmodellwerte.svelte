@@ -57,7 +57,7 @@
     clip_l: ['bild.clip_l', 'textversteher'],
     clip_g: ['bild.clip_g', 'textversteher'],
     llm: ['bild.llm', 'textversteher'],
-    llm_vision: ['bild.llm_vision', 'textversteher'],
+    llm_vision: ['bild.llm_vision', 'sehteile'],
     tokenizer: ['bild.tokenizer', 'tokenizers'],
     uncond_diffusion_model: ['bild.uncond_modell', 'modelle'],
     high_noise_diffusion_model: ['bild.high_noise_modell', 'modelle'],
@@ -161,6 +161,9 @@
      service merges them into what the model already holds. */
   let gesendet = null
   let zeit
+  // The write that waits for its moment; the window going away does not
+  // wait for it.
+  let pendingWrite = null
   $effect(() => {
     const jetzt = w ? { ...w } : null
     if (!jetzt || !gesendet) return
@@ -170,7 +173,7 @@
     }
     if (!Object.keys(geaendert).length) return
     clearTimeout(zeit)
-    zeit = setTimeout(async () => {
+    const schreiben = async () => {
       try {
         await api.einstellungMischen('global', SCHLUESSEL, { [modell]: geaendert })
         gesendet = { ...gesendet, ...Object.fromEntries(Object.keys(geaendert).map((n) => [n, jetzt[n]])) }
@@ -184,8 +187,23 @@
       } catch (fehler) {
         melde(String(fehler.message || fehler), 'fehler')
       }
+    }
+    pendingWrite = schreiben
+    zeit = setTimeout(() => {
+      pendingWrite = null
+      schreiben()
     }, 350)
     return () => clearTimeout(zeit)
+  })
+
+  /* A change still waiting when the row closes is kept at once, not dropped
+     with the timer. */
+  $effect(() => () => {
+    if (!pendingWrite) return
+    clearTimeout(zeit)
+    const schreiben = pendingWrite
+    pendingWrite = null
+    schreiben()
   })
 
   /* A part's choices: the files of its folder. An empty entry stands for
@@ -203,6 +221,7 @@
 
   async function zuruecksetzen() {
     clearTimeout(zeit)
+    pendingWrite = null
     try {
       await api.einstellungMischen('global', SCHLUESSEL, { [modell]: null })
       await laden()

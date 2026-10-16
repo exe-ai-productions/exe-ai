@@ -690,6 +690,16 @@ FAMILIES: tuple[Family, ...] = (
                   "docs/qwen_image_2.1.md, Download weights (gguf)"),
             _part("vae", "Comfy-Org/Qwen-Image-2.1", "vae/qwen_image_2.1_vae_bf16.safetensors",
                   "docs/qwen_image_2.1.md, Download weights"),
+            # The vision half of the same Qwen3-VL, which --llm_vision takes
+            # for editing from references (docs/qwen_image_edit.md).
+            _part("llm_vision", "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+                  "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+                  "docs/qwen_image_edit.md, --llm_vision takes the mmproj file"),
+        ),
+        variants=(
+            _variant("turbo", "model card of Qwen-Image-2.1-Turbo on huggingface.co/Qwen "
+                     "(8 denoising steps, CFG 1); the sd.cpp docs name none",
+                     steps=8, cfg=1.0),
         ),
     ),
     Family(

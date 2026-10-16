@@ -213,9 +213,12 @@ class ServiceClient:
         *,
         json: Any = None,
         params: dict[str, Any] | None = None,
+        content: bytes | None = None,
+        content_type: str | None = None,
     ) -> httpx.Response:
         """One request below ``/api/v1``; the whole answer, for callers that
-        read its headers. A refusal raises ``ServiceError``.
+        read its headers. A refusal raises ``ServiceError``. ``content`` is
+        a body of raw bytes, with its kind in ``content_type``.
 
         A refused key means the service was restarted and minted a new one:
         the key is read again and the request repeated, once. Where the
@@ -225,16 +228,23 @@ class ServiceClient:
         url = f"{self.address}{API_PREFIX}{path}"
         if self._hung_up:
             raise ServiceUnreachable(self.address)
+
+        def headers() -> dict[str, str]:
+            held = self._headers()
+            if content_type:
+                held["Content-Type"] = content_type
+            return held
+
         try:
             response = self._http.request(
-                method, url, json=json, params=params, headers=self._headers()
+                method, url, json=json, params=params, content=content, headers=headers()
             )
             if response.status_code == 401:
                 self.connect()
                 if self.login_required:
                     raise self._key_refused(response)
                 response = self._http.request(
-                    method, url, json=json, params=params, headers=self._headers()
+                    method, url, json=json, params=params, content=content, headers=headers()
                 )
         except (httpx.HTTPError, httpx.InvalidURL) as error:
             raise ServiceUnreachable(self.address) from error
@@ -265,6 +275,19 @@ class ServiceClient:
 
     def post(self, path: str, json: Any = None) -> Any:
         return self._body(self.request("POST", path, json=json))
+
+    def upload(
+        self,
+        path: str,
+        data: bytes,
+        *,
+        content_type: str = "application/octet-stream",
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        """Sends ``data`` as the raw body of a POST — a file, not JSON."""
+        return self._body(
+            self.request("POST", path, params=params, content=data, content_type=content_type)
+        )
 
     def put(self, path: str, json: Any = None) -> Any:
         return self._body(self.request("PUT", path, json=json))

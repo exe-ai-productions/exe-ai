@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import ipaddress
+import socket
 import time
 
+import httpx
 import pytest
 
-from app import task_images
+from app import public_host, task_images
 from app.providers import MockProvider, mock_endpunkt
 from app.providers.base import Werkzeugaufruf
 from tests.conftest import png_bytes, provider_setzen
@@ -17,6 +20,44 @@ URL = "https://example.com/mock.png"
 
 def _yes(_path: str) -> bool:
     return True
+
+
+# --- No test reaches the network ------------------------------------------------
+
+# What a name resolves to in these tests; a name not listed does not resolve.
+_NAMES = {
+    "example.com": "93.184.216.34",
+    "files.example.com": "93.184.216.35",
+    "internal.example": "10.0.0.5",
+    "meshed.example": "100.100.0.7",
+    "nat64.example": "64:ff9b::a00:1",
+    "mapped.example": "::ffff:10.0.0.5",
+}
+
+
+@pytest.fixture(autouse=True)
+def _offline_names(monkeypatch):
+    """Every test resolves names from the table above and nothing else, so
+    a fetch can never leave the machine by accident."""
+
+    def resolve(host, *_args, **_kwargs):
+        try:
+            ipaddress.ip_address(host)
+            address = host
+        except ValueError:
+            address = _NAMES.get(host)
+        if address is None:
+            raise socket.gaierror(f"no such name in the test: {host}")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 0))]
+
+    monkeypatch.setattr(public_host.socket, "getaddrinfo", resolve)
+
+
+def _fetched(handler, names, tmp_path, **kwargs):
+    """``prepare`` with ``names`` and an address fetched through ``handler``."""
+    return task_images.prepare(
+        names, [], tmp_path, _yes, transport=httpx.MockTransport(handler), **kwargs
+    )
 
 
 def _data_url() -> str:
@@ -85,6 +126,178 @@ def test_an_unexpected_failure_leaves_plain_text(tmp_path, monkeypatch):
     assert task_images.prepare(["shot.png"], [str(tmp_path)], tmp_path, _yes) == []
 
 
+# --- An address ---------------------------------------------------------------
+
+
+def _png_response(_request):
+    return httpx.Response(200, content=png_bytes(), headers={"content-type": "image/png"})
+
+
+def test_a_picture_behind_an_https_address_is_fetched_and_travels(tmp_path):
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return _png_response(request)
+
+    images = _fetched(handler, [URL], tmp_path)
+
+    assert seen == [URL]
+    assert [(i.kind, i.source, i.position) for i in images] == [("url", URL, 1)]
+    assert images[0].data_url.startswith("data:image/png;base64,")
+    urls, lines = task_images.for_model(images, vision=True)
+    assert urls == [images[0].data_url]
+    assert lines == []
+
+
+def test_a_model_without_eyes_still_gets_the_address_as_a_line(tmp_path):
+    images = _fetched(_png_response, [URL], tmp_path)
+
+    urls, lines = task_images.for_model(images, vision=False)
+
+    assert urls == []
+    assert lines == [f"[Image attached: {URL}]"]
+
+
+def test_the_kind_is_the_bytes_not_the_servers_word(tmp_path):
+    def handler(_request):
+        return httpx.Response(200, content=b"<html>not a picture</html>",
+                              headers={"content-type": "image/png"})
+
+    images = _fetched(handler, [URL], tmp_path)
+
+    assert [(i.kind, i.data_url, i.too_large) for i in images] == [("url", None, False)]
+
+
+def test_silence_an_address_that_cannot_be_fetched_stays_a_line(tmp_path):
+    def missing(_request):
+        return httpx.Response(404)
+
+    def broken(request):
+        raise httpx.ConnectError("no route", request=request)
+
+    for handler in (missing, broken):
+        images = _fetched(handler, [URL], tmp_path)
+        assert [(i.kind, i.data_url, i.too_large) for i in images] == [("url", None, False)]
+        _urls, lines = task_images.for_model(images, vision=True)
+        assert lines == [f"[Image attached: {URL}]"]
+
+
+def test_a_picture_above_the_ceiling_says_so_by_header_or_by_count(tmp_path, monkeypatch):
+    monkeypatch.setattr(task_images, "MAX_PAYLOAD_BYTES", 1000)
+    body = png_bytes() + b"\0" * 2000
+
+    def announced(_request):
+        return httpx.Response(200, content=body)
+
+    def streamed(_request):
+        # No Content-Length: only counting the bytes as they come tells.
+        return httpx.Response(200, headers={"transfer-encoding": "chunked"},
+                              content=iter([body[:600], body[600:1200], body[1200:]]))
+
+    for handler in (announced, streamed):
+        images = _fetched(handler, [URL], tmp_path)
+        assert [(i.too_large, i.data_url) for i in images] == [(True, None)]
+        _urls, lines = task_images.for_model(images, vision=True)
+        assert len(lines) == 1
+        assert lines[0].startswith(f"[The image at {URL} was not attached")
+
+
+def test_an_address_in_a_private_or_local_place_is_not_fetched(tmp_path):
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return _png_response(request)
+
+    names = [
+        "http://127.0.0.1/shot.png",
+        "http://169.254.169.254/latest/meta-data",
+        "http://internal.example/shot.png",
+        "http://meshed.example/shot.png",
+        "http://unknown.invalid/shot.png",
+        "http://[::1]/shot.png",
+        "http://[fe80::1]/shot.png",
+        "http://nat64.example/shot.png",
+        "http://mapped.example/shot.png",
+    ]
+    images = _fetched(handler, names, tmp_path)
+
+    assert seen == []
+    assert [(i.source, i.data_url) for i in images] == [(name, None) for name in names]
+
+
+def test_silence_an_address_that_is_no_address_costs_only_itself(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "shot.png").write_bytes(png_bytes())
+
+    images = task_images.prepare(
+        ["shot.png", "http://example.com:abc/x.png", "https://\u2603.example/x.png", "https://example.com/ok.png"],
+        [str(shared)], tmp_path / "data", _yes, transport=httpx.MockTransport(_png_response),
+    )
+
+    assert [(i.kind, i.position, bool(i.data_url)) for i in images] == [
+        ("path", 1, True), ("url", 2, False), ("url", 3, False), ("url", 4, True),
+    ]
+
+
+def test_a_redirect_into_a_private_place_is_stopped_at_that_hop(tmp_path):
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        if request.url.host == "files.example.com":
+            return httpx.Response(302, headers={"location": "http://127.0.0.1/secret.png"})
+        return httpx.Response(302, headers={"location": "https://files.example.com/shot.png"})
+
+    images = _fetched(handler, [URL], tmp_path)
+
+    assert seen == [URL, "https://files.example.com/shot.png"]
+    assert [(i.kind, i.data_url) for i in images] == [("url", None)]
+
+
+def test_a_redirect_between_public_places_is_followed(tmp_path):
+    def handler(request):
+        if request.url.host == "example.com":
+            return httpx.Response(302, headers={"location": "https://files.example.com/shot.png"})
+        return _png_response(request)
+
+    images = _fetched(handler, [URL], tmp_path)
+
+    assert images[0].data_url.startswith("data:image/png;base64,")
+
+
+def test_silence_paths_and_data_urls_are_not_fetched_and_keep_their_order(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "shot.png").write_bytes(png_bytes())
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return _png_response(request)
+
+    images = task_images.prepare(
+        ["shot.png", URL, _data_url()], [str(shared)], tmp_path / "data", _yes,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert seen == [URL]
+    assert [(i.kind, i.position, bool(i.data_url)) for i in images] == [
+        ("path", 1, True), ("url", 2, True), ("data", 3, True),
+    ]
+
+
+def test_the_copy_of_a_fetched_picture_does_not_stay_behind(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+
+    task_images.prepare([URL], [], data, _yes, transport=httpx.MockTransport(_png_response))
+
+    assert list(data.rglob("*")) == []
+
+
 # --- What the model gets ------------------------------------------------------
 
 
@@ -100,7 +313,7 @@ def test_a_model_that_sees_gets_the_pictures():
     urls, lines = task_images.for_model(_three(), vision=True)
 
     assert urls == ["data:image/png;base64,AA", "data:image/png;base64,BB"]
-    # An address is named, never fetched.
+    # An address whose fetch gave nothing (no picture in this list) is named.
     assert lines == [f"[Image attached: {URL}]"]
 
 

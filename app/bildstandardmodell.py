@@ -1,11 +1,11 @@
-"""The picture model every chat draws with until it chooses its own.
+"""The picture model every chat draws with.
 
-Chosen once in the picture server and kept for every chat: a chat whose
-picture window names no model, the drawing tool outside a chat and the
-server's start by hand all draw with it. Nothing picks it by itself — the
-first file of the folder is no choice anybody made — so without it, or
-when its file left the folder, nothing is drawn, and the answer says where
-it is chosen.
+Chosen once in the picture server and kept for every chat: the drawing tool
+in a chat, the drawing tool outside a chat and the server's start by hand
+all draw with it. (The picture studio has a model of its own.) Nothing
+picks it by itself — the first file of the folder is no choice anybody
+made — so without it, or when its file left the folder, nothing is drawn,
+and the answer says where it is chosen.
 """
 
 from __future__ import annotations

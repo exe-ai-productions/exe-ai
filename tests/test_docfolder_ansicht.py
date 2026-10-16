@@ -422,7 +422,14 @@ def test_the_doc_folder_wears_the_galleries_folder_row_without_a_plus():
     assert "files.length}" not in quelle.replace("{#if files.length}", "")
 
     reihe = (FRONTEND / "src/teile/Speicherortzeile.svelte").read_text(encoding="utf-8")
-    assert '<span class="pfad" title={shownPath}>{shownPath}</span>' in reihe
+    assert '<span class="pfad" title={shownPath}><span>{shownPath}</span></span>' in reihe
+    # The path is cut at its front: the box reads right to left and the path
+    # itself, in the inner span, left to right. `plaintext` on the box would
+    # take the direction away again and cut it at the end.
+    box = reihe.split("  .pfad {", 1)[1].split("\n  }", 1)[0]
+    assert "direction: rtl;" in box and "unicode-bidi" not in box
+    inner = reihe.split("  .pfad span {", 1)[1].split("\n  }", 1)[0]
+    assert "direction: ltr;" in inner and "unicode-bidi: bidi-override;" in inner
     assert "const shownPath = $derived(pathText ?? pfad)" in reihe
     assert "onadd" not in reihe and "showPath" not in reihe
 

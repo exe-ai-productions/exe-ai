@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import sys
 import getpass
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from prompt_toolkit.application import Application, get_app_or_none
 from prompt_toolkit.buffer import Buffer
@@ -30,6 +30,8 @@ from rich.console import Console, RenderableType
 from cli import themes
 from cli.dialogs import TerminalAsker
 from cli.interfaces import Context, Entry, Renderer, Screen
+
+_T = TypeVar("_T")
 
 
 class NeedsTerminal(Exception):
@@ -87,6 +89,13 @@ class OutsideScreen(Screen):
     def open_chat(self, chat: Any) -> None:
         self.opened = dict(chat)
 
+    def hand_over(self, work: Callable[[], _T]) -> _T:
+        # The program that is given the terminal needs one: the editor
+        # runs in the terminal ``exe`` was called from.
+        if not has_terminal():
+            raise NeedsTerminal
+        return work()
+
     def export(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._console.save_html(
@@ -101,6 +110,8 @@ class PlainRenderer(Renderer):
 
     def __init__(self) -> None:
         self.failed = False
+        # Whether what was written last ends in the middle of a line.
+        self._line_open = False
 
     def notice(self, text: str) -> None:
         print(text)
@@ -110,6 +121,24 @@ class PlainRenderer(Renderer):
 
     def shell_line(self, text: str) -> None:
         print(text)
+
+    def content(self, text: str) -> None:
+        # What a log or an answer says, as it is: the text on the output.
+        sys.stdout.write(text)
+        self._line_open = not text.endswith("\n")
+
+    def tool_result(self, event: Mapping[str, Any]) -> None:
+        # One line a tool: its name, where the log is read out.
+        self._end_line()
+        print(str(event.get("name") or ""))
+
+    def done(self, event: Mapping[str, Any]) -> None:
+        self._end_line()
+
+    def _end_line(self) -> None:
+        if self._line_open:
+            print()
+            self._line_open = False
 
     def error(self, text: str) -> None:
         self.failed = True
@@ -130,25 +159,52 @@ class OutsideAsker(TerminalAsker):
             raise NeedsTerminal
         return super().choose(entries, head)
 
-    def ask_text(self, head: str, *, secret: bool = False) -> str | None:
-        """A line typed at the terminal's own prompt: hidden for a secret,
-        and the head in front of it on the error output, so that the
-        command's result alone stands on the standard output."""
+    def search(
+        self,
+        entries: Sequence[Entry],
+        find: Callable[[str], Sequence[Entry]],
+        head: str = "",
+        empty: str = "",
+    ) -> Entry | None:
         if not has_terminal():
             raise NeedsTerminal
-        prompt = f"{head} "
+        return super().search(entries, find, head, empty)
+
+    def check(
+        self, entries: Sequence[Entry], head: str = "", checked: Collection[int] = ()
+    ) -> list[int] | None:
+        if not has_terminal():
+            raise NeedsTerminal
+        return super().check(entries, head, checked)
+
+    def ask_text(
+        self, head: str, *, secret: bool = False, default: str | None = None
+    ) -> str | None:
+        """A line typed at the terminal's own prompt: hidden for a secret,
+        and the head in front of it on the error output, so that the
+        command's result alone stands on the standard output. The value that
+        stands is written in brackets behind the head, and nothing typed
+        takes it."""
+        if not has_terminal():
+            raise NeedsTerminal
+        prompt = f"{head} [{default}] " if default else f"{head} "
         try:
             typed = getpass.getpass(prompt) if secret else input_line(prompt)
         except EOFError:
             return None
-        return typed.strip() or None
+        typed = typed.strip()
+        if typed:
+            return typed
+        return default
 
     def _ask(self, question: Any) -> dict[str, Any] | None:
         if question.entries is None:
             return None
         with self._lock:
             self._open = question
-        field = Window(BufferControl(Buffer()), height=1)
+        field = Window(
+            BufferControl(Buffer(on_text_changed=lambda buffer: self.typed(buffer.text))), height=1
+        )
         block: Application[None] = Application(
             layout=Layout(
                 HSplit(
@@ -170,6 +226,12 @@ class OutsideAsker(TerminalAsker):
         finally:
             self._block = None
         return question.answer
+
+    def _show(self, question: Any, asked: int, entries: Sequence[Entry]) -> None:
+        super()._show(question, asked, entries)
+        block = self._block
+        if block is not None and block.is_running:
+            block.invalidate()
 
     def _settle(
         self, question: Any, answer: dict[str, Any], marked: int | None, typed: str

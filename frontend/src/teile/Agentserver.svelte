@@ -1,4 +1,5 @@
 <script>
+  import { onDestroy } from 'svelte'
   import { rollfade } from '../lib/rollfade.js'
   /* The agent server — the second model this program loads itself.
 
@@ -31,12 +32,14 @@
   import { api } from '../lib/api.js'
   import { t } from '../lib/texte.svelte.js'
   import { katalogOeffnen, melde, modelleLaden, zustand } from '../lib/zustand.svelte.js'
-  import { serverAnteil } from '../lib/speicherschaetzung.js'
+  import { isEightBitCache, serverAnteil } from '../lib/speicherschaetzung.js'
   import { nurGeaendert } from '../lib/nurgeaendert.js'
   import {
     HAUPTMODELL,
     agentenmodell,
     alsWahl,
+    modulesFor,
+    setModules,
     slotStarten,
     slotStoppen,
     standLaden,
@@ -49,6 +52,7 @@
   import Serverreihe from './Serverreihe.svelte'
   import Startfehler from './Startfehler.svelte'
   import Serverlogkopf from './Serverlogkopf.svelte'
+  import LlamaCppSection from './LlamaCppSection.svelte'
   import {
     protokollOffen,
     oeffneProtokoll,
@@ -91,7 +95,8 @@
 
   let wahl = $state(HAUPTMODELL_WAHL)
   let kontext = $state(0)
-  let schichten = $state(99)
+  /* `null` is "Auto": no layer count is sent and the engine places the layers. */
+  let schichten = $state(null)
   let port = $state(0)
   let drafter = $state('')
   let vision = $state('')
@@ -101,7 +106,7 @@
      off, a count means that many layers. */
   let moeSchichten = $state(null)
   let parallel = $state(null)
-  let fein = $state({ kv_cache: 'f16', moe_auf_cpu: false, festnageln: false })
+  let fein = $state({ kv_cache: 'f16', moe_auf_cpu: false, festnageln: false, kv_unified: true })
 
   const feindaten = $derived({
     ...fein,
@@ -236,7 +241,12 @@
   const schaetzung = $derived(
     istSlot
       ? serverAnteil(auskunft?.modelle, auskunft?.mtp, {
-          modell: agentenmodell.wert, kontext, drafter,
+          modell: agentenmodell.wert,
+          kontext,
+          drafter,
+          eightBit: isEightBitCache(fein.kv_cache),
+          vision,
+          projectors: auskunft?.projector_size_gb,
         })
       : null,
   )
@@ -291,10 +301,10 @@
      was written, so the pairing came back at the next start. The page has to
      show what would actually run before "no thanks" can be an answer to it. */
   function moduleUebernehmen() {
-    const v = auskunft?.vorgaben ?? {}
     const z = auskunft?.zuordnung?.[agentenmodell.wert]
-    drafter = agentenmodell.drafter ?? z?.mtp ?? v.drafter ?? ''
-    vision = agentenmodell.vision ?? z?.mmproj ?? v.vision ?? ''
+    const modul = modulesFor(agentenmodell.wert)
+    drafter = modul.drafter ?? z?.mtp ?? ''
+    vision = modul.vision ?? z?.mmproj ?? ''
   }
 
   /* The stored values, into the form. Taken once — this runs on a two-second
@@ -307,7 +317,7 @@
        which is the normal case on an install that predates this page. */
     const v = auskunft?.vorgaben ?? {}
     kontext = agentenmodell.kontext ?? v.kontext
-    schichten = agentenmodell.schichten ?? v.schichten
+    schichten = agentenmodell.schichten ?? v.schichten ?? null
     /* Null means "the slot's own port", and only the server knows what that
        is — it comes back in `port` while nothing runs. */
     port = agentenmodell.port ?? auskunft?.port ?? 0
@@ -321,6 +331,7 @@
       kv_cache: f.kv_cache === 'q4_0' ? 'q8_0' : (f.kv_cache ?? 'f16'),
       moe_auf_cpu: Boolean(f.moe_auf_cpu),
       festnageln: Boolean(f.festnageln),
+      kv_unified: f.kv_unified !== false,
     }
     faeden = f.faeden || 0
     /* The stored kinds of "all experts on the CPU": the older switch
@@ -338,6 +349,9 @@
      told from the middle of one. The model server's page has kept this all
      along; see `laden`. */
   let liefVorher = false
+
+  /* The running file the stored choice was last read for — see `laden`. */
+  let readFor = ''
 
   /* What this poll reported last, so a failure that lasts is reported once
      rather than once every two seconds. Same reason, same shape, on the
@@ -428,6 +442,18 @@
         await standLaden(true)
         werteUebernehmen()
       }
+      /* A slot started from outside this window — the command line, a second
+         window — holds a file the stored choice named only after that start,
+         so the copy this window opened with names the one before. Read once
+         per file, and not while a pick of this window is in flight. */
+      if (
+        auskunft.laeuft && auskunft.modell && !arbeitet
+        && auskunft.modell !== readFor
+        && !(agentenmodell.sorte === 'slot' && agentenmodell.wert === auskunft.modell)
+      ) {
+        readFor = auskunft.modell
+        await standLaden()
+      }
       liefVorher = Boolean(auskunft.laeuft)
       agentenmodell.laeuft = Boolean(auskunft.laeuft)
       /* Not while a pick is in flight: the store is written before the
@@ -472,22 +498,32 @@
      they are picked (`drafterGewaehlt`, `visionGewaehlt`), exactly as the
      model server's do — a row nobody touched must stay unanswered, or the
      empty entry the form shows would be stored as a deliberate "none". */
+  function writeNumbers() {
+    /* The same fallbacks `werteUebernehmen` fills the form from — the slot
+       owns its port, and the rest come from the one place that decides
+       them (app/agentenmodellwahl.py `VORGABE`). */
+    const nachtrag = nurGeaendert(
+      { kontext, schichten, port, fein: feindaten, vorladen },
+      agentenmodell,
+      { ...(auskunft?.vorgaben ?? {}), port: auskunft?.port },
+    )
+    if (!Object.keys(nachtrag).length) return
+    werteSetzen(nachtrag).catch(() => {})
+  }
+
   $effect(() => {
     const _ = JSON.stringify({ kontext, schichten, port, feindaten, vorladen })
     if (!zahlenStehen || laeuft) return
-    const uhr = setTimeout(() => {
-      /* The same fallbacks `werteUebernehmen` fills the form from — the slot
-         owns its port, and the rest come from the one place that decides
-         them (app/agentenmodellwahl.py `VORGABE`). */
-      const nachtrag = nurGeaendert(
-        { kontext, schichten, port, fein: feindaten, vorladen },
-        agentenmodell,
-        { ...(auskunft?.vorgaben ?? {}), port: auskunft?.port },
-      )
-      if (!Object.keys(nachtrag).length) return
-      werteSetzen(nachtrag).catch(() => {})
-    }, 600)
+    const uhr = setTimeout(writeNumbers, 600)
     return () => clearTimeout(uhr)
+  })
+
+  /* What waited for the quiet is written when the window goes away — the
+     clock above is taken down with it, and a change made in the last 600 ms
+     before closing was simply gone. Nothing changed, nothing sent; the write
+     goes through the store's queue, which outlives the window. */
+  onDestroy(() => {
+    if (zahlenStehen && !laeuft) writeNumbers()
   })
 
   /* The speed module and the projector, stored the moment they are picked.
@@ -499,44 +535,21 @@
      manifest and the name heuristic step in (app/modellrunner.py). A
      projector switched off by hand therefore came back on the command line,
      while the row on this page went on saying "none". The main model server
-     kept the two apart from the start (Modellserver.svelte `modulSetzen`);
+     kept the two apart from the start (Modellserver.svelte `setModules`);
      this is that same rule on the second page. */
   function drafterGewaehlt() {
-    werteSetzen({ drafter }).catch(() => {})
+    if (istSlot) setModules(agentenmodell.wert, { drafter }).catch(() => {})
   }
   function visionGewaehlt() {
-    werteSetzen({ vision }).catch(() => {})
+    if (istSlot) setModules(agentenmodell.wert, { vision }).catch(() => {})
   }
 
   async function modellGewaehlt(wahl) {
     arbeitet = true
     try {
-      /* A remembered module pair belongs to the file it was picked for, and
-         this key holds exactly ONE pair — not a table per file, the way the
-         model server's does (lib/runnermodell.svelte.js `module`). So a draft
-         or a projector chosen by hand for one file went on standing in the
-         row for the next one, and not only in the row: `slot_startwerte`
-         reads that same single pair, so the next start really did put the
-         first file's mtp module on the command line of the second. A 12B
-         draft against a 31B model is the one pairing the candidate rule
-         exists to prevent.
-
-         Handing the pair back to `null` when the choice changes is the true
-         statement about a file nobody has said anything about — and `null`
-         is what lets the folder manifest declare the pairing for the file
-         that was actually picked (app/modellrunner.py `starten`).
-
-         Before the pick, not after: picking a slot model starts it at once
-         (lib/agentenserver.svelte.js `waehlen`), and the process reads the stored
-         choice on its way up.
-
-         What this cannot do is REMEMBER the pair per file — that needs the
-         key to become a table, on both sides. Until then switching away and
-         back costs the pair, which is a forgotten answer rather than a wrong
-         one. */
-      if (wahl !== alsWahl() && (agentenmodell.drafter !== null || agentenmodell.vision !== null)) {
-        await werteSetzen({ drafter: null, vision: null })
-      }
+      /* The module pair is remembered per file, so a switch carries nothing
+         over from the file before and brings back what was chosen for this
+         one: the rows are read again below. */
       await agentenmodellWaehlen(wahl)
       /* Another file, so the rows are read again: what the manifest declares
          is declared for a file, and the file has just changed. */
@@ -651,6 +664,8 @@
           bind:faeden
           maxFaeden={MAX_FAEDEN}
           bind:moeSchichten
+          {parallel}
+          {fein}
           {schaetzung}
           {maschineGb}
         />
@@ -668,6 +683,7 @@
         />
       {/snippet}
     </Serverreihe>
+    <LlamaCppSection {auskunft} onrefresh={laden} />
   {/snippet}
   {#snippet unten()}
     <div class="log">

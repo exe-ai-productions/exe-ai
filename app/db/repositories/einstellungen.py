@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from typing import Any
 
 from app.db.repositories.base import Repository
@@ -89,6 +89,24 @@ def chat_bereich(chat_id: str) -> str:
     return f"chat:{chat_id}"
 
 
+def _restore_refused(judged: dict, stored: Any, sent: dict) -> dict:
+    """The set the check left, with every entry that was sent with a value
+    the check dropped put back as it was stored. An entry sent as unset
+    (None, "" or False) is meant to go and stays gone; one sent with a real
+    value the check would not take is a refusal, and a refusal must not
+    take the stored value with it."""
+    if not isinstance(stored, dict):
+        return judged
+    restored = dict(judged)
+    for key, value in sent.items():
+        if key in restored or key not in stored:
+            continue
+        if value is None or value == "" or value is False:
+            continue
+        restored[key] = stored[key]
+    return restored
+
+
 class EinstellungenRepository(Repository):
     # --- single scopes ----------------------------------------------------
 
@@ -137,6 +155,7 @@ class EinstellungenRepository(Repository):
         row_check: Callable[[Any, Any], None] | None = None,
         as_sent: frozenset[str] = frozenset(),
         as_kept: frozenset[str] = frozenset(),
+        null_unsets: frozenset[str] = frozenset(),
     ) -> dict[str, Any] | None:
         """Stores only the keys given, into what this scope already holds.
 
@@ -178,8 +197,9 @@ class EinstellungenRepository(Repository):
         stored set. Merging alone can only add and change, so an entry sent as
         unset — a switch turned off — would stay stored for good; here the
         check drops it and it is gone, and a set the check empties is written
-        empty, the last entry being as good to unset as any other. The entries
-        that were not sent stay, as everywhere else.
+        empty, the last entry being as good to unset as any other. An entry
+        sent with a value the check REFUSED is not unset: it keeps the value
+        it had. The entries that were not sent stay, as everywhere else.
 
         Read, check and write are one step, not three. They are statements on
         a connection in autocommit mode, and the route that calls this is a
@@ -189,11 +209,19 @@ class EinstellungenRepository(Repository):
         which is the loss this method exists to prevent. See
         ``_MISCH_SCHLOSS``.
 
+        The keys in ``null_unsets`` are the ones a sent ``None`` unsets: the
+        key is taken out of the stored row, so the works answer stands again.
+        The check never sees them — a ``None`` is no value, and a check that
+        drops it would leave a field that was emptied unable to go back to
+        "not set".
+
         The answer is the row as stored.
         """
         with _MISCH_SCHLOSS:
             alt = self.holen(bereich, schluessel)
             stored = alt if isinstance(alt, dict) else {}
+            unset = {name for name, value in wert.items() if value is None and name in null_unsets}
+            wert = {name: value for name, value in wert.items() if name not in unset}
             if pruefen is not None:
                 context = dict(stored)
                 for name, value in wert.items():
@@ -208,15 +236,22 @@ class EinstellungenRepository(Repository):
                 # Only a sent set is taken as the check left it; anything else
                 # sent under such a key is judged like every other value.
                 kept = {
-                    name: judged[name] for name, value in wert.items()
+                    name: _restore_refused(judged[name], stored.get(name), value)
+                    for name, value in wert.items()
                     if name in as_kept and isinstance(value, dict) and isinstance(judged.get(name), dict)
                 }
                 wert = {name: judged[name] for name in wert if name in judged}
-                if not kept and not any(_carries_something(value) for value in wert.values()):
+                if not kept and not unset and not any(
+                    _carries_something(value) for value in wert.values()
+                ):
                     return None
             else:
                 kept = {}
-            merged = {**_tief_mischen(stored, wert), **kept}
+            merged = {
+                name: value
+                for name, value in {**_tief_mischen(stored, wert), **kept}.items()
+                if name not in unset
+            }
             if row_check is not None:
                 row_check(stored, merged)
             self.setzen(bereich, schluessel, merged)
@@ -246,31 +281,6 @@ class EinstellungenRepository(Repository):
     def bereich_leeren(self, bereich: str) -> None:
         """Everything of one scope — used when a chat is deleted."""
         self.verbindung.execute("DELETE FROM einstellungen WHERE bereich = ?", (bereich,))
-
-    def named_by_other_chats(
-        self, names: Iterable[str], *, key: str, named_in: Callable[[Any], set[str]],
-        except_chat: str,
-    ) -> set[str]:
-        """Which of these names the scope of a chat other than
-        ``except_chat`` carries in its value under ``key``. ``named_in``
-        says which names such a value holds. One pass over the chats' rows
-        of that key, however many names are asked. A row that cannot be
-        read names nothing."""
-        wanted = set(names)
-        found: set[str] = set()
-        if not wanted:
-            return found
-        for row in self.verbindung.execute(
-            "SELECT wert_json FROM einstellungen "
-            "WHERE schluessel = ? AND bereich LIKE 'chat:%' AND bereich != ?",
-            (key, chat_bereich(except_chat)),
-        ):
-            try:
-                value = json.loads(row["wert_json"])
-            except json.JSONDecodeError:
-                continue
-            found |= named_in(value) & wanted
-        return found
 
     # --- the cascade ------------------------------------------------------
 

@@ -16,7 +16,7 @@ from app import bildgeraete, bildmodellwerte, bildwahlen, model_convert
 from app.bildrunner import Bildrunner
 from app.config import Config
 from app.tools import bild_werkzeug
-from tests.conftest import Bilddienst
+from tests.conftest import Antwort, Bilddienst
 from tests.test_bild_bausatz_api import _kopf, hand_start  # noqa: F401 - the fixture is used by name
 
 
@@ -114,14 +114,15 @@ def test_without_a_default_model_nothing_is_drawn(tmp_path, monkeypatch):
     assert service.gezeichnet == []
 
 
-def test_a_chat_with_its_own_model_draws_with_it(tmp_path, monkeypatch):
-    """Silence: the default model stands back where a chat names its own."""
+def test_a_chat_draws_with_the_default_model_whatever_it_stored(tmp_path, monkeypatch):
+    """The default model draws for every chat; the model an older chat
+    stored for its picture window is not asked for."""
     service = Bilddienst(
-        {"c1": {"modell": "a.safetensors"}},
         modelle=["a.safetensors", "b.safetensors"], standardmodell="b.safetensors",
+        answers={"/settings/resolved/bildfenster": Antwort({"wert": {"modell": "a.safetensors"}})},
     )
     _draw(tmp_path, monkeypatch, service, chat_id="c1")
-    assert [body["modell"] for body in service.gezeichnet] == ["a.safetensors"]
+    assert [body["modell"] for body in service.gezeichnet] == ["b.safetensors"]
 
 
 # --- The kit of each model ---------------------------------------------------
@@ -331,7 +332,8 @@ def test_a_change_the_service_did_not_take_is_not_shown_as_stored():
     # Only the last write puts back: a later one carries the same fields.
     assert "if (write === writes) showStored(geaendert)" in caught
     scheduled = source.split("clearTimeout(zeit)\n    ausstehend = true\n", 1)[1]
-    assert scheduled.startswith("    const write = ++writes\n    zeit = setTimeout(() => {")
+    assert scheduled.startswith(
+        "    const write = ++writes\n    waiting = write\n    zeit = setTimeout(() => {")
     back = source.split("function showStored(changed) {", 1)[1].split("\n  }\n", 1)[0]
     # Each field of the change, each switch by its key; a limit being typed waits for its field to be left.
     assert (
@@ -355,7 +357,7 @@ def test_the_page_s_writes_go_out_one_after_another():
         encoding="utf-8")
     assert "  let line = Promise.resolve()\n" in source
     scheduled = source.split("zeit = setTimeout(() => {", 1)[1].split("}, 350)", 1)[0]
-    assert scheduled.strip() == "line = line.then(() => store(write))"
+    assert scheduled.strip() == "waiting = 0\n      line = line.then(() => store(write))"
     write = source.split("async function store(write) {", 1)[1].split("\n  }\n", 1)[0]
     # What goes out is read when the write's turn has come, not when it was asked for.
     assert write.lstrip().startswith(
@@ -400,10 +402,15 @@ def test_the_time_limit_is_one_field_that_may_stay_empty_and_goes_out_as_null():
     assert "w.zeitgrenze = ziffern ? Number(ziffern) : null" in row
     assert "if (!ausstehend) w.zeitgrenze = zeitGespeichert" in row
     # Loaded as a number or empty; stored as the service answers it.
-    assert "zeitgrenze: Number.isInteger(v.zeitgrenze) && v.zeitgrenze > 0 ? v.zeitgrenze : null," in source
-    stored = source.split("if ('zeitgrenze' in geaendert) {", 1)[1].split("\n      }\n", 1)[0]
-    assert "Number.isInteger(antwort?.wert?.zeitgrenze) ? antwort.wert.zeitgrenze : null" in stored
-    assert "if (!zeitFokus) w.zeitgrenze = zeitGespeichert" in stored
+    assert (
+        "case 'zeitgrenze': return Number.isInteger(v.zeitgrenze) && v.zeitgrenze > 0 ? v.zeitgrenze : null"
+    ) in source
+    # What the write left in the service is taken over for every field, the
+    # limit among them — except while its field is under the fingers.
+    adopted = source.split("function adopt(geaendert, jetzt, stored) {", 1)[1].split("\n  }\n", 1)[0]
+    assert "zeitgrenze: zeitFokus" in adopted
+    assert "if (name === 'zeitgrenze') zeitGespeichert = held" in adopted
+    assert "const held = asHeld(name, stored)" in adopted
     # Both labels already stand in the catalogue, in both languages.
     import json
 

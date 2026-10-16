@@ -1,6 +1,6 @@
 <script>
-  /* The studio's drawing surface: the whole of the chat tile while the
-     studio is open. A grid lies on it; the generation area — the chat's
+  /* The studio's drawing surface: the whole of the main tile while the
+     studio is open. A grid lies on it; the generation area — the studio's
      width × height — stands fixed in it and never leaves the window. Only
      the picture moves: the wheel zooms it towards the pointer, the hand (or
      a held space bar) drags it. The picture in the area is the start
@@ -8,7 +8,7 @@
 
      The mask is painted right on the picture, with the brush and the eraser
      of the mask editor (lib/maske.js), at the picture's own size. It stays
-     with the chat for the session (studio.svelte.js `maskeDesChats`) and
+     with the studio for the session (studio.svelte.js `studioMask`) and
      leaves the surface as a file only when a picture is drawn.
 
      Along the left edge the tools: hand, brush, eraser, invert, clear,
@@ -17,8 +17,8 @@
      the top right the zoom: a list of percentages, and a step of one
      percentage point to either side of it.
 
-     While no picture stands in the area and none of this chat is drawn or
-     waits to be, the house's picture plaque fills it: a click opens the
+     While no picture stands in the area and none is drawn or waits to be,
+     the house's picture plaque fills it: a click opens the
      file picker, and a picture laid on it — a file, or one off the picture
      wall — is the start picture. */
   import { tick, untrack } from 'svelte'
@@ -31,22 +31,18 @@
   import StudioPictureMenu from './StudioPictureMenu.svelte'
   import { api } from '../lib/api.js'
   import { draussen } from '../lib/draussen.js'
-  import { chatanzeige } from '../lib/chatanzeige.svelte.js'
   import { pictureProgress, watchPicturePreview, watchPictureProgress } from '../lib/pictureProgress.svelte.js'
   import { zeichnung } from '../lib/studiozeichnen.svelte.js'
   import { alsSchwarzWeiss, aufFlaeche, bemalt, leeren, malflaeche, strich, umkehren } from '../lib/maske.js'
+  import { layerChangeable, paintAllowed } from '../lib/maskLock.js'
+  import { fitArea } from '../lib/studioArea.js'
   import {
-    leinwand, maskeDesChats, newestIntoArea, releaseLayers, startbildWaehlen, studioSichtbar, surface, werte,
+    leinwand, newestIntoArea, pictureFromOutside, releaseLayers, studioMask, studioSichtbar, surface, werte,
   } from '../lib/studio.svelte.js'
+  import { studioStore } from '../lib/studioStore.svelte.js'
   import { t } from '../lib/texte.svelte.js'
   import { melde, zustand } from '../lib/zustand.svelte.js'
 
-  /* Room the area leaves around itself: the tools on the left (and as much
-     on the right, so it stands in the middle), the bar and the area's label
-     above, the prompt bar below. */
-  const RAND_SEITE = 70
-  const RAND_OBEN = 110
-  const RAND_UNTEN = 274
   // How far the picture zooms, in picture pixels per generated pixel.
   const ZOOM_MIN = 0.05
   const ZOOM_MAX = 8
@@ -76,15 +72,10 @@
     return () => beobachter.disconnect()
   })
 
-  // The generation area: the chat's width × height, fitted into the room.
+  // The generation area: the studio's width × height, fitted into the room.
   const gw = $derived(Math.max(64, Number(werte.breite) || 1024))
   const gh = $derived(Math.max(64, Number(werte.hoehe) || 1024))
-  const bereich = $derived.by(() => {
-    const s = Math.max(0.01, Math.min((fw - 2 * RAND_SEITE) / gw, (fh - RAND_OBEN - RAND_UNTEN) / gh))
-    const w = gw * s
-    const h = gh * s
-    return { s, w, h, x: (fw - w) / 2, y: RAND_OBEN + Math.max(0, (fh - RAND_OBEN - RAND_UNTEN - h) / 2) }
-  })
+  const bereich = $derived(fitArea(fw, fh, gw, gh))
 
   /* The picture: where its top left corner lies in the area's own pixels,
      and how large it is shown, in picture pixels per generated pixel. Kept
@@ -170,11 +161,19 @@
   let stand = $state(0)
   const kannZurueck = $derived(stand >= 0 && Boolean(maske?.verlauf.length))
   const kannVor = $derived(stand >= 0 && Boolean(maske?.zukunft.length))
-  let werkzeug = $state('pinsel')
+  // The hand is the tool the surface opens with, and the mask is off: a
+  // picture can be moved at once, and the person switches the mask on
+  // (`surface.maskOn`, studio.svelte.js).
+  let werkzeug = $state('hand')
   let groesse = $state(48)
   let toenung = $state(0.5)
-  let maskeSichtbar = $state(true)
+  // The brush or the eraser is picked: the bar with the size, the tint and
+  // the switch stands there, and the switch is reached from it.
   const malt = $derived(werkzeug === 'pinsel' || werkzeug === 'radierer')
+  // Locked while the switch is off: nothing is painted, the ring is gone,
+  // and invert and clear rest (lib/maskLock.js).
+  const mayPaint = $derived(paintAllowed(werkzeug, surface.maskOn))
+  const layerFree = $derived(layerChangeable(surface.maskOn, natur.w))
   // Read back once per change of the mask, not per drawing of the tools.
   const etwasGemalt = $derived(stand >= 0 && maske?.flaeche ? bemalt(maske.flaeche) : false)
   // Told to the studio: a painted mask is one of the things "auto" goes by.
@@ -183,6 +182,20 @@
     return () => {
       surface.masked = false
     }
+  })
+  // The switch goes back to off when the surface goes, and with every
+  // picture laid into the area the hand is chosen again and the mask is off.
+  $effect(() => () => {
+    surface.maskOn = false
+  })
+  let eingelegt = ''
+  $effect(() => {
+    const name = werte.startbild
+    if (name && name !== eingelegt) {
+      werkzeug = 'hand'
+      surface.maskOn = false
+    }
+    eingelegt = name
   })
 
   function zeichnenAufSicht() {
@@ -213,7 +226,7 @@
     }
   }
 
-  // A changed mask is no longer the one the chat has stored.
+  // A changed mask is no longer the one the studio has stored.
   function geaendert() {
     werte.maske = ''
     stand += 1
@@ -226,7 +239,7 @@
     geaendert()
   }
 
-  // From the mask the chat had stored (if any), every step again.
+  // From the mask the studio had stored (if any), every step again.
   function paintLayer() {
     leeren(maske.flaeche)
     if (maske.grund) maske.flaeche.getContext('2d').drawImage(maske.grund, 0, 0)
@@ -240,7 +253,7 @@
   }
 
   function ganzeMaske(art) {
-    if (!maske?.flaeche) return
+    if (!layerFree || !maske?.flaeche) return
     const schritt = { art }
     anwenden(schritt)
     merken(schritt)
@@ -258,7 +271,7 @@
     neuZeichnen()
   }
 
-  /* A mask the chat has stored is black and white; on the surface white is
+  /* A mask the studio has stored is black and white; on the surface white is
      painted and black is free, so its brightness becomes the cover of the
      layer under the steps. What was painted while it loaded stays on top. */
   function gespeicherteLaden(f, name) {
@@ -288,31 +301,31 @@
   }
 
   /* The picture loaded: a picture new to the area is fitted into it, and
-     the chat's mask for it comes forward — the one painted this session,
-     else the one the chat has stored, else an empty layer at the picture's
-     size. A picture that only loads again stands where it was put: the
-     area is emptied and refilled when a chat's stored values arrive, as
-     they do for the chat a first draw opens. A finished picture that takes
+     the studio's mask for it comes forward — the one painted this session,
+     else the one the studio has stored, else an empty layer at the
+     picture's size. A picture that only loads again stands where it was
+     put: the area is emptied and refilled when the studio's stored values
+     arrive. A finished picture that takes
      the place of one of its own size stands where that one stood, at its
      zoom: what was worked on stays in view. */
   let fittedPicture = null
   /* An area that stands empty has no fitted picture any more: whatever
-     comes into it next is new to it. While a chat's stored values are on
-     their way the area is only between two fillings and nothing is
+     comes into it next is new to it. While the studio's stored values are
+     on their way the area is only between two fillings and nothing is
      forgotten — asked once every effect of that moment has run, so a
      filling in the same breath counts whichever of the two runs first. A
      read that failed brings no filling: the area stands empty like any
      other. */
   $effect(() => {
     if (bildUrl) return
-    if (chatanzeige.chatId && !chatanzeige.geladen && !chatanzeige.readError) return
+    if (!studioStore.loaded && !studioStore.error) return
     tick().then(() => {
       if (!bildUrl) fittedPicture = null
     })
   })
   function bildGeladen(ereignis) {
     const knoten = ereignis.currentTarget
-    // Told by what was loaded, not by what the chat names by now.
+    // Told by what was loaded, not by what the area names by now.
     const loaded = knoten.getAttribute('src')
     // A picture that finishes loading after the area left it measures nothing.
     if (!bildUrl || loaded !== bildUrl) return
@@ -327,12 +340,13 @@
     maskeHolen()
   }
 
-  /* A layer the mask gave back while its chat was closed is painted again
-     from what it is made of — the stored mask it was read from and the
-     steps since. Any other layer that is missing or of another size than
-     the picture starts from the mask the chat has stored now. */
+  /* A layer the mask gave back while another picture stood in the area is
+     painted again from what it is made of — the stored mask it was read
+     from and the steps since. Any other layer that is missing or of
+     another size than the picture starts from the mask the studio has
+     stored now. */
   function maskeHolen() {
-    maske = maskeDesChats(chatanzeige.chatId, werte.startbild)
+    maske = studioMask(werte.startbild)
     const fits = (w, h) => w === natur.w && h === natur.h
     if (!maske.flaeche || !fits(maske.flaeche.width, maske.flaeche.height)) {
       const givenBack = !maske.flaeche && Boolean(maske.size) && fits(...maske.size)
@@ -345,16 +359,6 @@
     stand += 1
     zeichnenAufSicht()
   }
-
-  /* Another chat with the very same picture loads nothing new: its own mask
-     is fetched all the same. A view to keep was the chat's before. */
-  $effect(() => {
-    void chatanzeige.chatId
-    leinwand.keepView = ''
-    untrack(() => {
-      if (natur.w && bildUrl) maskeHolen()
-    })
-  })
 
   $effect(() => {
     if (!bildUrl) {
@@ -421,7 +425,7 @@
   async function ausgeben(name, mitMaske, bearbeiten = false) {
     if (!bildKnoten || !natur.w || name !== werte.startbild) return null
     const schluessel = JSON.stringify([
-      name, mitMaske, bearbeiten, lage, gw, gh, natur, chatanzeige.chatId, stand,
+      name, mitMaske, bearbeiten, lage, gw, gh, natur, stand, surface.maskOn,
     ])
     if (zuletzt?.schluessel === schluessel) return zuletzt.ergebnis
     const ergebnis = await ausgebenNeu(name, mitMaske, bearbeiten)
@@ -442,7 +446,7 @@
        place. */
     const cut = wieEs ? null : aufDenBereich(bildKnoten, place)
     let cutMask = null
-    if (mitMaske && maske?.flaeche && bemalt(maske.flaeche)) {
+    if (mitMaske && surface.maskOn && maske?.flaeche && bemalt(maske.flaeche)) {
       const schwarzWeiss = alsSchwarzWeiss(maske.flaeche)
       cutMask = wieEs ? schwarzWeiss : aufDenBereich(schwarzWeiss, place)
     }
@@ -493,7 +497,7 @@
       schiebt = true
       return
     }
-    if (!malt || !maske?.flaeche) return
+    if (!mayPaint || !maske?.flaeche) return
     const punkt = aufFlaeche(ereignis, bildKnoten, maske.flaeche)
     const radiert = werkzeug === 'radierer'
     laufenderStrich = { art: 'strich', punkte: [punkt], groesse, radiert }
@@ -516,6 +520,13 @@
       return
     }
     if (!laufenderStrich || !maske?.flaeche) return
+    if (!mayPaint) {
+      // The switch went off under the stroke: what was drawn stands as one
+      // step, and the rest of the stroke leaves no mark.
+      merken(laufenderStrich)
+      laufenderStrich = null
+      return
+    }
     const jetzt = aufFlaeche(ereignis, bildKnoten, maske.flaeche)
     const punkte = laufenderStrich.punkte
     strich(maske.flaeche, punkte[punkte.length - 1], jetzt, groesse, laufenderStrich.radiert)
@@ -563,16 +574,16 @@
   let ablegen = $state(false)
   let ablageWahl = 0
   /* A picture file for the area: uploaded, then the start picture — unless
-     another one was laid down or another chat opened meanwhile. */
+     another one was laid down meanwhile. It lies in the pictures folder and
+     belongs to no chat. */
   async function setFile(datei) {
     if (!datei?.type?.startsWith('image/')) return
-    const fuer = chatanzeige.chatId
     const wahl = ++ablageWahl
     try {
       const ergebnis = await api.bildHochladen(datei)
-      if (fuer === chatanzeige.chatId && wahl === ablageWahl) startbildWaehlen(ergebnis.bild)
+      if (wahl === ablageWahl) pictureFromOutside(ergebnis.bild)
     } catch (fehler) {
-      if (fuer === chatanzeige.chatId) melde(String(fehler.message || fehler), 'fehler')
+      melde(String(fehler.message || fehler), 'fehler')
     }
   }
   /* A picture off the picture wall (ModulBilder) travels by its name: it
@@ -584,7 +595,7 @@
   function setFromFolder(name) {
     if (!FOLDER_NAME.test(name)) return
     ablageWahl += 1
-    startbildWaehlen(name)
+    pictureFromOutside(name)
   }
   function abgelegt(ereignis) {
     ereignis.preventDefault()
@@ -593,19 +604,19 @@
     else setFile([...(ereignis.dataTransfer?.files ?? [])].find((d) => d.type.startsWith('image/')))
   }
 
-  /* The picture of this chat drawing now: its progress stands in the
-     area too, with its stop — and, where it is drawn with a live preview,
-     the picture as far as it is, laid over the area. The watch follows the
-     picture, not the line: a line rebuilt around the same picture must not
-     end it and start it over. */
-  const laufend = $derived(zustand.pictureQueue.find((w) => w.running && w.chat_id === chatanzeige.chatId) ?? null)
+  /* The picture drawing now: its progress stands in the area too, with its
+     stop — and, where it is drawn with a live preview, the picture as far
+     as it is, laid over the area. The watch follows the picture, not the
+     line: a line rebuilt around the same picture must not end it and start
+     it over. The line holds the studio's pictures only. */
+  const laufend = $derived(zustand.pictureQueue.find((w) => w.running) ?? null)
   const prozent = $derived(Math.round((pictureProgress.share || 0) * 100))
   const runningId = $derived(laufend?.id ?? null)
-  /* A picture of this chat drawing or waiting in the line: the empty area
-     belongs to the progress, not to the picture plaque. Waiting counts too
-     — between two pictures of one run the first is drawn and the next has
-     not begun, and the plaque would show up for that moment. */
-  const inLine = $derived(zustand.pictureQueue.some((w) => w.chat_id === chatanzeige.chatId))
+  /* A picture drawing or waiting in the line: the empty area belongs to the
+     progress, not to the picture plaque. Waiting counts too — between two
+     pictures of one run the first is drawn and the next has not begun, and
+     the plaque would show up for that moment. */
+  const inLine = $derived(zustand.pictureQueue.length > 0)
   $effect(() => {
     if (runningId === null) return
     const stopProgress = watchPictureProgress()
@@ -615,17 +626,13 @@
       stopProgress()
     }
   })
-  /* The chat's newest picture comes into the area by itself
-     (lib/studio.svelte.js): its pictures are read when the chat opens,
-     whenever its line of pictures changes — a picture that left the line
-     is finished — and when a message arrives, which may bring one. */
-  const line = $derived(
-    zustand.pictureQueue.filter((w) => w.chat_id === chatanzeige.chatId).map((w) => w.id).join(),
-  )
+  /* The studio's newest picture comes into the area by itself
+     (lib/studio.svelte.js): its pictures are read when the surface comes
+     up and whenever its line of pictures changes — a picture that left the
+     line is finished. */
+  const line = $derived(zustand.pictureQueue.map((w) => w.id).join())
   $effect(() => {
-    void chatanzeige.chatId
     void line
-    void zustand.nachrichten.length
     untrack(newestIntoArea)
   })
 
@@ -646,13 +653,13 @@
   <!-- The picture and its mask, moved and zoomed as one box; clipped to the
        surface, veiled outside the area. -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="buehne" class:hand={schiebend} class:greift={schiebt} class:malt={malt && !schiebend && natur.w}
+  <div class="buehne" class:hand={schiebend} class:greift={schiebt} class:malt={mayPaint && !schiebend && natur.w}
        onwheel={radeln} onpointerdown={fassen} onpointermove={ziehen} onpointerup={loslassen}
        onpointercancel={loslassen} onpointerleave={() => (zeiger = null)}>
     {#if bildUrl}
       <div class="bild" style={bildStil}>
         <img src={bildUrl} alt={t('bild.startbild')} bind:this={bildKnoten} onload={bildGeladen} draggable="false" />
-        <canvas bind:this={sicht} class="maske" style:opacity={maskeSichtbar ? toenung : 0}></canvas>
+        <canvas bind:this={sicht} class="maske" style:opacity={surface.maskOn ? toenung : 0}></canvas>
       </div>
     {/if}
     <div class="bereich" class:leer={!bildUrl} aria-hidden="true"
@@ -665,7 +672,7 @@
         <Bildablage waehlen={setFile} named={setFromFolder} fill />
       </div>
     {/if}
-    {#if zeiger && malt && !schiebend && natur.w}
+    {#if zeiger && mayPaint && !schiebend && natur.w}
       {@const d = groesse * lage.zoom * bereich.s}
       <div class="pinselring" aria-hidden="true"
            style="left:{zeiger.x}px;top:{zeiger.y}px;width:{d}px;height:{d}px"></div>
@@ -683,6 +690,17 @@
         <button onclick={() => zeichnung.stopEins?.(laufend.id)}>{t('bild.stopp')}</button>
       </span>
       <span class="balken" style:width="{prozent}%"></span>
+    </div>
+  {/if}
+
+  {#if natur.w}
+    <!-- The picture's own resolution, in the row above the area's: what
+         lies in the area and what the area asks for can be told apart.
+         Only while a picture lies there. -->
+    <div class="bereichsname" role="group" aria-label={t('bild.startbild')}
+         style="left:{bereich.x}px;top:{bereich.y - 66}px">
+      <Hauszeichen zeichen="bild" groesse={14} />
+      <span>{natur.w} × {natur.h}</span>
     </div>
   {/if}
 
@@ -711,11 +729,11 @@
         <MaskenZeichen name={w.zeichen} groesse={18} />
       </button>
     {/each}
-    <button onclick={() => ganzeMaske('umkehren')} disabled={!natur.w} title={t('maske.umkehren')}
+    <button onclick={() => ganzeMaske('umkehren')} disabled={!layerFree} title={t('maske.umkehren')}
             aria-label={t('maske.umkehren')}>
       <MaskenZeichen name="umkehren" groesse={18} />
     </button>
-    <button onclick={() => ganzeMaske('leeren')} disabled={!natur.w || !etwasGemalt}
+    <button onclick={() => ganzeMaske('leeren')} disabled={!layerFree || !etwasGemalt}
             title={t('maske.leeren')} aria-label={t('maske.leeren')}>
       <!-- The catalogue's "mask clear": the frame with the dashed mask
            inside, as the drawing has it. -->
@@ -762,7 +780,7 @@
       <span class="trenner" aria-hidden="true"></span>
       <span class="teil">
         <span class="name">{t('studio.maske')}</span>
-        <Schalter an={maskeSichtbar} onschalten={(an) => (maskeSichtbar = an)} beschriftung={t('studio.maske')} />
+        <Schalter an={surface.maskOn} onschalten={(an) => (surface.maskOn = an)} beschriftung={t('studio.maske')} />
       </span>
     </div>
     </div>

@@ -37,7 +37,7 @@ from app.api.v1.schemas import (
     OrdnerStand,
 )
 from app.db import Repositories
-from app.db.repositories.einstellungen import chat_bereich
+from app.db.repositories.einstellungen import GLOBAL, chat_bereich
 from app.discovery import Discovery
 from app.events import Ereignisse, bus
 from app.generationen import Generierungsverwaltung
@@ -498,9 +498,10 @@ async def remove_chat(
     # The data folder travels in because the repository has no config of
     # its own: it is what tells the delete where this chat's own document
     # folder lies, so the files go with the row instead of outliving it.
-    # The pictures its rows name and its picture studio holds — a start, end
-    # or reference picture, a guide picture, a mask: one laid into the
-    # studio is named by no row. Read while rows and studio are still there.
+    # The pictures its rows name and the picture window it held before the
+    # studio stood apart from the chats — a start, end or reference picture,
+    # a guide picture, a mask: one laid into it is named by no row. Read
+    # while rows and window are still there.
     bilder = list(dict.fromkeys([
         *repositories.messages.bilder_von(chat_id=chat_id),
         *sorted(bildfensterwahl.held_pictures(
@@ -512,16 +513,15 @@ async def remove_chat(
     )
     # They go with it from the picture folder — but one that a row of
     # another chat still names stays: a picture lies there once and belongs
-    # to every chat that names it. So does one another chat's picture
-    # studio holds in any of those places: no row names it there, and the
-    # studio would open on an empty picture. A copy saved elsewhere is
-    # never touched.
+    # to every chat that names it. So does one the picture studio holds in
+    # any of those places — in its area, as a reference, start, end or guide
+    # picture, as a mask: no row names it there, and the studio would open
+    # on an empty picture. A copy saved elsewhere is never touched.
     if geloescht and bilder:
         bleiben = repositories.messages.noch_genannt(bilder)
-        bleiben |= repositories.einstellungen.named_by_other_chats(
-            bilder, key=bildfensterwahl.SCHLUESSEL,
-            named_in=bildfensterwahl.held_pictures, except_chat=chat_id,
-        )
+        bleiben |= bildfensterwahl.held_pictures(
+            repositories.einstellungen.holen(GLOBAL, bildfensterwahl.SCHLUESSEL)
+        ) & set(bilder)
         bilder_entfernen(bilder_verzeichnis(config), [name for name in bilder if name not in bleiben])
     # What the database holds goes with the row (foreign keys, cascade).
     # What lives in memory has to be told: this chat's little run history —

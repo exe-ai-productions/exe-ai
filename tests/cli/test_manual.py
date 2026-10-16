@@ -95,7 +95,7 @@ def test_the_chapter_names_every_word_and_switch_of_the_command_line(language: s
     assert {
         piece.removeprefix("exe ") for piece in code if re.fullmatch(r"exe [a-z]+(?: [a-z]+)?", piece)
     } == words
-    assert {piece for piece in code if re.fullmatch(r"--[a-z-]+", piece)} == switches
+    assert {piece for piece in code if re.fullmatch(r"-{1,2}[a-z][a-z-]*", piece)} == switches
 
 
 @languages
@@ -103,7 +103,7 @@ def test_the_command_line_table_repeats_what_help_prints_word_for_word(language:
     printed = re.findall(r"^  (.+?)\s{2,}(.+)$", help_text(Texts(language)), re.M)
     assert printed
     # The rows that name a word or a switch of the command line.
-    said = [(name.removeprefix("exe "), sentence) for name, sentence in _rows(language, "exe ", "--")]
+    said = [(name.removeprefix("exe "), sentence) for name, sentence in _rows(language, "exe ", "-")]
     assert said == printed
 
 
@@ -135,7 +135,7 @@ def test_a_sentence_of_two_lines_stands_in_the_chapter_with_both(language: str, 
         for command in registry.matching(name)
         if command.name == name and "\n" in registry.summary(command)
     }
-    assert set(two_lines) == {"/server", "/download", "/theme", "/set", "/tools", "/export"}
+    assert set(two_lines) == {"/chats", "/rename", "/archive", "/project", "/ps", "/mcp", "/skills", "/image", "/server", "/download", "/provider", "/setup", "/theme", "/settings", "/agents", "/cron", "/tools", "/dir", "/compact", "/export"}
     said = dict(_rows(language, "/"))
     for name, sentence in two_lines.items():
         first, second = sentence.split("\n")
@@ -173,3 +173,11 @@ def test_both_languages_carry_the_same_chapters() -> None:
     assert english == german
     assert english[-2:] == ["terminal", "hakt"]
     assert len(english) == 17
+
+
+def test_the_german_manual_calls_the_choice_of_appearance_by_one_word() -> None:
+    """App, first start and command table say "Erscheinungsbild"; a chapter
+    that says "Look" for the same thing is a second word for it."""
+    page = _page("de")
+    assert not re.search(r"\bLooks?\b", page)
+    assert "fünf Erscheinungsbilder" in page

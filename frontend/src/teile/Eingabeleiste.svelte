@@ -2,6 +2,7 @@
   import { flushSync, tick, untrack } from 'svelte'
   import QuestionBox from './QuestionBox.svelte'
   import Mikrofonknopf from './Mikrofonknopf.svelte'
+  import VoiceLine from './VoiceLine.svelte'
   import Arbeitsordner from './Arbeitsordner.svelte'
   import FolderChip from './FolderChip.svelte'
   import Modellwahl from './Modellwahl.svelte'
@@ -31,6 +32,8 @@
     abbrechen as aufnahmeAbbrechen,
     starten as aufnahmeStarten,
     stoppen as aufnahmeStoppen,
+    oeffnen as aufnahmeOeffnen,
+    schliessen as aufnahmeSchliessen,
     zwischenstand as aufnahmeZwischenstand,
   } from '../lib/aufnahme.svelte.js'
   import {
@@ -43,7 +46,9 @@
   import { system } from '../lib/keyNames.js'
   import { layout } from '../lib/keyboardLayout.svelte.js'
   import { api } from '../lib/api.js'
+  import { attachPlayback } from '../lib/playbackLevel.js'
   import { neuAusrichten, sprechtextPutzen, stueckeSchneiden } from '../lib/sprechtext.js'
+  import { pauseElapsed } from '../lib/conversationPause.js'
   import { bildZeigen } from '../lib/bildschau.svelte.js'
   import { t } from '../lib/texte.svelte.js'
   import {
@@ -55,7 +60,7 @@
   import { diktat, standLaden as diktatStandLaden } from '../lib/diktat.svelte.js'
 
   let {
-    senden, abbrechen, bildStoppen, compactChat, bildLokalLaeuft = false, gruss = null, vektoren = false,
+    senden, abbrechen, compactChat, gruss = null, vektoren = false,
   } = $props()
 
   /* The permission mode for chat calls — Tor 3 (app/berechtigungen.py).
@@ -376,15 +381,9 @@
   const leer = $derived(!text.trim() && !anhaenge.length && !dokumentAnhaenge.length)
   /* The action button shows the stop sign only while a run has nothing to
      send beside it — with something in the field, sending (into the queue)
-     is what the hand is after.
-
-     A drawing picture only claims the button in the chat it is drawn FOR,
-     and only with an empty field. In every other chat the button keeps
-     sending — or typing a message anywhere would silently kill a picture
-     running elsewhere, and the model there could never be asked anything
-     while a picture draws. */
-  const bildHier = $derived(bildLokalLaeuft && Boolean(zustand.bildLaeuftChat[zustand.aktiverChat]))
-  const stoppt = $derived((bildHier || laeuftGerade) && leer)
+     is what the hand is after. A picture the studio draws is the studio's:
+     it never claims this button. */
+  const stoppt = $derived(laeuftGerade && leer)
   /* The arrow is locked because the chat's model is switched off in the
      quick choice. It then says so, in the sentence the model choice beside
      it already carries: a locked button that still read "send" named its
@@ -611,9 +610,14 @@
   let narrowContent = 0
   let measureQueued = false
   let measureForced = false
+  /* The left of the row is a stretching place for the voice line with the
+     group inside it; the group is what has a width of its own. */
+  function groupOf(child) {
+    return child.classList.contains('links-platz') ? child.firstElementChild : child
+  }
   function groupsWidth() {
     let sum = 0
-    for (const group of row.children) sum += group.getBoundingClientRect().width
+    for (const child of row.children) sum += groupOf(child).getBoundingClientRect().width
     return sum
   }
   function neededWidth() {
@@ -667,7 +671,7 @@
        (a longer folder name, the "later" chip) while the row keeps its
        width. */
     observer.observe(row)
-    for (const group of row.children) observer.observe(group)
+    for (const child of row.children) observer.observe(groupOf(child))
     return () => observer.disconnect()
   })
   /* Words the narrow form hides can change without any size changing:
@@ -1180,10 +1184,6 @@
      recording on a slow machine takes as long as it takes. */
   let transcriptionAbort = null
 
-  const zaehler = $derived(
-    `${Math.floor(aufnahme.sekunden / 60)}:${String(aufnahme.sekunden % 60).padStart(2, '0')}`,
-  )
-
   /* Where the words go is decided in lib/dictationMirror.js; what is left
      here is the field: its text, its focus and its cursor. */
   function diktatEinfuegen(neu, bereich = null) {
@@ -1498,18 +1498,25 @@
      Silence detection is a small formula, scaled
      to the 16-bit range `aufnahme.svelte.js` already reports blocks in: a
      level of 200 counts as speech (measured as a block's RMS, not its
-     peak), 3.0 seconds under it — once at least 0.3 seconds of speech has
-     actually happened — ends the sentence, and 15 seconds with less than
+     peak), the pause under it (3.0 seconds as shipped, the user's own
+     number in the speech server window) — once at least 0.3 seconds of
+     speech has actually happened — ends the sentence, and 15 seconds with less than
      0.3 seconds of speech ends the round; three such rounds in a row end
      the conversation itself. */
   const GESPRAECH_MIN_SPRACH_MS = 300
-  const GESPRAECH_STILLE_MS = 3000
   const GESPRAECH_RUNDE_STILLE_MS = 15000
   const GESPRAECH_RUNDEN_ENDE = 3
 
   let gespraechAn = $state(false)
   /* 'hoert' | 'denkt' | 'spricht' — only read while `gespraechAn` is true. */
   let gespraechZustand = $state('hoert')
+
+  /* What the voice is doing, for the line that takes the left of the row:
+     a dictation, its text being fetched, or a conversation's own state.
+     `null` while the voice is not in use — then the left group shows. */
+  const lineState = $derived(
+    gespraechAn ? gespraechZustand : holtText ? 'holt' : aufnahme.laeuft ? 'diktat' : null,
+  )
 
   // Plain closures, not `$state`: silence timing runs off the worklet's own
   // callback (see aufnahme.svelte.js), not off Svelte's render loop, and
@@ -1518,7 +1525,7 @@
   let vadSprachMs = 0
   let vadStilleMs = 0
   let vadLetzteZeit = 0
-  let vadRundenBeginn = 0
+  let vadRundenUhr = null
   let vadFehlrunden = 0
   // Set right before `abbrechen()` is asked to stop a running answer, so the
   // `senden()` this function is still awaiting knows not to read a half
@@ -1586,6 +1593,8 @@
       gespraechChat = zustand.aktiverChat
       gespraechAn = true
       vadFehlrunden = 0
+      if (!(await gespraechMikroOeffnen())) return
+      voiceKeepStart()
       await gespraechZuhoeren()
     } finally {
       gespraechStartet = false
@@ -1598,11 +1607,49 @@
     text = text.trim() ? `${text.trimEnd()} ${sentence}` : sentence
   }
 
+  /* The voice stays loaded on the service while the conversation lasts: it is
+     announced when the conversation begins and again every few seconds (the
+     service lets go of it when the announcements stop, so a page that went
+     away leaves nothing loaded), and given back when the conversation ends.
+     Whether it is kept at all is the service's answer to the first call. */
+  const VOICE_HOLD_MS = 10_000
+  let voiceHoldTimer = null
+  function voiceKeepStart() {
+    voiceKeepStop(false)
+    const announce = () => { api.voiceHold().catch(() => {}) }
+    announce()
+    voiceHoldTimer = setInterval(announce, VOICE_HOLD_MS)
+  }
+  function voiceKeepStop(release = true) {
+    if (!voiceHoldTimer) return
+    clearInterval(voiceHoldTimer)
+    voiceHoldTimer = null
+    if (release) api.voiceRelease().catch(() => {})
+  }
+  $effect(() => {
+    const leave = () => {
+      voiceKeepStop()
+      if (gespraechAn) aufnahmeSchliessen()
+    }
+    window.addEventListener('pagehide', leave)
+    return () => {
+      window.removeEventListener('pagehide', leave)
+      leave()
+    }
+  })
+
   function gespraechBeenden() {
     gespraechAn = false
     gespraechUnterbrochenUm = 0
+    // The reading first: a sentence still being made is called off before
+    // the voice is given back, or it would arrive at a service that no
+    // longer holds the voice and be spoken by a second program.
     vorlesungStoppen()
-    if (aufnahme.laeuft) aufnahmeAbbrechen()
+    voiceKeepStop()
+    vadRundenUhrStoppen()
+    // Frees the microphone the conversation held open, and drops a round
+    // that was still listening on it.
+    aufnahmeSchliessen()
   }
 
   // A chat switch mid-conversation would otherwise keep listening for one
@@ -1632,13 +1679,38 @@
     })
   })
 
+  /* The conversation's microphone: opened once, before the voice is
+     announced, and held open through every round until the conversation
+     ends — a round only starts and stops collecting. Opening again is a
+     no-op while it is open, and brings the device back if it went away.
+     False when the conversation did not get its microphone or ended while
+     it was opening. */
+  async function gespraechMikroOeffnen() {
+    try {
+      await aufnahmeOeffnen()
+    } catch (fehler) {
+      melde(t(fehlerschluessel(fehler)), 'fehler')
+      gespraechBeenden()
+      return false
+    }
+    // Ended while the microphone was still opening (a chat switch, the
+    // hold): `gespraechBeenden` found nothing open to free, so what has
+    // just come up would be left without an owner.
+    if (!gespraechAn) {
+      aufnahmeSchliessen()
+      return false
+    }
+    return true
+  }
+
   async function gespraechZuhoeren() {
     if (!gespraechAn) return
     gespraechZustand = 'hoert'
     vadSprachMs = 0
     vadStilleMs = 0
     vadLetzteZeit = performance.now()
-    vadRundenBeginn = vadLetzteZeit
+    vadRundenUhrStoppen()
+    if (!(await gespraechMikroOeffnen())) return
     try {
       await aufnahmeStarten(gespraechSatzFertig, gespraechPegel)
     } catch (fehler) {
@@ -1646,10 +1718,26 @@
       gespraechBeenden()
       return
     }
-    // Ended while the microphone was still opening (a chat switch, the
-    // hold): `gespraechBeenden` found nothing running to stop, so the
-    // recording that has just come up would be left without an owner.
-    if (!gespraechAn && aufnahme.laeuft) aufnahmeAbbrechen()
+    if (!gespraechAn) {
+      aufnahmeSchliessen()
+      return
+    }
+    // The round's own clock: 15 seconds with too little speech end it, also
+    // when the microphone delivers nothing at all.
+    vadRundenUhr = setTimeout(gespraechRundeAblaufen, GESPRAECH_RUNDE_STILLE_MS)
+  }
+
+  function vadRundenUhrStoppen() {
+    clearTimeout(vadRundenUhr)
+    vadRundenUhr = null
+  }
+
+  function gespraechRundeAblaufen() {
+    vadRundenUhr = null
+    if (!gespraechAn || gespraechZustand !== 'hoert' || !aufnahme.laeuft) return
+    if (vadSprachMs >= GESPRAECH_MIN_SPRACH_MS) return
+    aufnahmeAbbrechen()
+    gespraechRundeOhneSatz()
   }
 
   function gespraechPegel(pegel) {
@@ -1663,13 +1751,9 @@
     } else {
       vadStilleMs += dt
     }
-    if (vadSprachMs >= GESPRAECH_MIN_SPRACH_MS && vadStilleMs >= GESPRAECH_STILLE_MS) {
+    if (vadSprachMs >= GESPRAECH_MIN_SPRACH_MS && pauseElapsed(vadStilleMs, diktat.conversation_pause_seconds)) {
       gespraechSatzFertig(aufnahmeStoppen())
       return
-    }
-    if (vadSprachMs < GESPRAECH_MIN_SPRACH_MS && jetzt - vadRundenBeginn >= GESPRAECH_RUNDE_STILLE_MS) {
-      aufnahmeAbbrechen()
-      gespraechRundeOhneSatz()
     }
   }
 
@@ -1685,6 +1769,7 @@
   }
 
   async function gespraechSatzFertig(blob) {
+    vadRundenUhrStoppen()
     if (!gespraechAn) return
     if (!blob) {
       await gespraechRundeOhneSatz()
@@ -1769,6 +1854,8 @@
       aus: false,
       rechnet: false,
       wecken: null,
+      // Ends a sentence still being made when the reading is stopped.
+      abort: new AbortController(),
     }
     vorlesung = v
     return v
@@ -1804,7 +1891,7 @@
     const kopf = v.stuecke[0]
     if (v.aus || !kopf || kopf.wav || v.rechnet) return
     v.rechnet = true
-    kopf.wav = api.spracheSprechen(kopf.text).finally(() => {
+    kopf.wav = api.spracheSprechen(kopf.text, { signal: v.abort.signal }).finally(() => {
       v.rechnet = false
       stueckVorbereiten(v)
     })
@@ -1847,6 +1934,15 @@
     const url = URL.createObjectURL(wav)
     const audioEl = new Audio(url)
     gespraechAudioEl = audioEl
+    /* Through the analyser the voice's loudness reaches the line; when the
+       route cannot be built the clip plays on its own, as it always did. */
+    const route = await attachPlayback(audioEl)
+    if (gespraechAudioEl !== audioEl) {
+      /* Stopped while the route was being built: nothing is played. */
+      route?.()
+      URL.revokeObjectURL(url)
+      return
+    }
     try {
       await new Promise((fertig) => {
         gespraechAudioFertig = fertig
@@ -1855,6 +1951,7 @@
         audioEl.play().catch(fertig)
       })
     } finally {
+      route?.()
       URL.revokeObjectURL(url)
       gespraechAudioEl = null
       gespraechAudioFertig = null
@@ -1867,6 +1964,7 @@
     if (v) {
       v.aus = true
       v.stuecke = []
+      v.abort.abort()
       v.wecken?.()
     }
     gespraechAudioStoppen()
@@ -1908,6 +2006,8 @@
       aus: false,
       rechnet: false,
       wecken: null,
+      // Ends a sentence still being made when the reading is stopped.
+      abort: new AbortController(),
     }
     // Fed whole and finished before it becomes the reading, so the effect
     // that feeds a conversation's answer finds nothing left to feed.
@@ -2072,8 +2172,13 @@
          model with its lamps and ring, the thinking switch, the microphone
          and send on the right. -->
     <div class="bar-row" class:narrow class:tight bind:this={row}>
+      <!-- The left group and, over the same room, the line that shows what the
+           voice hears while it is in use. The group never leaves the layout —
+           it only fades — so the row's height and its measuring stay as they
+           are. -->
+      <div class="links-platz" class:stimme={Boolean(lineState)}>
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="linkegruppe" onkeydown={modeListEscape}>
+      <div class="linkegruppe" inert={Boolean(lineState)} onkeydown={modeListEscape}>
         <div class="menu-anchor" data-bar-menu="plus">
           <button
             class="round plus"
@@ -2153,17 +2258,12 @@
           </div>
         {/if}
       </div>
+      <VoiceLine zustand={lineState} />
+      </div>
 
       <div class="rechts">
         <Modellwahl open={openMenu === 'model'} onToggle={(open) => toggleMenu('model', open)} {narrow} {tight}
                     bind:label={modelLabel} />
-
-        <!-- The seconds, beside the button rather than in it: a counter
-             growing inside it would push its size around while somebody
-             speaks. -->
-        {#if aufnahme.laeuft}
-          <span class="zaehler">{zaehler}</span>
-        {/if}
 
         <!-- How deeply the model thinks, right beside the microphone: the
              bulb with its stage dots (Denkschalter.svelte). -->
@@ -2192,7 +2292,7 @@
           class="aktion"
           class:stoppt={stoppt}
           class:leer={!laeuftGerade && leer}
-          onclick={() => (stoppt ? (bildHier ? bildStoppen() : abbrechen()) : absenden())}
+          onclick={() => (stoppt ? abbrechen() : absenden())}
           disabled={gesperrtDurchModell}
           title={stoppt
             ? t('eingabe.abbrechen_tipp')
@@ -2377,6 +2477,32 @@
   .bar-row.tight .linkegruppe,
   .bar-row.tight .rechts { gap: 0; }
   .rechts { margin-left: auto; }
+  /* The room left of the model picker. The group inside keeps its own width;
+     the voice line fills what is left of it. The two never show together:
+     going in, the group fades first (160 ms) and the line follows; coming
+     back, the line leaves first and the group follows. The transition sits
+     on the state that is being reached. */
+  .links-platz {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+  }
+  .links-platz > .linkegruppe { transition: opacity 0.22s ease-out 0.16s; }
+  .links-platz.stimme > .linkegruppe {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.16s ease-in;
+  }
+  /* The page-wide rule for less motion cuts every transition to a hundredth
+     of a millisecond with `!important`; the group's fade is the exception —
+     it still fades, softly, instead of switching. */
+  @media (prefers-reduced-motion: reduce) {
+    .links-platz > .linkegruppe { transition-duration: 0.22s !important; }
+    .links-platz.stimme > .linkegruppe { transition-duration: 0.16s !important; }
+  }
   .menu-anchor { position: relative; flex: none; }
 
   .round {
@@ -2517,14 +2643,6 @@
   @keyframes bildpuls {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
-  }
-
-  /* The seconds beside the button — a fact while it runs, so brightness and
-     no colour of its own. */
-  .zaehler {
-    font: 500 12px/1 var(--schrift-fest);
-    color: var(--text);
-    font-variant-numeric: tabular-nums;
   }
 
   .aktion {

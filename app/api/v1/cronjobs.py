@@ -495,9 +495,9 @@ def calendar(
     }
 
 
-# How many coming runs the mask names under a cron expression it cannot
-# otherwise put into words: enough to show the rhythm, short enough for a line.
-PREVIEW_RUNS = 3
+# How many coming runs the mask names under a typed cron expression: one, the
+# next. The sentence above it says what the expression means.
+PREVIEW_RUNS = 1
 
 
 @router.get("/preview", response_model=list[str], summary="Upcoming runs for the entered "
@@ -507,9 +507,10 @@ def preview(
     request: Request,
     language: str = Depends(hole_sprache),
 ) -> list[str]:
-    """The next few due moments of a schedule not yet stored — the line
-    under a typed cron expression that says what it means. Read by the same
-    module the tick fires by (app/terminplan.py), on the same clock."""
+    """The next due moment of a schedule not yet stored — the line under a
+    typed cron expression, and the service's word on whether it can be read
+    at all. Read by the same module the tick fires by (app/terminplan.py), on
+    the same clock."""
     try:
         # Counted in moments, not on the wall clock: the repeated hour of
         # the autumn day names each of its times twice.

@@ -46,6 +46,9 @@ _GLYPHS: dict[str, tuple[str, str, str]] = {
     "disconnected": ("○", "x", ""),
     # In front of the name of the entry of a selection that is in use.
     "in_use": ("●", "*", ""),
+    # In front of the entry of a checklist: ticked, and not ticked.
+    "checked": ("■", "[x]", ""),
+    "unchecked": ("□", "[ ]", ""),
     # Between two parts of one line.
     "separator": ("·", "|", ""),
     # In front of an item of a list, and down the side of a quotation.

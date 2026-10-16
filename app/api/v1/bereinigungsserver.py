@@ -20,15 +20,14 @@ from pydantic import BaseModel, Field
 
 from app import diktatsprachewahl
 from app.api.abhaengigkeiten import hole_repositories, hole_sprache
-from app.api.v1.runner import Modelldatei, _fehler
+from app.api.v1.runner import Modelldatei, ProgramState, _fehler, program_state
 from app.db import Repositories
 from app.modellrunner import RunnerFehler
 
 router = APIRouter(prefix="/bereinigungsserver", tags=["bereinigungsserver"])
 
 
-class Auskunft(BaseModel):
-    programm: str | None = None
+class Auskunft(ProgramState):
     ordner: str
     modelle: list[Modelldatei] = []
     laeuft: bool = False
@@ -61,7 +60,7 @@ def _auskunft(request: Request, repositories: Repositories) -> Auskunft:
     runner = _runner(request)
     lauf = runner.lauf()
     return Auskunft(
-        programm=str(runner.programm) if runner.programm else None,
+        **program_state(runner, request.app.state.config),
         ordner=str(runner.ordner),
         modelle=[
             Modelldatei(name=m.name, groesse_gb=m.groesse_gb)
@@ -69,7 +68,9 @@ def _auskunft(request: Request, repositories: Repositories) -> Auskunft:
         ],
         laeuft=runner.laeuft(),
         modell=lauf.modell if lauf else (diktatsprachewahl.putzmodell(repositories) or None),
-        port=lauf.port if lauf else runner.port_vorgabe,
+        port=lauf.port if lauf else (
+            diktatsprachewahl.wahl(repositories)["cleanup_port"] or runner.port_vorgabe
+        ),
         kerne=os.cpu_count(),
         unknown_architecture=runner.unknown_architecture(),
         diktat_vorgaben=diktatsprachewahl.vorgaben(),
@@ -104,7 +105,9 @@ def starten(
             daten.modell,
             kontext=kontext,
             schichten=schichten,
-            port=daten.port,
+            # The request's port, else the one stored with the other start
+            # values, else the server's own.
+            port=daten.port or stand["cleanup_port"],
             # No speed module and no projector here: a cleaner reads text
             # and writes text, and its folder may well hold a pair meant
             # for the speech model beside it.

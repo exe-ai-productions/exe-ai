@@ -54,8 +54,10 @@ SCHLUESSEL = "runnermodell"
 # It is a starting point, not a limit: the field stays open, and a value a
 # hand puts there is stored and read back before this one is ever reached.
 KONTEXT_VORGABE = 16384
-# 99 is llama.cpp's own way of saying "all of them".
-SCHICHTEN_VORGABE = 99
+# No layer count is named: llama.cpp places the layers itself, and with them
+# the experts of a MoE model, to fit the memory it finds ("auto"). A number a
+# hand puts into the field is stored and passed on as it stands.
+SCHICHTEN_VORGABE = None
 
 # The bounds the window's own fields carry, repeated here because a stored
 # value can come from anywhere — an old version, a hand-edited database, a
@@ -168,7 +170,7 @@ def wahl_pruefen(wert: Any) -> dict[str, Any]:
     if "schichten" in wert:
         sauber["schichten"] = (
             None if wert["schichten"] is None
-            else _zahl(wert["schichten"], SCHICHTEN_MIN, SCHICHTEN_MAX, SCHICHTEN_VORGABE)
+            else _zahl(wert["schichten"], SCHICHTEN_MIN, SCHICHTEN_MAX, None)
         )
     if "port" in wert:
         # None survives as None: "the server's own port" is a real answer
@@ -295,8 +297,10 @@ def startwerte(repositories, datei: str) -> dict[str, Any]:
         "kontext": _zahl(
             stand.get("kontext"), KONTEXT_MIN, KONTEXT_MAX, KONTEXT_VORGABE
         ),
-        "schichten": _zahl(
-            stand.get("schichten"), SCHICHTEN_MIN, SCHICHTEN_MAX, SCHICHTEN_VORGABE
+        # Nothing named stays nothing: the runner then sends no layer flag.
+        "schichten": (
+            None if stand.get("schichten") is None
+            else _zahl(stand.get("schichten"), SCHICHTEN_MIN, SCHICHTEN_MAX, None)
         ),
         "port": (
             None if stand.get("port") in (None, "", 0)

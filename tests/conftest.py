@@ -440,8 +440,6 @@ class Bilddienst:
     know the field answers a request the tool never made.
 
     What each test brings itself:
-    * ``fenster`` — the picture window per chat id (``/settings/resolved/bildfenster``).
-    * ``jobs`` — job id to the chat it came from (the tool asks before it draws).
     * ``familien`` — file name to family, the folder's headers.
     * ``modelle`` — the file names the folder holds.
     * ``standardmodell`` — the picture server's default model; left out, the
@@ -468,9 +466,7 @@ class Bilddienst:
 
     def __init__(
         self,
-        fenster=None,
         *,
-        jobs=None,
         familien=None,
         modelle=None,
         vorgaben=None,
@@ -482,8 +478,6 @@ class Bilddienst:
         aufbereitung=None,
         aufbereitung_status: int = 200,
     ):
-        self._fenster = fenster or {}
-        self._jobs = jobs or {}
         self._familien = familien or {}
         self._modelle = list(modelle) if modelle is not None else ["a.safetensors", "b.safetensors"]
         self._standardmodell = (
@@ -530,13 +524,6 @@ class Bilddienst:
             if callable(antwort):
                 antwort = antwort((params or {}).get("modell"))
             return Antwort(antwort or {}, self._vorgaben_status)
-        if url.endswith("/settings/resolved/bildfenster"):
-            return Antwort({"wert": self._fenster.get((params or {}).get("chat"), {})})
-        if "/jobs/" in url:
-            kennung = url.rsplit("/", 1)[-1]
-            if kennung in self._jobs:
-                return Antwort({"id": kennung, "chat_id": self._jobs[kennung]})
-            return Antwort({"detail": "no such job"}, 404)
         return Antwort({})
 
     def _fixed(self, url):

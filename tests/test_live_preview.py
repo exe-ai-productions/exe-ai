@@ -89,7 +89,7 @@ def _function(source: str, head: str) -> str:
 def test_the_studio_watches_the_live_preview():
     """The preview is only fetched while a surface watches it. The studio's
     generation area and the drawing tile of its row of pictures both show
-    it, so both watch — while a picture of the open chat is drawing, and
+    it, so both watch — while a picture of the studio is drawing, and
     keyed by that picture, so a line rebuilt around it does not end the
     watch and start it over."""
     canvas = (SOURCE / "teile" / "StudioCanvas.svelte").read_text(encoding="utf-8")
@@ -103,15 +103,15 @@ def test_the_studio_watches_the_live_preview():
         assert "if (laufend) return watch" not in component
     assert '{#if pictureProgress.previewUrl}<img class="preview" src={pictureProgress.previewUrl} alt="" />{/if}' in canvas
     assert '{#if pictureProgress.previewUrl}<img src={pictureProgress.previewUrl} alt="" />{/if}' in rail
-    # Shown inside what stands only while this chat's picture is drawing.
+    # Shown inside what stands only while the studio's picture is drawing.
     area = canvas.split("{#if laufend}", 1)[1].split("{/if}\n\n", 1)[0]
     assert 'class="preview"' in area
     # The progress has the empty area to itself: the picture plaque, which
-    # stands in the same place, is there only while no picture of this chat
-    # is drawn or waits in the line — waiting too, or the plaque would show
-    # up between two pictures of one run.
+    # stands in the same place, is there only while no picture is drawn or
+    # waits in the line — waiting too, or the plaque would show up between
+    # two pictures of one run.
     assert "{#if !bildUrl && !inLine}" in canvas.split('<div class="plaque"', 1)[0].rsplit("{/if}", 1)[1]
-    assert "const inLine = $derived(zustand.pictureQueue.some((w) => w.chat_id === chatanzeige.chatId))" in canvas
+    assert "const inLine = $derived(zustand.pictureQueue.length > 0)" in canvas
     # The working frame in the chat shows none and watches none.
     frame = (SOURCE / "teile" / "Bildfuellung.svelte").read_text(encoding="utf-8")
     assert "watchPicturePreview" not in frame and "previewUrl" not in frame

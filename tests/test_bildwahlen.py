@@ -32,8 +32,12 @@ def test_turbo_hand_start_baut_das_gespann_ueber_dieselben_pruefungen():
     assert funktion, "turbo_starten not found"
     rumpf = funktion.group(0)
     for aufruf in (
-        r"rng=bildwahlen\.rng_pruefen\(",
-        r"weight_type=bildwahlen\.weight_type_pruefen\(",
+        # The start values come from one function (app/image_start_values.py),
+        # which asks the `bildwahlen` validators itself (checked below).
+        r"image_start_values\.lesen\(",
+        r"rng=anfang\.rng",
+        r"weight_type=anfang\.weight_type",
+        r"vae_format=anfang\.vae_format",
         r"geraete = bildgeraete\.lesen\(repositories\)",
         r"threads=geraete\.threads",
         r"vram_limit=geraete\.vram_limit",
@@ -48,12 +52,20 @@ def test_turbo_hand_start_baut_das_gespann_ueber_dieselben_pruefungen():
         r"upscaler_ordner=_upscaler_ordner\(",
         r"ad_negativ=",
         r"ad_confidence=",
-        r"prediction=bildwahlen\.prediction_pruefen\(",
+        r"prediction=anfang\.prediction",
     ):
         assert re.search(aufruf, rumpf), (
             f"turbo_starten builds the pair again without {aufruf!r} -- "
             "two ways for the same thing"
         )
+    start_values = (WURZEL / "app/image_start_values.py").read_text()
+    for aufruf in (
+        r"bildwahlen\.rng_pruefen\(",
+        r"bildwahlen\.weight_type_pruefen\(",
+        r"bildwahlen\.vae_format_pruefen\(",
+        r"bildwahlen\.prediction_pruefen\(",
+    ):
+        assert re.search(aufruf, start_values), f"the start values skip {aufruf!r}"
 
 
 def test_upscaler_ordner_kommt_aus_einer_einzigen_quelle():

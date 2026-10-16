@@ -96,6 +96,10 @@ let verbundenerChat = null
    without this a resent stretch would be drawn a second time. */
 let hoechsteNummer = -1
 
+/* The key the studio's runs are filed under: what a draw without a chat
+   leaves in the list (app/bildlauf.py, STUDIO). */
+export const STUDIO_RUNS = 'studio'
+
 export async function verbinden(chatId) {
   if (chatId === verbundenerChat) return
   trennen()

@@ -82,6 +82,9 @@ export function neuAusrichten(alt, gelesen, neu) {
 
 // After a sentence's end mark and some whitespace, or at a blank line.
 const SATZGRENZE = /(?<=[.!?])\s|\n\n/g;
+// The same, and after a comma as well: where the first piece of an answer may
+// end, so the voice starts on the first clause instead of the first sentence.
+const FIRST_PIECE_BOUNDARY = /(?<=[.!?,])\s|\n\n/g;
 // A piece shorter than this is carried into the next one: "Yes." or "1." on
 // their own are no sentence worth a start of the voice.
 export const MINDESTLAENGE = 20;
@@ -89,18 +92,26 @@ export const MINDESTLAENGE = 20;
 /* The pieces that are finished in a spoken script, counted from `ab` (how
    much of it has already been handed out). Returns the new pieces and how
    far they reach. With `fertig` the answer is complete and whatever is left
-   goes out as the last piece. */
+   goes out as the last piece.
+
+   The first piece of an answer (nothing handed out yet) may end at a comma,
+   every further one ends at a sentence's end. */
 export function stueckeSchneiden(script, ab, fertig) {
   const stuecke = [];
   let start = ab;
-  SATZGRENZE.lastIndex = ab;
+  let grenze = ab === 0 ? FIRST_PIECE_BOUNDARY : SATZGRENZE;
+  grenze.lastIndex = ab;
   let treffer;
-  while ((treffer = SATZGRENZE.exec(script)) !== null) {
+  while ((treffer = grenze.exec(script)) !== null) {
     const ende = treffer.index + treffer[0].length;
     const stueck = script.slice(start, ende);
     if (stueck.trim().length < MINDESTLAENGE) continue;
     stuecke.push(stueck.trim());
     start = ende;
+    if (grenze !== SATZGRENZE) {
+      grenze = SATZGRENZE;
+      grenze.lastIndex = ende;
+    }
   }
   if (fertig) {
     const rest = script.slice(start).trim();

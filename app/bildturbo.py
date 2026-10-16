@@ -51,7 +51,7 @@ from app.no_console import no_window
 from app.photomaker import fingerabdruck as foto_fingerabdruck
 from app.pipe_text import live_text
 from app.prozessspeicher import rss_gb
-from app.sddownload import ORDNER
+from app.sddownload import ORDNER, gefundenes_programm
 
 # The lines the server window shows: as many as the chat runner keeps
 # (app/modellrunner.py), the oldest dropped first.
@@ -160,12 +160,16 @@ _SCHRITT_MUSTER = re.compile(
 )
 
 
-def programm_finden(datenordner: Path) -> Path | None:
+def programm_finden(datenordner: Path, variante: str | None = None) -> Path | None:
     """The sd-server binary, or nothing if this machine has none.
 
     Only the fetched build is looked at — sd-server is not a thing people put
     on their PATH the way they might sd-cli, and it must be the same build as
-    the sd-cli that drew the one-shot pictures, or the two would disagree.
+    the sd-cli that drew the one-shot pictures, or the two would disagree: it
+    is taken from the folder that sd-cli starts from, never from another
+    build folder that happens to stand beside it. One put loose in the bare
+    folder by hand goes first, as it always did. ``variante`` is the variant
+    of the program the user picked, which the build folders keep to.
     """
     wurzel = Path(datenordner).expanduser() / ORDNER
     if not wurzel.is_dir():
@@ -173,6 +177,10 @@ def programm_finden(datenordner: Path) -> Path | None:
     direkt = wurzel / PROGRAMM
     if direkt.is_file() and os.access(direkt, os.X_OK):
         return direkt
+    cli = gefundenes_programm(datenordner, variante)
+    if cli is not None:
+        neben = cli.parent / PROGRAMM
+        return neben if neben.is_file() and os.access(neben, os.X_OK) else None
     for treffer in sorted(wurzel.rglob(PROGRAMM)):
         if treffer.is_file() and os.access(treffer, os.X_OK):
             return treffer
@@ -240,8 +248,15 @@ def _serverwort(fehler: httpx.HTTPError) -> str | None:
 class Bildturbo:
     """One persistent picture server, switched on and off by hand."""
 
-    def __init__(self, datenordner: Path, app_port: int | None = None) -> None:
+    def __init__(
+        self,
+        datenordner: Path,
+        app_port: int | None = None,
+        fassung: Callable[[], str | None] | None = None,
+    ) -> None:
         self._datenordner = Path(datenordner).expanduser()
+        # Asked per start: the variant of the program the user picked.
+        self._fassung = fassung or (lambda: None)
         # Which instance of the program this belongs to. The data folder is
         # shared between instances, so the port is what keeps their notes and
         # their servers apart.
@@ -361,7 +376,7 @@ class Bildturbo:
 
     @property
     def programm(self) -> Path | None:
-        return programm_finden(self._datenordner)
+        return programm_finden(self._datenordner, self._fassung())
 
     @property
     def modell(self) -> str | None:

@@ -193,10 +193,17 @@ def _program_files(folder: Path, name: str) -> list[Path]:
     while it is being read. What was found before it vanished is kept and
     the rest counts as not there, instead of failing the request that read
     it.
+
+    Nothing below a folder still being unpacked (``UNFERTIG``, see
+    ``_holen``) counts: its files are half written, and where every file
+    passes ``os.access`` for running, as on Windows, the exec bit that
+    keeps them out on a Mac is not there to do it.
     """
     found: list[Path] = []
     try:
         for path in folder.rglob(name):
+            if any(part.startswith(UNFERTIG) for part in path.relative_to(folder).parts):
+                continue
             found.append(path)
     except OSError:
         pass
@@ -228,12 +235,19 @@ class _BuildFolder:
     variant: str
 
 
-def _chosen_build_folder(datenordner: Path, bau: str | None = None) -> _BuildFolder | None:
+def _chosen_build_folder(
+    datenordner: Path, bau: str | None = None, variante: str | None = None
+) -> _BuildFolder | None:
     """The build folder this program both runs and reports, by one rule on
     every system: the highest build number, and at the same number a folder
     named for a known variant (``_PAKETE_WIN32``) ahead of the plain one; a
     suffix this program never names a folder with ranks as plain. ``bau``
     narrows the choice to that one build. The root is read once.
+
+    ``variante`` is the variant somebody picked (win32 only). A folder of
+    that variant goes ahead of every other, whatever its number — a newer
+    build of another variant standing beside it does not count. With none of
+    that variant on disk, the rule above holds as if nothing was picked.
 
     More than one build folder can stay on disk for good: the cleanup after
     a fetch leaves a NEWER build standing (``_andere_bauten_entfernen``).
@@ -243,6 +257,18 @@ def _chosen_build_folder(datenordner: Path, bau: str | None = None) -> _BuildFol
         entries = sorted(root.iterdir())
     except OSError:
         return None
+    if variante is not None and sys.platform == "win32":
+        picked = _best_folder(entries, bau, variante)
+        if picked is not None:
+            return picked
+    return _best_folder(entries, bau, None)
+
+
+def _best_folder(
+    entries: list[Path], bau: str | None, variante: str | None
+) -> _BuildFolder | None:
+    """The best build folder among ``entries`` by the rule of
+    ``_chosen_build_folder``, only of ``variante`` when one is given."""
     name = program_name()
     chosen: _BuildFolder | None = None
     best: tuple[int, bool] | None = None
@@ -253,6 +279,8 @@ def _chosen_build_folder(datenordner: Path, bau: str | None = None) -> _BuildFol
         entry_tag, variant = parts
         number = _bau_nummer(entry_tag)
         if number is None or (bau is not None and entry_tag != bau):
+            continue
+        if variante is not None and variant != variante:
             continue
         rank = (number, variant != VORGABE_VARIANTE and variant in _PAKETE_WIN32)
         # Strictly greater: among equal folders the first by name stays. A
@@ -265,16 +293,30 @@ def _chosen_build_folder(datenordner: Path, bau: str | None = None) -> _BuildFol
     return chosen
 
 
-def installierter_bau(datenordner: Path) -> str | None:
+def variante_installiert(datenordner: Path, variante: str) -> bool:
+    """Whether a runnable build folder of exactly this variant is on disk —
+    of any build number, and only on win32, the one system with variants."""
+    if sys.platform != "win32":
+        return False
+    root = Path(datenordner).expanduser() / ORDNER
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:
+        return False
+    return _best_folder(entries, None, variante) is not None
+
+
+def installierter_bau(datenordner: Path, variante: str | None = None) -> str | None:
     """The tag of whichever build is unpacked and runnable, or nothing.
 
     Not just the pinned ``BAU`` any more: a fetch can now land
     a newer release than the one this program ships with, and the folder it
     lands in carries THAT release's own tag. When more than one build
     folder sits on disk at once, it is the one ``_chosen_build_folder``
-    picks — the build ``gefundenes_programm`` starts.
+    picks — the build ``gefundenes_programm`` starts, with the same
+    ``variante``.
     """
-    chosen = _chosen_build_folder(datenordner)
+    chosen = _chosen_build_folder(datenordner, variante=variante)
     return chosen.tag if chosen else None
 
 
@@ -287,17 +329,19 @@ def _hand_install(datenordner: Path) -> Path | None:
     return None
 
 
-def restorable(datenordner: Path) -> bool:
+def restorable(datenordner: Path, variante: str | None = None) -> bool:
     """Whether there is a tested build to go back to: the build that runs
     was fetched and is not the pinned one. Beside a hand install there is
     nothing to offer — it runs whatever is fetched, and it blocks a fetch."""
     if _hand_install(datenordner) is not None:
         return False
-    installed = installierter_bau(datenordner)
+    installed = installierter_bau(datenordner, variante)
     return installed is not None and installed != BAU
 
 
-def installierte_variante(datenordner: Path, bau: str | None = None) -> str | None:
+def installierte_variante(
+    datenordner: Path, bau: str | None = None, variante: str | None = None
+) -> str | None:
     """Which variant the build that runs is, read off its build folder's
     name — or nothing when there is none. The folder is the one
     ``gefundenes_programm`` starts (``_chosen_build_folder``), so the name
@@ -305,25 +349,25 @@ def installierte_variante(datenordner: Path, bau: str | None = None) -> str | No
     variant name to read and answers nothing here; it is still found and
     used by ``gefundenes_programm``, it just cannot be named.
 
-    The plain build folder names a variant only on win32, where it holds
-    the CPU build of the table above. Every other system has one universal
-    package whose name has no backend in it — macOS runs its Metal support
-    inside that same build — and refuses to fetch any other variant
-    (``veroeffentlichung_paket``). Its plain folder answers nothing, so the
-    caller keeps to its plain sentence instead of a name from the Windows
-    table; a folder named for a variant, left from before that refusal, is
-    still read by its name.
+    Only win32 names a variant: the plain build folder holds the CPU build
+    of the table above there, and a folder named for a variant is one of the
+    four. Every other system has one universal package whose name has no
+    backend in it — macOS runs its Metal support inside that same build — and
+    refuses to fetch any other variant (``veroeffentlichung_paket``). It
+    answers nothing, so the caller keeps to its plain sentence and an update
+    fetches that one package; handing a name left on disk from before that
+    refusal (``master-820-de298c2-vulkan``) on would ask for a package this
+    system does not have, and the update would never run.
 
     ``bau`` narrows the answer to that build, for a caller that already
-    holds it from ``installierter_bau()``. Either way the folder is read
-    once.
+    holds it from ``installierter_bau()``. ``variante`` is the variant
+    picked: its folder is the one that runs, so it is the one named. Either
+    way the folder is read once.
     """
-    chosen = _chosen_build_folder(datenordner, bau)
-    if chosen is None:
+    if sys.platform != "win32":
         return None
-    if chosen.variant == VORGABE_VARIANTE and sys.platform != "win32":
-        return None
-    return chosen.variant
+    chosen = _chosen_build_folder(datenordner, bau, variante)
+    return chosen.variant if chosen is not None else None
 
 
 # The release's file names carry the same shape the pinned table above
@@ -430,6 +474,21 @@ def neueste_veroeffentlichung(zeitgrenze: float = 10.0) -> Veroeffentlichung | N
     )
 
 
+def latest_for(variante: str) -> Veroeffentlichung | None:
+    """The newest release, when it carries a package of ``variante`` for this
+    machine — otherwise nothing, and the caller keeps to the pinned build,
+    which has one. cuda12 needs its runtime archive beside it, as the fetch
+    itself demands (``starten``)."""
+    veroeffentlichung = neueste_veroeffentlichung()
+    if veroeffentlichung is None:
+        return None
+    if veroeffentlichung_paket(veroeffentlichung, variante) is None:
+        return None
+    if variante == "cuda12" and veroeffentlichung.cudart is None:
+        return None
+    return veroeffentlichung
+
+
 def neuere_fassung(eigener_bau: str, zeitgrenze: float = 10.0) -> Veroeffentlichung | None:
     """The newest release, only when it is actually ahead of
     ``eigener_bau`` — nothing when it is the same, unreachable, or its tag
@@ -477,7 +536,7 @@ class SddownloadFehler(Exception):
         self.grund = grund
 
 
-def gefundenes_programm(datenordner: Path) -> Path | None:
+def gefundenes_programm(datenordner: Path, variante: str | None = None) -> Path | None:
     """The unpacked sd-cli below the data folder, or nothing.
 
     Three places, in this order: the bare folder, which is where somebody
@@ -486,7 +545,8 @@ def gefundenes_programm(datenordner: Path) -> Path | None:
     two builds in one directory — and of several, the one
     ``installierte_variante`` reports from (``_chosen_build_folder``), so
     the build the panel names is the build that runs; and failing both,
-    any runnable sd-cli below the root, as it was always found.
+    any runnable sd-cli below the root, as it was always found. ``variante``
+    is the variant picked, which that choice then keeps to.
     """
     root = Path(datenordner).expanduser() / ORDNER
     if not root.is_dir():
@@ -495,7 +555,7 @@ def gefundenes_programm(datenordner: Path) -> Path | None:
     direkt = root / name
     if direkt.is_file() and os.access(direkt, os.X_OK):
         return direkt
-    chosen = _chosen_build_folder(datenordner)
+    chosen = _chosen_build_folder(datenordner, variante=variante)
     if chosen is not None:
         program = _first_runnable(_program_files(chosen.folder, name))
         if program is not None:
@@ -547,14 +607,17 @@ class Sddownload:
             if self._hand_installation() is not None:
                 raise SddownloadFehler("schon_da")
             bauordner = _bauordner_name_von(build.bau, variante)
-            if not replace_newer and self._bau_vorhanden(bauordner) is not None:
-                raise SddownloadFehler("schon_da")
             paket = veroeffentlichung_paket(build, variante)
             # cuda12 needs the runtime archive beside it; a release that
             # does not carry it uniquely is a release this program
             # cannot safely offer that variant of, not a guess to make.
+            # Said BEFORE "already there": a variant this system has no
+            # package for is no variant to have, whatever folder a former
+            # version left behind under its name.
             if paket is None or (variante == "cuda12" and build.cudart is None):
                 raise SddownloadFehler("kein_paket")
+            if not replace_newer and self._bau_vorhanden(bauordner) is not None:
+                raise SddownloadFehler("schon_da")
 
             self._stand = Fortschritt(geladen=0, gesamt=0)
             threading.Thread(
@@ -572,6 +635,9 @@ class Sddownload:
         self, variante: str, build: Veroeffentlichung, name: str, replace_newer: bool = False
     ) -> None:
         bauordner = _bauordner_name_von(build.bau, variante)
+        # Starts with a dot, so no rule of the build search reads it as a
+        # build folder — a name ending in the build's own would parse as one.
+        zwischen = f"{UNFERTIG}-{bauordner}"
         basis = _basis(build.bau)
         archiv = self._ordner / (name + UNFERTIG)
         # cuda12 needs the runtime archive right beside the build — without
@@ -596,19 +662,29 @@ class Sddownload:
             # thread before the state could say so, and the bar stood at
             # nought for good.
             self._ordner.mkdir(parents=True, exist_ok=True)
+            # Unpacked into a folder of its own, put in its place only when
+            # whole: a build folder is a finished one or it is not there. A
+            # fetch cut off half way (program ended, disk full) leaves
+            # nothing the search could take for an installed build.
+            shutil.rmtree(self._ordner / zwischen, ignore_errors=True)
             self._laden(basis, name, archiv, fest=cudart_name is not None)
-            self._entpacken(archiv, bauordner)
+            self._entpacken(archiv, zwischen)
             archiv.unlink(missing_ok=True)
 
             if cudart_name:
                 assert cudart_archiv is not None
                 self._laden(basis, cudart_name, cudart_archiv, fest=True)
-                self._entpacken(cudart_archiv, bauordner)
+                self._entpacken(cudart_archiv, zwischen)
                 cudart_archiv.unlink(missing_ok=True)
 
-            programm = self._rechte_setzen(bauordner)
+            programm = self._rechte_setzen(zwischen)
             if programm is None:
                 raise SddownloadFehler("fehlgeschlagen")
+            # A build fetched anew over one that is still on disk takes its
+            # place; the rename itself cannot go over a folder that is not
+            # empty. Both lie in the same folder, so it is one step.
+            shutil.rmtree(self._ordner / bauordner, ignore_errors=True)
+            (self._ordner / zwischen).rename(self._ordner / bauordner)
 
             # Only one build stays on disk — a leftover from a different
             # variant, or from an older release, would otherwise sit next to
@@ -622,7 +698,7 @@ class Sddownload:
             archiv.unlink(missing_ok=True)
             if cudart_archiv is not None:
                 cudart_archiv.unlink(missing_ok=True)
-            shutil.rmtree(self._ordner / bauordner, ignore_errors=True)
+            shutil.rmtree(self._ordner / zwischen, ignore_errors=True)
             if self._stand:
                 self._stand.fehler = (
                     fehler.grund if isinstance(fehler, SddownloadFehler) else "fehlgeschlagen"

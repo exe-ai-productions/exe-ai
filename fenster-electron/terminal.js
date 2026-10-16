@@ -19,6 +19,7 @@
   rest of this file is plain node, so tests run it with a stand-in.
 */
 
+const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
@@ -109,13 +110,15 @@ function clientEnvironment(env = process.env) {
 /**
  * The terminals of this shell, one per page. `pty` is node-pty (or a
  * stand-in with `spawn`); null where it could not be loaded, and then
- * every start answers with an error instead of a process id.
+ * every start answers with an error instead of a process id. `exists` says
+ * whether the program is there: where it is not, nothing is started and the
+ * answer names the file.
  *
  * Wired to `ipcMain` under five names: `terminal-start` (invoke, answers
  * `{ pid }` or `{ error }`), `terminal-write`, `terminal-resize`,
  * `terminal-stop`; the page hears `terminal-data` and `terminal-exit`.
  */
-function createTerminals({ ipcMain, pty, address, command, log = console.log }) {
+function createTerminals({ ipcMain, pty, address, command, log = console.log, exists = fs.existsSync }) {
   const sessions = new Map()
   // The pages whose end is already listened for: one listener per page,
   // however often it asks for a client.
@@ -126,6 +129,13 @@ function createTerminals({ ipcMain, pty, address, command, log = console.log }) 
     // The one failure named here rather than by the system: `reason` lets
     // the page say it in the language it shows.
     if (!pty) return { error: 'node-pty is unavailable.', reason: 'no-pty' }
+    /* A missing program does not make node-pty throw on every system: the
+       child ends at once and the page would only see that it ended. So the
+       file is looked for first, and nothing is started where it is not. */
+    if (!exists(command.file)) {
+      log(`Terminal: ${command.file} was not found, nothing was started`)
+      return { error: `${command.file} was not found.`, reason: 'no-file', path: command.file }
+    }
     const wish = cleanRequest(request)
     let term
     try {

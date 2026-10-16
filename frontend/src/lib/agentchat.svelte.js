@@ -52,9 +52,21 @@ export function agentQuestions(chatId) {
     .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
 }
 
+/* The chats an agent waits on the user in, gathered in ONE pass over the job
+   list per change. A row of the chat list asks this for its own chat, and
+   a list of two thousand rows that each walked the job list was a quadratic
+   stall on every change of the list. */
+const askingChats = $derived.by(() => {
+  const chats = new Set()
+  for (const job of zustand.auftraege) {
+    if (job.chat_id && questionOpen(job)) chats.add(job.chat_id)
+  }
+  return chats
+})
+
 /** Does an agent of this chat wait on the user? */
 export function agentAsks(chatId) {
-  return agentQuestions(chatId).length > 0
+  return Boolean(chatId) && askingChats.has(chatId)
 }
 
 /**

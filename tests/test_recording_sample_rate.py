@@ -53,8 +53,9 @@ class FakeContext {
   createGain() { return { gain: {}, connect() {}, disconnect() {} } }
   close() {}
 }
+const nodes = []
 class FakeNode {
-  constructor() { this.port = { close() {}, onmessage: null } }
+  constructor() { this.port = { close() {}, onmessage: null }; nodes.push(this) }
   connect() {}
   disconnect() {}
 }
@@ -133,6 +134,8 @@ def test_the_header_of_that_recording_carries_the_device_rate():
     report = _run("""
     refuseRate = true
     await m.starten()
+    // A recording that heard nothing gives no file; one block is enough.
+    nodes[nodes.length - 1].port.onmessage({ data: new Float32Array(128).fill(0.25) })
     return { rate: await rateOf(m.stoppen()) }
 """)
 

@@ -437,9 +437,9 @@ def test_the_provider_routes_write_in_a_thread_under_one_lock_and_the_file_follo
 
     echt = anbieter._atomar_schreiben
 
-    def under_the_lock(konfig_datei, rohdaten):
+    def under_the_lock(konfig_datei, rohdaten, schreiber):
         assert anbieter._schleuse.locked(), "the write runs outside the lock"
-        echt(konfig_datei, rohdaten)
+        echt(konfig_datei, rohdaten, schreiber)
 
     monkeypatch.setattr(anbieter, "_atomar_schreiben", under_the_lock)
     monkeypatch.setattr(paketierung, "daten", lambda: tmp_path)

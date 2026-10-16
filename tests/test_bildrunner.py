@@ -27,6 +27,7 @@ from app.api.v1.bild import MAX_KANTE, MIN_KANTE, RASTER, _erwartete_paesse, _ka
 from app.bildrunner import Auftrag, BildFehler, Bildrunner, LoRA
 from app.bildturbo import Bildturbo
 from app.config import Config
+from tests.test_bildinhalt import clip_gguf_bytes
 
 
 @pytest.fixture
@@ -617,6 +618,35 @@ def test_textversteher_liegen_in_ihrem_eigenen_ordner(daten: Path):
     assert bildrunner.textversteher(daten) == ["t5xxl.gguf"]
 
 
+def test_a_vision_part_is_in_the_vision_list_and_no_text_encoder_list(daten: Path):
+    """A projector file lies beside the text encoders but is none of them:
+    the fields that take a text encoder never offer it, and the field that
+    takes a vision part offers nothing else."""
+    ordner = daten / "text_encoders"
+    ordner.mkdir()
+    (ordner / "mmproj-f16.gguf").write_bytes(clip_gguf_bytes(vision=True))
+    (ordner / "clip_l.gguf").write_bytes(clip_gguf_bytes(vision=False))
+    (ordner / "qwen3vl.gguf").write_bytes(b"x")
+    assert bildrunner.textversteher(daten) == ["clip_l.gguf", "qwen3vl.gguf"]
+    assert bildrunner.sehteile(daten) == ["mmproj-f16.gguf"]
+    assert bildrunner.vision_part_path(daten, "mmproj-f16.gguf") == ordner / "mmproj-f16.gguf"
+    for name in ("clip_l.gguf", "qwen3vl.gguf"):
+        with pytest.raises(BildFehler) as fehler:
+            bildrunner.vision_part_path(daten, name)
+        assert fehler.value.grund == "bild.begleiter_unbekannt"
+    with pytest.raises(BildFehler):
+        bildrunner.textversteher_pfad(daten, "mmproj-f16.gguf")
+
+
+def test_a_vision_part_in_the_main_folder_is_caught_and_is_no_model(daten: Path):
+    loose = daten / "mmproj-versehentlich-hier.gguf"
+    loose.write_bytes(clip_gguf_bytes(vision=True))
+    assert loose.name not in bildrunner.modelle(daten)
+    assert loose.name not in bildrunner.textversteher(daten)
+    assert loose.name in bildrunner.sehteile(daten)
+    assert bildrunner.vision_part_path(daten, loose.name) == loose
+
+
 def test_ein_fehlender_textversteher_ordner_ist_eine_leere_liste(daten: Path):
     assert bildrunner.textversteher(daten) == []
 
@@ -713,6 +743,20 @@ def test_bild_modelle_route_liefert_die_embeddings(
     assert antwort.json()["embeddings"] == ["EasyNegative"]
 
 
+def test_bild_modelle_route_fuehrt_den_sehteil_nur_unter_den_sehteilen(
+    config: Config, client: TestClient, tmp_path: Path
+):
+    config.app.bildmodelle_verzeichnis = str(tmp_path / "bildmodelle")
+    ordner = tmp_path / "bildmodelle" / "text_encoders"
+    ordner.mkdir(parents=True)
+    (ordner / "mmproj-f16.gguf").write_bytes(clip_gguf_bytes(vision=True))
+    (ordner / "clip_l.gguf").write_bytes(clip_gguf_bytes(vision=False))
+
+    daten = client.get("/api/v1/bild/modelle").json()
+    assert daten["sehteile"] == ["mmproj-f16.gguf"]
+    assert daten["textversteher"] == ["clip_l.gguf"]
+
+
 def test_bild_modelle_route_liefert_die_textversteher(
     config: Config, client: TestClient, tmp_path: Path
 ):
@@ -724,6 +768,7 @@ def test_bild_modelle_route_liefert_die_textversteher(
     antwort = client.get("/api/v1/bild/modelle")
     daten = antwort.json()
     assert daten["textversteher"] == ["t5xxl.gguf"]
+    assert daten["sehteile"] == []
     # Every other field the response already carried stays exactly where
     # it was — this step only adds a field, it does not move one.
     assert daten["embeddings"] == []

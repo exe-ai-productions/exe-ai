@@ -231,6 +231,40 @@ def _ueber_chat(
     return inhalt if isinstance(inhalt, str) else None
 
 
+class SpeechServerError(Exception):
+    """The speech server answered, and the answer was an error.
+
+    ``reason`` is what the server said (its own ``error.message``, or the
+    status line when it said nothing readable) — the sentence the person
+    reads. ``log_text`` is the same with the status in front, for the log.
+    """
+
+    def __init__(self, reason: str, status: int) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.status = status
+
+    @property
+    def log_text(self) -> str:
+        return f"HTTP {self.status}: {self.reason}"
+
+
+def _refusal(fehler: httpx.HTTPStatusError) -> SpeechServerError | None:
+    """What the server said in an error answer, or nothing when the error
+    carries no answer to read."""
+    antwort = getattr(fehler, "response", None)
+    if antwort is None:
+        return None
+    status = antwort.status_code
+    try:
+        message = antwort.json()["error"]["message"]
+    except (ValueError, KeyError, TypeError):
+        message = None
+    if not isinstance(message, str) or not message.strip():
+        message = f"HTTP {status} {antwort.reason_phrase}".strip()
+    return SpeechServerError(message.strip(), status)
+
+
 def transkribieren(
     port: int,
     schluessel: str | None,
@@ -241,10 +275,14 @@ def transkribieren(
 ) -> str | None:
     """The spoken words as text, or None when this way is not available.
 
-    None covers every failure alike — no server, one still loading, a
-    timeout, an answer in a shape we do not recognise. The caller turns it
-    into one sentence a person can act on; a traceback would say the same
-    thing in a language nobody reads.
+    None covers every failure without a readable answer alike — no server,
+    one still loading, a timeout, an answer in a shape we do not recognise.
+    The caller turns it into one sentence a person can act on; a traceback
+    would say the same thing in a language nobody reads. Every one of them is
+    in the log, with its kind.
+
+    A server that answers with an error is not silent: ``SpeechServerError``
+    carries what it said, and the caller shows it.
 
     An EMPTY string is not a failure. Silence transcribes to nothing, and
     nothing is a correct answer.
@@ -254,13 +292,47 @@ def transkribieren(
     weg = _ueber_endpunkt if WEG == "endpunkt" else _ueber_chat
     try:
         text = weg(port, schluessel, wav, sprache, anweisung)
-    except Exception:  # noqa: BLE001 - every failure means the same thing here
-        log.debug("Speech server does not answer", exc_info=True)
+    except httpx.HTTPStatusError as fehler:
+        refusal = _refusal(fehler)
+        if refusal is not None:
+            log.warning("Speech server answered with an error: %s", refusal.log_text)
+            raise refusal from None
+        log.warning("Speech server answered with an error that carries no reply", exc_info=True)
+        return None
+    except httpx.RequestError as fehler:
+        # No answer at all: the connection, or the time, ran out.
+        log.warning(
+            "Speech server does not answer (%s): %s", type(fehler).__name__, str(fehler) or "no detail"
+        )
+        return None
+    except Exception as fehler:  # noqa: BLE001 - every other failure means the same thing here
+        log.warning(
+            "Speech server answered in a form that cannot be read (%s)", type(fehler).__name__,
+            exc_info=True,
+        )
         return None
     if text is None:
         return None
     _, marke, danach = text.partition(ASR_MARKE)
     return danach if marke else text
+
+
+# The dictation travels inside this tag: a small model told to tidy a spoken
+# question otherwise reads the question as one put to it and answers it. The
+# tag marks the words as material, not as a request.
+TRANSCRIPT_OPEN = "<TRANSCRIPT>"
+TRANSCRIPT_CLOSE = "</TRANSCRIPT>"
+
+
+def _without_tag(text: str) -> str:
+    """The tidied words without the tag a model sometimes echoes back around
+    them (or half of it: only the opening one, or only the closing one)."""
+    tidy = text.strip()
+    if tidy.startswith(TRANSCRIPT_OPEN):
+        tidy = tidy[len(TRANSCRIPT_OPEN):]
+    if tidy.endswith(TRANSCRIPT_CLOSE):
+        tidy = tidy[: -len(TRANSCRIPT_CLOSE)]
+    return tidy.strip()
 
 
 def bereinigen(
@@ -288,7 +360,10 @@ def bereinigen(
             json={
                 "messages": [
                     {"role": "system", "content": anweisung},
-                    {"role": "user", "content": roh},
+                    {
+                        "role": "user",
+                        "content": f"{TRANSCRIPT_OPEN}\n{roh}\n{TRANSCRIPT_CLOSE}",
+                    },
                 ],
                 "stream": False,
             },
@@ -302,7 +377,7 @@ def bereinigen(
         return None
     if not isinstance(inhalt, str):
         return None
-    sauber = inhalt.strip()
+    sauber = _without_tag(inhalt)
     # A model that answered with nothing has not tidied anything; handing an
     # empty field back would look like the recording had failed.
     return sauber or None
@@ -317,6 +392,8 @@ __all__ = [
     "PUTZ_SCHLUESSEL_VARIABLE",
     "PUTZ_ZEITGRENZE",
     "SCHLUESSEL_VARIABLE",
+    "TRANSCRIPT_OPEN",
+    "TRANSCRIPT_CLOSE",
     "WEG",
     "ZEITGRENZE",
     "bereinigen",

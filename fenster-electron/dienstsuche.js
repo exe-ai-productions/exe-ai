@@ -139,46 +139,6 @@ async function runningService({ port, root, answers = pageAnswers, alive = proce
   return { pid: note.pid, port }
 }
 
-/**
- * The version the service says it is, from its open health address
- * (`/health`, no key): a string — or null where the address does not answer
- * in time, answers with anything but a complete 200, or carries no `version`.
- * Null means "could not be read", never "different".
- */
-function serviceVersion(port, { host = '127.0.0.1', timeout = PAGE_TIMEOUT_MS } = {}) {
-  return new Promise((done) => {
-    let decided = false
-    const settle = (answer) => {
-      if (decided) return
-      decided = true
-      done(answer)
-    }
-    const request = http.get({ host, port, path: '/health', timeout }, (answer) => {
-      if (answer.statusCode !== 200) {
-        answer.resume()
-        settle(null)
-        return
-      }
-      const pieces = []
-      answer.on('data', (piece) => pieces.push(piece))
-      answer.on('error', () => settle(null))
-      answer.on('end', () => {
-        try {
-          const version = JSON.parse(Buffer.concat(pieces).toString('utf8')).version
-          settle(typeof version === 'string' && version.trim() ? version.trim() : null)
-        } catch (failure) {
-          settle(null)
-        }
-      })
-    })
-    request.on('timeout', () => {
-      request.destroy()
-      settle(null)
-    })
-    request.on('error', () => settle(null))
-  })
-}
-
 module.exports = {
-  dataRoot, noteFile, readNote, pageAnswers, processAlive, runningService, serviceVersion,
+  dataRoot, noteFile, readNote, pageAnswers, processAlive, runningService,
 }

@@ -464,16 +464,54 @@ class StubImageServer:
         self.log: list[str] = []
         self.starts: list[str] = []
         self.stops = 0
+        # The program: whether it is there, the builds a machine can
+        # choose from (``{"variante", "groesse"}``) and which one is
+        # installed, the answer of the check for a newer one, the steps of
+        # a fetch (the last repeats; ``None`` is an empty state) and the
+        # bodies of the fetches.
+        self.program = True
+        self.builds: list[dict[str, Any]] = []
+        self.installed: str | None = None
+        self.update: dict[str, Any] = {"verfuegbar": False, "aktuell": False}
+        self.program_steps: list[dict[str, Any] | None] = [
+            {"geladen": 1, "gesamt": 1, "anteil": 1.0, "fertig": True, "fehler": None}
+        ]
+        self.program_posts: list[Any] = []
+        # A picture from one sentence: the bodies asked for, how long the
+        # request is held (seconds, ended early by a stop), the steps of its
+        # progress (the last repeats), what stops were asked for, and the
+        # sentence a refusal says.
+        self.draws: list[dict[str, Any]] = []
+        self.draw_seconds = 0.0
+        self.progress_steps: list[dict[str, Any]] = [{"laeuft": False}]
+        self.draw_stops = 0
+        self.refuse_draw = ""
 
     def state(self) -> dict[str, Any]:
         return {
             "zustand": self.word,
             "modell": self.model,
-            "programm_da": True,
+            "programm_da": self.program,
             "picture_running": False,
         }
 
+    def program_step(self) -> dict[str, Any] | None:
+        """The next answer of a fetch of the program; once it is over the
+        program is there."""
+        step = self.program_steps[0]
+        if len(self.program_steps) > 1:
+            self.program_steps.pop(0)
+        if step and step.get("fertig"):
+            self.program = True
+            if self.builds and self.program_posts and isinstance(self.program_posts[-1], dict):
+                chosen = self.program_posts[-1].get("variante")
+                if chosen:
+                    self.installed = chosen
+        return step
+
     def start(self, file: str) -> dict[str, Any]:
+        if not self.program:
+            raise HTTPException(412, "The image program is not installed.")
         if file not in [entry["name"] for entry in self.files]:
             raise HTTPException(404, "No such model file.")
         self.starts.append(file)
@@ -547,6 +585,17 @@ class StubService:
         self.token: str | None = None
         self.token_posts: list[dict[str, Any]] = []
         self.token_deletes = 0
+        # The cloud providers: what each request was sent with, as
+        # ``(route, body)``, and whether a provider that is added answers.
+        self.provider_requests: list[tuple[str, Any]] = []
+        self.provider_reachable = True
+        # The two long texts the service keeps, and every write to them as
+        # ``(route, text)``; ``refuse_writes`` makes the service say no.
+        self.long_texts: dict[str, str] = {"/memory": "", "/system-prompt": ""}
+        self.text_writes: list[tuple[str, str]] = []
+        self.refuse_writes = False
+        # What ``/meta`` says of the system: the name it suggests.
+        self.system_name = ""
         # The four other servers that start from a file of a folder, by
         # the path of their routes, and the image server.
         self.servers: dict[str, StubServer] = {
@@ -582,6 +631,81 @@ class StubService:
         # Every change of a chat, as it was asked for: the chat, then the
         # fields sent.
         self.changes: list[dict[str, Any]] = []
+        # What was uploaded for a message, as ``(route, name, kind, bytes)``,
+        # and the sentence a route refuses with ("" lets it through).
+        self.uploads: list[tuple[str, str, str, bytes]] = []
+        self.refuse_upload: dict[str, tuple[int, str]] = {}
+        # The agents and the tasks they were given, and what was done to
+        # them as ``(what, task id, body)``.
+        self.agents: list[dict[str, Any]] = [
+            {"name": "researcher", "description": "Reads and sums up."},
+            {"name": "writer", "description": "Writes texts."},
+        ]
+        # The sentences of agent files that are broken, the instruction of
+        # each agent, what was done to the files as ``(what, name, body)``,
+        # the sentence a save is refused with ("" lets it through) and the
+        # answer for the model a run would take.
+        self.broken_agents: dict[str, str] = {}
+        self.agent_prompts: dict[str, str] = {}
+        self.agent_actions: list[tuple[str, str, Any]] = []
+        self.refuse_agent = ""
+        self.run_model: dict[str, Any] = {"endpoint_id": "local", "name": "Local Model", "denklaenge": None}
+        self.run_model_asked: list[dict[str, str]] = []
+        # What the list of chats was asked with, the chats that were
+        # deleted, and the sentence a deletion is refused with.
+        self.chat_listings: list[dict[str, Any]] = []
+        # The commands of a chat by its id, the chats whose commands were
+        # asked for, and the commands that were stopped as ``(chat, number)``.
+        self.runs: dict[str, list[dict[str, Any]]] = {}
+        self.run_listings: list[str] = []
+        self.run_stops: list[tuple[str, int]] = []
+        # The projects, what was done to them as ``(what, project id, body)``,
+        # and the sentence a deletion is refused with ("" lets it through).
+        self.projects: dict[str, dict[str, Any]] = {}
+        self.project_actions: list[tuple[str, str, Any]] = []
+        self.refuse_project_delete = ""
+        self.chat_deletions: list[str] = []
+        self.refuse_chat_delete = ""
+        self.jobs: dict[str, dict[str, Any]] = {}
+        self.job_steps: dict[str, list[dict[str, Any]]] = {}
+        self.job_actions: list[tuple[str, str, Any]] = []
+        # The scheduled tasks, their runs, and what was done to them as
+        # ``(what, cronjob id, body)``.
+        self.cronjobs: dict[str, dict[str, Any]] = {}
+        self.cronjob_runs: list[dict[str, Any]] = []
+        self.cronjob_actions: list[tuple[str, str, Any]] = []
+        self.cronjob_notice: str | None = None
+        # The folders of chats that are gone from the disk, and the sentence
+        # the service gives a path it refuses ("" lets every path pass).
+        self.missing_folders: list[str] = []
+        self.refuse_folder = ""
+        # The files of the doc folder (each with its ``chat_id``) and the
+        # folder of a chat by its id; a chat with no folder answers 404.
+        self.doc_files: list[dict[str, Any]] = []
+        self.doc_places: dict[str, str] = {}
+        # The storage locations the service lists, the paths they were set
+        # to as ``(name, body)``, and the sentence a path is refused with.
+        self.places: list[dict[str, Any]] = []
+        self.place_actions: list[tuple[str, Any]] = []
+        self.refuse_place = ""
+        # The skills by name (``beschreibung``, ``auto``, ``eigen``,
+        # ``mitgeliefert``, ``inhalt``), what was done to them as ``(what,
+        # name, body)``, and the sentence a write is refused with.
+        self.skill_files: dict[str, dict[str, Any]] = {}
+        self.skill_actions: list[tuple[str, str, Any]] = []
+        self.refuse_skill = ""
+        # The MCP servers by name, what was done to them as ``(what, name,
+        # body)``, what the probe of an address answers (by address; an
+        # address left out needs nothing), the tools an entered server
+        # offers, whether it answers once entered, and what a sign-in
+        # opens and was asked with.
+        self.mcp_servers: dict[str, dict[str, Any]] = {}
+        self.mcp_actions: list[tuple[str, str, Any]] = []
+        self.mcp_probes: dict[str, dict[str, Any]] = {}
+        self.mcp_tool_names: list[str] = ["search", "fetch"]
+        self.mcp_connects = True
+        self.mcp_sign_in_url = "https://auth.example.test/authorize"
+        self.refuse_mcp = ""
         self.sent: list[dict[str, Any]] = []
         self.confirmations: list[dict[str, Any]] = []
         self.stops: list[dict[str, Any]] = []
@@ -719,6 +843,13 @@ class StubService:
         if chat is None:
             raise HTTPException(404, "No such chat")
         return chat
+
+    def _write_long_text(self, route: str, wanted: dict[str, Any]) -> dict[str, Any]:
+        self.text_writes.append((route, str(wanted.get("text"))))
+        if self.refuse_writes:
+            raise HTTPException(500, "The text could not be written.")
+        self.long_texts[route] = str(wanted.get("text"))
+        return {"text": self.long_texts[route], "datei": "file.md"}
 
     def _build(self) -> FastAPI:
         app = FastAPI()
@@ -871,6 +1002,64 @@ class StubService:
             return {
                 "modelle": [entry["name"] for entry in image.files],
                 "sizes": {entry["name"]: int(entry["groesse_gb"] * 1e9) for entry in image.files},
+                "programm_da": image.program,
+            }
+
+        @api.get("/bild/programm")
+        async def image_program_state() -> dict[str, Any] | None:
+            return self.image.program_step()
+
+        @api.post("/bild/programm")
+        async def image_program(wanted: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+            self.image.program_posts.append(wanted)
+            step = self.image.program_step()
+            return step or {"geladen": 0, "gesamt": 0, "anteil": 0.0, "fertig": False}
+
+        @api.get("/bild/programm/varianten")
+        async def image_program_builds() -> dict[str, Any]:
+            return {"varianten": list(self.image.builds), "installiert": self.image.installed}
+
+        @api.get("/bild/programm/aktualisierung")
+        async def image_program_update() -> dict[str, Any]:
+            return dict(self.image.update)
+
+        @api.get("/bild/fortschritt")
+        async def image_progress() -> dict[str, Any]:
+            steps = self.image.progress_steps
+            step = steps[0]
+            if len(steps) > 1:
+                steps.pop(0)
+            return step
+
+        @api.post("/bild/stop")
+        async def image_stop_drawing() -> bool:
+            self.image.draw_stops += 1
+            return True
+
+        @api.post("/bild/satz", status_code=201)
+        async def image_from_sentence(wanted: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            image = self.image
+            image.draws.append(dict(wanted))
+            if str(wanted.get("chat_id")) not in self.chats:
+                raise HTTPException(404, "Chat not found")
+            if image.refuse_draw:
+                raise HTTPException(409, image.refuse_draw)
+            if not image.program:
+                raise HTTPException(409, "The image program is not installed.")
+            waited = 0.0
+            stops_before = image.draw_stops
+            while waited < image.draw_seconds:
+                if image.draw_stops > stops_before:
+                    raise HTTPException(409, "The picture was stopped.")
+                await asyncio.sleep(0.02)
+                waited += 0.02
+            return {
+                "bild": "lighthouse.png",
+                "pfad": "/data/images/lighthouse.png",
+                "seed": 7,
+                "modell": "draw.safetensors",
+                "prompt": str(wanted.get("prompt")),
+                "werte": {},
             }
 
         @api.get("/bild/turbo")
@@ -913,11 +1102,15 @@ class StubService:
             return chat
 
         @api.get("/chats")
-        async def list_chats(suche: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        async def list_chats(
+            suche: str = "", limit: int = 100, archived: bool = False
+        ) -> list[dict[str, Any]]:
+            self.chat_listings.append({"suche": suche, "archived": archived})
             found = [
                 chat
                 for chat in self.chats.values()
                 if suche.casefold() in str(chat["title"]).casefold()
+                and bool(chat.get("archived")) == archived
             ]
             return found[:limit]
 
@@ -931,10 +1124,263 @@ class StubService:
         ) -> dict[str, Any]:
             chat = self._chat(chat_id)
             self.changes.append({"chat": chat_id, **changes})
-            for field in ("title", "endpoint_id", "working_dirs"):
+            if self.refuse_folder and changes.get("working_dirs") is not None:
+                raise HTTPException(422, self.refuse_folder)
+            for field in ("title", "endpoint_id", "working_dirs", "archived"):
                 if changes.get(field) is not None:
                     chat[field] = changes[field]
+            if "project_id" in changes:
+                # A null takes the chat out of its project.
+                chat["project_id"] = changes["project_id"]
             return chat
+
+        @api.get("/laeufe/{chat_id}")
+        async def list_runs(chat_id: str) -> dict[str, Any]:
+            self.run_listings.append(chat_id)
+            return {"laeufe": self.runs.get(chat_id, []), "ab": 0}
+
+        @api.post("/laeufe/{chat_id}/{number}/stop")
+        async def stop_run(chat_id: str, number: int) -> dict[str, Any]:
+            self.run_stops.append((chat_id, number))
+            for run in self.runs.get(chat_id, []):
+                if run["lauf"] == number:
+                    run["zustand"] = "abgebrochen"
+                    return run
+            raise HTTPException(404, "No such run")
+
+        @api.get("/projects")
+        async def list_projects() -> list[dict[str, Any]]:
+            return [
+                {
+                    **project,
+                    "chat_count": sum(
+                        1 for chat in self.chats.values() if chat.get("project_id") == project["id"]
+                    ),
+                }
+                for project in self.projects.values()
+                if not project.get("archived")
+            ]
+
+        @api.post("/projects", status_code=201)
+        async def create_project(wanted: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            identifier = self._next("project")
+            self.project_actions.append(("create", identifier, dict(wanted)))
+            project = {"id": identifier, "name": wanted.get("name"), "archived": False, "chat_count": 0}
+            self.projects[identifier] = project
+            return project
+
+        @api.patch("/projects/{project_id}")
+        async def change_project(
+            project_id: str, wanted: dict[str, Any] = Body(default={})
+        ) -> dict[str, Any]:
+            self.project_actions.append(("change", project_id, dict(wanted)))
+            self.projects[project_id].update(wanted)
+            return self.projects[project_id]
+
+        @api.delete("/projects/{project_id}")
+        async def delete_project(project_id: str) -> list[str]:
+            project = self.projects[project_id]
+            if not project.get("archived"):
+                raise HTTPException(409, "Only archived projects can be deleted.")
+            if self.refuse_project_delete:
+                raise HTTPException(409, self.refuse_project_delete)
+            self.project_actions.append(("delete", project_id, None))
+            gone = [
+                chat_id
+                for chat_id, chat in list(self.chats.items())
+                if chat.get("project_id") == project_id
+            ]
+            for chat_id in gone:
+                self.chats.pop(chat_id, None)
+            self.projects.pop(project_id, None)
+            return gone
+
+        @api.delete("/chats/{chat_id}", status_code=204)
+        async def delete_chat(chat_id: str) -> Response:
+            self._chat(chat_id)
+            if self.refuse_chat_delete:
+                raise HTTPException(409, self.refuse_chat_delete)
+            self.chat_deletions.append(chat_id)
+            self.chats.pop(chat_id, None)
+            return Response(status_code=204)
+
+        @api.post("/documents", status_code=201)
+        async def upload_document(request: Request, chat_id: str, name: str) -> dict[str, Any]:
+            self._chat(chat_id)
+            if "/documents" in self.refuse_upload:
+                code, detail = self.refuse_upload["/documents"]
+                raise HTTPException(code, detail)
+            data = await request.body()
+            self.uploads.append(("/documents", name, "", data))
+            identifier = self._next("doc")
+            return {"dokument": {"id": identifier, "filename": name, "size_bytes": len(data)}}
+
+        @api.post("/images", status_code=201)
+        async def upload_image(request: Request) -> dict[str, str]:
+            if "/images" in self.refuse_upload:
+                code, detail = self.refuse_upload["/images"]
+                raise HTTPException(code, detail)
+            data = await request.body()
+            kind = (request.headers.get("content-type") or "").split(";")[0]
+            name = f"{self._next('picture')}.png"
+            self.uploads.append(("/images", name, kind, data))
+            return {"bild": name}
+
+        @api.get("/agents")
+        async def list_agents() -> list[dict[str, Any]]:
+            return self.agents
+
+        @api.get("/agent-files")
+        async def list_agent_files() -> list[dict[str, Any]]:
+            names = [agent["name"] for agent in self.agents] + list(self.broken_agents)
+            return [{"name": name, "kaputt": self.broken_agents.get(name)} for name in sorted(names)]
+
+        @api.get("/agents/{name}")
+        async def read_agent(name: str) -> dict[str, Any]:
+            if name in self.broken_agents:
+                return {"name": name, "content": "", "kaputt": self.broken_agents[name], "prompt": None}
+            if name not in [agent["name"] for agent in self.agents]:
+                raise HTTPException(404, "No such agent")
+            return {"name": name, "content": "", "kaputt": None, "prompt": self.agent_prompts.get(name, "")}
+
+        @api.put("/agents/{name}/fields")
+        async def save_agent_fields(name: str, wanted: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            if self.refuse_agent:
+                raise HTTPException(422, self.refuse_agent)
+            self.agent_actions.append(("save", name, dict(wanted)))
+            return {"name": name, "content": "", "kaputt": None, "prompt": wanted.get("prompt")}
+
+        @api.delete("/agents/{name}", status_code=204)
+        async def delete_agent(name: str) -> Response:
+            self.agent_actions.append(("delete", name, None))
+            self.agents = [agent for agent in self.agents if agent["name"] != name]
+            self.broken_agents.pop(name, None)
+            return Response(status_code=204)
+
+        @api.get("/jobs/laufmodell")
+        async def run_model(request: Request) -> dict[str, Any]:
+            self.run_model_asked.append(dict(request.query_params))
+            return self.run_model
+
+        @api.get("/jobs")
+        async def list_jobs() -> list[dict[str, Any]]:
+            return list(self.jobs.values())
+
+        @api.post("/jobs", status_code=201)
+        async def start_job(wanted: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            if wanted.get("agent") not in [agent["name"] for agent in self.agents]:
+                names = ", ".join(agent["name"] for agent in self.agents)
+                raise HTTPException(404, f"No agent of that name. There are: {names}")
+            identifier = self._next("job")
+            self.job_actions.append(("start", identifier, dict(wanted)))
+            job = {
+                "id": identifier,
+                "agent": wanted["agent"],
+                "task": wanted["task"],
+                "state": "laeuft",
+                "result": None,
+                "question": None,
+                "created_at": "2026-10-15T10:00:00+00:00",
+                "updated_at": "2026-10-15T10:00:00+00:00",
+            }
+            self.jobs[identifier] = job
+            return job
+
+        @api.get("/jobs/{job_id}")
+        async def read_job(job_id: str) -> dict[str, Any]:
+            if job_id not in self.jobs:
+                raise HTTPException(404, "No such task")
+            return {**self.jobs[job_id], "schritte": self.job_steps.get(job_id, [])}
+
+        @api.post("/jobs/{job_id}/cancel")
+        async def cancel_job(job_id: str) -> dict[str, Any]:
+            self.job_actions.append(("cancel", job_id, None))
+            self.jobs[job_id]["state"] = "abgebrochen"
+            return self.jobs[job_id]
+
+        @api.post("/jobs/{job_id}/answer")
+        async def answer_job(job_id: str, wanted: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            self.job_actions.append(("answer", job_id, dict(wanted)))
+            self.jobs[job_id].update(state="laeuft", question=None)
+            return self.jobs[job_id]
+
+        @api.delete("/jobs/{job_id}", status_code=204)
+        async def delete_job(job_id: str) -> Response:
+            self.job_actions.append(("delete", job_id, None))
+            self.jobs.pop(job_id, None)
+            return Response(status_code=204)
+
+        @api.get("/cronjobs")
+        async def list_cronjobs() -> list[dict[str, Any]]:
+            return list(self.cronjobs.values())
+
+        @api.get("/cronjobs/runs/all")
+        async def cronjob_runs() -> list[dict[str, Any]]:
+            return self.cronjob_runs
+
+        @api.post("/cronjobs", status_code=201)
+        async def create_cronjob(wanted: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            identifier = self._next("cron")
+            self.cronjob_actions.append(("create", identifier, dict(wanted)))
+            kind = "reminder" if wanted.get("reminder") else "script" if wanted.get("skript") else "agent"
+            entry = {
+                "id": identifier,
+                "agent": wanted.get("agent") or "(none)",
+                "task": wanted.get("task", ""),
+                "zeitplan": wanted["zeitplan"],
+                "aktiv": True,
+                "kind": kind,
+                "skript": wanted.get("skript"),
+                "einmalig": bool(wanted.get("einmalig")),
+                "datum": wanted.get("datum"),
+                "letzter_ausgang": None,
+            }
+            self.cronjobs[identifier] = entry
+            return entry
+
+        @api.patch("/cronjobs/{cronjob_id}")
+        async def change_cronjob(
+            cronjob_id: str, wanted: dict[str, Any] = Body(default={})
+        ) -> dict[str, Any]:
+            self.cronjob_actions.append(("change", cronjob_id, dict(wanted)))
+            self.cronjobs[cronjob_id].update(wanted)
+            return self.cronjobs[cronjob_id]
+
+        @api.post("/cronjobs/{cronjob_id}/pause")
+        async def pause_cronjob(cronjob_id: str) -> dict[str, Any]:
+            self.cronjob_actions.append(("pause", cronjob_id, None))
+            self.cronjobs[cronjob_id]["aktiv"] = False
+            return self.cronjobs[cronjob_id]
+
+        @api.post("/cronjobs/{cronjob_id}/resume")
+        async def resume_cronjob(cronjob_id: str) -> dict[str, Any]:
+            self.cronjob_actions.append(("resume", cronjob_id, None))
+            self.cronjobs[cronjob_id]["aktiv"] = True
+            return self.cronjobs[cronjob_id]
+
+        @api.post("/cronjobs/{cronjob_id}/run")
+        async def run_cronjob(cronjob_id: str) -> dict[str, Any]:
+            if not self.cronjobs[cronjob_id]["aktiv"]:
+                raise HTTPException(409, "This schedule is paused.")
+            self.cronjob_actions.append(("run", cronjob_id, None))
+            return {**self.cronjobs[cronjob_id], "notice": self.cronjob_notice}
+
+        @api.delete("/cronjobs/{cronjob_id}", status_code=204)
+        async def delete_cronjob(cronjob_id: str) -> Response:
+            self.cronjob_actions.append(("delete", cronjob_id, None))
+            self.cronjobs.pop(cronjob_id, None)
+            return Response(status_code=204)
+
+        @api.get("/chats/{chat_id}/ordnerstand")
+        async def folder_state(chat_id: str) -> dict[str, Any]:
+            chat = self._chat(chat_id)
+            return {
+                "fehlend": [
+                    folder
+                    for folder in chat.get("working_dirs") or []
+                    if folder in self.missing_folders
+                ]
+            }
 
         @api.get("/chats/{chat_id}/messages")
         async def list_messages(chat_id: str) -> JSONResponse:
@@ -1010,6 +1456,99 @@ class StubService:
             self._watchers.add(watcher)
             return StreamingResponse(self._watch(watcher), media_type="text/event-stream")
 
+        # --- Cloud providers --------------------------------------------------------
+
+        @api.get("/meta")
+        async def meta() -> dict[str, Any]:
+            return {"system_name": self.system_name}
+
+        @api.get("/memory")
+        async def read_memory() -> dict[str, Any]:
+            return {"text": self.long_texts["/memory"], "datei": "memory.md"}
+
+        @api.put("/memory")
+        async def write_memory(wanted: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            return self._write_long_text("/memory", wanted)
+
+        @api.get("/system-prompt")
+        async def read_system_prompt() -> dict[str, Any]:
+            return {"text": self.long_texts["/system-prompt"], "datei": "system.md"}
+
+        @api.put("/system-prompt")
+        async def write_system_prompt(wanted: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            return self._write_long_text("/system-prompt", wanted)
+
+        @api.post("/providers")
+        async def add_provider(wanted: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            self.provider_requests.append(("add", dict(wanted)))
+            key = str(wanted.get("schluessel") or "")
+            if len(key) < 8:
+                # The service's own validation names the value it refused.
+                raise HTTPException(422, [{"msg": "too short", "input": key}])
+            kind = str(wanted.get("art") or "")
+            identifier = str(wanted.get("kennung") or kind).lower()
+            if any(entry.get("anbieter") == identifier for entry in self.models):
+                raise HTTPException(409, "A provider with that id exists already.")
+            entry = model(f"{identifier}-model", f"{identifier} model")
+            entry.update(
+                {
+                    "anbieter": identifier,
+                    "anbieter_name": {"anthropic": "Anthropic", "openai": "OpenAI"}.get(
+                        identifier, identifier
+                    ),
+                    "group": "cloud",
+                    "erreichbar": self.provider_reachable,
+                    "schluessel_gesetzt": True,
+                    "key_goes_with_provider": True,
+                }
+            )
+            self.models.append(entry)
+            return {
+                "id": identifier,
+                "api_key_env": f"{identifier.upper()}_API_KEY",
+                "erreichbar": self.provider_reachable,
+            }
+
+        def provider_models(identifier: str) -> list[dict[str, Any]]:
+            found = [entry for entry in self.models if entry.get("anbieter") == identifier]
+            if not found:
+                raise HTTPException(404, f"No such provider: {identifier}")
+            return found
+
+        @api.put("/providers/{identifier}/capabilities")
+        async def provider_capabilities(
+            identifier: str, wanted: dict[str, Any] = Body(default={})
+        ) -> dict[str, Any]:
+            self.provider_requests.append((f"{identifier}/capabilities", dict(wanted)))
+            for entry in provider_models(identifier):
+                entry.setdefault("capabilities", {}).update(wanted)
+            return {"id": identifier}
+
+        @api.put("/providers/{identifier}/context")
+        async def provider_context(
+            identifier: str, wanted: dict[str, Any] = Body(default={})
+        ) -> dict[str, Any]:
+            self.provider_requests.append((f"{identifier}/context", dict(wanted)))
+            for entry in provider_models(identifier):
+                entry["kontext_eigen"] = wanted.get("context_tokens")
+            return {"id": identifier}
+
+        @api.put("/providers/{identifier}/timeout")
+        async def provider_timeout(
+            identifier: str, wanted: dict[str, Any] = Body(default={})
+        ) -> dict[str, Any]:
+            self.provider_requests.append((f"{identifier}/timeout", dict(wanted)))
+            for entry in provider_models(identifier):
+                entry["timeout_enabled"] = wanted.get("timeout_enabled")
+            return {"id": identifier}
+
+        @api.delete("/providers/{identifier}", status_code=204)
+        async def remove_provider(identifier: str) -> Response:
+            self.provider_requests.append((f"{identifier}/remove", None))
+            provider_models(identifier)
+            self.models[:] = [entry for entry in self.models if entry.get("anbieter") != identifier]
+            return Response(status_code=204)
+
         # --- Settings, tools, permissions ---
 
         @api.get("/settings/resolved")
@@ -1025,10 +1564,25 @@ class StubService:
                     raise HTTPException(400, "No setting was named")
             return {name: self._resolved(name, modell, chat) for name in names}
 
+        @api.get("/settings/resolved/{name}")
+        async def resolved_one(
+            name: str, modell: str | None = None, chat: str | None = None
+        ) -> dict[str, Any]:
+            return self._resolved(name, modell, chat)
+
         @api.get("/settings/{scope}/{name}")
         async def read_setting(scope: str, name: str) -> dict[str, Any]:
             value = self.settings.get(scope, {}).get(name)
             return {"bereich": scope, "schluessel": name, "wert": value}
+
+        @api.patch("/settings/{scope}/{name}")
+        async def merge_setting(
+            scope: str, name: str, wanted: dict[str, Any] = Body(...)
+        ) -> dict[str, Any]:
+            held = self.settings.setdefault(scope, {}).get(name)
+            merged = {**(held if isinstance(held, dict) else {}), **(wanted.get("wert") or {})}
+            self.settings[scope][name] = merged
+            return {"bereich": scope, "schluessel": name, "wert": merged}
 
         @api.put("/settings/{scope}/{name}")
         async def write_setting(
@@ -1047,6 +1601,166 @@ class StubService:
         async def tools() -> dict[str, Any]:
             servers = sorted({str(tool.get("server") or "") for tool in self.tools} - {""})
             return {"aktiv": bool(self.tools), "server": servers, "werkzeuge": self.tools}
+
+        def skill_row(name: str) -> dict[str, Any]:
+            skill = self.skill_files[name]
+            return {
+                "name": name,
+                "beschreibung": skill.get("beschreibung", ""),
+                "auto": bool(skill.get("auto")),
+                "eigen": bool(skill.get("eigen")),
+                "mitgeliefert": bool(skill.get("mitgeliefert")),
+            }
+
+        @api.get("/skills")
+        async def skills_offered() -> list[dict[str, Any]]:
+            return [
+                {key: row[key] for key in ("name", "beschreibung", "auto")}
+                for row in (skill_row(name) for name in sorted(self.skill_files))
+            ]
+
+        @api.get("/skills/verwaltung")
+        async def skills_managed() -> list[dict[str, Any]]:
+            return [skill_row(name) for name in sorted(self.skill_files)]
+
+        @api.post("/skills", status_code=201)
+        async def skill_create(wanted: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            if self.refuse_skill:
+                raise HTTPException(400, self.refuse_skill)
+            name = str(wanted.get("name"))
+            self.skill_actions.append(("create", name, dict(wanted)))
+            self.skill_files[name] = {
+                "beschreibung": "", "auto": False, "eigen": True, "mitgeliefert": False,
+                "inhalt": wanted.get("inhalt", ""),
+            }
+            return skill_row(name)
+
+        @api.get("/skills/{name}")
+        async def skill_file(name: str) -> dict[str, Any]:
+            if name not in self.skill_files:
+                raise HTTPException(404, "No such skill")
+            skill = self.skill_files[name]
+            return {
+                "name": name, "inhalt": skill.get("inhalt", ""),
+                "eigen": bool(skill.get("eigen")), "mitgeliefert": bool(skill.get("mitgeliefert")),
+            }
+
+        @api.put("/skills/{name}")
+        async def skill_save(name: str, wanted: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            if self.refuse_skill:
+                raise HTTPException(400, self.refuse_skill)
+            self.skill_actions.append(("save", name, dict(wanted)))
+            self.skill_files[name].update(inhalt=wanted.get("inhalt", ""), eigen=True)
+            return skill_row(name)
+
+        @api.patch("/skills/{name}")
+        async def skill_auto(name: str, wanted: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            if self.refuse_skill:
+                raise HTTPException(400, self.refuse_skill)
+            self.skill_actions.append(("auto", name, dict(wanted)))
+            self.skill_files[name].update(auto=bool(wanted.get("auto")), eigen=True)
+            return skill_row(name)
+
+        @api.delete("/skills/{name}", status_code=204)
+        async def skill_remove(name: str) -> Response:
+            skill = self.skill_files.get(name)
+            if skill is None or not skill.get("eigen"):
+                raise HTTPException(404, "No copy of your own")
+            self.skill_actions.append(("remove", name, None))
+            if skill.get("mitgeliefert"):
+                skill["eigen"] = False
+            else:
+                del self.skill_files[name]
+            return Response(status_code=204)
+
+        @api.get("/doc-folder")
+        async def doc_folder(chat: str | None = None) -> list[dict[str, Any]]:
+            return [
+                entry for entry in self.doc_files if chat is None or entry.get("chat_id") == chat
+            ]
+
+        @api.get("/doc-folder/place")
+        async def doc_folder_place(chat: str) -> dict[str, Any]:
+            if chat not in self.doc_places:
+                raise HTTPException(404, "No such file")
+            return {"path": self.doc_places[chat]}
+
+        @api.get("/speicherorte")
+        async def storage_places() -> list[dict[str, Any]]:
+            return self.places
+
+        @api.put("/speicherorte/{name}")
+        async def storage_place_set(
+            name: str, wanted: dict[str, Any] = Body(default={})
+        ) -> dict[str, Any]:
+            if self.refuse_place:
+                raise HTTPException(400, self.refuse_place)
+            place = next((entry for entry in self.places if entry["name"] == name), None)
+            if place is None:
+                raise HTTPException(404, "This storage location does not exist")
+            self.place_actions.append((name, dict(wanted)))
+            place["pfad"] = wanted.get("pfad")
+            return place
+
+        @api.get("/tools/servers")
+        async def mcp_servers() -> list[dict[str, Any]]:
+            return list(self.mcp_servers.values())
+
+        @api.post("/tools/mcp/sondieren")
+        async def mcp_probe(wanted: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            self.mcp_actions.append(("probe", str(wanted.get("url")), dict(wanted)))
+            return self.mcp_probes.get(str(wanted.get("url")), {"verlangt": None})
+
+        @api.put("/tools/servers/{name}")
+        async def mcp_write(
+            name: str, neu: bool = False, wanted: dict[str, Any] = Body(default={})
+        ) -> dict[str, Any]:
+            if self.refuse_mcp:
+                raise HTTPException(422, self.refuse_mcp)
+            if neu and name in self.mcp_servers:
+                raise HTTPException(409, "Name already taken")
+            self.mcp_actions.append(("write", name, dict(wanted)))
+            entry = self.mcp_servers.setdefault(
+                name,
+                {
+                    "name": name,
+                    "type": "http",
+                    "enabled": True,
+                    "laeuft": False,
+                    "alle_werkzeuge": [],
+                    "allowed_tools": None,
+                    "needs_confirmation": [],
+                },
+            )
+            fields = {key: value for key, value in wanted.items() if key != "api_key"}
+            entry.update(fields)
+            if neu:
+                entry["laeuft"] = self.mcp_connects
+                entry["alle_werkzeuge"] = (
+                    [{"name": tool, "beschreibung": ""} for tool in self.mcp_tool_names]
+                    if self.mcp_connects
+                    else []
+                )
+            return entry
+
+        @api.delete("/tools/servers/{name}", status_code=204)
+        async def mcp_remove(name: str) -> Response:
+            if name not in self.mcp_servers:
+                raise HTTPException(404, "No such server")
+            self.mcp_actions.append(("delete", name, None))
+            del self.mcp_servers[name]
+            return Response(status_code=204)
+
+        @api.post("/tools/oauth/start")
+        async def mcp_sign_in(wanted: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            self.mcp_actions.append(("oauth", str(wanted.get("server")), dict(wanted)))
+            entry = self.mcp_servers.get(str(wanted.get("server")))
+            if entry is not None and self.mcp_connects:
+                entry["laeuft"] = True
+                entry["alle_werkzeuge"] = [
+                    {"name": tool, "beschreibung": ""} for tool in self.mcp_tool_names
+                ]
+            return {"url": self.mcp_sign_in_url}
 
         @api.get("/permissions/always-allow")
         async def always_allowed() -> dict[str, str]:

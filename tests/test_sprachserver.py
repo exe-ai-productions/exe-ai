@@ -233,6 +233,73 @@ def test_die_bereinigung_fragt_den_gewaehlten_server(monkeypatch):
     assert gesehen["headers"]["Authorization"] == "Bearer putzschluessel"
 
 
+def test_the_dictation_goes_out_inside_the_transcript_tag(monkeypatch):
+    """A tidying model told only "tidy this" reads a dictated question as one
+    put to it. The words travel as material inside the tag, the instruction
+    stays as it is."""
+    gesehen: dict = {}
+
+    def falsch(url, **kw):
+        gesehen.update(kw)
+        return _Antwort({"choices": [{"message": {"content": "Was ist die Hauptstadt von Frankreich?"}}]})
+
+    monkeypatch.setattr(sprachserver.httpx, "post", falsch)
+    fertig = sprachserver.bereinigen(
+        "http://127.0.0.1:8085/v1", None, "tidy this", "  ähm was ist die hauptstadt von frankreich "
+    )
+    nachrichten = gesehen["json"]["messages"]
+    assert nachrichten[0] == {"role": "system", "content": "tidy this"}
+    assert nachrichten[1] == {
+        "role": "user",
+        "content": "<TRANSCRIPT>\nähm was ist die hauptstadt von frankreich\n</TRANSCRIPT>",
+    }
+    assert fertig == "Was ist die Hauptstadt von Frankreich?"
+
+
+@pytest.mark.parametrize(
+    "antwort",
+    [
+        "<TRANSCRIPT>\nÖffne die Datei.\n</TRANSCRIPT>",
+        "<TRANSCRIPT>Öffne die Datei.</TRANSCRIPT>",
+        "<TRANSCRIPT>\nÖffne die Datei.",
+        "Öffne die Datei.\n</TRANSCRIPT>",
+    ],
+)
+def test_the_tag_a_model_echoes_back_does_not_reach_the_field(monkeypatch, antwort):
+    monkeypatch.setattr(
+        sprachserver.httpx,
+        "post",
+        lambda url, **kw: _Antwort({"choices": [{"message": {"content": antwort}}]}),
+    )
+    assert sprachserver.bereinigen("http://127.0.0.1:8085/v1", None, "x", "öffne die datei") == (
+        "Öffne die Datei."
+    )
+
+
+def test_an_empty_dictation_sends_no_request(monkeypatch):
+    """Silence probe: nothing to tidy, nothing asked, nothing wrapped."""
+    def nie(*a, **kw):
+        raise AssertionError("a request went out for an empty dictation")
+
+    monkeypatch.setattr(sprachserver.httpx, "post", nie)
+    assert sprachserver.bereinigen("http://127.0.0.1:8085/v1", None, "x", "   ") == ""
+
+
+def test_a_text_that_merely_mentions_the_tag_keeps_it_inside(monkeypatch):
+    """Silence probe: only a tag standing at the very start or end is taken
+    off; one inside the sentence is the person's own word."""
+    monkeypatch.setattr(
+        sprachserver.httpx,
+        "post",
+        lambda url, **kw: _Antwort(
+            {"choices": [{"message": {"content": "Setze das <TRANSCRIPT> Feld auf leer."}}]}
+        ),
+    )
+    assert sprachserver.bereinigen("http://127.0.0.1:8085/v1", None, "x", "y") == (
+        "Setze das <TRANSCRIPT> Feld auf leer."
+    )
+
+
 def test_eine_stumme_bereinigung_wird_zu_nichts(monkeypatch):
     def falsch(*a, **kw):
         raise httpx.ConnectError("nobody there")
@@ -323,6 +390,112 @@ def test_ein_stummer_server_wird_gemeldet(client: TestClient, monkeypatch):
     )
     assert antwort.status_code == 502
     assert antwort.json()["detail"]
+
+
+# --- The reason of a failure -------------------------------------------------
+
+_ERROR_BODY = {
+    "error": {
+        "code": 400,
+        "message": "Failed to load image or audio file",
+        "type": "invalid_request_error",
+    }
+}
+
+
+def _server_answering(status: int, **content):
+    """``httpx.post`` as it is, over a transport that answers like the
+    speech server: a real response, so ``raise_for_status`` does what it does
+    for real."""
+
+    def post(url, **kw):
+        transport = httpx.MockTransport(lambda request: httpx.Response(status, **content))
+        with httpx.Client(transport=transport) as client:
+            return client.post(url, **kw)
+
+    return post
+
+
+def test_ein_fehler_des_servers_traegt_seinen_grund(monkeypatch, caplog):
+    """The server answered with an error: what it said is raised and stands in
+    the log with the status, on the level somebody reads."""
+    monkeypatch.setattr(sprachserver.httpx, "post", _server_answering(400, json=_ERROR_BODY))
+    with caplog.at_level("WARNING", logger="app.sprachserver"):
+        with pytest.raises(sprachserver.SpeechServerError) as fehler:
+            sprachserver.transkribieren(8084, None, b"RIFF")
+    assert fehler.value.reason == "Failed to load image or audio file"
+    assert fehler.value.status == 400
+    zeilen = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(zeilen) == 1
+    assert "400" in zeilen[0].getMessage()
+    assert "Failed to load image or audio file" in zeilen[0].getMessage()
+
+
+def test_ohne_lesbaren_grund_steht_die_statuszeile(monkeypatch):
+    """A proxy's page or a body of another shape: the status line stands in,
+    never the raw text."""
+    monkeypatch.setattr(
+        sprachserver.httpx, "post", _server_answering(502, text="<html>bad gateway</html>")
+    )
+    with pytest.raises(sprachserver.SpeechServerError) as fehler:
+        sprachserver.transkribieren(8084, None, b"RIFF")
+    assert fehler.value.reason == "HTTP 502 Bad Gateway"
+
+
+def test_ohne_antwort_bleibt_es_nichts_und_die_art_steht_im_protokoll(monkeypatch, caplog):
+    """The silence probe: no server at all is None as before, and the log
+    names the kind of failure instead of staying quiet."""
+
+    def falsch(*a, **kw):
+        raise httpx.ConnectError("nobody there")
+
+    monkeypatch.setattr(sprachserver.httpx, "post", falsch)
+    with caplog.at_level("WARNING", logger="app.sprachserver"):
+        assert sprachserver.transkribieren(8084, None, b"RIFF") is None
+    zeilen = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(zeilen) == 1 and "ConnectError" in zeilen[0]
+
+
+def test_die_route_nennt_den_grund_des_servers(client: TestClient, monkeypatch):
+    _laufen_lassen(client, monkeypatch)
+    monkeypatch.setattr(sprachserver.httpx, "post", _server_answering(400, json=_ERROR_BODY))
+    antwort = client.post(
+        "/api/v1/sprachserver/transkribieren",
+        content=b"RIFF",
+        headers={"Content-Type": "audio/wav"},
+    )
+    assert antwort.status_code == 502
+    # The test service speaks German.
+    assert antwort.json()["detail"] == (
+        "Der Sprach-Server meldet einen Fehler: Failed to load image or audio file"
+    )
+
+
+def test_die_route_sagt_ohne_antwort_weiter_nicht_geantwortet(client: TestClient, monkeypatch):
+    _laufen_lassen(client, monkeypatch)
+
+    def falsch(*a, **kw):
+        raise httpx.ReadTimeout("too slow")
+
+    monkeypatch.setattr(sprachserver.httpx, "post", falsch)
+    antwort = client.post(
+        "/api/v1/sprachserver/transkribieren",
+        content=b"RIFF",
+        headers={"Content-Type": "audio/wav"},
+    )
+    assert antwort.status_code == 502
+    assert antwort.json()["detail"] == "Der Sprach-Server hat nicht geantwortet"
+
+
+def test_die_meldung_mit_grund_steht_in_beiden_sprachen():
+    from app.i18n import t
+
+    assert t("fehler.speech_server_reported", "en", reason="x") == (
+        "The speech server reported an error: x"
+    )
+    assert t("fehler.speech_server_reported", "de", reason="x") == (
+        "Der Sprach-Server meldet einen Fehler: x"
+    )
 
 
 def test_bei_laufendem_server_kommt_keine_aus_meldung(client: TestClient, monkeypatch):
@@ -816,7 +989,7 @@ def test_der_hauptweg_ruft_llama_tts_mit_allem(client: TestClient, monkeypatch):
     gesehen: dict = {}
 
     def falsch(programm, modell, mmproj, text, *, sprache, ordner, stimmprobe=None,
-               sampling=None, schichten=None, faeden=None):
+               sampling=None, schichten=None, faeden=None, cancel=None):
         gesehen.update(
             programm=programm, modell=modell, mmproj=mmproj, text=text,
             sprache=sprache, ordner=ordner, stimmprobe=stimmprobe,
@@ -836,13 +1009,14 @@ def test_der_hauptweg_ruft_llama_tts_mit_allem(client: TestClient, monkeypatch):
     assert gesehen["sprache"] == "de"
     assert gesehen["stimmprobe"] == "probe.wav"
     # Nothing stored: the five values a voice has always been called with,
-    # and its memory pair (all layers on the card, the engine's own threads).
+    # and its memory pair (no layer count named — the engine places them —
+    # and the engine's own threads).
     assert gesehen["sampling"] == {
         "temperature": stimme.TEMPERATUR, "top_k": stimme.TOP_K,
         "top_p": stimme.TOP_P, "min_p": stimme.MIN_P,
         "repeat_penalty": stimme.WIEDERHOLUNGSSTRAFE,
     }
-    assert gesehen["schichten"] == 99
+    assert gesehen["schichten"] is None
     assert gesehen["faeden"] == 0
 
 

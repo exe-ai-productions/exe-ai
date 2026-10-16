@@ -16,10 +16,11 @@ from pathlib import Path
 import pytest
 
 from app import bildinhalt
-from app.bildinhalt import BILDMODELL, TEXTVERSTEHER, UNBEKANNT, VAE, sorte
+from app.bildinhalt import BILDMODELL, SEHTEIL, TEXTVERSTEHER, UNBEKANNT, VAE, sorte
 
 _ZEICHENKETTE = 8
 _U32 = 4
+_BOOL = 7
 
 
 def _gguf_bytes(paare: list[tuple[str, int, object]], *, version: int = 3) -> bytes:
@@ -39,9 +40,20 @@ def _gguf_bytes(paare: list[tuple[str, int, object]], *, version: int = 3) -> by
             kopf += struct.pack("<Q", len(rohwert)) + rohwert
         elif art == _U32:
             kopf += struct.pack("<I", wert)
+        elif art == _BOOL:
+            kopf += struct.pack("<B", 1 if wert else 0)
         else:
             raise ValueError(f"unhandled type in this test's own builder: {art}")
     return bytes(kopf)
+
+
+def clip_gguf_bytes(*, vision: bool | None) -> bytes:
+    """A GGUF header of architecture ``clip``: with the vision-encoder flag
+    set (a vision projector), cleared, or absent (``None``)."""
+    paare: list[tuple[str, int, object]] = [("general.architecture", _ZEICHENKETTE, "clip")]
+    if vision is not None:
+        paare.append(("clip.has_vision_encoder", _BOOL, vision))
+    return _gguf_bytes(paare)
 
 
 def _safetensors_bytes(namen: list[str]) -> bytes:
@@ -82,6 +94,36 @@ def test_gguf_vl_und_mistral_encoder_sind_textversteher(tmp_path, architektur):
 def test_gguf_t5_architektur_ist_ein_textversteher(tmp_path):
     inhalt = _gguf_bytes([("general.architecture", _ZEICHENKETTE, "t5")])
     assert sorte(_datei(tmp_path, "t5.gguf", inhalt)) == TEXTVERSTEHER
+
+
+def test_a_clip_head_with_a_vision_encoder_is_a_vision_part(tmp_path):
+    """A vision projector (mmproj) names the architecture ``clip``, as a
+    CLIP text encoder does; the vision-encoder flag tells it apart."""
+    path = _datei(tmp_path, "mmproj-f16.gguf", clip_gguf_bytes(vision=True))
+    assert sorte(path) == SEHTEIL
+
+
+@pytest.mark.parametrize("vision", [False, None])
+def test_a_clip_head_without_a_vision_encoder_stays_a_text_encoder(tmp_path, vision):
+    path = _datei(tmp_path, "clip_l.gguf", clip_gguf_bytes(vision=vision))
+    assert sorte(path) == TEXTVERSTEHER
+
+
+@pytest.mark.parametrize("architektur", ["qwen3vl", "t5", "llama"])
+def test_a_text_encoder_of_another_architecture_is_never_a_vision_part(tmp_path, architektur):
+    path = _datei(
+        tmp_path, "encoder.gguf",
+        _gguf_bytes([("general.architecture", _ZEICHENKETTE, architektur)]),
+    )
+    assert sorte(path) == TEXTVERSTEHER
+
+
+def test_a_vision_head_read_from_bytes_says_so():
+    data = clip_gguf_bytes(vision=True)
+    is_gguf, architecture, _, vision = bildinhalt.header_from_bytes(data, len(data))
+    assert (is_gguf, architecture, vision) == (True, "clip", True)
+    reading = bildinhalt.read_header(None, architecture, is_gguf=is_gguf, vision=vision)
+    assert reading.kind == SEHTEIL
 
 
 def test_gguf_unbekannte_architektur_bleibt_unbekannt(tmp_path):
@@ -589,8 +631,8 @@ def test_a_gguf_architecture_names_its_family_without_names():
 
 def test_the_front_of_a_safetensors_file_is_read_from_bytes():
     data = _safetensors_bytes(["model.diffusion_model.txtfusion.projector.weight"]) + b"\0" * 64
-    is_gguf, architecture, names = bildinhalt.header_from_bytes(data, len(data))
-    assert (is_gguf, architecture) == (False, None)
+    is_gguf, architecture, names, vision = bildinhalt.header_from_bytes(data, len(data))
+    assert (is_gguf, architecture, vision) == (False, None, False)
     assert list(names) == ["model.diffusion_model.txtfusion.projector.weight"]
 
 
@@ -609,8 +651,8 @@ def test_a_gguf_head_cut_in_the_middle_asks_for_more():
 
 def test_the_front_of_a_gguf_file_is_read_from_bytes():
     data = _gguf_bytes([("general.architecture", _ZEICHENKETTE, "flux")])
-    is_gguf, architecture, _ = bildinhalt.header_from_bytes(data, 10_000_000)
-    assert (is_gguf, architecture) == (True, "flux")
+    is_gguf, architecture, _, vision = bildinhalt.header_from_bytes(data, 10_000_000)
+    assert (is_gguf, architecture, vision) == (True, "flux", False)
 
 
 def test_bytes_that_are_no_head_answer_nothing():

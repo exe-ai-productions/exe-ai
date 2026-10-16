@@ -60,7 +60,7 @@ class Switch:
     high: float | None = None
     # A property of the machine the pictures are drawn on rather than of a
     # picture — kept for the session like the other memory fields, never
-    # stored with a chat (app/bildfensterwahl.py).
+    # stored with the studio's values (app/bildfensterwahl.py).
     machine: bool = False
     # True: acts on a video only; False: on a still picture only; None: on
     # both. Dropped where it does not act, like an unmet ``needs``.

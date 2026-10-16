@@ -1050,14 +1050,14 @@ def mode_run(bild_senden, config: Config, tmp_path: Path):
 
 def test_enlarging_alone_reports_no_seed(mode_run, client: TestClient, chat_id):
     """Enlarging draws nothing and uses no seed: the answer, the chat's row
-    and the values kept for the picture name none."""
+    and the values kept for the picture name none. The original here has no
+    kept values, so the new picture is kept with its prompt alone — none of
+    the values the route would have drawn with."""
     answer = mode_run(chat_id, "upscale")
     assert answer["seed"] is None
     row = next(m for m in _nachrichten(client, chat_id) if m.get("bild") == answer["bild"])
     assert "seed" not in row["stats"]
-    kept = _info(client, answer["bild"])
-    assert "seed" not in kept
-    assert kept["modell"] == "base.safetensors"
+    assert _info(client, answer["bild"]) == {"prompt": "x"}
 
 
 def test_repairing_faces_alone_keeps_its_seed(mode_run, client: TestClient, chat_id):

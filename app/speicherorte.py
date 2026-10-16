@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -62,41 +63,39 @@ class SpeicherortFehler(Exception):
 
 @dataclass(frozen=True)
 class Ort:
-    """One named location: its key, the config field that holds its default
-    path, and whether a running process is bound to it at startup (so a move
-    takes hold only after a restart) or it is read fresh each time it is
-    needed (so a move takes hold at once)."""
+    """One named location: its key and the config field that holds its
+    default path. Every location is read fresh each time it is needed, so a
+    move takes hold at once and no restart is ever asked for."""
 
     name: str
     feld: str
-    neustart_noetig: bool
 
 
 # The known locations, in the order the settings screen lists them. The
 # database file is deliberately NOT here: moving an open database is its own
 # undertaking, and until it is one, its place stays fixed.
 ORTE: tuple[Ort, ...] = (
-    # The pictures are written and read fresh per request — a move is felt at
-    # once, no restart.
-    Ort("images", "bilder_verzeichnis", neustart_noetig=False),
-    # The model folders are handed to running servers and the download router
-    # at startup — a move needs a restart to take full hold.
-    Ort("image_models", "bildmodelle_verzeichnis", neustart_noetig=True),
-    Ort("models", "modelle_verzeichnis", neustart_noetig=True),
-    Ort("embedding_models", "einbettungsmodelle_verzeichnis", neustart_noetig=True),
-    Ort("speech_models", "sprachmodelle_verzeichnis", neustart_noetig=True),
+    # The pictures are written and read fresh per request.
+    Ort("images", "bilder_verzeichnis"),
+    # The model folders are asked for by name at every listing, start and
+    # download (``LiveFolders`` below, ``Modellrunner``'s folder source): a
+    # server that is up keeps the model it loaded, the next start and the
+    # next listing read the new folder.
+    Ort("image_models", "bildmodelle_verzeichnis"),
+    Ort("models", "modelle_verzeichnis"),
+    Ort("embedding_models", "einbettungsmodelle_verzeichnis"),
+    Ort("speech_models", "sprachmodelle_verzeichnis"),
     # The scripts a cron entry may start. Resolved fresh at every
-    # firing, so a move takes hold at once — and it has to: this folder is
-    # not only where the scripts are kept, it is the boundary that decides
-    # what may run at all. A path bound at startup would leave a moved folder
-    # running the old one's files.
-    Ort("scripts", "skripte_verzeichnis", neustart_noetig=False),
+    # firing — and it has to be: this folder is not only where the scripts
+    # are kept, it is the boundary that decides what may run at all. A path
+    # bound at startup would leave a moved folder running the old one's files.
+    Ort("scripts", "skripte_verzeichnis"),
     # The agents' delivery shelf. Resolved fresh every time the
-    # shelf is opened — a delivery, a listing, a download — so a move takes
-    # hold at once, with no restart. The shelf keeps its own record INSIDE
-    # this folder (app/agentendock.py), so the folder is the whole shelf and
-    # a move can never leave a list here pointing at files over there.
-    Ort("agent_dock", "agentendock_verzeichnis", neustart_noetig=False),
+    # shelf is opened — a delivery, a listing, a download. The shelf keeps
+    # its own record INSIDE this folder (app/agentendock.py), so the folder
+    # is the whole shelf and a move can never leave a list here pointing at
+    # files over there.
+    Ort("agent_dock", "agentendock_verzeichnis"),
 )
 
 _NACH_NAME = {o.name: o for o in ORTE}
@@ -174,6 +173,27 @@ def ort(config: "Config", name: str) -> Path:
     if ueber:
         return Path(ueber).expanduser().resolve()
     return standard(config, name)
+
+
+class LiveFolders(Mapping[str, Path]):
+    """Folders by kind that follow the locations: every lookup asks ``ort``
+    again, so a folder moved a moment ago is the one a request sees. Handed
+    to the places that used to be given one folder at startup (the download
+    router's folder per kind) — a plain dict built once would still name the
+    old folder after the move."""
+
+    def __init__(self, config: "Config", names: dict[str, str]) -> None:
+        self._config = config
+        self._names = dict(names)
+
+    def __getitem__(self, art: str) -> Path:
+        return ort(self._config, self._names[art])
+
+    def __iter__(self):
+        return iter(self._names)
+
+    def __len__(self) -> int:
+        return len(self._names)
 
 
 # Where the smaller copies for the model live (app/model_image.py). A cache,
@@ -333,8 +353,7 @@ def _schreiben(config: "Config", daten: dict[str, str]) -> None:
 
 def uebersicht(config: "Config") -> list[dict]:
     """Every location for the settings screen: its name, the folder in force,
-    the installed default, whether it currently sits on the default, and
-    whether a move needs a restart to take full hold."""
+    the installed default, and whether it currently sits on the default."""
     ueber = ueberschreibungen(config)
     zeilen = []
     for eintrag in ORTE:
@@ -345,7 +364,6 @@ def uebersicht(config: "Config") -> list[dict]:
             "pfad": str(gilt),
             "standard": str(std),
             "ist_standard": _gleicher_ort(gilt, std),
-            "neustart_noetig": eintrag.neustart_noetig,
         })
     return zeilen
 

@@ -5,6 +5,7 @@ gets when it has come back, the numbers and marks of an answer below it."""
 from __future__ import annotations
 
 import io
+import re
 import sys
 from typing import Any
 
@@ -57,13 +58,13 @@ class Stage(Screen):
     """A screen that writes the history into a recording and keeps what
     the line beside the spinner was set to."""
 
-    def __init__(self, width: int = WIDTH) -> None:
+    def __init__(self, width: int = WIDTH, color_system: str | None = "truecolor") -> None:
         self.console = Console(
             file=io.StringIO(),
             record=True,
             width=width,
             force_terminal=True,
-            color_system="truecolor",
+            color_system=color_system,
             no_color=False,
             legacy_windows=False,
             highlight=False,
@@ -651,6 +652,14 @@ def colour_code(colour_name: str) -> str:
     return "38;2;" + ";".join(str(int(colour[i : i + 2], 16)) for i in (1, 3, 5))
 
 
+def mark_code() -> str:
+    """The code of the colour the program's mark is drawn in: the text colour
+    with a fifth of the accent in it."""
+    colour = themes.current().mark_colour()
+    assert colour is not None
+    return "38;2;" + ";".join(str(int(colour[i : i + 2], 16)) for i in (1, 3, 5))
+
+
 def test_at_one_hundred_and_twenty_columns_the_head_is_the_letters_the_standing_line_the_chats_and_the_tips(
     head_service, tmp_path
 ):
@@ -664,7 +673,12 @@ def test_at_one_hundred_and_twenty_columns_the_head_is_the_letters_the_standing_
     # The letters stand in the text colour, not the accent; the standing
     # line is quiet.
     margin = " " * render.WORDMARK_MARGIN
-    assert f"{colour_code('text')}m{margin}{wordmark.WORDMARK[0]}" in stage.sent()
+    # The letters carry the text colour with a fifth of the accent in it (the
+    # preview's value for Dark Matter: #ded4f9 = 222;212;249) — neither the
+    # plain text colour nor the accent itself.
+    assert mark_code() == "38;2;222;212;249"
+    assert f"{mark_code()}m{margin}{wordmark.WORDMARK[0]}" in stage.sent()
+    assert f"{colour_code('text')}m{margin}{wordmark.WORDMARK[0]}" not in stage.sent()
     assert f"{colour_code('accent')}m{margin}{wordmark.WORDMARK[0]}" not in stage.sent()
     assert f"{colour_code('muted')}m{standing()}" in stage.sent()
 
@@ -681,7 +695,7 @@ def test_at_sixty_columns_the_letters_still_stand_and_below_that_the_name_takes_
     lines = stage.lines()
     assert lines[:3] == ["", wordmark.WORDMARK_PLAIN, ""]
     assert lines[3].startswith(f"{WORDS.t('cli.titel')} 9.8.7 {sign('separator')} http://service.test")
-    assert f"\x1b[1;{colour_code('text')}m{wordmark.WORDMARK_PLAIN}" in stage.sent()
+    assert f"\x1b[1;{mark_code()}m{wordmark.WORDMARK_PLAIN}" in stage.sent()
     assert not any(wordmark.WORDMARK[0].strip() in line for line in lines)
     # The chats and the tips stand below it as they do under the letters.
     assert lines[5:] == [*recent(), *tips()]
@@ -907,3 +921,120 @@ def test_an_output_without_utf8_is_written_a_history_of_ascii_alone(renderer, st
     # The standing line is longer than the window: cut short, without the
     # mark a wider output would end it with.
     assert "Tools allowed without" in written
+
+
+# --- Addresses that open ------------------------------------------------------
+
+GUIDE = "https://docs.example.com/guides/getting-started/installation?lang=en"
+LONG_ADDRESS = "https://docs.example.com/a/very/long/path/that/wraps/over?x=1"
+# One piece of a link as the terminal is sent it: the target, the text it
+# covers, and the sequence that ends it.
+_LINK_PIECE = re.compile(r"\x1b\]8;id=[^;]*;([^\x1b]+)\x1b\\(?:\x1b\[[0-9;]*m)*([^\x1b]*)")
+
+
+def pieces(stage: Stage) -> list[tuple[str, str]]:
+    """Each piece of a link the history was sent with: its target and the
+    text it covers."""
+    return _LINK_PIECE.findall(stage.sent())
+
+
+def test_every_piece_of_a_wrapped_address_is_a_link_to_the_whole_address(
+    head_service, tmp_path
+):
+    stage = Stage(40)
+    renderer = build(stage, head_service, tmp_path)
+    renderer.start({})
+    renderer.content(f"See [the guide]({GUIDE}) and also {LONG_ADDRESS}.\n\n")
+    found = pieces(stage)
+    # The address behind a link's words, and a bare address: each wraps into
+    # two pieces, each piece names the whole address and not the bracket or
+    # the full stop beside it.
+    assert [target for target, _ in found] == [GUIDE, GUIDE, LONG_ADDRESS, LONG_ADDRESS]
+    assert "".join(text for _, text in found[:2]) == GUIDE
+    assert "".join(text for _, text in found[2:]) == LONG_ADDRESS
+    assert max(len(line) for line in stage.lines()) <= 40
+
+
+def test_writing_the_address_as_a_link_changes_nothing_that_is_shown(
+    head_service, tmp_path
+):
+    plain = Stage(40, color_system=None)
+    linked = Stage(40)
+    for stage in (plain, linked):
+        renderer = build(stage, head_service, tmp_path)
+        renderer.start({})
+        renderer.content(f"See [the guide]({GUIDE}) and also {LONG_ADDRESS}.\n\n")
+    assert linked.lines() == plain.lines()
+
+
+def test_a_terminal_without_colours_gets_no_link_sequence(head_service, tmp_path):
+    stage = Stage(40, color_system=None)
+    renderer = build(stage, head_service, tmp_path)
+    renderer.start({})
+    renderer.content(f"See {GUIDE}\n\n")
+    # What the console wrote out, not what it recorded.
+    assert "\x1b" not in stage.console.file.getvalue()  # type: ignore[attr-defined]
+    assert stage.lines()[-1].endswith("lang=en")
+
+
+def test_only_web_addresses_become_links(renderer, stage):
+    renderer.start({})
+    renderer.content(
+        "Not [this](javascript:alert(1)) or file:///etc/passwd or ftp://example.org/x, "
+        "but http://example.org/a and HTTPS://EXAMPLE.ORG/B.\n\n"
+    )
+    assert [target for target, _ in pieces(stage)] == ["http://example.org/a", "HTTPS://EXAMPLE.ORG/B"]
+
+
+def test_a_bracket_that_belongs_to_the_address_stays_in_it(renderer, stage):
+    renderer.start({})
+    renderer.content("(see https://en.example.org/wiki/Thing_(film)) and https://example.org/x).\n\n")
+    assert [target for target, _ in pieces(stage)] == [
+        "https://en.example.org/wiki/Thing_(film)",
+        "https://example.org/x",
+    ]
+
+
+def test_an_address_in_a_heading_a_list_a_quote_and_a_table_cell_is_a_link(renderer, stage):
+    renderer.start({})
+    renderer.content(
+        "## https://example.org/h\n\n- https://example.org/l\n\n> https://example.org/q\n\n"
+        "| a | b |\n|---|---|\n| https://example.org/t | x |\n\n"
+    )
+    assert [target for target, _ in pieces(stage)] == [
+        "https://example.org/h",
+        "https://example.org/l",
+        "https://example.org/q",
+        "https://example.org/t",
+    ]
+
+
+def test_an_address_in_a_code_block_is_a_link(renderer, stage):
+    renderer.start({})
+    renderer.content("```bash\ncurl https://example.org/install.sh | sh\n```\n")
+    assert [target for target, _ in pieces(stage)] == ["https://example.org/install.sh"]
+    assert any("curl https://example.org/install.sh | sh" in line for line in stage.lines())
+
+
+def test_an_address_the_user_typed_is_a_link(renderer, stage):
+    renderer.user_message(f"Read {GUIDE} please")
+    assert [target for target, _ in pieces(stage)] == [GUIDE]
+
+
+def test_an_address_in_a_tools_line_and_result_is_a_link(renderer, stage):
+    renderer.start({})
+    renderer.tool_call({"name": "fetch", "aufruf_id": "a1", "argumente": {"url": "https://example.org/in"}})
+    renderer.tool_result(
+        {"name": "fetch", "aufruf_id": "a1", "fehlgeschlagen": False, "text": "moved to https://example.org/out", "dauer_sekunden": 1}
+    )
+    assert [target for target, _ in pieces(stage)] == ["https://example.org/in", "https://example.org/out"]
+
+
+def test_an_address_in_a_shell_line_and_in_an_error_is_a_link(renderer, stage):
+    renderer.start({})
+    renderer.shell_line("\x1b[32mhttps://example.org/shell\x1b[0m")
+    renderer.error("Could not reach https://example.org/down")
+    assert [target for target, _ in pieces(stage)] == [
+        "https://example.org/shell",
+        "https://example.org/down",
+    ]

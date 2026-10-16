@@ -75,7 +75,7 @@ def start_with(ctx: Context, file: str) -> dict[str, Any] | None:
     state = ctx.client.get("/runner")
     running = isinstance(state, dict) and bool(state.get("laeuft"))
     carries = running and state.get("modell") == file
-    with _waiting(ctx) as cancel:
+    with waiting(ctx) as cancel:
         if not carries:
             if running and not _stop_what_runs(ctx, file):
                 return None
@@ -85,7 +85,7 @@ def start_with(ctx: Context, file: str) -> dict[str, Any] | None:
 
 
 @contextlib.contextmanager
-def _waiting(ctx: Context) -> Iterator[threading.Event]:
+def waiting(ctx: Context) -> Iterator[threading.Event]:
     """What a command that waits for something stands in: the interrupt key
     ends the wait through the event, and once it is over the line above the
     status line is the running answer's again, or empty."""
@@ -105,7 +105,7 @@ def settle_activity(ctx: Context) -> None:
     ctx.screen.set_activity(busy)
 
 
-def _ask(ctx: Context, question: str) -> bool:
+def ask(ctx: Context, question: str) -> bool:
     """Whether the user answered a question of the client's own with yes. A
     selection that was closed is no."""
     texts = ctx.texts
@@ -126,7 +126,7 @@ def _stop_what_runs(ctx: Context, file: str) -> bool:
     an answer. ``False`` where the user said no."""
     server = [entry for entry in _models(ctx) if entry.get("anbieter") == PROVIDER]
     if any(entry.get("server_state") == ACTIVE for entry in server):
-        if not _ask(ctx, ctx.texts.t("cli.model_swap_ask", name=file)):
+        if not ask(ctx, ctx.texts.t("cli.model_swap_ask", name=file)):
             return False
     ctx.client.post("/runner/stop")
     return True
@@ -158,7 +158,7 @@ def _start(
     except ServiceError as error:
         if error.status != NO_PROGRAM or not fetches:
             raise
-    if not _ask(ctx, ctx.texts.t("cli.program_missing_ask")):
+    if not ask(ctx, ctx.texts.t("cli.program_missing_ask")):
         return False
     if not _fetch_program(ctx, cancel):
         return False
@@ -166,14 +166,45 @@ def _start(
     return True
 
 
-def _fetch_program(ctx: Context, cancel: threading.Event, *, newest: bool = False) -> bool:
-    """Has the service fetch the servers' program — the newest build where
-    ``newest`` — and waits for it, saying how far it is. ``False`` where it
-    failed — which has been said, as the window says it — or the wait was
-    ended; the service has no way to end a fetch, so one that was walked
-    away from goes on."""
+def _start_image(ctx: Context, file: str, cancel: threading.Event) -> bool:
+    """Starts the image server with ``file``. Where its program is not
+    there, it is offered as the window offers it — as one entry of the
+    selection, not as a question — and fetched, and the start is made
+    again. ``False`` where the selection was closed or the wait ended."""
+    path = SERVERS[-1].start
+    try:
+        ctx.client.post(path, json={"modell": file})
+        return True
+    except ServiceError as error:
+        if error.status != NO_PROGRAM:
+            raise
+    if not fetch_image_program(ctx, cancel):
+        return False
+    ctx.client.post(path, json={"modell": file})
+    return True
+
+
+def _fetch_program(
+    ctx: Context,
+    cancel: threading.Event,
+    *,
+    newest: bool = False,
+    path: str = "/runner/programm",
+    variant: str | None = None,
+    word_key: str = "modell.server_holen",
+) -> bool:
+    """Has the service fetch a program — the newest build where ``newest``,
+    the build of ``variant`` where one is named — and waits for it, saying
+    how far it is. ``False`` where it failed — which has been said, as the
+    window says it — or the wait was ended; the service has no way to end a
+    fetch, so one that was walked away from goes on."""
     texts = ctx.texts
-    stand = ctx.client.post("/runner/programm", json={"aktualisieren": True} if newest else None)
+    body: dict[str, Any] | None = None
+    if newest:
+        body = {"aktualisieren": True}
+    elif variant is not None:
+        body = {"variante": variant}
+    stand = ctx.client.post(path, json=body)
     while True:
         if isinstance(stand, dict):
             if stand.get("fehler"):
@@ -184,10 +215,84 @@ def _fetch_program(ctx: Context, cancel: threading.Event, *, newest: bool = Fals
                 return True
             anteil = stand.get("anteil")
             percent = round(float(anteil) * 100) if isinstance(anteil, (int, float)) else 0
-            ctx.screen.set_activity(f"{texts.t('modell.server_holen')} {percent} %")
+            ctx.screen.set_activity(f"{texts.t(word_key)} {percent} %")
+        elif stand is None and path != "/runner/programm":
+            # The image program's state is empty once nothing is being
+            # fetched: what is left to say is whether the program is there.
+            return bool(_image_listing(ctx).get("programm_da"))
         if cancel.wait(POLL_SECONDS):
             return False
-        stand = ctx.client.get("/runner/programm")
+        stand = ctx.client.get(path)
+
+
+# --- The image server's program ------------------------------------------------------------
+
+IMAGE_PROGRAM = "/bild/programm"
+
+
+def fetch_image_program(ctx: Context, cancel: threading.Event) -> bool:
+    """The image server's program is not there: offers to fetch it — as one
+    entry of a selection that the window's button stands for, or, on a
+    system that offers more than one build, one entry per build — and
+    fetches the one picked, saying how far it is. ``False`` where the
+    selection was closed, a build that is there was picked, or it failed."""
+    texts = ctx.texts
+    builds = _image_builds(ctx)
+    if builds:
+        entries = [
+            Entry(
+                cells=[
+                    ("text", name),
+                    (
+                        "muted",
+                        texts.t("bildserver.variante_installiert")
+                        if name == installed
+                        else texts.t("bildserver.variante_holen", groesse=_build_size(size)),
+                    ),
+                ]
+            )
+            for name, size, installed in builds
+        ]
+    else:
+        entries = [Entry(cells=[("text", texts.t("bildserver.generator_holen"))])]
+    picked = ctx.asker.choose(entries)
+    if picked is None:
+        return False
+    name = builds[picked][0] if builds else None
+    if builds and builds[picked][0] == builds[picked][2]:
+        return False
+    return _fetch_program(
+        ctx, cancel, path=IMAGE_PROGRAM, variant=name, word_key="bildserver.generator_laedt"
+    )
+
+
+def _image_builds(ctx: Context) -> list[tuple[str, Any, str | None]]:
+    """The builds of the program a machine can choose between, each with
+    its size and which one is installed — empty where the system offers
+    only one, as everywhere but on Windows."""
+    try:
+        answer = ctx.client.get(f"{IMAGE_PROGRAM}/varianten")
+    except ServiceError:
+        return []
+    answer = answer if isinstance(answer, dict) else {}
+    listed = answer.get("varianten")
+    installed = answer.get("installiert")
+    installed = installed if isinstance(installed, str) else None
+    return [
+        (str(entry["variante"]), entry.get("groesse"), installed)
+        for entry in (listed if isinstance(listed, list) else [])
+        if isinstance(entry, dict) and isinstance(entry.get("variante"), str)
+    ]
+
+
+def _build_size(size: Any) -> str:
+    """A build's size as the window words it: whole megabytes."""
+    return f"{round(size / (1024 * 1024))} MB" if _is_number(size) else ""
+
+
+def _image_listing(ctx: Context) -> dict[str, Any]:
+    listed = ctx.client.get("/bild/modelle")
+    return listed if isinstance(listed, dict) else {}
 
 
 def _wait_until_connected(
@@ -236,9 +341,11 @@ LOG = "log"
 ACTIONS = (START, STOP, LOG)
 
 # What the entries of a server's own selection stand for besides the three
-# above: the check for a newer program, and the fetch of it.
+# above: the check for a newer program, the fetch of it, and — for the image
+# server — the fetch of the program itself.
 _CHECK = "check"
 _UPDATE = "update"
+_GET = "get"
 
 # What the image server says of itself while it can draw.
 _IMAGE_RUNNING = ("bereit", "zeichnet")
@@ -298,6 +405,8 @@ class Standing:
     files: list[tuple[str, Any]] = field(default_factory=list)
     # Whether the service offers to look for a newer program.
     updatable: bool = False
+    # Whether the service says the server's program is not on the machine.
+    program_missing: bool = False
 
 
 def size_text(texts: Texts, size: Any) -> str:
@@ -312,18 +421,25 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _standing(ctx: Context, server: Server, *, files: bool = False) -> Standing:
-    """How ``server`` stands. The image server's files are a request of their
-    own, made only where ``files`` asks for them."""
+def _standing(
+    ctx: Context, server: Server, *, files: bool = False, program: bool = False
+) -> Standing:
+    """How ``server`` stands. The image server's files and the word whether
+    its program is there are a request of their own, made only where
+    ``files`` or ``program`` asks for them."""
     state = ctx.client.get(server.status)
     state = state if isinstance(state, dict) else {}
     if server.word == IMAGE:
         running = state.get("zustand") in _IMAGE_RUNNING
         model = state.get("modell")
+        listing = _image_listing(ctx) if files or program else {}
         return Standing(
             running=running,
             file=model if running and isinstance(model, str) else None,
-            files=_image_files(ctx) if files else [],
+            files=_image_files(listing) if files else [],
+            # The program is there, so there is something to compare with.
+            updatable=bool(listing.get("programm_da")),
+            program_missing="programm_da" in listing and not listing["programm_da"],
         )
     running = bool(state.get("laeuft"))
     model, port, memory = state.get("modell"), state.get("port"), state.get("belegt_gb")
@@ -343,11 +459,9 @@ def _standing(ctx: Context, server: Server, *, files: bool = False) -> Standing:
     )
 
 
-def _image_files(ctx: Context) -> list[tuple[str, Any]]:
+def _image_files(listed: dict[str, Any]) -> list[tuple[str, Any]]:
     """The models of the image server's folder, sized the way the other
     servers' files are."""
-    listed = ctx.client.get("/bild/modelle")
-    listed = listed if isinstance(listed, dict) else {}
     names = listed.get("modelle")
     sizes = listed.get("sizes")
     sizes = sizes if isinstance(sizes, dict) else {}
@@ -435,13 +549,17 @@ def _menu(ctx: Context, server: Server, *, newer: bool = False) -> None:
     log, and where the service offers one, the check for a newer program —
     or, once it has said one is there, the fetch of it."""
     texts = ctx.texts
-    standing = _standing(ctx, server)
+    standing = _standing(ctx, server, program=True)
     actions: list[tuple[str, str]] = [
         (STOP, texts.t("modell.server_anhalten"))
         if standing.running
         else (START, texts.t("modell.server_starten")),
         (LOG, texts.t("modell.protokoll")),
     ]
+    # The image server's program: fetched where it is not there, and where
+    # the system offers more than one build, chosen from them.
+    if server.word == IMAGE and (standing.program_missing or _image_builds(ctx)):
+        actions.append((_GET, texts.t("bildserver.generator_holen")))
     if standing.updatable:
         actions.append(
             (_UPDATE, texts.t("bildserver.generator_aktualisieren"))
@@ -461,6 +579,10 @@ def _menu(ctx: Context, server: Server, *, newer: bool = False) -> None:
         _stop_server(ctx, server)
     elif action == LOG:
         _show_log(ctx, server)
+    elif action == _GET:
+        with waiting(ctx) as cancel:
+            fetch_image_program(ctx, cancel)
+        _say(ctx, server)
     elif action == _CHECK:
         _check_program(ctx, server)
     else:
@@ -481,6 +603,12 @@ def _start_server(ctx: Context, server: Server) -> None:
         _say(ctx, server, standing)
         return
     texts = ctx.texts
+    if server.word == IMAGE and standing.program_missing:
+        # The program first: the window does not let the server start
+        # without it either.
+        with waiting(ctx) as cancel:
+            if not fetch_image_program(ctx, cancel):
+                return
     picked = ctx.asker.choose(
         [
             Entry(cells=[("text", name), ("muted", size_text(texts, size))])
@@ -489,10 +617,14 @@ def _start_server(ctx: Context, server: Server) -> None:
     )
     if picked is None:
         return
-    with _waiting(ctx) as cancel:
-        if not _start(
-            ctx, server.start, standing.files[picked][0], cancel, fetches=server.word != IMAGE
-        ):
+    with waiting(ctx) as cancel:
+        file = standing.files[picked][0]
+        started = (
+            _start_image(ctx, file, cancel)
+            if server.word == IMAGE
+            else _start(ctx, server.start, file, cancel, fetches=True)
+        )
+        if not started:
             return
     _say(ctx, server)
 
@@ -520,18 +652,27 @@ def _check_program(ctx: Context, server: Server) -> None:
     """Asks the service whether a newer build of the program is there: up to
     date is said; a newer one brings the server's selection again with the
     fetch in the check's place; any other answer says nothing."""
-    answer = ctx.client.get("/runner/programm/aktualisierung")
+    path = f"{IMAGE_PROGRAM}/aktualisierung" if server.word == IMAGE else "/runner/programm/aktualisierung"
+    answer = ctx.client.get(path)
     if not isinstance(answer, dict):
         return
     if answer.get("aktuell"):
         ctx.renderer.notice(ctx.texts.t("bildserver.aktuell"))
     elif answer.get("verfuegbar"):
         _menu(ctx, server, newer=True)
+    elif answer.get("unreadable"):
+        ctx.renderer.notice(ctx.texts.t("bildserver.updates_nicht_pruefbar"))
 
 
 def _update_program(ctx: Context, server: Server) -> None:
-    with _waiting(ctx) as cancel:
-        if not _fetch_program(ctx, cancel, newest=True):
+    with waiting(ctx) as cancel:
+        if server.word == IMAGE:
+            fetched = _fetch_program(
+                ctx, cancel, newest=True, path=IMAGE_PROGRAM, word_key="bildserver.generator_laedt"
+            )
+        else:
+            fetched = _fetch_program(ctx, cancel, newest=True)
+        if not fetched:
             return
     _check_program(ctx, server)
 

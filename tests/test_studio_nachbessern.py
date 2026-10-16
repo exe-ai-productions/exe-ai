@@ -25,6 +25,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
+
+# The fixtures of the route tests: a fake picture folder, a model, and a mode
+# run on a finished picture.
+from tests.test_bild_lauf_api import _info, bild_senden, mode_run  # noqa: F401
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -176,7 +181,9 @@ def test_silence_without_a_face_model_the_old_message_stands_and_nothing_is_aske
 
 
 @needs_node
-def test_a_chat_opened_while_the_question_is_on_its_way_draws_nothing():
+def test_a_chat_opened_while_the_question_is_on_its_way_changes_nothing():
+    """The studio belongs to no chat: the question's answer is drawn from
+    whichever chat is open."""
     report = _run("""
     reset()
     answers.kept = { prompt: 'a red car' }
@@ -184,7 +191,7 @@ def test_a_chat_opened_while_the_question_is_on_its_way_draws_nothing():
     await pictures.nachbessern('car.png')
     return { drawn, said }
     """)
-    assert report["drawn"] == [] and report["said"] == []
+    assert [wish["prompt"] for wish in report["drawn"]] == ["a red car"] and report["said"] == []
 
 
 @needs_node
@@ -262,7 +269,7 @@ def test_upscaling_sends_the_kept_prompt_before_the_bar_and_never_a_word_of_the_
 
 
 @needs_node
-def test_a_chat_opened_while_the_question_for_the_upscale_is_on_its_way_draws_nothing():
+def test_a_chat_opened_while_the_question_for_the_upscale_is_on_its_way_changes_nothing():
     report = _run("""
     reset()
     answers.kept = { prompt: 'a red car' }
@@ -270,7 +277,7 @@ def test_a_chat_opened_while_the_question_for_the_upscale_is_on_its_way_draws_no
     await pictures.hochskalieren('car.png')
     return { drawn, said }
     """)
-    assert report["drawn"] == [] and report["said"] == []
+    assert [wish["prompt"] for wish in report["drawn"]] == ["a red car"] and report["said"] == []
 
 
 def _upscaling_section() -> str:
@@ -301,3 +308,58 @@ def test_silence_the_highres_upscaler_row_keeps_its_condition_and_its_built_in_n
     after = section[row:]
     assert "bind:wert={werte.hires_upscaler}" in after
     assert "listen.upscalerFeste" in after
+
+
+# --- The values of an enlarged picture are its original's --------------------
+
+
+def test_an_enlarged_picture_keeps_the_values_of_its_original(
+    mode_run, bild_senden, client: TestClient, chat_id,  # noqa: F811
+):
+    """The new picture names the values its original was kept with — model,
+    size, steps, CFG, seed, prompt — not the route's defaults of 512 x 512,
+    20 steps and CFG 7 and not the studio's model."""
+    original = bild_senden(
+        chat_id, prompt="a lighthouse", negativ="fog", breite=1024, hoehe=1024, schritte=9,
+        cfg=1.0, seed=5, sampler="euler",
+    )
+    kept = _info(client, original["bild"])
+    assert (kept["breite"], kept["schritte"], kept["cfg"], kept["seed"]) == (1024, 9, 1.0, 5)
+    enlarged = bild_senden(
+        chat_id, prompt="a lighthouse", startbild=original["bild"], mode="upscale",
+        upscale_model="big.pth", frage_erstellen=False,
+    )
+    assert _info(client, enlarged["bild"]) == kept
+
+
+def test_an_enlarged_picture_without_kept_values_has_only_its_prompt(
+    mode_run, bild_senden, client: TestClient, chat_id,  # noqa: F811
+):
+    """Silence: an original nothing is kept for (one that was uploaded) gives
+    its enlargement no value of the route — the prompt of the bar alone, or
+    nothing."""
+    mode_run(chat_id, "upscale")
+    with_prompt = bild_senden(
+        chat_id, prompt="a red car", startbild="finished.png", mode="upscale",
+        upscale_model="big.pth", frage_erstellen=False,
+    )
+    assert _info(client, with_prompt["bild"]) == {"prompt": "a red car"}
+    without = bild_senden(
+        chat_id, prompt="", startbild="finished.png", mode="upscale",
+        upscale_model="big.pth", frage_erstellen=False,
+    )
+    assert _info(client, without["bild"]) == {}
+
+
+def test_a_normally_drawn_picture_keeps_its_own_values(
+    bild_senden, client: TestClient, chat_id,  # noqa: F811
+):
+    """Silence: only an enlarging takes its values from an original."""
+    first = bild_senden(chat_id, prompt="a harbour", breite=768, hoehe=512, schritte=6, seed=3)
+    second = bild_senden(
+        chat_id, prompt="a ship", breite=640, hoehe=640, schritte=12, seed=4,
+        startbild=first["bild"], staerke=0.5,
+    )
+    kept = _info(client, second["bild"])
+    assert (kept["prompt"], kept["breite"], kept["schritte"], kept["seed"]) == ("a ship", 640, 12, 4)
+

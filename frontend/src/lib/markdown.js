@@ -199,7 +199,27 @@ function inline(text) {
     .replace(/~~([^~]+)~~/g, '<del>$1</del>')
     .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
       '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    // A bare address is a link too. What is already markup — a code span, a
+    // finished link, any tag — is left as it stands; only the text between
+    // is read, and an address in it is cut by the rule of the own message.
+    .replace(/(<code>.*?<\/code>|<a [^>]*>.*?<\/a>|<[^>]+>)|([^<]+)/gs,
+      (alles, markup, text) => (markup ? markup : adressenVerlinken(text)))
     .replace(/\x02(\d+)\x02/g, (_, i) => bilder[i]);
+}
+
+/* The bare addresses of one stretch of text that is already masked
+   (`maskieren`), as links. The stretch is unmasked for the cut — `&lt;`,
+   `&gt;` and `&quot;` end an address like the marks themselves do, a `;` of
+   an entity is no sentence mark — and every piece is masked again on the
+   way out. */
+function adressenVerlinken(maskiert) {
+  if (!/https?:\/\//i.test(maskiert)) return maskiert;
+  const roh = maskiert.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&');
+  return adressTeile(roh).map((teil) => (teil.href
+    ? '<a href="' + maskieren(teil.href) + '" target="_blank" rel="noopener noreferrer">' +
+      maskieren(teil.text) + '</a>'
+    : maskieren(teil.text))).join('');
 }
 
 function tabelle(zeilen) {

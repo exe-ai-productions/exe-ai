@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from app import cronablauf, skriptlauf, speicherorte
+from app import cronablauf, i18n, skriptlauf, speicherorte
 from app.tools import cronjob as cronjob_werkzeug
 from tests.conftest import script_file
 
@@ -374,13 +374,16 @@ def test_on_the_mac_the_execute_bit_decides_and_the_file_starts_alone(skriptordn
     assert skriptlauf.command_line(bat, "darwin") == [str(bat)]
 
 
+def _as_windows(monkeypatch):
+    """Everything in ``skriptlauf`` that asks the platform answers 'win32'."""
+    monkeypatch.setattr(skriptlauf, "_system", lambda: "win32")
+
+
 async def test_on_windows_a_shell_script_is_refused_at_creation(repos, skriptordner, monkeypatch):
     """The check at creation and at every firing asks the same function —
-    so on Windows a .sh with the bit set is refused with the sentence the
-    Mac uses for a file without the bit."""
-    import functools
-
-    monkeypatch.setattr(skriptlauf, "startable", functools.partial(skriptlauf.startable, platform="win32"))
+    so on Windows a .sh with the bit set is refused, with the sentence that
+    names what Windows starts by (and not a permission to grant)."""
+    _as_windows(monkeypatch)
     pfad = skript_schreiben(skriptordner, "nacht.sh", "#!/bin/sh\nexit 0\n")
     pfad.chmod(0o755)
 
@@ -390,17 +393,82 @@ async def test_on_windows_a_shell_script_is_refused_at_creation(repos, skriptord
             repos, skriptordner,
         )
 
-    assert "is not executable" in str(fehler.value)
+    assert str(fehler.value) == (
+        "'nacht.sh' cannot be started on Windows. Windows starts a script by its "
+        "extension: .exe, .bat, .cmd, .ps1 or .py."
+    )
+    assert "execute permission" not in str(fehler.value)
+
+
+def _refusal(skriptordner, name: str) -> skriptlauf.SkriptVerboten:
+    with pytest.raises(skriptlauf.SkriptVerboten) as fehler:
+        skriptlauf.geprueft(skriptordner, name)
+    return fehler.value
+
+
+def test_on_windows_a_py_without_python_says_so_in_both_languages(skriptordner, monkeypatch):
+    _as_windows(monkeypatch)
+    monkeypatch.setattr(skriptlauf.shutil, "which", _which_gibt(python=STORE_STUB))
+    skript_schreiben(skriptordner, "c.py", "print(1)\n")
+
+    verboten = _refusal(skriptordner, "c.py")
+
+    assert verboten.schluessel == "fehler.script_needs_python"
+    assert str(verboten) == (
+        "'c.py' cannot be started because no Python was found on this computer. "
+        "Install Python from python.org and try again."
+    )
+    assert i18n.t(verboten.schluessel, "de", **verboten.werte) == (
+        "„c.py“ lässt sich nicht starten, weil auf diesem Rechner kein Python gefunden wurde. "
+        "Installiere Python von python.org und versuche es erneut."
+    )
+
+
+@pytest.mark.parametrize("name", ["nacht.sh", "notizen.txt", "ohne-endung"])
+def test_on_windows_a_file_with_another_extension_names_what_windows_starts(
+    skriptordner, monkeypatch, name,
+):
+    _as_windows(monkeypatch)
+    skript_schreiben(skriptordner, name, "x\n")
+
+    verboten = _refusal(skriptordner, name)
+
+    assert verboten.schluessel == "fehler.script_not_startable_windows"
+    assert i18n.t(verboten.schluessel, "de", **verboten.werte) == (
+        f"„{name}“ lässt sich unter Windows nicht starten. Windows startet ein Skript "
+        "über seine Endung: .exe, .bat, .cmd, .ps1 oder .py."
+    )
+
+
+def test_silence_on_windows_a_py_with_a_python_is_not_refused(skriptordner, monkeypatch):
+    _as_windows(monkeypatch)
+    monkeypatch.setattr(skriptlauf.shutil, "which", _which_gibt(python=r"C:\Python313\python.exe"))
+    pfad = skript_schreiben(skriptordner, "c.py", "print(1)\n")
+
+    assert skriptlauf.geprueft(skriptordner, "c.py") == pfad.resolve()
+
+
+@pytest.mark.platforms("posix", reason="the execute bit")
+def test_silence_on_the_mac_a_file_without_the_bit_keeps_the_permission_sentence(skriptordner, monkeypatch):
+    monkeypatch.setattr(skriptlauf, "_system", lambda: "darwin")
+    pfad = skript_schreiben(skriptordner, "ohne.sh", "#!/bin/sh\nexit 0\n")
+    pfad.chmod(0o644)
+
+    verboten = _refusal(skriptordner, "ohne.sh")
+
+    assert verboten.schluessel == "fehler.skript_nicht_ausfuehrbar"
+    assert "is not executable" in str(verboten)
+    assert "Grant execute permission" in str(verboten)
 
 
 async def test_on_windows_the_start_hands_the_interpreter_to_the_process(skriptordner, monkeypatch):
     """The wiring, not the list: `starten` really gives `command_line` to
     the process. A recording fake stands in for the process and refuses,
     the way Windows refuses a bare .ps1 — so the run ends as a failed start
-    and the recorded argv is what would have been started."""
-    import functools
-
-    monkeypatch.setattr(skriptlauf, "command_line", functools.partial(skriptlauf.command_line, platform="win32"))
+    and the recorded argv is what would have been started. The sentence of
+    a failed start on Windows names the failure and nothing about a '#!'
+    line or an execute bit, which Windows does not have."""
+    _as_windows(monkeypatch)
     gesehen: list[list[str]] = []
 
     async def fake_exec(*argv, **kwargs):
@@ -411,10 +479,31 @@ async def test_on_windows_the_start_hands_the_interpreter_to_the_process(skripto
     pfad = skript_schreiben(skriptordner, "nacht.ps1", "Write-Host hi\n")
 
     ergebnis = await skriptlauf.starten(pfad, skriptordner, 10)
+    deutsch = await skriptlauf.starten(pfad, skriptordner, 10, sprache="de")
 
-    assert gesehen == [["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(pfad)]]
+    assert gesehen[0] == ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(pfad)]
     assert ergebnis.code is None
-    assert "could not be started" in ergebnis.ausgabe
+    assert ergebnis.ausgabe == "nacht.ps1 could not be started: not a valid Win32 application."
+    assert deutsch.ausgabe == "nacht.ps1 konnte nicht gestartet werden: not a valid Win32 application."
+    assert "'#!'" not in ergebnis.ausgabe
+    assert "'#!'" not in deutsch.ausgabe
+
+
+async def test_silence_on_the_mac_a_failed_start_keeps_the_shebang_sentence(skriptordner, monkeypatch):
+    monkeypatch.setattr(skriptlauf, "_system", lambda: "darwin")
+
+    async def fake_exec(*argv, **kwargs):
+        raise OSError(8, "Exec format error")
+
+    monkeypatch.setattr(skriptlauf.asyncio, "create_subprocess_exec", fake_exec)
+    pfad = skript_schreiben(skriptordner, "nacht.sh", "echo hi\n")
+
+    ergebnis = await skriptlauf.starten(pfad, skriptordner, 10)
+
+    assert ergebnis.ausgabe == (
+        "nacht.sh could not be started: Exec format error. "
+        "The script requires a '#!' line and execute permission."
+    )
 
 
 # --- The two kinds stay apart ----------------------------------------------

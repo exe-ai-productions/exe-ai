@@ -2,21 +2,26 @@
   import { rollfade } from '../lib/rollfade.js'
   import { slide } from 'svelte/transition'
   import { adressTeile, codeKopierKlick, dateiTeile, dateienZahl } from '../lib/markdown.js'
-  import { setContext } from 'svelte'
+  import { setContext, untrack } from 'svelte'
   import { lebendHtml } from '../lib/lebendhtml.js'
-  import { hervorheben, maskieren } from '../lib/einfaerben.js'
+  import { maskieren } from '../lib/einfaerben.js'
   import { dateiFakten, dateizeichen, writingFacts } from '../lib/dateiarten.js'
   import { api } from '../lib/api.js'
   import { drawingMakesVideo, melde, zustand } from '../lib/zustand.svelte.js'
   import { studioWithPicture } from '../lib/studio.svelte.js'
   import { t, teile as textPieces, texte } from '../lib/texte.svelte.js'
   import { stoppuhr } from '../lib/dauer.js'
-  import { aufrufZahl, buendeln, openCall, schlechtesterPunkt } from '../lib/werkzeugbuendel.js'
+  import { aufrufZahl, blockDot, buendeln, lastCall } from '../lib/werkzeugbuendel.js'
+  import { makeTextFlow } from '../lib/textFlow.js'
+  import { SWITCH_MS, reducedMotion } from '../lib/softSwitch.js'
+  import { folgtUnten } from '../lib/folgtunten.js'
+  import { lineFloor } from '../lib/lineFloor.js'
   import { tempoGemessen, tempoTitelSchluessel } from '../lib/tempoquelle.js'
   import { takt, taktHalten } from '../lib/sekundentakt.svelte.js'
   import { skillAmAnfang } from '../lib/skills.svelte.js'
   import { bildZeigen } from '../lib/bildschau.svelte.js'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
+  import Wartezeile from './Wartezeile.svelte'
   import { terminal } from '../lib/terminalfenster.svelte.js'
   import { tabRemoveByAddress } from '../lib/vorschautabs.svelte.js'
   import { laufampel } from '../lib/laufampel.js'
@@ -27,9 +32,9 @@
   import Videokachel from './Videokachel.svelte'
   import { isPicture, isVideo } from '../lib/media.js'
   import Dateikarte from './Dateikarte.svelte'
-  import ThoughtLine from './ThoughtLine.svelte'
   import Agentenmarke from './Agentenmarke.svelte'
   import { chatJob, openTranscript } from '../lib/agentchat.svelte.js'
+  import { openCall, rememberTrigger } from '../lib/callSelection.svelte.js'
 
   /* `marke`: the chat's live waiting mark (App.svelte, `wartemarke`), handed
      only to the answer it waits for. It stands as that answer's last entry
@@ -259,6 +264,12 @@
     }
   }
   const hatInhalt = $derived(Boolean((nachricht.content || '').trim()))
+  /* While the answer's text is under way the line below it holds only the
+     mark: no word, no clock, no readings, no buttons. They would move down
+     with every new line of text. The footer keeps its height, invisible, so
+     that the end of the run lets nothing jump. Until the first word stands
+     the wait row speaks as it always did. */
+  const markeRuhig = $derived(laeuft && hatInhalt)
   /* Markdown is rendered once per distinct text, not once per chunk.
 
      While an answer streams, only the LAST section grows — every section
@@ -417,6 +428,17 @@
      one — no head, no arrow, no way to the text. */
   const denktJetzt = $derived(laeuft && nachricht.taetigkeit === 'denkt')
 
+  /* The line of the answer keeps its greatest height for as long as the
+     answer runs (lib/lineFloor.js): a tool bundle folds the thinking and
+     the calls before it into one row, and without a floor the answer would
+     fall by that much and grow again with the next thinking. */
+  let lineHeight = $state(0)
+  let floorHeight = $state(0)
+  $effect(() => {
+    const floor = lineFloor(laeuft, lineHeight, untrack(() => floorHeight))
+    if (floor !== untrack(() => floorHeight)) floorHeight = floor
+  })
+
   /* The moment the CURRENT reasoning stretch began — the last section's own
      `seit` (App.svelte's textAnhaengen sets it once, when the section is
      opened, not on every chunk). The waiting mark's clock normally starts
@@ -467,8 +489,8 @@
     ),
   ])
 
-  /* How long a finished thinking stretch took: from its own start to its
-     own end — the first event after it that was not thinking (App.svelte,
+  /* How long a thinking stretch took, in milliseconds: from its own start to
+     its own end — the first event after it that was not thinking (App.svelte,
      `endThinking`), so a wait on a tool confirmation after it is not
      counted. Thinking that goes on after such an event takes the end back
      (`textAnhaengen`). Without a recorded end, the start of whatever came
@@ -476,24 +498,27 @@
      its stored sections, with the same ends; one written before those
      existed has none, and a stretch with neither has no end — both stay
      without a length rather than show an invented one. */
-  function denkDauer(i) {
+  function thinkMillis(i) {
     const beginn = teile[i]?.seit
     const ende = teile[i]?.endedAt ?? teile[i + 1]?.seit
-    return beginn != null && ende != null ? stoppuhr(ende - beginn) : null
+    return beginn != null && ende != null ? ende - beginn : null
   }
 
-  /* Whether the thinking stretch at `i` still carries its line with the
-     newest thought. It stands from the stretch's first moment to the moment
-     something visible stands behind it — text, or a tool row — or the
-     answer ends. A piece of only white space draws nothing and ends
-     nothing: a line that left with it left the answer shorter by its height
-     and grew again with the first word. */
-  function gedankeZeileSteht(i) {
-    if (!laeuft) return false
-    for (let k = i + 1; k < teile.length; k++) {
-      if (teile[k].art !== 'content' || teile[k].text.trim()) return false
+  /* How long the thinking of one block took: its finished stretches by their
+     own times, the one that runs by the clock. Null where no stretch has a
+     length. */
+  function blockThinkTime(eintrag) {
+    let sum = 0
+    let counted = false
+    for (const { teil, i } of eintrag.eintraege) {
+      if (teil.art !== 'reasoning') continue
+      const laeuftHier = i === teile.length - 1 && denktJetzt
+      const ms = laeuftHier ? takt.jetzt - (denkSeit ?? takt.jetzt) : thinkMillis(i)
+      if (ms == null) continue
+      sum += Math.max(0, ms)
+      counted = true
     }
-    return true
+    return counted ? stoppuhr(sum) : null
   }
 
   /* A tool call's dot on the line — it carries the call's whole state, the
@@ -769,19 +794,172 @@
     }
   }
 
-  /* The same parts, with runs of two or more tool calls bundled into one
-     entry (lib/werkzeugbuendel.js). */
+  /* The same parts, with every run of thinking and calls between two pieces
+     of text gathered into one block (lib/werkzeugbuendel.js). */
   const anzeige = $derived(buendeln(teile))
 
-  /* The bundle's dot: the worst state among its calls. The thinking in it
-     has no say — its blue would outrank every finished call. */
-  function buendelPunkt(eintrag) {
-    return schlechtesterPunkt(
-      eintrag.eintraege
-        .filter(({ teil }) => teil.art === 'werkzeug')
-        .map(({ teil }) => werkzeugPunkt(teil.werkzeug, hintergrundStand(teil.werkzeug))),
+  /* The block that still goes: the answer runs and nothing stands after it on
+     the line. Its head ticks, its dot breathes, and below its closed head
+     stands the newest step. */
+  const lastEntry = $derived(anzeige.length ? anzeige[anzeige.length - 1] : null)
+  const blockRuns = (eintrag) => laeuft && eintrag === lastEntry
+
+  /* The block's dot follows the last call, as the terminal's last line does
+     (lib/werkzeugbuendel.js, `blockDot`). */
+  function blockState(eintrag) {
+    return blockDot(
+      eintrag.eintraege,
+      blockRuns(eintrag),
+      (werkzeug) => werkzeugPunkt(werkzeug, hintergrundStand(werkzeug)),
+      punktPulsiert('chat'),
     )
   }
+
+  /* The key a call has in the terminal's list (lib/werkzeughistorie.js): a
+     shell command with a run number stands there as its run, every other
+     call by its message and its place in the message's tool log. */
+  function callKey(werkzeug) {
+    if (werkzeug.name === 'run_command' && werkzeug.lauf_nummer != null) {
+      return `l${werkzeug.lauf_nummer}`
+    }
+    return `${nachricht.id ?? ''}#${werkzeuge.indexOf(werkzeug)}`
+  }
+
+  /* A click on the row of a helper: its card unfolds in the agents view, and
+     closing the column gives the focus back to the row. */
+  function openHelper(jobId, row) {
+    rememberTrigger(row)
+    openTranscript(jobId)
+  }
+
+  /* What the line of a call says to somebody who does not see it: the words
+     that no longer stand at its end — running, running in the background,
+     waiting for the reader, the exit code or "failed". */
+  function callWord(werkzeug, stand) {
+    if (stand?.laeuft) return t('werkzeug.hintergrund_laeuft')
+    if (stand?.atmet) return t('werkzeug.hintergrund_ungelesen')
+    if (werkzeug.exit_code) return t('werkzeug.exit', { code: werkzeug.exit_code })
+    if (werkzeug.fehlgeschlagen) return t('werkzeug.marke_fehlgeschlagen')
+    if (werkzeug.ergebnis === null && wartetAufNutzer(werkzeug.aufruf_id)) return t('jobs.zustand.wartet')
+    if (werkzeug.ergebnis === null) return t('werkzeug.buendel_laeuft')
+    return ''
+  }
+  function callLabel(werkzeug, stand) {
+    return [werkzeug.name, vorschau(werkzeug.argumente), callWord(werkzeug, stand)]
+      .filter(Boolean)
+      .join(', ')
+  }
+
+  /* How the text of the running answer comes up (lib/textFlow.js): the
+     answer's last piece of text is let out evenly and its new characters
+     fade in. Only this piece flows; every other stands whole. A stored
+     answer and any text that was there when this window came stand whole at
+     once. */
+  const flowIndex = $derived.by(() => {
+    for (let k = teile.length - 1; k >= 0; k -= 1) {
+      if (teile[k].art === 'content') return k
+    }
+    return -1
+  })
+  const flowTarget = $derived(flowIndex >= 0 ? teile[flowIndex].text.length : 0)
+  let flowLength = $state(0)
+  let flowOn = $state(false)
+  const flow = makeTextFlow({
+    set: (length, flowing) => {
+      flowLength = length
+      flowOn = flowing
+    },
+    raf: (fn) => requestAnimationFrame(fn),
+    caf: (id) => cancelAnimationFrame(id),
+    reducedMotion,
+  })
+  $effect(() => {
+    const index = flowIndex
+    const target = flowTarget
+    const going = laeuft
+    untrack(() => flow.follow(index, target, going))
+  })
+  $effect(() => () => flow.cancel())
+  /* The first `length` characters of `text`; a cut never falls between the
+     two halves of one character. */
+  function cutAt(text, length) {
+    let end = length
+    const code = text.charCodeAt(end - 1)
+    if (code >= 0xd800 && code <= 0xdbff) end += 1
+    return text.slice(0, end)
+  }
+  /* The text of part `i` as it stands now. */
+  const textShown = (teil, i) =>
+    flowOn && i === flowIndex ? cutAt(teil.text, flowLength) : teil.text
+
+  /* The thinking comes in the same way: its last stretch flows and fades in,
+     in the open block's window. A stored answer and what was there when the
+     window came stand whole. */
+  const thinkIndex = $derived.by(() => {
+    for (let k = teile.length - 1; k >= 0; k -= 1) {
+      if (teile[k].art === 'reasoning') return k
+    }
+    return -1
+  })
+  const thinkTarget = $derived(thinkIndex >= 0 ? teile[thinkIndex].text.length : 0)
+  let thinkLength = $state(0)
+  let thinkFlowing = $state(false)
+  const thinkFlow = makeTextFlow({
+    set: (length, flowing) => {
+      thinkLength = length
+      thinkFlowing = flowing
+    },
+    raf: (fn) => requestAnimationFrame(fn),
+    caf: (id) => cancelAnimationFrame(id),
+    reducedMotion,
+  })
+  $effect(() => {
+    const index = thinkIndex
+    const target = thinkTarget
+    const going = laeuft
+    untrack(() => thinkFlow.follow(index, target, going))
+  })
+  $effect(() => () => thinkFlow.cancel())
+  const thinkShown = (teil, i) =>
+    thinkFlowing && i === thinkIndex ? cutAt(teil.text, thinkLength) : teil.text
+
+  /* How long a window or a row takes to come: one character's time. */
+  const switchMs = () => (reducedMotion() ? 0 : SWITCH_MS)
+  /* A new call row in the open window fades in and rises a little. */
+  function rowIn() {
+    return {
+      duration: switchMs(),
+      css: (t) => `opacity: ${t}; transform: translateY(${(1 - t) * 6}px)`,
+    }
+  }
+
+  /* The follow-along of an open block: it keeps to its end while the block
+     goes and lets go when it is over. */
+  function followAlong(node, active) {
+    let follower = active ? folgtUnten(node) : null
+    return {
+      update(next) {
+        if (next && !follower) follower = folgtUnten(node)
+        else if (!next && follower) {
+          follower.destroy()
+          follower = null
+        }
+      },
+      destroy() {
+        follower?.destroy()
+      },
+    }
+  }
+
+  /* The row at the end of the line keeps its place: while the answer runs the
+     waiting mark stands in it, and when the answer is over the readings stand
+     in the same row. Once an answer has run in this window the row stays,
+     even where nothing was measured, so nothing below it moves when the mark
+     goes. A stored answer has the row only where it has readings. */
+  let hasRun = $state(false)
+  $effect(() => {
+    if (laeuft) hasRun = true
+  })
 
   /* A foretaste in the header, so you don't have to unfold every row to
      see what was searched for. The first value suffices for that. */
@@ -790,56 +968,6 @@
     if (!werte.length) return ''
     const erster = typeof werte[0] === 'string' ? werte[0] : JSON.stringify(werte[0])
     return erster.length > 60 ? erster.slice(0, 60) + '…' : erster
-  }
-
-  /* An argument value in the same colours as a real code block — a string
-     stays plain (no language is known, and guessing one has burned this
-     house before), an object or number goes through as the JSON it
-     actually is, since stringifying it here is what makes it one. */
-  function wertHtml(wert) {
-    return typeof wert === 'string'
-      ? hervorheben(wert)
-      : hervorheben(JSON.stringify(wert), 'json')
-  }
-
-  /* A tool's result carries its change block, if any, straight after the
-     one-sentence summary — app/tools/aenderungsblock.py joins them with a
-     blank line, then the first hunk. That blank line followed by a hunk
-     header is the mark: ordinary tool output never happens to start a line
-     with it. */
-  function aenderungAufteilen(text) {
-    const stelle = String(text || '').indexOf('\n\n@@ ')
-    if (stelle === -1) return null
-    return { kurz: text.slice(0, stelle), diff: text.slice(stelle + 2) }
-  }
-
-  /* Coloured line by line instead of through hervorheben(): a diff is not a
-     programming language, it is `+`/`-`/context rows, and highlight.js has
-     no grammar registered for it (einfaerben.js). Kept to what B4 already
-     draws a tool's result with — no new colour file, no syntax palette on
-     top of a line that is already carrying red or green. */
-  function aenderungHtml(diff) {
-    return diff
-      .split('\n')
-      .map((zeile) => {
-        let art = 'kontext'
-        if (zeile.startsWith('@@')) art = 'kopf'
-        else if (zeile.startsWith('+')) art = 'hinzu'
-        else if (zeile.startsWith('-')) art = 'entfernt'
-        else if (zeile.startsWith('… ')) art = 'hinweis'
-        return `<span class="diff-zeile diff-${art}">${maskieren(zeile)}</span>`
-      })
-      .join('\n')
-  }
-
-  /* One tool result, either as plain highlighted text or, when it carries a
-     change block, as the short sentence plus the coloured diff below it —
-     the same <pre> either way, so nothing about the surrounding block has
-     to know which one it got. */
-  function werkzeugErgebnisHtml(text) {
-    const aenderung = aenderungAufteilen(text)
-    if (!aenderung) return hervorheben(text)
-    return maskieren(aenderung.kurz) + '\n\n' + aenderungHtml(aenderung.diff)
   }
 
   function teilKlappen(i) {
@@ -960,6 +1088,14 @@
     return zuletztGemessen
   })
   const messungenHaelt = $derived(laeuft && !messungen.length && fussMessungen.length > 0)
+  /* The last row of the line is there while the mark goes and, once the
+     answer is over, for the finished mark and its readings — in the same
+     place and at the same height, so nothing moves when the running mark
+     gives way (see `hasRun`). An answer that was stored has the row too,
+     with or without readings: the line always ends on the mark. */
+  const placeHeld = $derived(
+    !laeuft && (fussMessungen.length > 0 || hasRun || (etwasKam && !nachricht.bild)),
+  )
   /* What is not a reading: how the run ended, and the error it died of.
      Through `laufzustand`, the one reading of how the run ended, and not the
      blob: a row the service stamped aborted after a crash carries the column
@@ -1022,113 +1158,53 @@
   }
 </script>
 
-<!-- One tool call: the name, a background run's number, a foretaste of
-     the arguments. On its own it has its dot on the line;
-     inside a bundle (`imBuendel`) the bundle's dot stands for all of them
-     and the row has none. -->
 <!-- The own message as it was typed. An address with http:// or https:// in
      it is a link that opens like one in an answer (in the shell's window in
      the system's browser, in the browser in a new tab); everything else
      stays text, character for character. -->
 {#snippet eigenerText(inhalt)}{#each adressTeile(inhalt) as teil}{#if teil.href}<a class="eigenlink" href={teil.href} target="_blank" rel="noopener noreferrer">{teil.text}</a>{:else}{teil.text}{/if}{/each}{/snippet}
 
-{#snippet werkzeugEintrag(teil, i, imBuendel)}
-  {@const stand = hintergrundStand(teil.werkzeug)}
-  {@const wzPunkt = werkzeugPunkt(teil.werkzeug, stand)}
-  <!-- A tool call is one row at the line: the name, a background
-       run's number, a foretaste of the arguments, and on the right
-       "running", an exit code or "failed". No card and no
-       sign of its own — the dot on the line carries its state
-       (werkzeugPunkt). Unfolded, arguments and result stand quietly
-       at the line in fixed width. -->
-  <div class="werkzeugzeile" class:ereignis={!imBuendel} class:im-buendel={imBuendel}>
-    {#if !imBuendel}
-      {@render punkt(wzPunkt.farbe, wzPunkt.atmet)}
+{#snippet callRow(teil, i)}
+  {@const werkzeug = teil.werkzeug}
+  {@const stand = hintergrundStand(werkzeug)}
+  {@const wzPunkt = werkzeugPunkt(werkzeug, stand)}
+  <!-- A call is one row in the block's window: a small dot in a column of its
+       own, the name, a background run's number and a foretaste of the
+       arguments. Nothing stands at its end — no "running", no exit code, no
+       "failed": the dot says it, and for somebody who does not see it the
+       label says the word. A click opens the call in the terminal tool,
+       where its arguments and its result stand. -->
+  <button
+    class="aufruf"
+    disabled={werkzeug.unbegun}
+    aria-label={callLabel(werkzeug, stand)}
+    in:rowIn
+    onclick={(event) => {
+      /* Opening the call is reading it: the dot of a finished background
+         run stops moving here as well as when the next answer has read the
+         report. Only a FINISHED run's — opened while the run still goes,
+         the row would count the ending as read before it had happened. */
+      if (stand && !stand.laeuft) werkzeug.gesehen = true
+      openCall(callKey(werkzeug), event.currentTarget)
+    }}
+  >
+    <span class="call-column" aria-hidden="true">
+      <Leuchtpunkt farbe={wzPunkt.farbe} groesse={6} atmet={wzPunkt.atmet} quiet />
+    </span>
+    {#if werkzeug.written != null}
+      {@render beingWritten(werkzeug)}
+    {:else}
+      <span class="wz-name">{werkzeug.name}</span>
     {/if}
-    <button
-      class="werkzeug-kopf"
-      class:offen={offeneTeile.has(i)}
-      aria-expanded={offeneTeile.has(i)}
-      disabled={teil.werkzeug.unbegun}
-      title={stand?.laeuft
-        ? t('werkzeug.hintergrund_laeuft')
-        : stand?.atmet ? t('werkzeug.hintergrund_ungelesen') : null}
-      onclick={() => {
-        teilKlappen(i)
-        /* Opening the row is reading it: the dot of a finished
-           background run stops moving here as well as when the next
-           answer has read the report. Only a FINISHED run's — opened
-           while the run still goes, the row would count the ending
-           as read before it had happened, and green or red would
-           never show. */
-        if (stand && !stand.laeuft) teil.werkzeug.gesehen = true
-      }}
-    >
-      {#if teil.werkzeug.written != null}
-        {@render beingWritten(teil.werkzeug)}
-      {:else}
-      <span class="wz-name werkzeugname">{teil.werkzeug.name}</span>
-      {/if}
-      <!-- WHICH run this was. Only a background run has a number;
-           every other call is one of one and would be told nothing by
-           a "#1". Quiet, because it identifies rather than reports. -->
-      {#if teil.werkzeug.lauf_nummer != null}
-        <span class="wz-nummer">#{teil.werkzeug.lauf_nummer}</span>
-      {/if}
-      {#if vorschau(teil.werkzeug.argumente)}
-        <span class="wz-vorschau">{vorschau(teil.werkzeug.argumente)}</span>
-      {/if}
-      <!-- The row's far end says only what the reader acts on: a run that
-           is still going, or a call that went wrong. How long a call took
-           is left out — a number that changes with every call and moves
-           the row's end with it is noise in a conversation. -->
-      {#if stand?.laeuft}
-        <span class="wz-rechts">
-          <span class="wz-dauer">{t('werkzeug.hintergrund_laeuft')}</span>
-        </span>
-      {:else if teil.werkzeug.exit_code || teil.werkzeug.fehlgeschlagen}
-        <span class="wz-rechts">
-          <!-- The exit code says everything the word "failed"
-               says AND which code it was, so it takes the word's
-               place rather than standing next to it — three items at
-               the far end of a 12.5px row is where a line stops being
-               readable. Only where there IS one: an ordinary tool
-               call has no exit code and keeps the word.
-
-               Zero is deliberately not drawn. It is the absence of
-               trouble, and a green "exit 0" on every finished command
-               would be a badge for the normal case. Falsy covers both
-               0 and the null of a run whose code nobody knows -- and
-               that null then falls through to the word, which is the
-               honest thing to say about it. -->
-          {#if teil.werkzeug.exit_code}
-            <span class="wz-code">{t('werkzeug.exit', { code: teil.werkzeug.exit_code })}</span>
-          {:else if teil.werkzeug.fehlgeschlagen}
-            <span class="wz-marke">{t('werkzeug.marke_fehlgeschlagen')}</span>
-          {/if}
-        </span>
-      {/if}
-    </button>
-    {#if offeneTeile.has(i) && !teil.werkzeug.unbegun}
-      <div class="werkzeug-text" use:rollfade transition:slide={{ duration: 200 }}>
-        {#if Object.keys(teil.werkzeug.argumente ?? {}).length}
-          <dl class="wz-argumente">
-            {#each Object.entries(teil.werkzeug.argumente) as [schluessel, wert] (schluessel)}
-              <dt>{schluessel}</dt>
-              <dd>{@html wertHtml(wert)}</dd>
-            {/each}
-          </dl>
-        {/if}
-        {#if teil.werkzeug.ergebnis}
-          <pre class="wz-ergebnis"><code>{@html werkzeugErgebnisHtml(teil.werkzeug.ergebnis)}</code></pre>
-        {:else}
-          <p class="wz-leer">
-            {teil.werkzeug.ergebnis === null ? t('werkzeug.laeuft_noch') : t('werkzeug.nichts_mitgeschrieben')}
-          </p>
-        {/if}
-      </div>
+    <!-- WHICH run this was. Only a background run has a number; every
+         other call is one of one and would be told nothing by a "#1". -->
+    {#if werkzeug.lauf_nummer != null}
+      <span class="wz-nummer">#{werkzeug.lauf_nummer}</span>
     {/if}
-  </div>
+    {#if vorschau(werkzeug.argumente)}
+      <span class="wz-vorschau">{vorschau(werkzeug.argumente)}</span>
+    {/if}
+  </button>
 {/snippet}
 
 <!-- A call the model is still writing: the sentence the notice over the
@@ -1137,55 +1213,99 @@
      and its arguments take the words' place. The number of characters runs
      along in the fixed face: its digits are all one width. -->
 {#snippet beingWritten(werkzeug)}
-  <span class="wz-writing">{#each textPieces('werkzeug.schreibt', { name: werkzeug.name, zeichen: werkzeug.written }) as piece}{#if piece.wert === werkzeug.name}<span class="werkzeugname">{piece.wert}</span>{:else if piece.wert}<span class="wz-count">{piece.wert}</span>{:else}{piece.fest}{/if}{/each}</span>
+  <span class="wz-writing">{#each textPieces('werkzeug.schreibt', { name: werkzeug.name, zeichen: werkzeug.written }) as piece}{#if piece.wert === werkzeug.name}<span class="wz-name">{piece.wert}</span>{:else if piece.wert}<span class="wz-count">{piece.wert}</span>{:else}{piece.fest}{/if}{/each}</span>
 {/snippet}
 
-<!-- One entry's dot on the answer's line. The house's own state dot
-     (Leuchtpunkt.svelte), breathing while its entry is still going — the
-     caller says so, as far as the pulse settings allow. The answer's own
-     text wears an empty ring instead: it is no state, it is what everything
-     else led to. -->
-<!-- One thinking stretch: its head with the time it took, the whole text
-     when unfolded, the newest thought while it runs. On its own it has its
-     dot on the line; inside a bundle (`imBuendel`) it has none. A stretch in
-     a bundle is never the running one — the bundle ends at its last call. -->
-{#snippet gedankeEintrag(teil, i, imBuendel)}
-  {@const laeuftHier = i === teile.length - 1 && denktJetzt}
-  {@const dauer = laeuftHier ? null : denkDauer(i)}
-  <div class:ereignis={!imBuendel} class:im-buendel={imBuendel}>
-    {#if !imBuendel}
-      {@render punkt('blau', laeuftHier && punktPulsiert('chat'))}
-    {/if}
-    <button class="gedanke-kopf" class:offen={offeneTeile.has(i)}
-            aria-expanded={offeneTeile.has(i)} onclick={() => teilKlappen(i)}>
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+<!-- The block: everything the answer thought and did between two pieces of
+     text. A head with an arrow, the time it thought and the number of tools;
+     one dot on the line, which follows the last call. Closed it is the head
+     and nothing else, running or not: the thinking and the calls appear
+     with the click. Opened, the thinking and the calls
+     stand in their order in a window of ten lines at most; the rest scrolls
+     inside without a bar and melts out at the edge, and while the block goes
+     the window keeps to its end. -->
+{#snippet block(eintrag)}
+  {@const offen = offeneTeile.has(eintrag.schluessel)}
+  {@const going = blockRuns(eintrag)}
+  {@const stand = blockState(eintrag)}
+  {@const hasThinking = eintrag.eintraege.some(({ teil }) => teil.art === 'reasoning')}
+  {@const zeit = blockThinkTime(eintrag)}
+  {@const zahl = aufrufZahl(eintrag.eintraege)}
+  {@const single = zahl === 1 ? lastCall(eintrag.eintraege) : null}
+  <div class="ereignis block">
+    {@render punkt(stand.farbe, stand.atmet)}
+    <button class="block-head" class:offen aria-expanded={offen}
+            onclick={() => teilKlappen(eintrag.schluessel)}>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
         <path d="M9 6l6 6-6 6" />
       </svg>
-      <span class:leucht={laeuftHier}>
-        {laeuftHier
-          ? t('nachricht.gedankengang_laeuft', { zeit: verstricheneZeit })
-          : dauer
-            ? t('nachricht.gedankengang_laeuft', { zeit: dauer })
-            : t('nachricht.gedankengang')}
+      <span class="head-text" class:leucht={going}>
+        {#if hasThinking}
+          {zeit ? t('nachricht.gedankengang_laeuft', { zeit }) : t('nachricht.gedankengang')}
+        {:else if zahl > 1}
+          {t('werkzeug.buendel', { zahl })}
+        {:else if single}
+          <span class="head-name">{single.name}</span>
+        {/if}
       </span>
+      {#if hasThinking && zahl > 1}
+        <span class="head-count">· {t('werkzeug.buendel', { zahl })}</span>
+      {:else if hasThinking && single}
+        <span class="head-count">· <span class="head-name">{single.name}</span></span>
+      {/if}
     </button>
-    {#if offeneTeile.has(i)}
-      <!-- The whole text, quietly, at the line: at most ten lines
-           high, the rest melting out at the bottom and scrolling
-           inside without a bar (lib/rollfade.js). -->
-      <div class="gedanke-text" use:rollfade transition:slide={{ duration: 200 }}>{teil.text}</div>
-    {:else if gedankeZeileSteht(i)}
-      <ThoughtLine text={teil.text} />
+    {#if offen}
+      <div class="block-window" use:rollfade use:followAlong={going}
+           transition:slide={{ duration: switchMs() }}>
+        {#each eintrag.eintraege as step (step.i)}
+          {#if step.teil.art === 'reasoning'}
+            {#if step.i === thinkIndex && step.teil.text}
+              <p class="step-thought"
+                 use:lebendHtml={{ html: maskieren(thinkShown(step.teil, step.i)), fadeIn: thinkFlowing }}></p>
+            {:else if step.teil.text}
+              <p class="step-thought">{step.teil.text}</p>
+            {/if}
+          {:else}
+            {@render callRow(step.teil, step.i)}
+          {/if}
+        {/each}
+      </div>
     {/if}
   </div>
 {/snippet}
 
+<!-- The readings of an answer. One row of its own: the dot between two
+     readings belongs to them (8 px apart), and the 14 px the footer keeps
+     between its children would otherwise sit around the dot too. The dot
+     wears the footer's ink as it is: dimmed, it fell under the contrast text
+     needs. While the answer runs they stand in the footer, kept invisible
+     between two rounds (see `haelt`); once it is over they stand in the last
+     row of the line, where the waiting mark stood. -->
+{#snippet readings()}
+  {#if fussMessungen.length}
+    <span class="messungen" class:haelt={messungenHaelt}
+          aria-hidden={messungenHaelt ? 'true' : undefined}>
+      {#each fussMessungen as messung, nummer}
+        {#if nummer > 0}<span class="trenner" aria-hidden="true">·</span>{/if}
+        <span class="messung" title={messung.titel}>
+          <span class="zahl">{messung.zahl}</span> {messung.wort}
+        </span>
+      {/each}
+    </span>
+  {/if}
+{/snippet}
+
+<!-- One entry's dot on the answer's line. The house's own state dot
+     (Leuchtpunkt.svelte), small and quiet — six pixels, no standing glow —
+     breathing while its entry is still going: the caller says so, as far as
+     the pulse settings allow. The answer's own text wears an empty ring
+     instead: it is no state, it is what everything else led to. -->
 {#snippet punkt(farbe, atmet = false)}
   <span class="punkt" aria-hidden="true">
     {#if farbe === 'antwort'}
       <span class="ring"></span>
     {:else}
-      <Leuchtpunkt {farbe} groesse={9} {atmet} />
+      <Leuchtpunkt {farbe} groesse={6} {atmet} quiet />
     {/if}
   </span>
 {/snippet}
@@ -1299,8 +1419,9 @@
       <button class="tat" title={t('nachricht.neu_senden')} aria-label={t('nachricht.neu_senden')}
               onclick={() => neuSenden?.()}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             stroke-width="2" stroke-linecap="round">
-          <path d="M20 11a8 8 0 10-2.3 5.7M20 5v6h-6" />
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+          <path d="M21 3v5h-5" />
         </svg>
       </button>
     {/if}
@@ -1314,7 +1435,8 @@
          the reader, grey the fold, an empty ring the answer's own text. The
          dot that is still going breathes. It is the only line in the chat —
          the entries themselves carry no rule or bar of their own. -->
-    <div class="antwortlinie">
+    <div class="antwortlinie" bind:offsetHeight={lineHeight}
+         style:min-height={floorHeight ? `${floorHeight}px` : null}>
       {#if nachricht.bild || nachricht.bildLaeuft}
         <div class="ereignis">
           {@render punkt('antwort')}
@@ -1385,122 +1507,65 @@
            `teile`. -->
       {#each anzeige as eintrag (eintrag.art === 'buendel' ? eintrag.schluessel : eintrag.i)}
         {#if eintrag.art === 'buendel'}
-          {@const offen = offeneTeile.has(eintrag.schluessel)}
-          {@const punktStand = buendelPunkt(eintrag)}
-          {@const open = openCall(
-            eintrag.eintraege.filter(({ teil }) => !teil.werkzeug?.unbegun),
-            wartetAufNutzer,
-            (werkzeug) => Boolean(hintergrundStand(werkzeug)?.laeuft),
-          )}
-          {@const written = eintrag.eintraege.findLast(({ teil }) => teil.werkzeug?.written != null)?.teil.werkzeug}
-          <!-- Two or more tool calls in a row, with the thinking before and
-               between them: one row, always closed. It names the number of
-               calls — while one runs, that call's name and "running" (a call
-               that waits for the reader has its name alone, its dot says the
-               waiting); while one is being written, that, the way its own
-               row says it — and its dot is the worst state among the calls. Opened, the calls
-               and the thinking stand as they always did, without a dot
-               each. -->
-          <div class="ereignis werkzeugzeile buendel">
-            {@render punkt(punktStand.farbe, punktStand.atmet)}
-            <button
-              class="werkzeug-kopf"
-              class:offen
-              aria-expanded={offen}
-              onclick={() => teilKlappen(eintrag.schluessel)}
-            >
-              <!-- In the tool colour like every call's name: the row stands
-                   for calls, and the drawing gives it the same face. -->
-              <span class="wz-name werkzeugname">{t('werkzeug.buendel', { zahl: aufrufZahl(eintrag.eintraege) })}</span>
-              <svg class="wz-pfeil" width="10" height="10" viewBox="0 0 24 24" fill="none"
-                   stroke="currentColor" stroke-width="2.5" aria-hidden="true">
-                <path d="M9 6l6 6-6 6" />
-              </svg>
-              {#if written}
-                {@render beingWritten(written)}
-              {:else if open}
-                <span class="wz-vorschau werkzeugname">{open.name}</span>
-                {#if open.going}
-                  <span class="wz-rechts"><span class="wz-dauer">{t(open.background ? 'werkzeug.hintergrund_laeuft' : 'werkzeug.buendel_laeuft')}</span></span>
-                {/if}
-              {/if}
-            </button>
-            {#if offen}
-              <div class="buendel-inhalt" transition:slide={{ duration: 200 }}>
-                {#each eintrag.eintraege as aufruf (aufruf.i)}
-                  {#if aufruf.teil.art === 'reasoning'}
-                    {@render gedankeEintrag(aufruf.teil, aufruf.i, true)}
-                  {:else}
-                    {@render werkzeugEintrag(aufruf.teil, aufruf.i, true)}
-                  {/if}
-                {/each}
-              </div>
-            {/if}
-          </div>
+          {@render block(eintrag)}
         {:else}
         {@const teil = eintrag.teil}
         {@const i = eintrag.i}
-        <!-- Every thinking stretch is its own entry with its own head, from
-             the very first second, always unfoldable. While it is the one
-             running, the word glows with the clock beside it and one line
-             under it carries the newest thought; once it is over it folds to
-             the head alone, with the time it took.
-
-             NOT summarised across stretches on purpose: thinking → tool →
-             thinking stays TWO entries with the tool between them, inside a
-             bundle as well. -->
-        {#if teil.art === 'reasoning'}
-          {@render gedankeEintrag(teil, i, false)}
-
-        {:else if startsAgent(teil)}
+        {#if startsAgent(teil)}
           {@const job = chatJob(teil.werkzeug.auftrag_id)}
+          {@const helper = job?.agent ?? teil.werkzeug.argumente?.agent}
+          {@const word = job && job.state !== 'laeuft' ? t('jobs.zustand.' + job.state) : ''}
           <!-- An agent this answer started: a quiet row at the line, the
                agent's sign where a call has its dot — so it reads at once
                as the agent's — then its name, how long it has been at work
                and the tool it called last; no card. Once it has stopped,
                the row keeps its name, the time it took and how it ended.
-               Its transcript is one click away, in the agents view.
+               The whole row is the way to its card in the agents view.
 
                The pieces stand in columns: the name's is as wide as the
                longest name among this answer's agents — the other names
                lie under it unseen and only lend their width — and the
                clock's and the state's are there in every row, also while
                they are empty. -->
-          <div class="ereignis agent-row">
+          <div class="ereignis helper">
             <span class="punkt agent-mark" aria-hidden="true"><Agentenmarke groesse={13} /></span>
-            <span class="agent-name">
-              <span>{job?.agent ?? teil.werkzeug.argumente?.agent}</span>
-              {#each agentNames as other (other)}
-                <span class="agent-name-room" aria-hidden="true">{other}</span>
-              {/each}
-            </span>
-            <span class="agent-time">{job ? agentRuntime(job) : ''}</span>
-            <span class="agent-status">
-              {#if job?.state === 'laeuft'}
-                {#if job.last_tool}<span class="agent-step werkzeugname">{job.last_tool}</span>{/if}
-              {:else if job}
-                <span class="agent-state" class:wartet={job.state === 'wartet'}>{t('jobs.zustand.' + job.state)}</span>
-              {/if}
-            </span>
-            <button class="agent-transcript" onclick={() => openTranscript(job?.id ?? teil.werkzeug.auftrag_id)}>
-              {t('agent_row.transcript')}
+            <button
+              class="agent-row"
+              title={t('agent_row.transcript')}
+              aria-label={[helper, word || t('jobs.zustand.laeuft'), job ? agentRuntime(job) : '', t('agent_row.transcript')].filter(Boolean).join(', ')}
+              onclick={(event) => openHelper(job?.id ?? teil.werkzeug.auftrag_id, event.currentTarget)}
+            >
+              <span class="agent-name">
+                <span>{helper}</span>
+                {#each agentNames as other (other)}
+                  <span class="agent-name-room" aria-hidden="true">{other}</span>
+                {/each}
+              </span>
+              <span class="agent-time">{job ? agentRuntime(job) : ''}</span>
+              <span class="agent-status">
+                {#if job?.state === 'laeuft'}
+                  {#if job.last_tool}<span class="agent-step werkzeugname">{job.last_tool}</span>{/if}
+                {:else if job}
+                  <span class="agent-state" class:wartet={job.state === 'wartet'}>{word}</span>
+                {/if}
+              </span>
             </button>
           </div>
 
-        {:else if teil.art === 'werkzeug'}
-          {@render werkzeugEintrag(teil, i, false)}
-
-        {:else if teil.text.trim()}
+        {:else if teil.art === 'content' && teil.text.trim()}
+          {@const quelle = textShown(teil, i)}
           <div class="ereignis textzeile">
             {@render punkt('antwort')}
             <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
             <div class="antwort" onclick={antwortKlick}>
-              {#each cardRows(dateiTeile(teil.text, versaetze[i])) as stueck, j (j)}
+              {#each cardRows(dateiTeile(quelle, versaetze[i])) as stueck, j (j)}
                 {#if stueck.art === 'html'}
                   <!-- Drawn in place, not through {@html}: that one tears the
                        whole answer out on every chunk, and the scroll area's
-                       dip threw the reader back (lib/lebendhtml.js). -->
-                  <div class="fliesstext" use:lebendHtml={stueck.wert}></div>
+                       dip threw the reader back (lib/lebendhtml.js). While
+                       the text flows, its new characters fade in. -->
+                  <div class="fliesstext"
+                       use:lebendHtml={{ html: stueck.wert, fadeIn: flowOn && i === flowIndex }}></div>
                 {:else}
                   <!-- A file stands as its card from the first line of its
                        fence: blue while it is written, green once it is
@@ -1599,9 +1664,22 @@
       <!-- The waiting mark, while this answer is being waited for: the last
            entry on the line, the mark itself sitting where the next dot will
            (Wartezeile.svelte), the word and the clock beside it. Its row has
-           one fixed height, so a mark changing its face never moves the chat. -->
-      {#if marke}
-        <div class="ereignis">{@render marke()}</div>
+           one fixed height, so a mark changing its face never moves the chat.
+           When the answer is over the readings stand in the same row, at the
+           place the mark had: the answer keeps its height and nothing below
+           it jumps. -->
+      {#if marke || placeHeld}
+        <div class="ereignis place" class:done={!marke}>
+          {#if marke}
+            {@render marke(markeRuhig)}
+          {:else if nachricht.bild}
+            {@render readings()}
+          {:else}
+            <!-- Over: the mark stands completely drawn and still at the end
+                 of the line, the readings beside it. -->
+            <Wartezeile art="antwort" finished>{@render readings()}</Wartezeile>
+          {/if}
+        </div>
       {/if}
 
       <!-- The notes below are entries on the line like everything else,
@@ -1685,22 +1763,9 @@
       {/if}
     </div>
 
-    <div class="fuss">
-      {#if fussMessungen.length}
-        <!-- One row of its own: the dot between two readings belongs to
-             them (8 px apart), and the 14 px the footer keeps between its
-             children would otherwise sit around the dot too. The dot wears
-             the footer's ink as it is: dimmed, it fell under the contrast
-             text needs. Kept invisible between two rounds (see `haelt`). -->
-        <span class="messungen" class:haelt={messungenHaelt}
-              aria-hidden={messungenHaelt ? 'true' : undefined}>
-          {#each fussMessungen as messung, nummer}
-            {#if nummer > 0}<span class="trenner" aria-hidden="true">·</span>{/if}
-            <span class="messung" title={messung.titel}>
-              <span class="zahl">{messung.zahl}</span> {messung.wort}
-            </span>
-          {/each}
-        </span>
+    <div class="fuss" class:ruhig={markeRuhig}>
+      {#if laeuft && fussMessungen.length}
+        {@render readings()}
       {/if}
       {#each hinweise as wert}<span>{wert}</span>{/each}
       {#if laeuft}<span class="platzhalter"></span>{/if}
@@ -1721,8 +1786,9 @@
         <button class="tat" title={arrowLabel} aria-label={arrowLabel}
                 onclick={() => neuErzeugen(nachricht.id)}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-               stroke-width="2" stroke-linecap="round">
-            <path d="M20 11a8 8 0 10-2.3 5.7M20 5v6h-6" />
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+            <path d="M21 3v5h-5" />
           </svg>
         </button>
       {/if}
@@ -2048,8 +2114,8 @@
   /* The answer's ring: the gap is the ring's own height, centred where the
      dot would sit (`.punkt`, one half line down). */
   .ereignis:has(> .punkt > .ring) {
-    --luecke-von: calc(1lh / 2 - 4.5px);
-    --luecke-bis: calc(1lh / 2 + 4.5px);
+    --luecke-von: calc(1lh / 2 - 3.5px);
+    --luecke-bis: calc(1lh / 2 + 3.5px);
   }
   /* A sign standing on the line (`.zeichen`: 15px box, 2px from the entry's
      top): the gap is the whole box. */
@@ -2067,20 +2133,57 @@
       var(--linie-stark) calc(var(--luecke-bis) - var(--linie-oben))
     );
   }
-  /* The waiting mark is the last entry and stands on the line itself: the
-     line comes down to the top of its row and ends there. A lone mark has
-     no line at all. */
+  /* The mark stands on the line itself: the line comes down and ends INSIDE
+     the stroke of the mark's outer form, never above it. The distance from
+     the row's top edge to that stroke (the outer form's centre line at the
+     line's x, in the mark's 24 × 20 box) is a little different for each
+     face: the frame of an answer 1.6 px, a document's web 2.5 px, an image's
+     eye 5.3 px, a compaction's upper line 5.8 px. A lone mark has no line at
+     all. */
   .ereignis:has(> :global(.wartet))::before {
     bottom: auto;
-    height: calc(0px - var(--linie-oben));
+    height: calc(1.6px - var(--linie-oben));
+  }
+  .ereignis:has(> :global(.wartet[data-art='einbettung']))::before {
+    height: calc(2.5px - var(--linie-oben));
+  }
+  .ereignis:has(> :global(.wartet[data-art='vision']))::before {
+    height: calc(5.3px - var(--linie-oben));
+  }
+  .ereignis:has(> :global(.wartet[data-art='verdichtung']))::before {
+    height: calc(5.8px - var(--linie-oben));
   }
   .ereignis:has(> :global(.wartet)):first-child::before { display: none; }
+  /* A finished mark with a note under it (cancelled, a limit): the line goes
+     on below the mark, down to the note's own piece. */
+  .ereignis:has(> :global(.wartet.fertig)):not(:last-child)::after {
+    content: '';
+    position: absolute;
+    left: -17px;
+    top: 100%;
+    height: 5px;
+    width: 1px;
+    background: var(--linie-stark);
+  }
+  /* The same row once the answer is over: the finished mark stands where the
+     running one stood, at the same height, the readings beside it, and the
+     line ends on it. */
+  .place {
+    height: 20px;
+    line-height: 20px;
+  }
+  .place.done:not(:has(> :global(.wartet)))::before { display: none; }
+  .place.done {
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    color: var(--text-still);
+  }
   /* A thinking row's head is `inline-flex` and would sink by half a
      leading inside a taller line box; giving the row exactly one head
      line keeps it — and the dot's line (below) — in place. The tool row
      gets the same line, so its dot reads the same 19px. */
-  .ereignis:has(> .gedanke-kopf),
-  .ereignis:has(> .werkzeug-kopf) {
+  .ereignis.block {
     line-height: 19px;
   }
   /* The dot sits in the middle of its entry's first line. The height is
@@ -2100,11 +2203,11 @@
   /* The disc covers the line where they meet; the ring of the answer is
      hollow and the line leaves a gap for it (`.ereignis::before`). */
   .ring {
-    width: 9px;
-    height: 9px;
+    width: 7px;
+    height: 7px;
     box-sizing: border-box;
     border-radius: 50%;
-    border: 1.5px solid var(--text-still);
+    border: 1.25px solid var(--text-still);
   }
   /* The answer's text sets a larger line: its dot follows it — the same
      1.65 the answer text stands in. */
@@ -2113,15 +2216,29 @@
   }
   .textzeile > .punkt { top: 8px; top: calc(1lh / 2 - 5.5px); }
 
-  /* An agent's row: as quiet as a tool call's, its sign in the dot's place. */
+  /* An agent's row: as quiet as a tool call's, its sign in the dot's place;
+     the whole row is the button to its card. */
+  .helper {
+    line-height: 22px;
+  }
   .agent-row {
     display: flex;
     align-items: center;
     gap: 8px;
+    width: calc(100% + 4px);
     min-height: 22px;
+    margin-left: -4px;
+    padding: 0 6px 0 4px;
+    border: none;
+    border-radius: 9px;
+    background: none;
+    font: inherit;
     font-size: 12.5px;
     color: var(--text-leise);
+    text-align: left;
+    cursor: pointer;
   }
+  .agent-row:hover { background: var(--bg-hoch); }
   .punkt.agent-mark {
     width: 15px;
     height: 15px;
@@ -2179,58 +2296,53 @@
   .agent-step { color: var(--werkzeug); }
   .agent-state { font: 12.5px var(--schrift); color: var(--text-still); }
   .agent-state.wartet { color: var(--gelb-text); }
-  .agent-transcript {
-    margin-left: auto;
-    flex: none;
-    padding: 2px 8px;
-    border: none;
-    border-radius: 9px;
-    background: none;
-    color: var(--text-still);
-    font: inherit;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .agent-transcript:hover { background: var(--bg-hoch); color: var(--text); }
   /* A picture in an image run's grid is a tile, not an answer — no line
      and no dot there. The grid is App.svelte's (`.bildlauf-platz`). */
   :global(.bildlauf-platz) .antwortlinie { padding-left: 0; }
   :global(.bildlauf-platz) .ereignis::before,
   :global(.bildlauf-platz) .punkt { display: none; }
 
-  /* The mark that says "this answer thought first", in the house blue: the
-     one colour the interface already spends on "something is running", and
-     the reason it is not a colour of its own is that a fifth state colour
-     beside blue, yellow, green and red would have to earn its meaning
-     first. What it may NOT be is the still grey of a subtitle — that is the
-     tone for something you may skip, and this line is the opposite.
-     The unfolded thought below keeps its own quieter tone: the mark says
-     something IS there, the text is what it says. */
-  .gedanke-kopf {
+  /* The block's head: an arrow, the time it thought and the number of tools,
+     in the quietest step of the program's text (`--text-neben`) — the dot on
+     the line carries the state, not the head. The block's thinking and its
+     calls stand in the same step, so there is one brightness in the block and
+     the answer is the only thing that stands bright. While the block goes, a
+     lighter band of the same colour runs across the word. */
+  .block-head {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    max-width: 100%;
+    margin: 0;
+    padding: 0 6px 0 0;
     font: inherit;
     font-size: 12.5px;
     line-height: 19px;
-    color: var(--blau-text);
+    color: var(--text-neben);
     background: none;
     border: none;
-    padding: 0;
+    border-radius: 9px;
+    white-space: nowrap;
     cursor: pointer;
   }
-  .gedanke-kopf svg {
+  .block-head:hover { color: var(--text); }
+  /* The name of a single call stands in the head as it stands in the row:
+     the fixed face, in the block's colour, no weight of its own. */
+  .head-name { font-family: var(--schrift-fest); }
+  .block-head svg {
     flex: none;
     transition: transform 0.18s;
   }
-  .gedanke-kopf.offen svg {
+  .block-head.offen svg {
     transform: rotate(90deg);
   }
-  /* While the stretch runs, the word glows: a lighter band of the same blue
-     sweeps across it. Held still for whoever asks for less motion. */
+  .head-text,
+  .head-count {
+    font-variant-numeric: tabular-nums;
+  }
   .leucht {
-    background: linear-gradient(90deg, var(--blau-text) 0%, var(--blau-text) 35%,
-      color-mix(in srgb, var(--blau-text) 40%, white) 50%, var(--blau-text) 65%, var(--blau-text) 100%);
+    background: linear-gradient(90deg, var(--text-neben) 0%, var(--text-neben) 35%,
+      color-mix(in srgb, var(--text-neben) 45%, white) 50%, var(--text-neben) 65%, var(--text-neben) 100%);
     background-size: 250% 100%;
     -webkit-background-clip: text;
     background-clip: text;
@@ -2244,187 +2356,112 @@
   @media (prefers-reduced-motion: reduce) {
     .leucht { animation: none; background: none; color: inherit; }
   }
-  /* The whole text, unfolded: quiet, at the line, no card and no rule of
-     its own. Ten lines at most; the rest scrolls inside without a bar and
-     melts out at the edge (lib/rollfade.js). */
-  .gedanke-text {
-    font-size: 12.5px;
-    line-height: 1.6;
-    color: var(--text-leise);
+  /* The open block's window: the thinking and the calls in their order, ten
+     lines at most. The rest scrolls inside without a bar and melts out at
+     the edge while more lies beyond it (`use:rollfade`). */
+  .block-window {
     margin-top: 4px;
-    max-height: calc(10 * 1.6em);
+    max-height: calc(10 * 20px);
     overflow-y: auto;
-    white-space: pre-wrap;
-  }
-  /* A tool call is one row at the line: no tile, no sign. The dot on the
-     line carries the state (werkzeugPunkt), the row only says what ran —
-     name, run number, a preview of the arguments, and at the far end the
-     duration or what broke. What does not fit is cut with an ellipsis;
-     the row unfolds and shows it whole. */
-  .werkzeug-kopf {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    width: 100%;
-    max-width: 100%;
-    min-width: 0;
-    font-family: var(--schrift-fest);
-    font-size: 12px;
-    line-height: 19px;
-    color: var(--text-still);
-    text-align: left;
-    background: none;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-  }
-  /* Only the layout: how a tool name is set is one rule for the whole
-     program (`.werkzeugname`, stil/global.css). `flex: none` keeps it
-     whole — the preview beside it is the one built to give way. */
-  .werkzeug-kopf .wz-name {
-    flex: none;
-  }
-  /* The arrow after the bundle's count: it turns when the bundle is open. */
-  .werkzeug-kopf .wz-pfeil {
-    flex: none;
-    transition: transform 0.15s;
-  }
-  .werkzeug-kopf.offen .wz-pfeil {
-    transform: rotate(90deg);
-  }
-  /* The calls inside an open bundle: the same rows, one under the other,
-     without a dot each. */
-  .buendel-inhalt {
-    margin-top: 6px;
+    overscroll-behavior: contain;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
   }
-  .im-buendel {
-    min-width: 0;
+  .step-thought {
+    margin: 0;
+    flex: none;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--text-neben);
+    white-space: pre-wrap;
   }
-  .werkzeug-kopf .wz-vorschau {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-  .werkzeug-kopf:hover .wz-vorschau {
-    color: var(--text-leise);
-  }
-  /* A call that has not begun has nothing to unfold. */
-  .werkzeug-kopf:disabled {
-    cursor: default;
-  }
-  /* "… is being written — n characters": words, so they leave the fixed
-     face like the words at the row's far end; the name in them and the
-     running number keep it. It gives way like the preview it stands for. */
-  .werkzeug-kopf .wz-writing {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-family: var(--schrift);
-  }
-  .werkzeug-kopf .wz-count {
-    font-family: var(--schrift-fest);
-    font-variant-numeric: tabular-nums;
-  }
-  /* "Running" and the failure mark share the row's far end — one item
-     pushed right, not two competing auto margins. They are words, not
-     code, so they leave the fixed face. */
-  .werkzeug-kopf .wz-rechts {
-    margin-left: auto;
+  /* A call is one row: a small dot in its own column, the name, a run's
+     number, a foretaste of the arguments — and nothing at its end. What does
+     not fit is cut with an ellipsis; the whole of it stands in the terminal
+     tool, one click away. */
+  .aufruf {
     display: flex;
     align-items: center;
     gap: 8px;
     flex: none;
-    font-family: var(--schrift);
-    white-space: nowrap;
-  }
-  .werkzeug-kopf .wz-dauer {
-    color: var(--text-still);
-  }
-  .werkzeug-kopf .wz-marke,
-  .werkzeug-kopf .wz-code {
-    flex: none;
-    color: var(--rot);
-  }
-  /* The run number identifies, it does not report — a step quieter still.
-     `flex: none` for the same reason the name has it: a number that gives
-     up a digit is a different number. */
-  .werkzeug-kopf .wz-nummer {
-    flex: none;
-    opacity: 0.8;
-  }
-  /* The unfolded arguments and result stand quietly at the line in the
-     fixed face — no card, at most ten lines high. The rest scrolls without
-     a visible bar and melts out at the edge while more lies beyond it
-     (`use:rollfade`). */
-  .werkzeug-text {
-    margin-top: 6px;
-    font-family: var(--schrift-fest);
-    font-size: 11.8px;
-    line-height: 1.55;
-    color: var(--text-leise);
-    max-height: calc(11.8px * 1.55 * 10);
-    overflow-y: auto;
-    overflow-x: hidden;
-  }
-  .wz-argumente {
-    margin: 0 0 6px;
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 1px 10px;
-  }
-  .wz-argumente dt {
-    color: var(--text-still);
-    white-space: nowrap;
-  }
-  .wz-argumente dd {
-    margin: 0;
+    width: calc(100% + 4px);
     min-width: 0;
-    overflow-wrap: anywhere;
+    margin-left: -4px;
+    padding: 0 6px 0 4px;
+    font-family: var(--schrift-fest);
+    font-size: 12px;
+    line-height: 19px;
+    color: var(--text-neben);
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: 9px;
+    cursor: pointer;
   }
-  /* The result is a tool's raw text, not prose — it keeps its own line
-     breaks, and a wide table or long path wraps instead of pushing the
-     page sideways. */
-  .wz-ergebnis {
-    margin: 0;
-    font: inherit;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
+  .aufruf:hover { background: var(--bg-hoch); }
+  .aufruf:hover .wz-vorschau { color: var(--text-leise); }
+  /* A call that has not begun has nothing to open. */
+  .aufruf:disabled { cursor: default; }
+  .aufruf:disabled:hover { background: none; }
+  .call-column {
+    flex: none;
+    width: 10px;
+    display: grid;
+    place-items: center;
   }
-  /* A change block's own rows, inside the same .wz-ergebnis <pre> — the
-     block-level element is what lets the tinted background reach the full
-     width of the box instead of hugging just the text. */
-  .wz-ergebnis :global(.diff-zeile) {
-    display: block;
+  /* The name of a call in the block: the fixed face of the row, in the
+     block's colour and weight — the sand and the bold of `.werkzeugname`
+     (stil/global.css) stay where the terminal tab shows names. `flex: none`
+     keeps it whole — the preview beside it is the one built to give way. */
+  .aufruf .wz-name { flex: none; }
+  .wz-writing .wz-name { font-family: var(--schrift-fest); }
+  .aufruf .wz-vorschau {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .wz-ergebnis :global(.diff-entfernt) {
-    color: var(--rot);
-    background: color-mix(in srgb, var(--rot) 12%, var(--bg));
+  /* "… is being written — n characters": words, so they leave the fixed
+     face; the name in them and the running number keep it. It gives way
+     like the preview it stands for. */
+  .aufruf .wz-writing {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--schrift);
   }
-  .wz-ergebnis :global(.diff-hinzu) {
-    color: var(--gruen);
-    background: color-mix(in srgb, var(--gruen) 12%, var(--bg));
+  .wz-count {
+    font-family: var(--schrift-fest);
+    font-variant-numeric: tabular-nums;
   }
-  .wz-ergebnis :global(.diff-kopf) {
-    color: var(--code-komm);
-  }
-  .wz-ergebnis :global(.diff-hinweis) {
-    color: var(--code-komm);
-    font-style: italic;
-  }
-  .wz-leer {
-    margin: 0;
-    color: var(--text-still);
+  /* The run number identifies, it does not report. `flex: none` for the
+     same reason the name has it: a number that gives up a digit is a
+     different number. */
+  .aufruf .wz-nummer {
+    flex: none;
   }
 
   .antwort {
     line-height: 1.65;
+  }
+  /* A new character of the flowing text comes up in 280 ms; the span carries
+     a negative delay of its age, so a span made afresh goes on from where
+     the last one was (lib/lebendhtml.js). */
+  .antwort :global(.flow-char),
+  .step-thought :global(.flow-char) {
+    animation: fade-in 280ms cubic-bezier(0.33, 0, 0.67, 1) both;
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .antwort :global(.flow-char),
+    .step-thought :global(.flow-char) { animation: none; }
   }
   /* The waiting indicators (logo and image sign alike) live in the
      Wartezeile — row, size, timing and spot are set only there. */
@@ -2547,13 +2584,15 @@
     font-size: 12px;
     color: var(--text-still);
   }
-  /* The readings of an answer: number bright, word quiet. The fixed font
-     gives every digit the same width, so the line does not wobble while the
-     figures change during a run. */
+  /* The readings of an answer: number, word and dot in the one quietest
+     text step, like the head, the text and the calls of the thinking block.
+     The fixed font gives every digit the same width, so the line does not
+     wobble while the figures change during a run. */
   .messungen {
     display: inline-flex;
     align-items: baseline;
     gap: 8px;
+    color: var(--text-neben);
   }
   /* Between two rounds: the place of the last reading, none of its ink. */
   .messungen.haelt {
@@ -2562,8 +2601,11 @@
   .messung {
     font-family: var(--schrift-fest);
   }
-  .messung .zahl {
-    color: var(--text);
+  /* Under the running text only the mark stands: the footer keeps its
+     room and its place in the line, none of its ink and none of its
+     reach, so the end of the run changes no height. */
+  .fuss.ruhig {
+    visibility: hidden;
   }
   /* The returning working mark needs air to the interim text. */
   .fuss .tat {

@@ -136,6 +136,13 @@ def _is_store_placeholder(found: str) -> bool:
     return "windowsapps" in parts
 
 
+def _system() -> str:
+    """The platform the script is started on — one place to ask, so the
+    sentence a refusal or a failed start carries and the command line that
+    would have been started always come from the same answer."""
+    return sys.platform
+
+
 def _python_on_windows() -> str | None:
     """The Python that runs a .py script on Windows: the one on the path
     unless it is the Store's placeholder, else the launcher. Neither — then
@@ -155,7 +162,7 @@ def startable(path: Path, platform: str | None = None) -> bool:
     found. ``platform`` is a parameter so a test can ask for the other
     system without rewriting ``sys.platform``.
     """
-    if (platform or sys.platform) != "win32":
+    if (platform or _system()) != "win32":
         return os.access(path, os.X_OK)
     extension = path.suffix.lower()
     if extension == ".py":
@@ -170,7 +177,7 @@ def command_line(path: Path, platform: str | None = None) -> list[str]:
     without the execution policy in the way; a .py to the Python found by
     ``startable``. .exe, .bat and .cmd start by themselves.
     """
-    if (platform or sys.platform) != "win32":
+    if (platform or _system()) != "win32":
         return [str(path)]
     extension = path.suffix.lower()
     if extension == ".ps1":
@@ -206,6 +213,16 @@ def geprueft(wurzel: Path, name: str) -> Path:
     if not ziel.is_file():
         raise SkriptVerboten("fehler.skript_fehlt", name=name, ordner=wurzel)
     if not startable(ziel):
+        if _system() == "win32":
+            # Windows has no execute bit to grant: the sentence says what
+            # Windows does need — a Python for a .py, a known extension
+            # for anything else.
+            schluessel = (
+                "fehler.script_needs_python"
+                if ziel.suffix.lower() == ".py"
+                else "fehler.script_not_startable_windows"
+            )
+            raise SkriptVerboten(schluessel, name=name)
         raise SkriptVerboten(
             "fehler.skript_nicht_ausfuehrbar", name=name, ordner=wurzel
         )
@@ -338,7 +355,11 @@ async def starten(
     except OSError as fehler:
         return Ergebnis(
             ausgabe=i18n.t(
-                "cronjobs.skript_nicht_gestartet",
+                # The '#!' line and the execute bit are a Mac and Linux
+                # matter; on Windows the sentence names only the failure.
+                "cronjobs.script_not_started_windows"
+                if _system() == "win32"
+                else "cronjobs.skript_nicht_gestartet",
                 sprache,
                 name=pfad.name,
                 fehler=fehler.strerror or fehler,

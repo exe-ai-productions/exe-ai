@@ -24,10 +24,13 @@ def asker() -> TerminalAsker:
     return TerminalAsker(context)
 
 
-def ask(asker: TerminalAsker, head: str, *, secret: bool = False) -> tuple[threading.Thread, list]:
+def ask(
+    asker: TerminalAsker, head: str, *, secret: bool = False, default: str | None = None
+) -> tuple[threading.Thread, list]:
     answers: list = []
     thread = threading.Thread(
-        target=lambda: answers.append(asker.ask_text(head, secret=secret)), daemon=True
+        target=lambda: answers.append(asker.ask_text(head, secret=secret, default=default)),
+        daemon=True,
     )
     thread.start()
     eventually(asker.pending)
@@ -83,3 +86,38 @@ def test_escape_closes_the_question_with_no_answer(asker):
     assert answers == [None]
     assert asker.secret() is False
     assert printed(asker) == []
+
+
+def test_a_value_that_stands_is_shown_and_nothing_typed_takes_it(asker):
+    thread, answers = ask(asker, "Preferred name", default="Kim")
+    shown = [text for _, text in asker.fragments()]
+    assert "Preferred name" in shown
+    assert any(text.endswith("Kim") for text in shown)
+    asker._on_enter(key(Buffer()))
+    thread.join(5)
+    assert answers == ["Kim"]
+    assert printed(asker) == []
+
+
+def test_a_value_that_stands_is_replaced_by_what_is_typed(asker):
+    thread, answers = ask(asker, "Preferred name", default="Kim")
+    buffer = Buffer()
+    buffer.text = " Alex "
+    asker._on_enter(key(buffer))
+    thread.join(5)
+    assert answers == ["Alex"]
+
+
+def test_an_empty_value_that_stands_is_an_answer_of_its_own(asker):
+    thread, answers = ask(asker, "Context size", default="")
+    asker._on_enter(key(Buffer()))
+    thread.join(5)
+    assert answers == [""]
+
+
+def test_escape_closes_a_question_that_has_a_value_with_no_answer(asker):
+    thread, answers = ask(asker, "Context size", default="")
+    asker._on_escape(key(Buffer()))
+    thread.join(5)
+    assert answers == [None]
+

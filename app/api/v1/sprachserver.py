@@ -19,6 +19,9 @@ there is nothing to convert on the way and no decoder to ship.
 from __future__ import annotations
 
 import asyncio
+import logging
+import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -26,12 +29,19 @@ from pydantic import BaseModel, Field
 
 from app import agentenserver, diktatsprachewahl, sprachserver, stimme
 from app.api.abhaengigkeiten import hole_repositories, hole_sprache
-from app.api.v1.runner import Modelldatei, _fehler
+from app.api.v1.runner import Modelldatei, ProgramState, _fehler, program_state
 from app.db import Repositories
 from app.feineinstellungen import MAX_FAEDEN, Feineinstellungen
 from app.i18n import t
 from app.modellrunner import RunnerFehler, passende_mmproj
 from app.ordner_oeffnen import OeffnenNichtMoeglich, ordner_oeffnen
+from app.voice_service import VoiceSpec, VoiceUnavailable
+from app.voice_worker import ALL_LAYERS
+
+log = logging.getLogger(__name__)
+
+# Nginx's code for "the client closed the request"; nobody reads this answer.
+_CLIENT_CLOSED_REQUEST = 499
 
 router = APIRouter(prefix="/sprachserver", tags=["sprachserver"])
 
@@ -45,7 +55,8 @@ MAX_BYTES = 8 * 1024 * 1024
 # What the panel's fields fall back to when nothing was set. Sent in the
 # answer rather than written into the page, so one place decides them.
 KONTEXT_VORGABE = 4096
-SCHICHTEN_VORGABE = 99
+# No layer count named: the engine places the layers itself.
+SCHICHTEN_VORGABE = None
 # Zero means "let the engine decide", which is what it does best.
 THREADS_VORGABE = 0
 
@@ -53,8 +64,7 @@ KONTEXT_MIN, KONTEXT_MAX = 512, 1_048_576
 SCHICHTEN_MIN, SCHICHTEN_MAX = 0, 999
 
 
-class Auskunft(BaseModel):
-    programm: str | None = None
+class Auskunft(ProgramState):
     ordner: str
     # Every startable file in the folder, with its size like the model
     # server's own list — the speech model AND the small text model that
@@ -148,7 +158,7 @@ def _auskunft(request: Request) -> Auskunft:
     dateien = runner.modelle()
     namen = [m.name for m in dateien]
     return Auskunft(
-        programm=str(runner.programm) if runner.programm else None,
+        **program_state(runner, request.app.state.config),
         ordner=str(ordner),
         modelle=[
             Modelldatei(name=m.name, groesse_gb=m.groesse_gb) for m in dateien
@@ -192,17 +202,23 @@ def protokoll(request: Request) -> list[str]:
 def starten(
     daten: Start,
     request: Request,
+    repositories: Repositories = Depends(hole_repositories),
     sprache: str = Depends(hole_sprache),
 ) -> Auskunft:
-    fein = Feineinstellungen(faeden=daten.threads or None)
+    # What the request does not name comes from the stored start values
+    # (the window writes them as they are touched), then from the works
+    # answers — one read of the setting for all of it.
+    gespeichert = diktatsprachewahl.sprachstart(repositories)
+    threads = gespeichert["threads"] if daten.threads is None else daten.threads
+    fein = Feineinstellungen(faeden=threads or None)
     try:
         _runner(request).starten(
             daten.modell,
-            kontext=daten.kontext or KONTEXT_VORGABE,
+            kontext=daten.kontext or gespeichert["kontext"],
             schichten=(
-                SCHICHTEN_VORGABE if daten.schichten is None else daten.schichten
+                gespeichert["schichten"] if daten.schichten is None else daten.schichten
             ),
-            port=daten.port,
+            port=daten.port or gespeichert["port"],
             fein=fein,
             # No speed module here, ever: a speech model has no draft to
             # ride along, and the folder manifest may well name one for the
@@ -298,14 +314,22 @@ async def transkribieren(
     # blocking wait here is a wait for everything — a chat stream mid-answer
     # stops emitting, the runner's status polling stalls, every other request
     # queues behind one dictated sentence.
-    roh = await asyncio.to_thread(
-        sprachserver.transkribieren,
-        lauf.port,
-        runner.schluessel,
-        daten,
-        sprache=diktatsprachewahl.sprachcode(repositories),
-        anweisung=diktatsprachewahl.anweisung(repositories),
-    )
+    try:
+        roh = await asyncio.to_thread(
+            sprachserver.transkribieren,
+            lauf.port,
+            runner.schluessel,
+            daten,
+            sprache=diktatsprachewahl.sprachcode(repositories),
+            anweisung=diktatsprachewahl.anweisung(repositories),
+        )
+    except sprachserver.SpeechServerError as fehler:
+        # It answered, and said why it refused: the person reads that, not
+        # that it was silent.
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            t("fehler.speech_server_reported", sprache, reason=fehler.reason),
+        ) from None
     if roh is None:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, t("fehler.sprachserver_stumm", sprache)
@@ -343,24 +367,32 @@ async def transkribieren(
     return Transkript(text=sauber, roh=roh, bereinigt=True, bereinigung=wer)
 
 
-@router.post(
-    "/sprechen",
-    summary="Convert text to speech (returns WAV bytes)",
-    response_class=Response,
-)
-async def sprechen(
-    daten: SprechenAnfrage,
-    request: Request,
-    repositories: Repositories = Depends(hole_repositories),
-    sprache: str = Depends(hole_sprache),
-) -> Response:
+@dataclass(frozen=True)
+class _VoiceFiles:
+    """What a sentence needs to be spoken: the program, the folder, the
+    chosen voice and its projector, and the settings it was read from."""
+
+    programm: Path
+    ordner: Path
+    stimme: str
+    mmproj: Path
+    sprache: str
+    wahl: dict
+
+
+def _voice_files(
+    request: Request, repositories: Repositories, sprache: str
+) -> _VoiceFiles:
+    """Resolves the chosen voice, or refuses in the words of the page's own
+    language — the same refusals whoever asks (the sentence itself, or the
+    announcement of a conversation)."""
     # Checked before anything is resolved: a voice with nothing chosen is
     # not a failure, it is the as-installed state, and the route says so in
     # plain words rather than reaching for a program it was never told to
     # use.
     # Read once for the sentence's own fields — which voice, its language,
     # its sample. The five generation values and the memory pair come in
-    # through the module's own doors below, read fresh the same way.
+    # through the module's own doors, read fresh the same way.
     wahl = diktatsprachewahl.wahl(repositories)
     gewaehlte_stimme = wahl["stimme"]
     if not gewaehlte_stimme:
@@ -394,24 +426,170 @@ async def sprechen(
         raise HTTPException(
             status.HTTP_412_PRECONDITION_FAILED, t("fehler.stimme_kein_projektor", sprache)
         )
+    return _VoiceFiles(programm, ordner, gewaehlte_stimme, mmproj, gewaehlte_sprache, wahl)
+
+
+def _voice_spec(
+    request: Request, files: _VoiceFiles, repositories: Repositories
+) -> VoiceSpec | None:
+    """What the kept voice would be loaded with, or None where it cannot be
+    kept: the engine's own copy is not there yet (asking for it starts its
+    fetch), or the sample is refused."""
+    library_dir = request.app.state.voice_library.directory()
+    if library_dir is None:
+        return None
+    sample = None
+    if files.wahl["stimmprobe"]:
+        try:
+            sample = str(stimme.sample_path(files.ordner, files.wahl["stimmprobe"]))
+        except stimme.SprechenNichtMoeglich:
+            return None
+    layers, threads = diktatsprachewahl.stimmspeicher(repositories, files.wahl)
+    return VoiceSpec(
+        library_dir=str(library_dir),
+        model=str(files.ordner / files.stimme),
+        mmproj=str(files.mmproj),
+        speaker=sample,
+        # No count named: the C interface has no auto, so all layers.
+        gpu_layers=ALL_LAYERS if layers is None else layers,
+        threads=threads,
+    )
+
+
+class VoiceHold(BaseModel):
+    # Whether the voice is kept for this conversation. False is no failure:
+    # the pieces are spoken one start each, as with the switch off.
+    kept: bool
+
+
+@router.post(
+    "/voice/hold",
+    summary="Announce a conversation: keep the voice loaded for it",
+    response_model=VoiceHold,
+)
+async def voice_hold(
+    request: Request,
+    repositories: Repositories = Depends(hole_repositories),
+    sprache: str = Depends(hole_sprache),
+) -> VoiceHold:
+    """Sent when a conversation begins and repeated while it lasts. The
+    first one loads the voice (in the background, the answer does not wait
+    for it); each one holds it a little longer. Where the voice cannot be
+    kept — a switch is off, nothing chosen, the engine's own copy is still
+    being fetched — the answer says so and the pieces go the plain way."""
+    service = request.app.state.voice_service
+    wahl = diktatsprachewahl.wahl(repositories)
+    # Nothing is read aloud without the first switch, so nothing is kept
+    # loaded for it either.
+    if not wahl["vorlesen"] or not diktatsprachewahl.keep_model_in_memory(repositories, wahl):
+        await asyncio.to_thread(service.release)
+        return VoiceHold(kept=False)
+    try:
+        files = _voice_files(request, repositories, sprache)
+    except HTTPException:
+        return VoiceHold(kept=False)
+    spec = _voice_spec(request, files, repositories)
+    if spec is None:
+        return VoiceHold(kept=False)
+    await asyncio.to_thread(service.hold, spec)
+    return VoiceHold(kept=True)
+
+
+@router.post(
+    "/voice/release",
+    summary="The conversation is over: give the voice back",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def voice_release(request: Request) -> Response:
+    await asyncio.to_thread(request.app.state.voice_service.release)
+    request.app.state.voice_library.conversation_over()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+async def _until_gone(
+    request: Request, work: asyncio.Task, cancel: threading.Event
+) -> None:
+    """Waits for ``work``, or for the one who asked to be gone — then sets
+    ``cancel``. Listens on the request's own channel rather than asking
+    ``request.is_disconnected()``: that one cannot see a departure through the
+    middleware that wraps this service."""
+    listening = asyncio.create_task(request.receive())
+    try:
+        while True:
+            await asyncio.wait({work, listening}, return_when=asyncio.FIRST_COMPLETED)
+            if work.done():
+                return
+            if listening.result().get("type") == "http.disconnect":
+                cancel.set()
+                return
+            listening = asyncio.create_task(request.receive())
+    finally:
+        listening.cancel()
+
+
+@router.post(
+    "/sprechen",
+    summary="Convert text to speech (returns WAV bytes)",
+    response_class=Response,
+)
+async def sprechen(
+    daten: SprechenAnfrage,
+    request: Request,
+    repositories: Repositories = Depends(hole_repositories),
+    sprache: str = Depends(hole_sprache),
+) -> Response:
+    files = _voice_files(request, repositories, sprache)
     # Off the loop for the same reason the transcription above is: this
     # waits on a subprocess for up to `stimme.ZEITGRENZE`, and a blocking
     # wait here is a wait for every other request too.
-    schichten, faeden = diktatsprachewahl.stimmspeicher(repositories, wahl)
-    try:
-        wav = await asyncio.to_thread(
+    schichten, faeden = diktatsprachewahl.stimmspeicher(repositories, files.wahl)
+    sampling = diktatsprachewahl.stimmwerte(repositories, files.wahl)
+    # In a conversation with the voice kept: the loaded voice speaks the
+    # piece. A piece it does not bring out is spoken by the program below,
+    # and so is each one after it until the conversation is over.
+    service = request.app.state.voice_service
+    if diktatsprachewahl.keep_model_in_memory(repositories, files.wahl) and service.active():
+        spec = _voice_spec(request, files, repositories)
+        if spec is not None:
+            try:
+                await asyncio.to_thread(service.hold, spec)
+                wav = await asyncio.to_thread(
+                    service.speak, daten.text, language=files.sprache, sampling=sampling,
+                )
+                return Response(content=wav, media_type="audio/wav")
+            except VoiceUnavailable as fehler:
+                log.info("The kept voice did not speak (%s); llama-tts speaks", fehler.reason)
+    cancel = threading.Event()
+    speaking = asyncio.create_task(
+        asyncio.to_thread(
             stimme.sprechen,
-            programm,
-            ordner / gewaehlte_stimme,
-            mmproj,
+            files.programm,
+            files.ordner / files.stimme,
+            files.mmproj,
             daten.text,
-            sprache=gewaehlte_sprache,
-            ordner=ordner,
-            stimmprobe=wahl["stimmprobe"] or None,
-            sampling=diktatsprachewahl.stimmwerte(repositories, wahl),
+            sprache=files.sprache,
+            ordner=files.ordner,
+            stimmprobe=files.wahl["stimmprobe"] or None,
+            sampling=sampling,
             schichten=schichten,
             faeden=faeden,
+            cancel=cancel,
         )
+    )
+    try:
+        # A request that is given up (a conversation that ended while its
+        # sentence was being made) ends the program too: nobody waits for
+        # the sound, and the model it loads is a gigabyte or two.
+        await _until_gone(request, speaking, cancel)
+        wav = await speaking
+    except stimme.SpeakCancelled:
+        return Response(status_code=_CLIENT_CLOSED_REQUEST)
+    except asyncio.CancelledError:
+        # The server gave the request up itself: the program goes with it,
+        # and nobody is left to read how it ended.
+        cancel.set()
+        speaking.add_done_callback(lambda task: task.cancelled() or task.exception())
+        raise
     except stimme.SprechenNichtMoeglich as fehler:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, t(f"fehler.{fehler.grund}", sprache)

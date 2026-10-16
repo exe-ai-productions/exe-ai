@@ -232,3 +232,50 @@ def test_a_reason_that_cannot_be_written_still_lets_the_run_close(monkeypatch):
     assert lauf.zustand == FEHLER and lauf.ausgabe == ""
     laeufe.vergessen("chat-bild-broken-text")
 
+
+def test_the_prompt_stands_once_not_again_among_the_dials():
+    """The run's own line is the prompt; the dials under it do not repeat it
+    (the negative prompt is another text and stays)."""
+    from app.api.v1.bild import BildWunsch
+
+    wunsch = BildWunsch(modell="m", prompt="a red car", negativ="blur")
+    for dials in (bildlauf._regler_von(wunsch), bildlauf._regler_von(wunsch.model_dump())):
+        assert "prompt" not in dials
+        assert dials["negativ"] == "blur"
+    lauf = bildlauf.beginnen("chat-bild-prompt", "a red car", wunsch)
+    assert lauf.befehl == "a red car"
+    assert "prompt" not in bildlauf.regler_von("chat-bild-prompt", lauf.nummer)
+    laeufe.vergessen("chat-bild-prompt")
+
+
+def test_a_dial_without_content_is_not_a_line():
+    """An empty sampler or scheduler used to stand as a name with nothing
+    after it; no field stands without a value."""
+    from app.api.v1.bild import BildWunsch
+
+    wunsch = BildWunsch(modell="m", prompt="p")
+    dials = bildlauf._regler_von(wunsch)
+    assert wunsch.scheduler == "" and "scheduler" not in dials
+    assert wunsch.sampler == "" and "sampler" not in dials
+    assert all(bildlauf._hat_inhalt(wert) for wert in dials.values())
+
+
+def test_silence_numbers_and_switches_stay_even_when_zero_or_off():
+    """A CFG of 0 and a switch set to off are choices, not blanks."""
+    assert bildlauf._hat_inhalt(0) is True
+    assert bildlauf._hat_inhalt(0.0) is True
+    assert bildlauf._hat_inhalt(False) is True
+    for blank in (None, "", "  ", [], {}, ()):
+        assert bildlauf._hat_inhalt(blank) is False
+    from app.api.v1.bild import BildWunsch
+
+    dials = bildlauf._regler_von(BildWunsch(modell="m", prompt="p", cfg=0.0, sampler="euler"))
+    assert dials["cfg"] == 0.0 and dials["sampler"] == "euler"
+
+
+def test_silence_a_command_run_has_no_dials_and_keeps_its_line():
+    lauf = laeufe.anlegen("chat-bild-befehl", "ls -la")
+    assert bildlauf.regler_von("chat-bild-befehl", lauf.nummer) is None
+    assert lauf.befehl == "ls -la"
+    laeufe.vergessen("chat-bild-befehl")
+

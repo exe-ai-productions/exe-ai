@@ -412,7 +412,7 @@
       <thead><tr><th>Gruppe</th><th>Seite</th><th>Was dort steht</th></tr></thead>
       <tbody>
       <tr><td>Allgemein</td><td>Sprache</td><td>Auto (Gerät), English oder Deutsch. Der Wechsel wirkt sofort.</td></tr>
-      <tr><td></td><td>Erscheinungsbild</td><td>Look, Nachrichtenfarbe, Code-Farben, Layout-Modus.</td></tr>
+      <tr><td></td><td>Erscheinungsbild</td><td>Erscheinungsbild, Nachrichtenfarbe, Code-Farben, Layout-Modus.</td></tr>
       <tr><td></td><td>Meldungen</td><td>Töne, Lautstärke, Anzeigedauer von Popups und die farbigen Punkte für Agenten, Cronjobs, Terminal und Chat.</td></tr>
       <tr><td></td><td>Tastenkürzel</td><td>Alle Kürzel auf einen Blick.</td></tr>
       <tr><td>Verhalten des Assistenten</td><td>Gedächtnis</td><td>Was er sich merkt und wohin diese Informationen übertragen werden.</td></tr>
@@ -431,7 +431,7 @@
   <div class="zwei">
     <div class="karte">
       <h3>Erscheinungsbild</h3>
-      <p>Zur Auswahl stehen fünf Looks – Pearl, Exe, Dark Matter, Heaven und Moune – sowie <b class="k">Eigener Verlauf</b> mit deinen Farben und <b class="k">Auto</b>, das dem Gerät folgt. Ein Look ändert das ganze Fenster: Rahmen, Linien, Nachrichten und Codeblöcke.</p>
+      <p>Zur Auswahl stehen fünf Erscheinungsbilder – Pearl, Exe, Dark Matter, Heaven und Moune – sowie <b class="k">Eigener Verlauf</b> mit deinen Farben und <b class="k">Auto</b>, das dem Gerät folgt. Ein Erscheinungsbild ändert das ganze Fenster: Rahmen, Linien, Nachrichten und Codeblöcke.</p>
       <p><b class="k">Nachrichtenfarbe</b> färbt deine eigenen Nachrichten. Unter <b class="k">Code-Farben</b> stehen folgende Farbschemata zur Auswahl: Exe, Tokyo Night, One Light, GitHub, GitHub Dark, Dracula, Nord, Solarized Light und Solarized Dark. Der <b class="k">Layout-Modus</b> stellt Schriftgröße, Chat-Breite und Nachrichtenabstand ein.</p>
     </div>
     <div class="karte">
@@ -491,16 +491,32 @@
       <tbody>
       <tr><td><code>exe new</code></td><td>Neuer Chat</td></tr>
       <tr><td><code>exe chats</code></td><td>Chat auswählen</td></tr>
+      <tr><td><code>exe rename</code></td><td>Chat umbenennen</td></tr>
+      <tr><td><code>exe delete</code></td><td>Chat löschen</td></tr>
+      <tr><td><code>exe archive</code></td><td>Chat archivieren</td></tr>
+      <tr><td><code>exe project</code></td><td>Projekte anlegen, umbenennen oder löschen und den Chat in ein Projekt verschieben</td></tr>
       <tr><td><code>exe model</code></td><td>Modell auswählen</td></tr>
       <tr><td><code>exe server</code></td><td>Einen Server starten, stoppen oder sein Log anzeigen</td></tr>
       <tr><td><code>exe download</code></td><td>Modell suchen und herunterladen</td></tr>
+      <tr><td><code>exe provider</code></td><td>Cloud-Anbieter hinzufügen oder entfernen</td></tr>
       <tr><td><code>exe status</code></td><td>Dienst, Server und Speicherbelegung anzeigen</td></tr>
       <tr><td><code>exe theme</code></td><td>Erscheinungsbild auswählen</td></tr>
       <tr><td><code>exe lang</code></td><td>Sprache auswählen</td></tr>
-      <tr><td><code>exe settings</code></td><td>Einstellungen anzeigen</td></tr>
-      <tr><td><code>exe set</code></td><td>Einstellung ändern</td></tr>
-      <tr><td><code>exe tools</code></td><td>Werkzeuge auflisten</td></tr>
+      <tr><td><code>exe setup</code></td><td>Sprache, Erscheinungsbild, Anrede und Modell einrichten</td></tr>
+      <tr><td><code>exe settings</code></td><td>Einstellungen anzeigen und ändern</td></tr>
+      <tr><td><code>exe agents</code></td><td>Aufgaben für Agenten starten und verfolgen oder Agenten bearbeiten</td></tr>
+      <tr><td><code>exe cron</code></td><td>Cronjobs anlegen, starten, pausieren oder entfernen</td></tr>
+      <tr><td><code>exe tools</code></td><td>Werkzeuge aktivieren oder deaktivieren</td></tr>
+      <tr><td><code>exe ps</code></td><td>Laufende Befehle des Modells im Chat anzeigen und stoppen</td></tr>
+      <tr><td><code>exe mcp</code></td><td>MCP-Server hinzufügen, ändern, entfernen oder sich bei einem anmelden</td></tr>
+      <tr><td><code>exe skills</code></td><td>Skills ansehen, schreiben oder bearbeiten</td></tr>
+      <tr><td><code>exe files</code></td><td>Dateien des Chats anzeigen</td></tr>
+      <tr><td><code>exe image</code></td><td>Bild aus einer Beschreibung erzeugen</td></tr>
+      <tr><td><code>exe memory</code></td><td>Gedächtnis im Texteditor lesen und ändern</td></tr>
+      <tr><td><code>exe system</code></td><td>Anweisungen im Texteditor lesen und ändern</td></tr>
+      <tr><td><code>exe dir</code></td><td>Arbeitsordner anzeigen, freigeben oder nicht mehr freigeben</td></tr>
       <tr><td><code>exe think</code></td><td>Denkstufe auswählen</td></tr>
+      <tr><td><code>exe compact</code></td><td>Chat komprimieren</td></tr>
       <tr><td><code>exe export</code></td><td>Chat als Datei speichern</td></tr>
       <tr><td><code>exe clear</code></td><td>Bildschirm leeren; Chat beibehalten</td></tr>
       <tr><td><code>exe help</code></td><td>Verfügbare Befehle auflisten</td></tr>
@@ -515,6 +531,8 @@
       <tr><td><code>--lang</code></td><td>Sprache des Clients festlegen: de, en</td></tr>
       <tr><td><code>--theme</code></td><td>Erscheinungsbild festlegen: auto, exe, darkmatter, moune, heaven, pearl</td></tr>
       <tr><td><code>--chat</code></td><td>Chat anhand seiner Kennung oder seines Titels öffnen</td></tr>
+      <tr><td><code>--continue</code></td><td>Den zuletzt benutzten Chat öffnen</td></tr>
+      <tr><td><code>-p</code></td><td>Eine Nachricht senden, die Antwort ausgeben und beenden; hineingeleiteter Text wird mitgeschickt, Werkzeuge laufen ohne Rückfrage. Beispiel: cat error.log | exe -p "erkläre diesen Fehler"</td></tr>
       <tr><td><code>--password-file</code></td><td>Passwort aus einer Datei lesen: das, das der Dienst außerhalb dieses Rechners verlangt, oder das, nach dem eine fremde Adresse fragt</td></tr>
       <tr><td><code>--version</code></td><td>Version anzeigen</td></tr>
       <tr><td><code>--help</code></td><td>Diese Hilfe anzeigen</td></tr>
@@ -527,17 +545,33 @@
       <thead><tr><th>Befehl</th><th>Was er tut</th></tr></thead>
       <tbody>
       <tr><td><code>/new</code></td><td>Neuer Chat</td></tr>
-      <tr><td><code>/chats</code></td><td>Chat auswählen</td></tr>
+      <tr><td><code>/chats</code></td><td>Chat auswählen<br>Tippen in der Auswahl sucht, Ziffern wählen nach Nummer. Beispiele: /chats 2 öffnet Chat 2; /chats archive zeigt die archivierten Chats.</td></tr>
+      <tr><td><code>/rename</code></td><td>Chat umbenennen<br>Beispiel: /rename Steuererklärung 2026</td></tr>
+      <tr><td><code>/delete</code></td><td>Chat löschen</td></tr>
+      <tr><td><code>/archive</code></td><td>Chat archivieren<br>Archivierte Chats zeigt /chats archive.</td></tr>
+      <tr><td><code>/project</code></td><td>Projekte anlegen, umbenennen oder löschen und den Chat in ein Projekt verschieben<br>Beispiel: /project 2 öffnet Projekt 2.</td></tr>
       <tr><td><code>/model</code></td><td>Modell auswählen</td></tr>
       <tr><td><code>/server</code></td><td>Einen Server starten, stoppen oder sein Log anzeigen<br>Beispiele: /server stop stoppt den Modell-Server; /server log agent zeigt das Log des Agenten-Servers.</td></tr>
       <tr><td><code>/download</code></td><td>Modell suchen und herunterladen<br>Beispiel: /download gemma 3 12b. Einen laufenden Download mit /download stop abbrechen.</td></tr>
+      <tr><td><code>/provider</code></td><td>Cloud-Anbieter hinzufügen oder entfernen<br>Beispiel: /provider add anthropic</td></tr>
       <tr><td><code>/status</code></td><td>Dienst, Server und Speicherbelegung anzeigen</td></tr>
       <tr><td><code>/theme</code></td><td>Erscheinungsbild auswählen<br>Nerd-Font-Symbole mit /theme nerd on aktivieren und mit /theme nerd off deaktivieren.</td></tr>
       <tr><td><code>/lang</code></td><td>Sprache auswählen</td></tr>
-      <tr><td><code>/settings</code></td><td>Einstellungen anzeigen</td></tr>
-      <tr><td><code>/set</code></td><td>Einstellung ändern<br>Beispiel: /set global.verdichtung_schwelle 70</td></tr>
-      <tr><td><code>/tools</code></td><td>Werkzeuge auflisten<br>Die Freigabe „Immer erlauben“ für ein Werkzeug widerrufen, zum Beispiel: /tools forget read_file</td></tr>
+      <tr><td><code>/setup</code></td><td>Sprache, Erscheinungsbild, Anrede und Modell einrichten<br>Einen einzelnen Schritt ausführen, zum Beispiel: /setup model</td></tr>
+      <tr><td><code>/settings</code></td><td>Einstellungen anzeigen und ändern<br>Beispiel: /settings global.verdichtung_schwelle 70</td></tr>
+      <tr><td><code>/agents</code></td><td>Aufgaben für Agenten starten und verfolgen oder Agenten bearbeiten<br>Eine Aufgabe starten, zum Beispiel: /agents run researcher fasse die offenen Punkte zusammen. Einen Agenten mit /agents edit researcher bearbeiten.</td></tr>
+      <tr><td><code>/cron</code></td><td>Cronjobs anlegen, starten, pausieren oder entfernen<br>Beispiele: /cron add fragt die Felder der Reihe nach ab; /cron run 2 startet Cronjob 2 sofort; /cron pause 2, /cron resume 2 und /cron remove 2 funktionieren ebenso.</td></tr>
+      <tr><td><code>/tools</code></td><td>Werkzeuge aktivieren oder deaktivieren<br>Beispiele: /tools 3 schaltet Werkzeug 3 zwischen aktiv und inaktiv um; /tools forget read_file widerruft die Freigabe „Immer erlauben“ für read_file.</td></tr>
+      <tr><td><code>/ps</code></td><td>Laufende Befehle des Modells im Chat anzeigen und stoppen<br>Beispiel: /ps 2 stoppt Befehl 2.</td></tr>
+      <tr><td><code>/mcp</code></td><td>MCP-Server hinzufügen, ändern, entfernen oder sich bei einem anmelden<br>Beispiel: /mcp 2 öffnet MCP-Server 2.</td></tr>
+      <tr><td><code>/skills</code></td><td>Skills ansehen, schreiben oder bearbeiten<br>Beispiel: /skills handoff öffnet den Skill handoff.</td></tr>
+      <tr><td><code>/files</code></td><td>Dateien des Chats anzeigen</td></tr>
+      <tr><td><code>/image</code></td><td>Bild aus einer Beschreibung erzeugen<br>Beispiel: /image ein Leuchtturm in der Dämmerung, Ölgemälde. Mit Strg+C abbrechen.</td></tr>
+      <tr><td><code>/memory</code></td><td>Gedächtnis im Texteditor lesen und ändern</td></tr>
+      <tr><td><code>/system</code></td><td>Anweisungen im Texteditor lesen und ändern</td></tr>
+      <tr><td><code>/dir</code></td><td>Arbeitsordner anzeigen, freigeben oder nicht mehr freigeben<br>Beispiele: /dir add ~/Projekte/website gibt einen Ordner frei; /dir remove 2 gibt Ordner 2 nicht mehr frei.</td></tr>
       <tr><td><code>/think</code></td><td>Denkstufe auswählen</td></tr>
+      <tr><td><code>/compact</code></td><td>Chat komprimieren<br>Die Zusammenfassung auf ein Thema ausrichten, zum Beispiel: /compact nur die offenen Aufgaben</td></tr>
       <tr><td><code>/export</code></td><td>Chat als Datei speichern<br>Mit /export den Chat als HTML-Datei speichern oder mit /export notizen.md als Markdown-Datei.</td></tr>
       <tr><td><code>/stop</code></td><td>Antwort abbrechen</td></tr>
       <tr><td><code>/clear</code></td><td>Bildschirm leeren; Chat beibehalten</td></tr>

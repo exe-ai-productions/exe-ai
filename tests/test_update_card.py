@@ -225,7 +225,7 @@ def test_the_card_sets_the_notes_only_through_the_one_door_and_its_buttons_only_
     # A download that fails says so, in the words of the settings row.
     # A step that fails says so, in the words of the settings row; "Later" says nothing.
     assert "if (stood && !stands && updates.state === 'error') {" in card
-    assert "meldeText('updates.failed', { reason: updates.reason }, 'fehler')" in card
+    assert "meldeText(failedKey(), { reason: updates.reason }, 'fehler')" in card
     assert "const stands = cardShown()" in card and "stood = stands" in card
     assert "onclick={chooseLater}>{t('updates.later')}" in card
     assert "onclick={downloadUpdate}>{t('updates.download')}" in card
@@ -250,7 +250,7 @@ def test_the_row_of_the_settings_asks_by_hand_and_says_what_came_of_it():
     # What a look brings is rolled into sight at the foot of the list.
     assert "await checkForUpdates()\n    await tick()\n    part?.scrollIntoView({ block: 'end' })" in row
     assert "t('updates.found', { version: updates.found })" in row
-    assert "t('updates.failed', { reason: updates.reason })" in row
+    assert "t(failedKey(), { reason: updates.reason })" in row
     assert "t('updates.current')" in row
     settings = (PARTS / "SystemPrompt.svelte").read_text(encoding="utf-8")
     assert settings.count("<Updatezeile />") == 1
@@ -273,6 +273,8 @@ def test_every_text_stands_word_for_word_in_both_languages():
         "current": "Die App ist aktuell.",
         "found": "Neue Version {version} verfügbar.",
         "failed": "Prüfen nicht möglich: {reason}",
+        "failed_download": "Laden nicht möglich: {reason}",
+        "failed_install": "Installieren nicht möglich: {reason}",
         "store": "Updates kommen aus dem Microsoft Store.",
     }
     assert texts["en"] == {
@@ -287,5 +289,55 @@ def test_every_text_stands_word_for_word_in_both_languages():
         "current": "The app is up to date.",
         "found": "New version {version} available.",
         "failed": "Could not check: {reason}",
+        "failed_download": "Could not download: {reason}",
+        "failed_install": "Could not install: {reason}",
         "store": "Updates come from the Microsoft Store.",
+    }
+
+
+def test_each_step_that_fails_has_its_own_sentence_and_a_look_keeps_the_old_one():
+    """The shell names the step that failed; the page picks the sentence by
+    it, in the row and in the card's notice alike. A failure that names no
+    step is a look, as before."""
+    source = (LIB / "updates.svelte.js").read_text(encoding="utf-8")
+    assert "const STEPS = ['check', 'download', 'install']" in source
+    assert "updates.step = STEPS.includes(status.step) ? status.step : 'check'" in source
+    key = re.search(r"export function failedKey\(\) \{\n(.*?)\n\}", source, re.S)
+    assert key, "failedKey not found"
+    body = key.group(1)
+    assert "updates.step === 'download'" in body and "'updates.failed_download'" in body
+    assert "updates.step === 'install'" in body and "'updates.failed_install'" in body
+    assert body.rstrip().endswith("return 'updates.failed'")
+    # A request that does not come back at all is told with the step it was.
+    assert "updates.step = STEPS.includes(name) ? name : 'check'" in source
+
+
+@needs_node
+def test_the_page_picks_the_sentence_by_the_step_the_shell_names():
+    """A failed look keeps its sentence, a failed download and a failed
+    installation take their own; a failure that names no step, or one the
+    page does not know, is a look. A request that does not come back at all
+    is told with the step of the request."""
+    answer = _state(
+        """
+        updatesStart(); await null; await null
+        const out = {}
+        for (const step of ['check', 'download', 'install', undefined, 'unpack']) {
+          tell({ state: 'error', reason: 'x', step })
+          out[String(step)] = failedKey()
+        }
+        shell.download = async () => { throw new Error('gone') }
+        tell({ state: 'available', found: '0.7.0', step: 'check' })
+        await downloadUpdate()
+        out.rejected = [updates.state, failedKey(), updates.reason]
+        console.log(JSON.stringify(out))
+        """
+    )
+    assert answer == {
+        "check": "updates.failed",
+        "download": "updates.failed_download",
+        "install": "updates.failed_install",
+        "undefined": "updates.failed",
+        "unpack": "updates.failed",
+        "rejected": ["error", "updates.failed_download", "gone"],
     }

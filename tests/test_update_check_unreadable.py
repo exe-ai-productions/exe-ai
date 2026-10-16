@@ -1,8 +1,9 @@
 """The check for a newer build says so when the release list cannot be read,
-in the model server's window and in the picture server's, and the footer's
+in the section "llama.cpp" every server window carries and in the picture
+server's window, and the footer's
 name for the skip-layers field is the field's own.
 
-Checked at the source of both windows, since there is no Svelte runtime
+Checked at the source of both, since there is no Svelte runtime
 harness here; the service's answer is tested with its routes.
 """
 
@@ -14,7 +15,7 @@ from pathlib import Path
 
 WURZEL = Path(__file__).resolve().parent.parent
 FENSTER = {
-    "model server": WURZEL / "frontend/src/teile/Modellserver.svelte",
+    "llama.cpp section": WURZEL / "frontend/src/teile/LlamaCppSection.svelte",
     "picture server": WURZEL / "frontend/src/teile/Bildserver.svelte",
 }
 
@@ -26,7 +27,7 @@ def _text(language: str, key: str):
     return node
 
 
-def test_both_windows_say_it_at_the_top_when_the_list_was_not_readable():
+def test_both_say_it_at_the_top_when_the_list_was_not_readable():
     for name, path in FENSTER.items():
         quelle = path.read_text(encoding="utf-8")
         said = re.search(

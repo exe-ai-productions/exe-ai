@@ -134,12 +134,29 @@ def steps(repositories) -> int:
 def limit_reached(repositories) -> dict[str, int] | None:
     """How many helpers run and how many may, when no further one may start
     now; None when one may. The two numbers are what the refusal's sentence
-    names (``jobs.helper_limit``)."""
+    names (see ``limit_key``)."""
     limit = at_once(repositories)
     running = repositories.auftraege.open_count(agent=HELPER_NAME)
     if running < limit:
         return None
     return {"running": running, "limit": limit}
+
+
+def limit_key(running: int, limit: int) -> str:
+    """The catalogue key of the refusal's sentence for these two numbers.
+
+    The sentence names both, and each is bent on its own: one helper "is"
+    running, several "are"; one "may", several "may" — a verb and a noun
+    that differ in the two languages. So there is one text for each way the
+    two can stand, the plain one for the many.
+    """
+    if running == 1 and limit == 1:
+        return "jobs.helper_limit_both_one"
+    if running == 1:
+        return "jobs.helper_limit_running_one"
+    if limit == 1:
+        return "jobs.helper_limit_limit_one"
+    return "jobs.helper_limit"
 
 
 def helper_agent(repositories, registry) -> Agent:

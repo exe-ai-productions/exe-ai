@@ -40,15 +40,19 @@ from app.api.v1.bilder import empty_scratch_pictures
 from app.api.v1.health import _health_ermitteln
 from app.modelldownload import Modelldownload
 from app import agentenserver, einbettungsserver, sprachserver
+from app.voice_library import VoiceLibrary
+from app.voice_service import VoiceService
+from app import picture_program_choice
 from app.bildrunner import Bildrunner
 from app.bildturbo import Bildturbo
 from app.modellrunner import Modellrunner, begleiter_einsortieren
-from app import modellvorlauf
+from app import modellvorlauf, server_restart
+from app.server_restart import Restart
 from app import runnerzustand
 from app import stoppmarke
 from app import server_state
 from app.sddownload import Sddownload
-from app.serverdownload import Serverdownload
+from app.serverdownload import Serverdownload, installed_variant
 from app.config import Config, abgelegte_schluessel_melden, get_config
 from app.configwanderung import file_tool_added
 from app.paketierung import ressourcen
@@ -64,7 +68,7 @@ from app.inhaltssicherheit import (
     REGEL as CSP_REGEL,
 )
 from app.protokoll import ProtokollMiddleware, logging_einrichten, speicher_mb
-from app.speicherorte import bildkopien_verzeichnis, ort
+from app.speicherorte import LiveFolders, bildkopien_verzeichnis, ort
 from app.tools import WerkzeugRegistry
 from app.tools.aufbau import dial_host, registry_bauen
 from app.tools.hintergrund import laeufe
@@ -862,7 +866,14 @@ async def lebenszyklus(app: FastAPI):
 
         # The model runner. Built here and not per request: it holds a running
         # process, and a second instance would not know about the first.
-        modellordner = ort(config, "models")
+        # Every server asks for its folder by name each time it needs it
+        # (a listing, a start, a download), so a location the user moved a
+        # moment ago is the one all of them see — nothing here is bound at
+        # startup but the first sorting below.
+        def models_folder() -> Path:
+            return ort(config, "models")
+
+        modellordner = models_folder()
         # Companions used to lie loose among the models; move them into their own
         # sub-folders once at startup, so the model folder shows only models and
         # each companion folder only its own kind. A plain rename, names kept;
@@ -870,7 +881,7 @@ async def lebenszyklus(app: FastAPI):
         # drafter folder moves back.
         begleiter_einsortieren(modellordner)
         app.state.modellrunner = Modellrunner(
-            modellordner,
+            models_folder,
             config.app.runner_programm,
             # Only this runner ever serves a cron entry ahead of
             # time, so only this one gets to record how long a load took — the
@@ -891,7 +902,10 @@ async def lebenszyklus(app: FastAPI):
         # "check, then create" in a request handler can be run twice at the same
         # moment by two requests, which would leave two runners holding two
         # locks and let exactly the thing happen that the lock exists to stop.
-        app.state.bildrunner = Bildrunner(config.datenverzeichnis)
+        def picked_picture_program() -> str | None:
+            return picture_program_choice.picked(app.state.repositories)
+
+        app.state.bildrunner = Bildrunner(config.datenverzeichnis, picked_picture_program)
         # Image-Turbo: the optional persistent picture server. Built here, never
         # started here — off by default, switched on by hand from the plus menu.
         # sd-cli stays the default; this only holds the model in memory so every
@@ -900,14 +914,16 @@ async def lebenszyklus(app: FastAPI):
         # instances, so it is the one thing that tells them apart — and without
         # it a second instance read the first one's note and killed a picture
         # server that was drawing for somebody else.
-        app.state.bildturbo = Bildturbo(config.datenverzeichnis, config.app.port)
+        app.state.bildturbo = Bildturbo(
+            config.datenverzeichnis, config.app.port, picked_picture_program
+        )
         # A leftover server from a previous run holds the port; end it now.
         app.state.bildturbo._raeum_waise()
         # The embedding server: its own folder, its own port, its own note and
         # key. Not started here — it is a speed-up somebody switches on, and the
         # one-shot path works without it.
         app.state.einbettungsrunner = einbettungsserver.runner_bauen(
-            config.pfad(config.app.einbettungsmodelle_verzeichnis),
+            lambda: ort(config, "embedding_models"),
             config.app.runner_programm,
             config.app.einbettung_port,
         )
@@ -917,16 +933,25 @@ async def lebenszyklus(app: FastAPI):
         # dictation. One folder for both, one port each. Neither is started here:
         # a microphone button is pressed by a hand, and until one is there is
         # nothing to listen to.
-        sprachordner = ort(config, "speech_models")
+        def speech_folder() -> Path:
+            return ort(config, "speech_models")
+
+        sprachordner = speech_folder()
         # Projectors dropped in loose belong in the vision sub-folder, the same
         # rule the model folder follows — a speech model without its projector
         # cannot hear at all, and the pairing reads that sub-folder.
         begleiter_einsortieren(sprachordner)
         app.state.sprachrunner = sprachserver.runner_bauen(
-            sprachordner, config.app.runner_programm, config.app.sprache_port
+            speech_folder, config.app.runner_programm, config.app.sprache_port
         )
         app.state.sprachputzrunner = sprachserver.putzrunner_bauen(
-            sprachordner, config.app.runner_programm, config.app.sprachputz_port
+            speech_folder, config.app.runner_programm, config.app.sprachputz_port
+        )
+        # The voice kept loaded for a conversation (app/voice_service.py);
+        # nothing is started here, a conversation's announcement does that.
+        app.state.voice_service = VoiceService()
+        app.state.voice_library = VoiceLibrary(
+            config.pfad("."), lambda: installed_variant(config.pfad("."))
         )
         if app.state.sprachrunner.aufraeumen():
             log.info("Orphaned speech server stopped")
@@ -936,7 +961,7 @@ async def lebenszyklus(app: FastAPI):
         # here; whether it also STARTS here is the one field's answer, and that is
         # asked further down, once the discovery it registers with exists.
         app.state.agentenrunner = agentenserver.runner_bauen(
-            modellordner, config.app.runner_programm
+            models_folder, config.app.runner_programm
         )
         if app.state.agentenrunner.aufraeumen():
             log.info("Orphaned agent model server stopped")
@@ -950,15 +975,23 @@ async def lebenszyklus(app: FastAPI):
         # download routes by this map, because each server reads only its own
         # folder — a file in the wrong one is invisible where it belongs and a
         # broken entry where it lands.
-        app.state.modellordner_je_art = {
-            "chat": modellordner,
-            "einbettung": config.pfad(config.app.einbettungsmodelle_verzeichnis),
-            "sprache": sprachordner,
-            "bild": ort(config, "image_models"),
-        }
+        app.state.modellordner_je_art = LiveFolders(
+            config,
+            {
+                "chat": "models",
+                "einbettung": "embedding_models",
+                "sprache": "speech_models",
+                "bild": "image_models",
+            },
+        )
         # The model server itself, fetchable in one click on machines that do
         # not have it — into the user's data folder, next to their models.
-        app.state.serverdownload = Serverdownload(config.pfad("."))
+        # The servers that run when a new build comes in start again on it
+        # (app/server_restart.py).
+        app.state.serverdownload = Serverdownload(
+            config.pfad("."),
+            Restart(server_restart.members_of(app, asyncio.get_running_loop())),
+        )
         # The picture generator the same way. Built here rather than on first
         # use, so there is one of it: two requests arriving together would
         # otherwise each build their own and write into the same file.
@@ -1034,6 +1067,12 @@ async def lebenszyklus(app: FastAPI):
                     server.stoppen()
                 except Exception:
                     log.warning("%s could not be stopped on shutdown", name, exc_info=True)
+            voice_service = getattr(app.state, "voice_service", None)
+            if voice_service is not None:
+                try:
+                    voice_service.stop()
+                except Exception:
+                    log.warning("The kept voice could not be stopped on shutdown", exc_info=True)
             # No process outlives its chat unseen: whatever a background run
             # still has running goes down with the service.
             getoetet = laeufe.alle_toeten()

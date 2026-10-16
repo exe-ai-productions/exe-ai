@@ -242,6 +242,9 @@ class ServerUebersicht(BaseModel):
     # If it is running: ALL tools the server offers — the checkbox list
     # shows them in full, approved is the intersection.
     alle_werkzeuge: list[WerkzeugKurz]
+    # The logo the running server sent along, checked (app/tools/mcp_logo.py),
+    # as a ``data:`` URL; None where there is none or it did not pass.
+    logo: str | None = None
 
 
 class MCPSondierungAnfrage(BaseModel):
@@ -355,6 +358,7 @@ def server_uebersicht(
                     WerkzeugKurz(name=w.name, beschreibung=w.beschreibung)
                     for w in (client.werkzeuge if client else [])
                 ],
+                logo=getattr(client, "logo", None),
             )
         )
     return sorted(uebersicht, key=lambda e: e.name)

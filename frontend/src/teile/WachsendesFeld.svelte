@@ -138,11 +138,14 @@
      caller sets for its content area. That makes the window exactly the
      same height on every tab, even though some show extra blocks below
      (status lights, read indicator, suspend switch). Its own cap goes
-     away — capping is now done by the flex frame. */
+     away — capping is now done by the flex frame. The floor is the one
+     place that holds its least height: where the rows above it take the
+     room, the field stops at about six lines and the body of the window
+     scrolls instead of the field shrinking to a single row. */
   .feld.volleHoehe {
     display: flex;
     flex: 1;
-    min-height: 0;
+    min-height: 10rem;
   }
   /* No height of its own: the row stretches it to the field. A percentage
      would need a parent with a set height, and a settings page only gives a

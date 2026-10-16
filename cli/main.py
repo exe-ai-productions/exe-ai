@@ -35,8 +35,10 @@ from cli import (
     install,
     outside,
     prefs,
+    print_mode,
     render,
     service,
+    setup_steps,
     status,
     themes,
 )
@@ -117,6 +119,11 @@ def _arguments(argv: Sequence[str] | None) -> tuple[argparse.Namespace, list[str
     # choice keeps the name it is remembered under.
     parser.add_argument("--theme", dest="look")
     parser.add_argument("--chat")
+    # The chat that was used last. A chat named with ``--chat`` goes first.
+    parser.add_argument("--continue", dest="continue_chat", action="store_true")
+    # One message from a script: the answer is written out and the program
+    # ends.
+    parser.add_argument("-p", dest="question")
     # The file holding a password, never the word itself: an argument shows
     # in every process listing. For ``serve`` the password the service is
     # to demand; for a remote address the one it asks for.
@@ -156,6 +163,8 @@ def _help_entries(texts: Texts) -> list[tuple[str, str] | None]:
         ("--lang", texts.t("cli.help_lang", codes=", ".join(available_languages()))),
         ("--theme", texts.t("cli.help_theme", names=", ".join(themes.available()))),
         ("--chat", texts.t("cli.help_chat")),
+        ("--continue", texts.t("cli.help_continue")),
+        ("-p", texts.t("cli.help_print", program=PROGRAM)),
         ("--password-file", texts.t("cli.help_password_file")),
         ("--version", texts.t("cli.help_version")),
         ("--help", texts.t("cli.help_help")),
@@ -286,6 +295,10 @@ def main(
 
     client = ServiceClient(address, language, http=http)
     try:
+        if args.question is not None:
+            return _print(
+                args.question, args, client, texts, prefs_path, language=language, look=look
+            )
         if args.command == SERVICE:
             return _service(left_over[0], client, texts, args.password_file)
         if args.command is not None:
@@ -492,7 +505,79 @@ def _outside(
     return 1 if renderer.failed else 0
 
 
-def _reach(client: ServiceClient, texts: Texts, password_file: Path | None) -> bool:
+def _read_piped() -> str:
+    """What was piped into the program, read to its end — nothing where the
+    input is a terminal or is not there."""
+    stream = sys.stdin
+    if stream is None or stream.isatty():
+        return ""
+    try:
+        return stream.read()
+    except (OSError, ValueError):
+        return ""
+
+
+def _print(
+    question: str,
+    args: argparse.Namespace,
+    client: ServiceClient,
+    texts: Texts,
+    prefs_path: Path | None,
+    *,
+    language: str,
+    look: str,
+) -> int:
+    """``-p``: one message into a new chat, the answer on the standard
+    output and nothing else there; what the program says itself goes to the
+    error output."""
+    piped = _read_piped()
+    if not question.strip() and not piped.strip():
+        # Nothing to send: the line the help gives the switch says what it
+        # takes.
+        print(_help_line(texts, "-p") or "", file=sys.stderr)
+        return 2
+    try:
+        if not _reach(client, texts, args.password_file, out=sys.stderr):
+            return 1
+        if client.login_required and not _sign_in(client, texts, args, prefs_path):
+            return 1
+        health = client.get("/health")
+        models = client.get("/models")
+    except ServiceUnreachable as error:
+        print(texts.t("fehler.dienst_antwortet_nicht", error=error.address), file=sys.stderr)
+        return 1
+    except ServiceError as error:
+        print(error.detail, file=sys.stderr)
+        return 1
+
+    ctx = Context(client=client, texts=texts, prefs_path=prefs_path)
+    ctx.session.health = health if isinstance(health, dict) else {}
+    ctx.session.models = models if isinstance(models, list) else []
+    ctx.status = status.build_status(ctx)
+    renderer = print_mode.PrintRenderer()
+    ctx.screen = print_mode.PrintScreen()
+    ctx.renderer = renderer
+    ctx.asker = print_mode.AutoAsker()
+    ctx.blocking = True
+    try:
+        _pick_model(ctx)
+        _remember(ctx, args, language=language, look=look)
+    except ServiceUnreachable as error:
+        print(texts.t("fehler.dienst_antwortet_nicht", error=error.address), file=sys.stderr)
+        return 1
+    except ServiceError as error:
+        print(error.detail, file=sys.stderr)
+        return 1
+    return print_mode.run(ctx, question, piped, renderer)
+
+
+def _reach(
+    client: ServiceClient,
+    texts: Texts,
+    password_file: Path | None,
+    *,
+    out: TextIO | None = None,
+) -> bool:
     """Connects to the service — and where none answers at an address of
     this machine, starts one first and waits for it, for as long as the
     started service lives. ``False`` once the start failed, which has been
@@ -506,7 +591,7 @@ def _reach(client: ServiceClient, texts: Texts, password_file: Path | None) -> b
         port = service.port_of(client.address)
         if port is None or not service.is_own(client.address):
             raise
-    print(texts.t("cli.service_starting", address=client.address))
+    print(texts.t("cli.service_starting", address=client.address), file=out)
     try:
         if service.start_and_wait(client, port, password_file):
             return True
@@ -630,20 +715,39 @@ def _run(
             # the head is written: the head names the model the first
             # message really goes to — the same one the status line names.
             _pick_model(ctx)
-            wanted = chat.find_chat(ctx, args.chat) if args.chat else None
+            if args.chat:
+                wanted = chat.find_chat(ctx, args.chat)
+            elif args.continue_chat:
+                wanted = chat.latest_chat(ctx)
+                if wanted is None:
+                    # No chat to go on with: said on the error output, like
+                    # what the program says of what it was asked.
+                    print(texts.t("chat.leer"), file=sys.stderr)
+            else:
+                wanted = None
+            asked_for_a_chat = bool(args.chat or args.continue_chat)
             if wanted is not None:
                 chat.enter_chat(ctx, wanted)
             render.show_head(ctx)
             ctx.status.update(address=client.address, look=look)
             _remember(ctx, args, language=language, look=look)
-            if not args.chat:
+            if not asked_for_a_chat:
                 chat.new_chat(ctx)
             elif wanted is None:
-                # Nothing, or more than one chat, answers to that name;
-                # which of the two has just been said, and the client ends.
+                # Nothing, or more than one chat, answers to that name — or
+                # there is no chat at all; which of them has just been said,
+                # and the client ends.
                 code = 1
             else:
                 chat.show_history(ctx, wanted)
+            if code == 0 and setup_steps.needed(ctx):
+                if outside.has_terminal():
+                    # Nothing is set up: the first thing the chat does is
+                    # ask whether to set it up.
+                    app.queue(lambda: setup_steps.ask_first_start(ctx))
+                else:
+                    print(texts.t("cli.setup_hint"), file=sys.stderr)
+                    code = 2
             if code == 0:
                 ctx.events.start()
                 app.run()

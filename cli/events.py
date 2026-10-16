@@ -248,6 +248,9 @@ class ServiceEvents(EventSink):
         if name == themes.current().name:
             return
         themes.set_look(name)
+        # The window takes only the cursor from the look: its colour follows
+        # the look the page has switched to.
+        themes.paint()
         self._ctx.screen.update_status(look=themes.current().name)
         self._ctx.screen.redraw()
 

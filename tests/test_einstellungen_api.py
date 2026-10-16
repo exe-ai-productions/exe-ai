@@ -396,3 +396,66 @@ def test_a_nested_set_is_merged_with_the_stored_one_before_the_check(client):
     assert fein["faeden"] == 12
     assert fein["kv_cache"] == "q8_0"
     assert fein["parallel"] == 4
+
+
+# --- a model id with a slash in it ----------------------------------------
+
+
+def test_a_model_with_a_slash_in_its_id_keeps_its_settings(client):
+    """A cloud model is named ``vendor/model``. The scope of its settings is
+    ``modell:vendor/model``; the slash must not be taken for the edge of the
+    path, or the write is answered with 405 and nothing it holds arrives."""
+    # The page sends the scope encoded, the way ``api.js`` builds the path.
+    pfad = "/api/v1/settings/modell%3Avendor%2Fmodell-x/parameter"
+
+    gesetzt = client.put(pfad, json={"wert": {"max_tokens": 4000}})
+    assert gesetzt.status_code == 200, gesetzt.text
+    assert gesetzt.json()["bereich"] == "modell:vendor/modell-x"
+    assert gesetzt.json()["wert"] == {"max_tokens": 4000}
+
+    gemischt = client.patch(pfad, json={"wert": {"temperature": 0.5}})
+    assert gemischt.status_code == 200, gemischt.text
+    assert gemischt.json()["wert"] == {"max_tokens": 4000, "temperature": 0.5}
+
+    gelesen = client.get(pfad)
+    assert gelesen.status_code == 200, gelesen.text
+    assert gelesen.json()["wert"] == {"max_tokens": 4000, "temperature": 0.5}
+
+    # The model's own value is what the resolution reads for it.
+    aufgeloest = client.get(
+        "/api/v1/settings/resolved?keys=parameter&modell=vendor%2Fmodell-x"
+    ).json()["parameter"]
+    assert aufgeloest["wert"]["max_tokens"] == 4000
+
+
+def test_a_slash_in_the_scope_changes_nothing_for_the_other_scopes(client):
+    """Silence probe: the plain scopes work as before, and a scope that is
+    none of the three is still refused."""
+    assert client.put(
+        "/api/v1/settings/global/parameter", json={"wert": {"max_tokens": 1000}}
+    ).status_code == 200
+    assert client.put(
+        "/api/v1/settings/chat:c1/parameter", json={"wert": {"max_tokens": 2000}}
+    ).status_code == 200
+    assert client.put(
+        "/api/v1/settings/modell:ohne-strich/parameter", json={"wert": {"max_tokens": 3000}}
+    ).status_code == 200
+    assert client.get("/api/v1/settings/global/parameter").json()["wert"] == {"max_tokens": 1000}
+    assert client.get("/api/v1/settings/chat:c1/parameter").json()["wert"] == {"max_tokens": 2000}
+    assert client.get("/api/v1/settings/modell:ohne-strich/parameter").json()["wert"] == {
+        "max_tokens": 3000
+    }
+
+    # Not a scope this route vouches for.
+    assert client.put(
+        "/api/v1/settings/fremd/parameter", json={"wert": {"max_tokens": 1000}}
+    ).status_code == 400
+
+
+def test_a_slash_does_not_make_an_unknown_scope_known(client):
+    """The scope is checked as a whole: only ``global``, ``modell:…`` and
+    ``chat:…`` are taken, whatever follows in them."""
+    pfad = "/api/v1/settings/fremd%2Fbereich/parameter"
+    assert client.put(pfad, json={"wert": {"max_tokens": 1000}}).status_code == 400
+    assert client.patch(pfad, json={"wert": {"max_tokens": 1000}}).status_code == 400
+    assert client.get(pfad).status_code == 400

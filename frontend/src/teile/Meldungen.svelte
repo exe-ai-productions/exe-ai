@@ -2,6 +2,7 @@
   import { fly } from 'svelte/transition'
   import { backOut, cubicIn } from 'svelte/easing'
   import Werkzeugzeichen from './Werkzeugzeichen.svelte'
+  import { serverLogo } from '../lib/serverlogo.svelte.js'
   import { meldungen, schliesseMeldung } from '../lib/meldewesen.svelte.js'
   import { t, teile } from '../lib/texte.svelte.js'
   import { farbenLaden, farbeVon, lesbar } from '../lib/agentenfarbe.svelte.js'
@@ -67,7 +68,7 @@
     <div class="meldung {meldung.art}" in:fly={REIN} out:fly={RAUS}>
       <span class="zeichen">
         {#if meldung.art === 'werkzeug'}
-          <Werkzeugzeichen name={meldung.werkzeug} server={meldung.server} laeuft={true} />
+          <Werkzeugzeichen name={meldung.werkzeug} server={meldung.server} logo={serverLogo(meldung.server)} laeuft={true} />
         {:else}
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

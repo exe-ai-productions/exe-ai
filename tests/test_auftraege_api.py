@@ -4557,28 +4557,26 @@ def test_a_stop_ends_a_handoff_that_only_gets_keepalives(config, client):
 async def _lauf_mit_bildfenster(
     config, client, tmp_path, monkeypatch, familie, aus=None
 ):
-    """One job whose chat's picture window stands at ``familie``.
+    """One job whose picture server's default model is of ``familie``.
 
     Returns the run's status steps and the request the model was offered —
     the two readings the notice and the offer are about.
     """
-    from app import bildfensterwahl
+    from app import bildstandardmodell
     from app.tools import bild_werkzeug
 
     ordner = tmp_path / "bilder"
     ordner.mkdir()
-    (ordner / "malen.safetensors").write_bytes(
-        json.dumps({"__metadata__": {"modelspec.architecture": familie}}).encode()
-    )
+    (ordner / "malen.safetensors").write_bytes(b"x")
     monkeypatch.setattr(bild_werkzeug, "ort", lambda config, was: ordner)
+    # What the file's header would name.
+    monkeypatch.setattr(bild_werkzeug.bildinhalt, "family", lambda pfad: familie)
     agent_schreiben(config, kopf="model: test\ntools:\n  - draw_image")
     provider = provider_setzen(client, MockProvider(mock_endpunkt("test")))
     repositories = client.app.state.repositories
     chat_id = client.post("/api/v1/chats", json={"title": "Bild"}).json()["id"]
     repositories.einstellungen.setzen(
-        bereich=f"chat:{chat_id}",
-        schluessel=bildfensterwahl.SCHLUESSEL,
-        wert={"modell": "malen.safetensors", "familie": familie},
+        "global", bildstandardmodell.SCHLUESSEL, "malen.safetensors",
     )
     if aus:
         repositories.einstellungen.setzen(
@@ -4623,8 +4621,8 @@ async def test_ein_draw_image_das_der_lauf_nicht_bekommt_steht_als_schritt_da(
 ):
     """An agent that names a tool the run does not get has to show it.
 
-    `draw_image` is offered only where the chat's picture window draws from
-    text; at a family that cannot (editing, video) the run starts without
+    `draw_image` is offered only where the default model draws from text;
+    at a family that cannot (editing, video) the run starts without
     it. The notice measured the agent's list against every name the program
     KNOWS (app/api/v1/auftraege.py) — so it stayed silent exactly there: a
     run with one tool less, and nothing saying so.
@@ -4640,8 +4638,8 @@ async def test_ein_draw_image_das_der_lauf_nicht_bekommt_steht_als_schritt_da(
 async def test_bei_einem_malenden_fenster_bleibt_der_schritt_aus(
     config, mcp_client_echt, tmp_path, monkeypatch
 ):
-    """Silence probe: a window that draws from text keeps the tool, and the
-    notice says nothing — exactly as before."""
+    """Silence probe: a default model that draws from text keeps the tool,
+    and the notice says nothing — exactly as before."""
     schritte, angeboten, fehlend = await _lauf_mit_bildfenster(
         config, mcp_client_echt, tmp_path, monkeypatch, "sdxl"
     )

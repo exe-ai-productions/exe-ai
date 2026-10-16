@@ -2,14 +2,14 @@
 
 A style has a name, a text and a negative. The text carries ``{prompt}``
 where the prompt goes; a text without it is added after the prompt. The
-negative is added after the picture's own negative. The styles hold for
-every chat (one global setting); which one a chat draws with is that chat's
-own choice (``stil`` in app/bildfensterwahl.py).
+negative is added after the picture's own negative. The styles are one global
+setting; which one the picture studio draws with is its own choice
+(``stil`` in app/bildfensterwahl.py).
 
-A style also has an id that never changes. A chat keeps its choice by that
-id, so a style given a new name is still the style of every chat that draws
-through it. A chat that chose before styles had ids keeps the name instead,
-and finds its style for as long as the style is called that.
+A style also has an id that never changes. The studio keeps its choice by
+that id, so a style given a new name is still the style it draws through.
+A choice made before styles had ids keeps the name instead, and finds its
+style for as long as the style is called that.
 
 Its own module for the same reason every stored setting has one: the
 settings route only writes what somebody vouches for.

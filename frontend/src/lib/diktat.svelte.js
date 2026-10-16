@@ -2,18 +2,20 @@
   What stands between the microphone and the input field — read from the
   service, written back to it.
 
-  Twenty-seven answers: which language is spoken, the instruction the speech
+  Thirty-five answers: which language is spoken, the instruction the speech
   model gets, who tidies the dictation afterwards, which file that tidy-up
   model runs from, the instruction IT gets, whether a conversation reads its
-  answers aloud, which voice does the reading, its voice sample, its
+  answers aloud, whether the voice stays loaded for the conversation, how
+  long the silence is before a spoken sentence is sent, which voice does the
+  reading, its voice sample, its
   language, its five generation values and its layers and threads, the
   instruction only a live conversation's message gets, whether a finished
   dictation is sent at once, which key works like a click on the microphone
-  button, and the clean-up server's own seven — context, layers, threads and
-  its five generation values. All of them live in one setting on the service
-  (app/diktatsprachewahl.py), because the service is what uses them: the
-  instruction goes into every request, and a copy kept in the browser would
-  be read by nobody.
+  button, the clean-up server's own eight — context, layers, threads, port and
+  its five generation values — and the speech server's five start values.
+  All of them live in one setting on the service (app/diktatsprachewahl.py),
+  because the service is what uses them: the instruction goes into every
+  request, and a copy kept in the browser would be read by nobody.
 
   The works texts are not repeated here. The panel gets them from the speech
   server's own answer (`diktat_vorgaben`), so its "restore" button puts back
@@ -36,6 +38,8 @@ const ZAHLFELDER = [
   'stimmtop_k', 'stimmtop_p', 'stimmmin_p', 'stimmstrafe',
   'stimmschichten', 'stimmfaeden',
   'putzkontext', 'putzschichten', 'putzfaeden',
+  'speech_context', 'speech_gpu_layers', 'speech_threads', 'speech_port', 'cleanup_port',
+  'conversation_pause_seconds',
   'putztemperatur', 'putztop_k', 'putztop_p', 'putzmin_p', 'putzstrafe',
 ]
 
@@ -56,9 +60,14 @@ export const diktat = $state({
      "off". Read with `??`, never `||`, or a stored "off" would be
      overridden back to the works "on" the moment this reloads. */
   vorlesen: null,
+  /* `null` for the same reason: a stored "off" is a real choice. */
+  keep_model_in_memory: null,
   stimme: '',
   stimmprobe: '',
   stimmsprache: '',
+  /* The speech server's file; its four numbers stand with the others below
+     (`null`: nothing stored, the server's own answer stands). */
+  speech_model: '',
   /* `null` for the same reason as `vorlesen`, and for the numbers below:
      zero is a real value, so the placeholder for "nobody set this" cannot
      be one. */
@@ -72,6 +81,13 @@ export const diktat = $state({
   putzkontext: null,
   putzschichten: null,
   putzfaeden: null,
+  speech_context: null,
+  speech_gpu_layers: null,
+  speech_threads: null,
+  speech_port: null,
+  cleanup_port: null,
+  /* `null`: nothing stored, and the works answer (3.0 seconds) stands. */
+  conversation_pause_seconds: null,
   putztemperatur: null,
   putztop_k: null,
   putztop_p: null,
@@ -111,7 +127,9 @@ function alsObjekt() {
     putzmodell: diktat.putzmodell,
     bereinigung_anweisung: diktat.bereinigung_anweisung,
     vorlesen: diktat.vorlesen,
+    keep_model_in_memory: diktat.keep_model_in_memory,
     stimme: diktat.stimme,
+    speech_model: diktat.speech_model,
     stimmprobe: diktat.stimmprobe,
     stimmsprache: diktat.stimmsprache,
     gespraechsanweisung: diktat.gespraechsanweisung,
@@ -123,6 +141,13 @@ function alsObjekt() {
 }
 
 let laden = null
+
+/** Resolves once every write made so far has been answered — what a window
+    waits for before it starts its server, so the start reads what the
+    window shows. */
+export function schreibenAbwarten() {
+  return schlange
+}
 
 export function standLaden(erneut = false) {
   if (diktat.geladen && !erneut) return Promise.resolve()
@@ -148,10 +173,12 @@ async function einlesen() {
   for (const name of [
     'sprache', 'anweisung', 'bereinigung', 'putzmodell', 'bereinigung_anweisung',
     'stimme', 'stimmprobe', 'stimmsprache', 'gespraechsanweisung', 'microphone_key',
+    'speech_model',
   ]) {
     if (typeof w[name] === 'string') diktat[name] = w[name]
   }
   if (typeof w.vorlesen === 'boolean') diktat.vorlesen = w.vorlesen
+  if (typeof w.keep_model_in_memory === 'boolean') diktat.keep_model_in_memory = w.keep_model_in_memory
   if (typeof w.automatik === 'boolean') diktat.automatik = w.automatik
   for (const name of ZAHLFELDER) {
     if (typeof w[name] === 'number') diktat[name] = w[name]

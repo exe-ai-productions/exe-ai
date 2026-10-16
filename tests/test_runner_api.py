@@ -19,7 +19,7 @@ from app.api.v1 import runner as runner_api
 from app.feineinstellungen import Feineinstellungen
 from app.modellrunner import Lauf, RunnerFehler
 from app.serverdownload import BUILD, Fortschritt, Serverdownload
-from tests.conftest import llama_server_name
+from tests.conftest import llama_server_name, sized_file
 
 
 class StummerRunner:
@@ -43,6 +43,9 @@ class StummerRunner:
 
     def mtp(self):
         return []
+
+    def projector_sizes(self):
+        return {}
 
     def laeuft(self):
         return self._lauf is not None
@@ -158,7 +161,7 @@ def test_ohne_gespeicherte_wahl_gelten_die_vorgaben(client):
     antwort = client.post("/api/v1/runner/start", json={"modell": "m.gguf"})
     assert antwort.status_code == 200
     assert runner.gestartet_mit["kontext"] == runnermodellwahl.KONTEXT_VORGABE
-    assert runner.gestartet_mit["schichten"] == runnermodellwahl.SCHICHTEN_VORGABE
+    assert runner.gestartet_mit["schichten"] is None
     # None: the runner falls back to its own port rather than to a number
     # written down a second time here.
     assert runner.gestartet_mit["port"] is None
@@ -187,7 +190,7 @@ def test_die_auskunft_nennt_die_vorgaben(client):
     daten = client.get("/api/v1/runner").json()
     assert daten["vorgaben"] == {
         "kontext": runnermodellwahl.KONTEXT_VORGABE,
-        "schichten": runnermodellwahl.SCHICHTEN_VORGABE,
+        "schichten": None,
         "port": None,
         # May the program bring this server up ahead of a due cron entry?
         # Shipped on, so an installation that has never seen the tick box
@@ -414,8 +417,7 @@ def test_a_vae_already_there_is_only_tied(client, tmp_path):
 
 def _sparse(pfad, groesse):
     pfad.parent.mkdir(parents=True, exist_ok=True)
-    with pfad.open("wb") as handle:
-        handle.truncate(groesse)
+    sized_file(pfad, groesse)
 
 
 VAE_BYTES = 335_304_388
@@ -794,6 +796,68 @@ def test_a_model_that_arrives_gets_no_part_that_is_missing(client, tmp_path):
     assert _model_part(client, "sd_xl_base_1.0.safetensors", "vae") is None
 
 
+def test_an_encoder_of_another_name_is_tied_under_the_name_the_catalogue_gave(client, tmp_path):
+    """The catalogue counts a Q8_0 as the part its Q4_K_M stands for and asks
+    for it by the name it lies under: nothing is fetched, the bond names it."""
+    (tmp_path / "text_encoders").mkdir()
+    (tmp_path / "text_encoders" / "Qwen3-4B-Instruct-2507-Q8_0.gguf").write_bytes(b"da")
+    fang = FinishingDownload()
+    client.app.state.modelldownload = fang
+    client.app.state.modellordner_je_art = {"bild": str(tmp_path)}
+    antwort = client.post("/api/v1/runner/download", json=_llm_request(
+        ziel="Qwen3-4B-Instruct-2507-Q8_0.gguf"
+    ))
+    assert antwort.status_code == 200 and antwort.json()["fertig"] is True
+    assert fang.gestartet == 0
+    assert _model_part(client, "z_image_turbo-Q4_K_M.gguf", "llm") == "Qwen3-4B-Instruct-2507-Q8_0.gguf"
+
+
+def test_a_vision_part_already_there_is_tied_as_the_vision_field(client, tmp_path):
+    """The projector lies in text_encoders/ with a vision head: the model
+    that came for it gets it under its vision field, and nothing is fetched."""
+    from tests.test_bildinhalt import clip_gguf_bytes
+
+    (tmp_path / "text_encoders").mkdir()
+    (tmp_path / "text_encoders" / "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf").write_bytes(
+        clip_gguf_bytes(vision=True)
+    )
+    fang = FinishingDownload()
+    client.app.state.modelldownload = fang
+    client.app.state.modellordner_je_art = {"bild": str(tmp_path)}
+    antwort = client.post("/api/v1/runner/download", json={
+        "repo": "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+        "datei": "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+        "ziel": "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+        "art": "bild", "unterordner": "text_encoders",
+        "gehoert_zu": "qwen-image-2.1-Q4_K_M.gguf", "rolle": "llm_vision",
+    })
+    assert antwort.status_code == 200 and antwort.json()["fertig"] is True
+    assert fang.gestartet == 0
+    assert (
+        _model_part(client, "qwen-image-2.1-Q4_K_M.gguf", "llm_vision")
+        == "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
+    )
+
+
+def test_a_model_that_arrives_finds_the_vision_part_that_is_there(client, tmp_path):
+    from tests.test_bildinhalt import clip_gguf_bytes
+
+    (tmp_path / "text_encoders").mkdir()
+    (tmp_path / "text_encoders" / "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf").write_bytes(
+        clip_gguf_bytes(vision=True)
+    )
+    client.app.state.modelldownload = FinishingDownload()
+    client.app.state.modellordner_je_art = {"bild": str(tmp_path)}
+    antwort = client.post("/api/v1/runner/download", json={
+        "repo": "wer/was", "datei": "qwen-image-2.1-turbo-Q4_K_M.gguf", "art": "bild",
+    })
+    assert antwort.status_code == 200
+    assert (
+        _model_part(client, "qwen-image-2.1-turbo-Q4_K_M.gguf", "llm_vision")
+        == "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
+    )
+
+
 # --- The program itself: its build, a newer one, and the way back ---------
 
 NEWER = "b11541"
@@ -1075,6 +1139,10 @@ def test_windows_lists_the_four_variants_and_names_the_one_that_was_fetched(
 
 def test_the_other_systems_list_no_variant(client, tmp_path, monkeypatch):
     """Silence probe: on a Mac the list is empty and nothing is named."""
+    # The test sets the system itself, like its neighbours: run on Windows it
+    # would otherwise list the four variants of that system.
+    monkeypatch.setattr(serverdownload, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(serverdownload.platform, "machine", lambda: "arm64")
     _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, BUILD))
     answer = client.get("/api/v1/runner/programm/varianten")
     assert answer.status_code == 200

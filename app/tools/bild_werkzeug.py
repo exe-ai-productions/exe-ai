@@ -7,23 +7,20 @@ very service over its own HTTP API, so it walks exactly the road the
 picture window walks: the same queue lock, the same memory check, the same
 metadata scrub.
 
-The model does not pick the model file or any other value. Every value is
-the one the picture window of the chat stands at (stored per chat,
-``app/bildfensterwahl.py``) — read on every call, so a change in the window
-holds for the very next picture — except the pictures the window was
-given (start picture, mask, face photo, guide picture). A job reads the
-window of the chat it was started from. A run with no chat, a chat without a
-model of its own, or one whose model is gone from the folder takes the first
-model in the folder with its family's start values
-(``app/image_families.py``), and the log says so. What the model brings is
-the one thing only it has: the prompt.
+The model does not pick the model file or any other value. A picture is
+drawn with the default model of the picture server
+(``app/bildstandardmodell.py``) and its start values — the values the user
+set for that model in the picture server laid over its family's start
+values (``app/image_families.py``). The picture studio's own model and
+values are not read here: the studio and the chats share nothing. What the
+model brings is the one thing only it has: the prompt.
 
-In a chat the picture goes the picture window's way all the way into the
-chat: the request names the chat and the answer being written, and the
+In a chat the picture goes into the chat the way the studio's pictures
+never do: the request names the chat and the answer being written, and the
 route writes every finished picture into that answer's own run itself —
-the moment it is finished, one file and one row, the same tiles the picture
-window's pictures stand in. The answer is named by the caller, not by an
-argument: anything the model can pass, the model can forge.
+the moment it is finished, one file and one row. The answer is named by
+the caller, not by an argument: anything the model can pass, the model can
+forge.
 
 A job has no answer for a picture to stand under and names none: there the
 picture stays in the pictures folder, and the model is told its path, so it
@@ -42,8 +39,7 @@ from typing import Any
 import httpx
 
 from app import (
-    bildfensterwahl, bildinhalt, bildmodellwerte, bildrunner, bildstandardmodell, bildstile,
-    bildwahlen, image_families,
+    bildinhalt, bildmodellwerte, bildrunner, bildstandardmodell, bildwahlen, image_families,
 )
 from app.i18n import t
 from app.image_families import Family
@@ -55,8 +51,11 @@ log = logging.getLogger(__name__)
 SERVER_NAME = "image"
 WERKZEUG_NAME = "draw_image"
 
-# An SDXL picture with a detailer pass takes minutes, not seconds. This bound
-# only keeps a hung server from holding the tool call open forever.
+# How long a call to the picture route may take to connect, to send and to be
+# answered — every call but the picture request itself. That request has no
+# read bound of its own (``_bild_anfordern``): the route ends a picture at the
+# time limit of the image-server page, and with none set a picture ends with
+# the image or with the run's stop.
 ZEITFENSTER_S = 900.0
 
 # How often a stop is sent again while the picture route still has not
@@ -106,7 +105,7 @@ NO_PICTURE = "The image could not be generated: the image service returned no im
 class Made:
     """What a tool that paints is on the way to, in the words its refusals
     open with. The calls before the painting are shared by every such tool
-    (the chat of a job, the chat's picture window, a picture handed in);
+    (the default model, a picture handed in);
     each tells them what it makes, so the model reads of the thing it asked
     for."""
 
@@ -122,9 +121,9 @@ PICTURE = Made("The image could not be generated", "The image was not generated"
 # Nothing chooses the default model by itself, so without one the model
 # learns where the user chooses it.
 NO_DEFAULT_MODEL = (
-    "The image was not generated: no default image model is selected, and this chat has no "
-    "model assigned. Ask the user to select a default model on the picture server page "
-    "(Local, picture server, Default model), then try again."
+    "The image was not generated: no default image model is selected. Ask the user to select "
+    "a default model on the picture server page (Local, picture server, Default model), then "
+    "try again."
 )
 
 
@@ -161,37 +160,37 @@ _PROMPT_STIL = {
 _WERTEFELDER: tuple[tuple[str, str, str, str], ...] = (
     (
         "width", "breite",
-        "Image width in pixels. Uses this chat's current setting by default. Omit unless the "
+        "Image width in pixels. Uses the image model's start value by default. Omit unless the "
         "user requests a specific width.",
         "size",
     ),
     (
         "height", "hoehe",
-        "Image height in pixels. Uses this chat's current setting by default. Omit unless the "
+        "Image height in pixels. Uses the image model's start value by default. Omit unless the "
         "user requests a specific height.",
         "size",
     ),
     (
         "steps", "schritte",
-        "Number of sampling steps. Uses this chat's current setting by default. Omit unless "
+        "Number of sampling steps. Uses the image model's start value by default. Omit unless "
         "the user requests a step count.",
         "steps",
     ),
     (
         "cfg", "cfg",
-        "CFG scale. Uses this chat's current setting by default. Omit unless the user "
+        "CFG scale. Uses the image model's start value by default. Omit unless the user "
         "requests a specific value.",
         "CFG",
     ),
     (
         "sampler", "sampler",
-        "Sampler, e.g. euler_a. Uses this chat's current setting by default. Omit unless the "
+        "Sampler, e.g. euler_a. Uses the image model's start value by default. Omit unless the "
         "user requests a sampler.",
         "sampler",
     ),
     (
         "scheduler", "scheduler",
-        "Scheduler, e.g. discrete. Uses this chat's current setting by default. Omit unless "
+        "Scheduler, e.g. discrete. Uses the image model's start value by default. Omit unless "
         "the user requests a scheduler.",
         "scheduler",
     ),
@@ -202,7 +201,7 @@ _WERTEFELDER: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "guidance", "guidance",
-        "Distilled guidance (Flux only). Uses this chat's current setting by default. Omit "
+        "Distilled guidance (Flux only). Uses the image model's start value by default. Omit "
         "unless the user requests a specific value.",
         "guidance",
     ),
@@ -257,18 +256,17 @@ def werkzeug_beschreibung(
     familie: Family | None = None, *, in_chat: bool = True,
     values: dict[str, Any] | None = None,
 ) -> MCPWerkzeug:
-    """The tool as this chat's picture window makes it.
+    """The tool as the default image model makes it.
 
-    ``familie`` is the image model the picture window stands at, ``values``
-    the values the next picture of this chat is drawn with, the CFG among
-    them. Together they decide what the model has to know BEFORE writing:
-    which text encoder reads the prompt and how, whether a negative prompt
+    ``familie`` is the default image model, ``values`` the values the next
+    picture is drawn with, the CFG among them. Together they decide what
+    the model has to know BEFORE writing: which text encoder reads the prompt and how, whether a negative prompt
     does anything at all, which values exist, and what each one is when the
     model sends none. The caller reads both with ``fensterbild`` — the same
     reading the drawing itself makes — so the description and the call
     cannot name two different models or two different values.
 
-    ``None`` is the honest answer for a caller that knows no window: the
+    ``None`` is the honest answer for a caller that knows no model: the
     sentence that fits every case, without a value the tool could not send.
 
     ``in_chat`` is False for a job's list: its picture stays in the pictures
@@ -301,25 +299,24 @@ def werkzeug_beschreibung(
             server=SERVER_NAME,
         )
     # No branch for a family that cannot draw from text (editing, video): a
-    # run whose window stands at one is not offered this tool at all
+    # run whose default model is one is not offered this tool at all
     # (app/tools/registry.py), so there is nothing here to describe — and a
     # description that has to say "this does nothing" is a promise the tool
     # cannot keep, sent in every request of that run.
     start = familie.start
     # What the picture will really run at: the CFG among the values in
-    # force — the chat's own, else the one set for the model itself, else
-    # the family's start — and the family's start for a caller that read
-    # none.
+    # force — the one set for the model itself, else the family's start —
+    # and the family's start for a caller that read none.
     wirksame_cfg = (values or {}).get("cfg")
     if wirksame_cfg is None:
         wirksame_cfg = start.cfg
     saetze = [
         # English FIRST: measured twice against a German wish, the model
         # wrote German keywords when this sentence stood behind the one
-        # naming the model (picture window on SDXL).
+        # naming the model (SDXL).
         "Write the prompt in ENGLISH regardless of the user's language. The image model was "
         "trained on English and does not reliably interpret other languages.",
-        f"Generates an image using {familie.label}, the image model selected for this chat.",
+        f"Generates an image using {familie.label}, the default image model.",
         "Describe the requested image through its subject, setting, lighting, mood, and "
         "appearance. Avoid vague adjectives.",
         _prompt_stil(familie),
@@ -329,7 +326,7 @@ def werkzeug_beschreibung(
             "At CFG 1, the negative prompt has no effect. Omit it."
         )
     saetze.append(
-        "Size, steps, CFG, sampler, and seed use this chat's current settings by default. "
+        "Size, steps, CFG, sampler, and seed use the image model's start values by default. "
         "Specify a value only when the user requests it. It applies to this image only and "
         "does not change the settings."
     )
@@ -361,7 +358,7 @@ def werkzeug_beschreibung(
 
 @dataclass(frozen=True)
 class FensterBild:
-    """What this chat's picture window will draw with.
+    """What the default image model will draw with.
 
     ``familie`` is the image model as a family, ``values`` the values the
     next picture is drawn with, by the names of the tool's fields — both
@@ -372,37 +369,23 @@ class FensterBild:
     values: dict[str, Any] = field(default_factory=dict)
 
 
-def fensterbild(repositories, chat_id: str | None, config) -> FensterBild:
-    """The image model this chat's picture window will draw with.
+def fensterbild(repositories, config) -> FensterBild:
+    """The image model the next picture is drawn with: the default model
+    of the picture server (app/bildstandardmodell.py), as a family, and the
+    values it starts at.
 
-    The SAME resolution the drawing makes (``ausfuehren``): the model the
-    window names, but only while it is still in the folder — a model that is
-    gone changes nothing, the default model of the picture server draws
-    instead (app/bildstandardmodell.py). Where there is no chat, no window
-    or no model, the default model is what draws, and that is what this
-    answers too; without one nothing draws. The window's own family wins
-    over the file's header, again like the drawing.
+    The SAME resolution the drawing makes (``_draw``): the picture studio's
+    model and values are not read — the studio and the chats share nothing.
+    Without a default model nothing draws, and this answers that too.
 
-    ``values`` are the values in force: what the chat set, and for
-    everything it never set the values the user set for this model in the
-    picture server, laid over its family's start values (``_request_of``,
-    the drawing's own reading).
+    ``values`` are the values in force: the values the user set for this
+    model in the picture server, laid over its family's start values
+    (``_request_of``, the drawing's own reading).
     """
     ordner = ort(config, "image_models")
-    modelle = bildrunner.modelle(ordner)
-    werte = repositories.einstellungen.zusammengefuehrt(
-        bildfensterwahl.SCHLUESSEL, chat=chat_id
-    )
-    window: dict[str, Any] = {}
-    modell = werte.get("modell") if isinstance(werte, dict) else None
-    if isinstance(modell, str) and modell in modelle:
-        window = werte
-    else:
-        # No window, or one whose model is gone: the default model draws,
-        # and the chat's other values belonged to its own model.
-        modell = bildstandardmodell.lesen(repositories, modelle)
-        if not modell:
-            return FensterBild(None)
+    modell = bildstandardmodell.lesen(repositories, bildrunner.modelle(ordner))
+    if not modell:
+        return FensterBild(None)
     # A model whose family is not to be read has none here either, exactly
     # as the picture route takes it: its own values hold, and its kit is
     # the one given to it.
@@ -410,33 +393,23 @@ def fensterbild(repositories, chat_id: str | None, config) -> FensterBild:
         bildinhalt.family(ordner / modell) or ""
         if bildmodellwerte.family_detection(repositories, modell) else ""
     )
-    familie = image_families.get(window.get("familie")) or image_families.get(header)
+    familie = image_families.get(header)
     start = image_families.start_values(familie.name if familie is not None else None, modell)
-    own = (
-        bildmodellwerte.eigene(repositories, modell)
-        if _own_values_apply(familie, header) else {}
-    )
-    return FensterBild(familie, _values_in_force(_request_of(window, start, own)))
+    own = bildmodellwerte.eigene(repositories, modell)
+    return FensterBild(familie, _values_in_force(_request_of(start, own)))
 
 
-def _own_values_apply(family: Family | None, header_family: Any) -> bool:
-    """Whether the values the user set for the model itself apply. A family
-    said by hand in the chat is another family than the one the file's
-    header names, and starts at its own start values."""
-    return family is None or family.name == header_family
-
-
-def _request_of(window: dict[str, Any], start, own: dict[str, Any]) -> dict[str, Any]:
-    """The draw request this chat makes with its model, before anything the
-    model asks for: what the chat set, and every value it never set starting
-    where the model starts — the values the user set for this model in the
-    picture server (``own``, empty where they do not apply) laid over its
-    family's start values (``start``).
+def _request_of(start, own: dict[str, Any]) -> dict[str, Any]:
+    """The draw request the default model is drawn with, before anything
+    the model asks for: every value starting where the model starts — the
+    values the user set for this model in the picture server (``own``,
+    empty where they do not apply) laid over its family's start values
+    (``start``).
 
     ONE reading for the drawing and for the tool's description, so the
     values the model is told are the ones the picture is drawn with.
     """
-    request = bildfensterwahl.draw_request(window)
+    request: dict[str, Any] = {}
     starts_at = {
         "breite": start.width, "hoehe": start.height, "schritte": start.steps,
         "sampler": start.sampler, "scheduler": start.scheduler, "cfg": start.cfg,
@@ -446,10 +419,10 @@ def _request_of(window: dict[str, Any], start, own: dict[str, Any]) -> dict[str,
         if field_name in own:
             starts_at[field_name] = own[field_name]
     for field_name in ("breite", "hoehe", "schritte", "sampler", "scheduler", "cfg"):
-        request.setdefault(field_name, starts_at[field_name])
-    if "guidance" not in request and starts_at["guidance"] is not None:
+        request[field_name] = starts_at[field_name]
+    if starts_at["guidance"] is not None:
         request["guidance"] = starts_at["guidance"]
-    if "flow_shift" not in request and starts_at["flow_shift"] is not None:
+    if starts_at["flow_shift"] is not None:
         request["flow_shift"] = starts_at["flow_shift"]
     return request
 
@@ -512,6 +485,77 @@ def _geprueft(argumente: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     return werte, unbrauchbar
 
 
+async def draw_with_window(
+    argumente: dict[str, Any],
+    basis: str,
+    schluessel: str,
+    *,
+    chat_id: str | None = None,
+    antwort_id: str | None = None,
+    abbruch: asyncio.Event | None = None,
+    input_picture: Path | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> "_Drawn | str":
+    """Draws the picture a prompt asks for with the default model of the
+    picture server and its start values, and hands back what was drawn —
+    or the sentence the model reads when no picture came.
+
+    The ONE place the values of a picture come together: ``draw_image`` and
+    the service's own way from one sentence to a picture (``POST
+    /bild/satz``, app/api/v1/bild.py) both go through it, so a picture
+    drawn from a sentence takes exactly the values the model's call would.
+
+    ``argumente`` carries the prompt (``prompt``) and, for the model's call,
+    the values it named. ``transport`` is for a caller inside this service:
+    the calls then go to the app in-process, session key included.
+    """
+    prompt = str(argumente.get("prompt") or "").strip()
+    if not prompt:
+        raise BildWerkzeugFehler("draw_image needs a prompt.")
+    negativ = str(argumente.get("negative_prompt") or "").strip()
+    # Every value the model named goes through the SAME checkers the picture
+    # route uses, here and not there: the route's answer carries the picture
+    # and the seed, nothing else, so a value it clamped would be reported
+    # back to the model as it was ASKED for. Checked once on the way in,
+    # both readers see the same number (the checkers are idempotent, so the
+    # route clamping the same value again changes nothing).
+    werte, unbrauchbar = _geprueft(argumente)
+    if unbrauchbar:
+        return (
+            "The image was not generated because these values were invalid: "
+            + ", ".join(unbrauchbar)
+            + ". Provide numbers and a supported sampler or scheduler, or omit them to use "
+              "the image model's start values."
+        )
+
+    # Every sentence this tool reads back comes from the picture route, and
+    # the picture route writes them in the language the interface is set to
+    # (``hole_sprache``). This tool is the model's door, so it asks that
+    # route for English: one header, and every refusal along the whole route
+    # — the missing space before drawing, the raw log of a failed run, all
+    # of them — arrives in the language the model reads. The studio keeps
+    # its own sentences: it asks the same route without this header.
+    kopfzeilen = {"X-Sitzungsschluessel": schluessel, "X-Ui-Language": "en"}
+    # A call that never got an answer — the service gone, the connection
+    # cut, the time up — is a failure like any refused one, and so is an
+    # answer httpx could not read: the model reads why, in the same
+    # sentence, instead of a raw exception.
+    # The chat's own answer, named by the caller: only with both does the
+    # picture go into the chat.
+    in_chat = bool(chat_id and antwort_id)
+    optionen: dict[str, Any] = {} if transport is None else {"transport": transport}
+    try:
+        async with httpx.AsyncClient(
+            timeout=ZEITFENSTER_S, headers=kopfzeilen, **optionen
+        ) as client:
+            return await _draw(
+                client, basis, prompt, negativ, werte, chat_id,
+                antwort_id if in_chat else None, abbruch, input_picture,
+            )
+    except (httpx.HTTPError, httpx.InvalidURL) as error:
+        return f"The image could not be generated: {str(error) or type(error).__name__}"
+
+
 async def ausfuehren(
     argumente: dict[str, Any],
     basis: str,
@@ -519,7 +563,6 @@ async def ausfuehren(
     schluessel: str,
     antwort_id: str | None = None,
     chat_id: str | None = None,
-    job_id: str | None = None,
     deliver_with: str | None = None,
     abbruch: asyncio.Event | None = None,
     input_picture: Path | None = None,
@@ -550,48 +593,11 @@ async def ausfuehren(
     called: set while the picture is being drawn, it ends the picture — a
     stop of the chat reaches the painter, not only the answer's text.
     """
-    prompt = str(argumente.get("prompt") or "").strip()
-    if not prompt:
-        raise BildWerkzeugFehler("draw_image needs a prompt.")
-    negativ = str(argumente.get("negative_prompt") or "").strip()
-    # Every value the model named goes through the SAME checkers the picture
-    # route uses, here and not there: the route's answer carries the picture
-    # and the seed, nothing else, so a value it clamped would be reported
-    # back to the model as it was ASKED for. Checked once on the way in,
-    # both readers see the same number (the checkers are idempotent, so the
-    # route clamping the same value again changes nothing).
-    werte, unbrauchbar = _geprueft(argumente)
-    if unbrauchbar:
-        return (
-            "The image was not generated because these values were invalid: "
-            + ", ".join(unbrauchbar)
-            + ". Provide numbers and a supported sampler or scheduler, or omit them to use "
-              "this chat's current settings."
-        )
-
-    # Every sentence this tool reads back comes from the picture route, and
-    # the picture route writes them in the language the interface is set to
-    # (``hole_sprache``). This tool is the model's door, so it asks that
-    # route for English: one header, and every refusal along the whole route
-    # — the missing space before drawing, the raw log of a failed run, all
-    # of them — arrives in the language the model reads. The window keeps
-    # its own sentences: it asks the same route without this header.
-    kopfzeilen = {"X-Sitzungsschluessel": schluessel, "X-Ui-Language": "en"}
-    # A call that never got an answer — the service gone, the connection
-    # cut, the time up — is a failure like any refused one, and so is an
-    # answer httpx could not read: the model reads why, in the same
-    # sentence, instead of a raw exception.
-    # The chat's own answer, named by the caller: only with both does the
-    # picture go into the chat.
     in_chat = bool(chat_id and antwort_id)
-    try:
-        async with httpx.AsyncClient(timeout=ZEITFENSTER_S, headers=kopfzeilen) as client:
-            drawn = await _draw(
-                client, basis, prompt, negativ, werte, chat_id, job_id,
-                antwort_id if in_chat else None, abbruch, input_picture,
-            )
-    except (httpx.HTTPError, httpx.InvalidURL) as error:
-        return f"The image could not be generated: {str(error) or type(error).__name__}"
+    drawn = await draw_with_window(
+        argumente, basis, schluessel, chat_id=chat_id, antwort_id=antwort_id,
+        abbruch=abbruch, input_picture=input_picture,
+    )
     if isinstance(drawn, str):
         return drawn
     modell, koerper, daten = drawn.model, drawn.body, drawn.answer
@@ -683,18 +689,15 @@ async def _aufbereiten(
     *,
     familie: str,
     cfg: Any,
-    style: Any,
 ) -> _Prepared:
     """The request, written over by the prompt preparation — or as it came,
-    with the reason, when the preparation did not answer. ``style`` is the
-    window's choice of a style; the preparation is told that style's name."""
-    stil = await _style_name(client, basis, style)
+    with the reason, when the preparation did not answer."""
     try:
         antwort = await client.post(
             f"{basis}/bild/prompt",
             json={
                 "prompt": prompt, "negativ": negativ, "modell": modell,
-                "familie": familie, "stil": stil,
+                "familie": familie,
                 "cfg": cfg if isinstance(cfg, (int, float)) and not isinstance(cfg, bool) else None,
             },
         )
@@ -724,9 +727,15 @@ async def _bild_anfordern(
     again every ``STOPP_TAKT_S`` until that answer is here: a stop that came
     before the painter had started found nothing to end.
     """
+    # The route answers with the finished picture and has no frame of its
+    # own; a bound on the read would end the wait while the painter still
+    # draws, and the picture would never reach the chat.
+    ohne_lesefrist = httpx.Timeout(ZEITFENSTER_S, read=None)
     if abbruch is None:
-        return await client.post(f"{basis}/bild", json=koerper)
-    anfrage = asyncio.ensure_future(client.post(f"{basis}/bild", json=koerper))
+        return await client.post(f"{basis}/bild", json=koerper, timeout=ohne_lesefrist)
+    anfrage = asyncio.ensure_future(
+        client.post(f"{basis}/bild", json=koerper, timeout=ohne_lesefrist)
+    )
     stopp = asyncio.ensure_future(abbruch.wait())
     gemeldet = False
     try:
@@ -778,7 +787,6 @@ async def _draw(
     negativ: str,
     werte: dict[str, Any],
     chat_id: str | None,
-    job_id: str | None,
     antwort_id: str | None = None,
     abbruch: asyncio.Event | None = None,
     input_picture: Path | None = None,
@@ -820,29 +828,11 @@ async def _draw(
             "No image model is installed. The user can add one under "
             "Images or from the catalogue."
         )
-    if chat_id is None and job_id:
-        chat_id, refusal = await _chat_of_job(client, basis, job_id)
-        if refusal is not None:
-            return refusal
-    window, refusal = await _window_of_chat(client, basis, chat_id)
-    if refusal is not None:
-        return refusal
-    gewaehlt = window.get("modell")
-    modell: str = gewaehlt if isinstance(gewaehlt, str) else ""
-    if modell not in modelle:
-        standard = lage.get("standardmodell")
-        if not isinstance(standard, str) or standard not in modelle:
-            return NO_DEFAULT_MODEL
-        log.info(
-            "draw_image: %s — drawing with the default model %s",
-            f"the chat's model {modell} is not in the folder" if modell
-            else "no model is set in this chat's picture window" if chat_id
-            else "a run outside a chat has no picture window",
-            standard,
-        )
-        modell = standard
-        # The chat's other values belonged to its own model.
-        window = {}
+    # The default model of the picture server draws, whichever chat or job
+    # asks: the picture studio's own model is the studio's.
+    modell = lage.get("standardmodell")
+    if not isinstance(modell, str) or modell not in modelle:
+        return NO_DEFAULT_MODEL
     answer = await client.get(f"{basis}/bild/vorgaben", params={"modell": modell})
     # A failed answer is not an empty one: drawing on with the family's
     # start values would hand back a picture the window never asked for,
@@ -870,15 +860,13 @@ async def _draw(
     # read here would bring its own kit along (`t5xxl`, `clip_l`, …) and
     # the route would refuse the body — the header is read for the ONE
     # question "can this model draw from text at all", nothing else.
-    family = image_families.get(window.get("familie")) or image_families.get(
-        defaults.get("family")
-    )
+    family = image_families.get(defaults.get("family"))
     wache = family or image_families.get(familien.get(modell))
     # The same rule the OFFER keeps, asked once more where the drawing
-    # happens: a window standing at a family that cannot draw from text
+    # happens: a default model whose family cannot draw from text
     # (editing, video) is not offered this tool (app/tools/registry.py).
     # A run outlives the offer it started with, though — the user can
-    # turn the window around while an answer is still going, and a call
+    # change the default model while an answer is still going, and a call
     # made against the old offer would have a video drawn and handed
     # back as a picture. Read again here, and answered in words rather
     # than drawn: the model can tell the user what to change.
@@ -886,54 +874,44 @@ async def _draw(
     # (``image_families.draws_from_text``) — one rule, two ends of one
     # tool, so neither can drift away from the other.
     if wache is not None and not image_families.draws_from_text(wache):
-        # Says "the model in use" and not "this chat's picture window":
-        # the family can also come from the default model —
-        # a run without a chat has no window at all, and a window whose
-        # model has left the folder is read the same way (see the two
-        # branches above). What is true in all of them is that the model
-        # this call would draw with cannot draw from text.
+        # What is true is that the model this call would draw with, the
+        # default one, cannot draw from text.
         return (
             f"The image was not generated: the selected model, {wache.label}, cannot generate "
             "images from text. It edits existing images or creates videos. Ask the user to "
-            "select a text-to-image model and try again: under Images for this chat, or as "
-            "the default on the picture server page if the run has no chat."
+            "select a text-to-image model as the default on the picture server page and try "
+            "again."
         )
-    # What the chat never set starts where the model starts: the values the
-    # user set for this model in the picture server, laid over its family's
-    # start values — the answer above carries both. A family said by hand in
-    # the window is another family than the header's, and starts at its own
-    # start values.
+    # Every value starts where the model starts: the values the user set for
+    # this model in the picture server, laid over its family's start values
+    # — the answer above carries both.
     start = image_families.start_values(family.name if family is not None else None, modell)
-    eigene_gelten = _own_values_apply(family, defaults.get("family"))
     koerper = _request_of(
-        window, start,
-        {name: defaults.get(name) for name in (defaults.get("eigene") or [])}
-        if eigene_gelten else {},
+        start, {name: defaults.get(name) for name in (defaults.get("eigene") or [])},
     )
     # The VAE format, the RNG and the further switches the family starts
-    # with, each where the chat set none of its own.
-    if start.vae_format and "vae_format" not in koerper:
+    # with.
+    if start.vae_format:
         koerper["vae_format"] = start.vae_format
-    if start.rng and "rng" not in koerper:
+    if start.rng:
         koerper["rng"] = start.rng
     if start.switches:
-        koerper["switches"] = {**start.switches, **(koerper.get("switches") or {})}
-    # What belongs to the model itself goes along where the chat set none;
-    # its kit the draw route adds itself.
-    if eigene_gelten:
-        if defaults.get("clip_skip") and "clip_skip" not in koerper:
-            koerper["clip_skip"] = defaults["clip_skip"]
-        if defaults.get("prediction") and "prediction" not in koerper:
-            koerper["prediction"] = defaults["prediction"]
-    if "model_args" not in window and family is not None and family.model_args:
+        koerper["switches"] = dict(start.switches)
+    # What belongs to the model itself goes along; its kit the draw route
+    # adds itself.
+    if defaults.get("clip_skip"):
+        koerper["clip_skip"] = defaults["clip_skip"]
+    if defaults.get("prediction"):
+        koerper["prediction"] = defaults["prediction"]
+    if family is not None and family.model_args:
         koerper["model_args"] = family.model_args
     if family is not None and "familie" not in koerper:
         koerper["familie"] = family.name
     koerper["modell"] = modell
     # A number the user named travels along for THIS picture and is not
-    # written into the picture window: the window is the user's, and a
-    # wish spoken once in a chat is not a setting. Whatever the caller
-    # did not send keeps the value it already has above.
+    # written anywhere: a wish spoken once in a chat is not a setting.
+    # Whatever the caller did not send keeps the value it already has
+    # above.
     koerper.update(werte)
     if input_picture is not None:
         # The picture the model named: handed to the service as its content
@@ -954,14 +932,13 @@ async def _draw(
             return refusal
         koerper[field] = [name] if field == "ref_bilder" else name
     # Every request goes through the prompt preparation, the same one the
-    # picture window's button asks: a language model writes the prompt for
+    # studio's button asks: a language model writes the prompt for
     # this family. When it does not answer, the picture is drawn with the
     # request as it came, and the answer says so.
     vorbereitet = await _bis_abbruch(
         _aufbereiten(
             client, basis, prompt, negativ, modell,
             familie=str(koerper.get("familie") or ""), cfg=koerper.get("cfg"),
-            style=window.get("stil"),
         ),
         abbruch,
     )
@@ -971,12 +948,9 @@ async def _draw(
     koerper["prompt"] = prompt
     if negativ:
         koerper["negativ"] = negativ
-    if chat_id:
-        log.info("draw_image: drawing with the picture window of chat %s", chat_id)
     if antwort_id:
-        # The picture window's own way into the chat: the route writes the
-        # finished picture into the run of the answer being written, at
-        # once, and the window draws it in that run's tiles.
+        # The route writes the finished picture into the run of the answer
+        # being written, at once, and the chat draws it in that run's tiles.
         koerper["chat_id"] = chat_id
         koerper["lauf_kennung"] = antwort_id
 
@@ -984,16 +958,7 @@ async def _draw(
     # started yet, so nothing is.
     if abbruch is not None and abbruch.is_set():
         return _gestoppt()
-    try:
-        antwort = await _bild_anfordern(client, basis, koerper, abbruch)
-    except httpx.ReadTimeout:
-        # The request went out and the route may still be drawing: a
-        # second call would draw the same picture twice.
-        return (
-            "Image generation timed out: no response was received within "
-            f"{ZEITFENSTER_S / 60:g} minutes. Generation may still be running; do not start it "
-            "again."
-        )
+    antwort = await _bild_anfordern(client, basis, koerper, abbruch)
     daten = _json_object(antwort)
     if antwort.status_code >= 400:
         return _nicht_gezeichnet(antwort, daten)
@@ -1126,78 +1091,3 @@ def _reason(response: httpx.Response, body: dict[str, Any] | None) -> str:
         if text:
             return text
     return f"HTTP {response.status_code} {response.reason_phrase}".strip()
-
-
-async def _chat_of_job(
-    client: httpx.AsyncClient, basis: str, job_id: str, made: Made = PICTURE,
-) -> tuple[str | None, str | None]:
-    """The chat a job was started from, and the sentence that stops the
-    drawing when the job could not be read.
-
-    No chat is a real answer: a job a schedule or the start window started
-    has none, and neither has a job the service does not know (the job
-    route answers 404 for that, app/api/v1/auftraege.py), and a readable
-    answer without a chat counts as no chat. Any other failed
-    answer stops the drawing: guessing "no chat" there would draw with the
-    default model instead of the chat's own. A call that got no
-    answer at all raises and is left to the caller.
-    """
-    antwort = await client.get(f"{basis}/jobs/{job_id}")
-    if antwort.status_code == 404:
-        return None, None
-    body = _json_object(antwort)
-    if antwort.status_code >= 400:
-        return None, _nicht_gezeichnet(antwort, body, made)
-    chat = (body or {}).get("chat_id")
-    return (chat if isinstance(chat, str) and chat else None), None
-
-
-async def _style_name(client: httpx.AsyncClient, basis: str, chosen: Any) -> str:
-    """The name of the style the window draws through, as the prompt
-    preparation is told it — the name the style has now. A style that is
-    gone names none, like the button in the picture studio; a list that
-    could not be read names none either, and the picture is drawn all the
-    same: the name is one fact more for the prompt writer, not a setting of
-    the drawing."""
-    if not isinstance(chosen, str) or not chosen:
-        return ""
-    try:
-        antwort = await client.get(f"{basis}/settings/resolved/{bildstile.SCHLUESSEL}")
-    except httpx.HTTPError:
-        return ""
-    body = _json_object(antwort)
-    if antwort.status_code >= 400:
-        return ""
-    return bildstile.name_of((body or {}).get("wert"), chosen)
-
-
-async def _window_of_chat(
-    client: httpx.AsyncClient, basis: str, chat_id: str | None, made: Made = PICTURE,
-) -> tuple[dict[str, Any], str | None]:
-    """What this chat's picture window stands at ({} when there is no chat
-    or the window holds nothing), and the sentence that stops the drawing
-    when the window could not be read.
-
-    The settings route answers a chat without a window with an empty value,
-    never with an error (app/api/v1/einstellungen.py) — so a failed answer
-    is a real failure and stops the drawing, rather than drawing with the
-    default model instead of the chat's own. An answer that
-    comes without a window value counts as no window. A call that got no
-    answer at all raises and is left to the caller.
-    """
-    if not chat_id:
-        return {}, None
-    antwort = await client.get(
-        f"{basis}/settings/resolved/bildfenster", params={"chat": chat_id}
-    )
-    body = _json_object(antwort)
-    if antwort.status_code >= 400:
-        return {}, _nicht_gezeichnet(antwort, body, made)
-    value = (body or {}).get("wert")
-    if not isinstance(value, dict):
-        return {}, None
-    # The family the window names decides how the picture is drawn; one of
-    # the wrong kind is an answer this tool cannot read, not an empty one.
-    if _wrong_kind(value, {"familie": str}):
-        return {}, made.unusable
-    return value, None

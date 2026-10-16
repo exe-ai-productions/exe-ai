@@ -39,6 +39,7 @@ from app.tools.mcp_client import (
     werkzeuge_aus_antwort,
     time_limit_sentence,
 )
+from app.tools.mcp_logo import logo_of
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +88,9 @@ class MCPHttpClient:
         self._protokoll: str | None = None
         self._zaehler = 0
         self.werkzeuge: list[MCPWerkzeug] = []
+        # The logo the server sent along, checked, as a data URL — or None
+        # (app/tools/mcp_logo.py).
+        self.logo: str | None = None
 
     @property
     def laeuft(self) -> bool:
@@ -107,7 +111,18 @@ class MCPHttpClient:
             self.name,
             (antwort.get("serverInfo") or {}).get("name", "unbekannt"),
         )
-        self.werkzeuge = await self._werkzeuge_holen()
+        # Fetched with a client of its own: the server's access (key, token)
+        # never travels with a request for a picture. Only the server's own
+        # origin may be asked.
+        logo = asyncio.ensure_future(
+            logo_of((antwort.get("serverInfo") or {}).get("icons"), self.url, self._transport)
+        )
+        try:
+            self.werkzeuge = await self._werkzeuge_holen()
+        except BaseException:
+            logo.cancel()
+            raise
+        self.logo = await logo
 
     async def _initialisieren(self) -> dict[str, Any]:
         """The handshake: initialize, remember the session, report initialized."""

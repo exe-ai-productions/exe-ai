@@ -28,6 +28,7 @@ from app.bildturbo import (
     START_PARTS, STARTFRIST, STARTFRIST_BAUSATZ, Bildturbo, BildturboFehler,
 )
 from app.config import Config
+from tests.test_bildinhalt import clip_gguf_bytes
 from tests.test_bildturbo import _LebtImmer, _sd_server_binary_anlegen
 
 
@@ -205,6 +206,40 @@ def test_llm_kommt_aufgeloest_an(bausatz_senden, tmp_path):
         llm="llm.gguf", diffusion_model="flux1-dev.gguf", familie="zimage",
     )
     assert auftrag.llm == tmp_path / "bildmodelle" / "text_encoders" / "llm.gguf"
+
+
+def test_the_vision_field_takes_a_vision_part_and_no_text_encoder(
+    bausatz_senden, client, tmp_path
+):
+    """The vision field of a VLM kit takes the projector file (mmproj),
+    whose head says it holds a vision encoder — a text encoder there would
+    only end the picture inside sd-cli, so the route refuses it by name."""
+    ordner = tmp_path / "bildmodelle" / "text_encoders"
+    (ordner / "mmproj-f16.gguf").write_bytes(clip_gguf_bytes(vision=True))
+    auftrag = bausatz_senden(
+        diffusion_model="flux1-dev.gguf", familie="qwen_image",
+        llm="llm.gguf", llm_vision="mmproj-f16.gguf", vae="ae.safetensors",
+    )
+    assert auftrag.llm_vision == ordner / "mmproj-f16.gguf"
+    assert auftrag.llm == ordner / "llm.gguf"
+
+    antwort = client.post(
+        "/api/v1/bild", json={
+            "prompt": "x", "modell": "base.safetensors",
+            "diffusion_model": "flux1-dev.gguf", "familie": "qwen_image",
+            "llm": "llm.gguf", "llm_vision": "llm.gguf", "vae": "ae.safetensors",
+        },
+    )
+    assert antwort.status_code == 404, antwort.text
+    # A projector file in a text encoder field is refused alike.
+    antwort = client.post(
+        "/api/v1/bild", json={
+            "prompt": "x", "modell": "base.safetensors",
+            "diffusion_model": "flux1-dev.gguf", "familie": "qwen_image",
+            "llm": "mmproj-f16.gguf", "vae": "ae.safetensors",
+        },
+    )
+    assert antwort.status_code == 404, antwort.text
 
 
 def test_vae_format_kommt_durch_wenn_gueltig(bausatz_senden):

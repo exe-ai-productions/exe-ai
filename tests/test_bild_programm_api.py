@@ -14,10 +14,25 @@ reads the real platform along the way.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from app import sddownload
 from app.config import Config
+
+
+def _windows(monkeypatch) -> None:
+    """Only the generator's own module plays Windows — the variants exist
+    there and nowhere else, and the rest of the program keeps the system it
+    runs on (the app has real threads under the TestClient)."""
+    monkeypatch.setattr(sddownload, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(sddownload.platform, "machine", lambda: "AMD64")
+
+
+def _macos(monkeypatch) -> None:
+    monkeypatch.setattr(sddownload, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(sddownload.platform, "machine", lambda: "arm64")
 
 
 def test_varianten_route_ist_leer_ohne_auswahl(config: Config, client: TestClient, monkeypatch):
@@ -40,8 +55,9 @@ def test_varianten_route_liefert_was_waehlbare_varianten_meldet(
 
 
 def test_varianten_route_meldet_die_installierte_variante(
-    config: Config, client: TestClient
+    config: Config, client: TestClient, monkeypatch
 ):
+    _windows(monkeypatch)
     ordner = config.datenverzeichnis / sddownload.ORDNER / f"{sddownload.BAU}-vulkan"
     ordner.mkdir(parents=True)
     (ordner / sddownload.program_name()).write_bytes(b"x")
@@ -207,6 +223,7 @@ def test_holen_mit_aktualisieren_ohne_variante_verwendet_die_installierte(
     """The panel sends no variant with the update click any more — the
     route resolves whichever one is actually on disk itself, rather than
     trust a `varianten` snapshot the panel might not have loaded yet."""
+    _windows(monkeypatch)
     _installation(config, "vulkan")
     monkeypatch.setattr(sddownload, "neuere_fassung", lambda eigener_bau: _veroeffentlichung(889))
     aufgerufen: dict = {}
@@ -214,6 +231,23 @@ def test_holen_mit_aktualisieren_ohne_variante_verwendet_die_installierte(
     antwort = client.post("/api/v1/bild/programm", json={"aktualisieren": True})
     assert antwort.status_code == 200
     assert aufgerufen["variante"] == "vulkan"
+
+
+def test_am_mac_aktualisiert_ein_alter_variantenordner_das_eine_paket(
+    config: Config, client: TestClient, monkeypatch
+):
+    """A Mac that still has a folder named for a backend from before the
+    variants were refused: the update asks for the one package of the
+    system, not for a variant it does not have — which would be answered
+    with 'no package' for good."""
+    _macos(monkeypatch)
+    _installation(config, "vulkan")
+    monkeypatch.setattr(sddownload, "neuere_fassung", lambda eigener_bau: _veroeffentlichung(889))
+    aufgerufen: dict = {}
+    monkeypatch.setattr(sddownload.Sddownload, "starten", _fake_starten(aufgerufen))
+    antwort = client.post("/api/v1/bild/programm", json={"aktualisieren": True})
+    assert antwort.status_code == 200
+    assert aufgerufen["variante"] is None
 
 
 # --- The way back to the tested build -------------------------------------
@@ -244,6 +278,7 @@ def test_restoring_fetches_the_pinned_build_in_place_of_the_installed_one(
     """No release is read and none is handed on: the pinned build is the
     one fetched, for the variant that is installed, and it replaces a
     newer one."""
+    _windows(monkeypatch)
     _newer_installation(config, "vulkan")
     monkeypatch.setattr(
         sddownload, "neuere_fassung",
@@ -282,3 +317,147 @@ def test_a_plain_fetch_and_an_update_do_not_replace_a_newer_build(
     for body in (None, {"aktualisieren": True}):
         assert client.post("/api/v1/bild/programm", json=body).status_code == 200
         assert aufgerufen["replace_newer"] is False
+
+
+# --- The variant that was picked -------------------------------------------
+
+
+def _picked(client: TestClient) -> str | None:
+    wert = client.get("/api/v1/settings/global/bildprogramm_fassung").json()["wert"]
+    return wert["variante"] if wert else None
+
+
+def test_a_fetch_of_a_variant_is_what_the_program_remembers(
+    config: Config, client: TestClient, monkeypatch
+):
+    """Vulkan picked beside a newer CPU build: the window is told vulkan runs,
+    and the program starts it (the folder is the one the status names)."""
+    _windows(monkeypatch)
+    _newer_installation(config)  # a newer CPU build, the plain folder
+    _installation(config, "vulkan")  # the pinned build of vulkan
+    assert client.get("/api/v1/bild/programm/varianten").json()["installiert"] == "cpu"
+
+    aufgerufen: dict = {}
+    monkeypatch.setattr(sddownload.Sddownload, "starten", _fake_starten(aufgerufen))
+    monkeypatch.setattr(sddownload, "neueste_veroeffentlichung", lambda: None)
+    antwort = client.post("/api/v1/bild/programm", json={"variante": "vulkan"})
+    assert antwort.status_code == 200
+    assert _picked(client) == "vulkan"
+
+    assert client.get("/api/v1/bild/programm/varianten").json()["installiert"] == "vulkan"
+    assert client.get("/api/v1/bild/modelle").json()["bau"] == sddownload.BAU
+
+
+def test_a_switch_fetches_the_newest_number_of_the_variant_asked_for(
+    config: Config, client: TestClient, monkeypatch
+):
+    _windows(monkeypatch)
+    _installation(config, "vulkan")
+    neueste = _veroeffentlichung(889)
+    neueste.varianten["cuda12"] = ("x.zip", 1)
+    neueste.cudart = 1
+    monkeypatch.setattr(sddownload, "neueste_veroeffentlichung", lambda: neueste)
+    aufgerufen: dict = {}
+    monkeypatch.setattr(sddownload.Sddownload, "starten", _fake_starten(aufgerufen))
+
+    antwort = client.post("/api/v1/bild/programm", json={"variante": "cuda12"})
+    assert antwort.status_code == 200
+    assert aufgerufen == {
+        "variante": "cuda12", "veroeffentlichung": neueste, "replace_newer": False,
+    }
+    assert _picked(client) == "cuda12"
+
+
+def test_a_switch_keeps_to_the_pinned_build_when_the_newest_release_has_no_package(
+    config: Config, client: TestClient, monkeypatch
+):
+    """Silence probe: a release that does not carry the variant must not turn
+    a switch that worked into a refusal — the pinned build has one."""
+    _windows(monkeypatch)
+    _installation(config, "vulkan")
+    neueste = _veroeffentlichung(889)  # carries no variant at all
+    monkeypatch.setattr(sddownload, "neueste_veroeffentlichung", lambda: neueste)
+    aufgerufen: dict = {}
+    monkeypatch.setattr(sddownload.Sddownload, "starten", _fake_starten(aufgerufen))
+
+    antwort = client.post("/api/v1/bild/programm", json={"variante": "cuda12"})
+    assert antwort.status_code == 200
+    assert aufgerufen["veroeffentlichung"] is None
+
+
+def test_a_first_fetch_takes_the_pinned_build_not_the_newest(
+    config: Config, client: TestClient, monkeypatch
+):
+    """Silence probe: nothing installed means nothing to switch from; the
+    release page is not even read."""
+    _windows(monkeypatch)
+    monkeypatch.setattr(
+        sddownload, "neueste_veroeffentlichung",
+        lambda: (_ for _ in ()).throw(AssertionError("a release was read")),
+    )
+    aufgerufen: dict = {}
+    monkeypatch.setattr(sddownload.Sddownload, "starten", _fake_starten(aufgerufen))
+
+    antwort = client.post("/api/v1/bild/programm", json={"variante": "vulkan"})
+    assert antwort.status_code == 200
+    assert aufgerufen["veroeffentlichung"] is None
+    assert _picked(client) == "vulkan"
+
+
+def test_a_switch_to_a_variant_that_is_installed_in_the_newest_number_only_picks_it(
+    config: Config, client: TestClient, monkeypatch
+):
+    """Both builds stand on disk, the CPU one runs. Asking for vulkan finds
+    nothing to fetch — and is not an error: the pick is all that is left."""
+    _windows(monkeypatch)
+    _installation(config)
+    _installation(config, "vulkan")
+    # The fetch looks for a program it can run, as the starting does.
+    for ordner in (config.datenverzeichnis / sddownload.ORDNER).iterdir():
+        (ordner / sddownload.program_name()).chmod(0o755)
+    monkeypatch.setattr(sddownload, "neueste_veroeffentlichung", lambda: None)
+    assert client.get("/api/v1/bild/programm/varianten").json()["installiert"] == "vulkan"
+
+    # The plain fetch finds the folder there and says so, as it always did.
+    antwort = client.post("/api/v1/bild/programm", json={"variante": "cpu"})
+    assert antwort.status_code == 200, antwort.text
+    assert antwort.json()["fertig"] is True
+    assert _picked(client) == "cpu"
+    assert client.get("/api/v1/bild/programm/varianten").json()["installiert"] == "cpu"
+
+
+def test_nothing_is_remembered_off_windows(
+    config: Config, client: TestClient, monkeypatch
+):
+    """Silence probe: no variants there, so no pick is stored."""
+    _macos(monkeypatch)
+    aufgerufen: dict = {}
+    monkeypatch.setattr(sddownload.Sddownload, "starten", _fake_starten(aufgerufen))
+
+    antwort = client.post("/api/v1/bild/programm", json={})
+    assert antwort.status_code == 200
+    assert _picked(client) is None
+
+
+def test_an_unknown_variant_is_not_stored_as_the_pick(client: TestClient):
+    antwort = client.put(
+        "/api/v1/settings/global/bildprogramm_fassung", json={"wert": {"variante": "quanten"}}
+    )
+    assert antwort.status_code == 200
+    assert antwort.json()["wert"] is None
+
+
+def test_asking_for_the_variant_that_runs_is_still_already_there(
+    config: Config, client: TestClient, monkeypatch
+):
+    """Silence probe: only a switch turns "already there" into a pick."""
+    _windows(monkeypatch)
+    _installation(config)
+    (config.datenverzeichnis / sddownload.ORDNER / sddownload.BAU / sddownload.program_name()).chmod(
+        0o755
+    )
+    monkeypatch.setattr(sddownload, "neueste_veroeffentlichung", lambda: None)
+
+    antwort = client.post("/api/v1/bild/programm", json={"variante": "cpu"})
+    assert antwort.status_code == 409
+    assert _picked(client) is None

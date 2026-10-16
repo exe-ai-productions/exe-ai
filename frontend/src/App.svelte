@@ -49,13 +49,13 @@
   } from './lib/zustand.svelte.js'
   import { protokollOffen } from './lib/protokollfenster.svelte.js'
   import { deferQuestion, isDeferred, questionCardStands, standingQuestion } from './lib/questionbox.svelte.js'
-  import { VORGABE_MODUS, anzeigeLaden, modusSpeichern } from './lib/anzeige.js'
+  import { anzeigeLaden, modusSpeichern, startModus } from './lib/anzeige.js'
   import { chatanzeige, scrollstelleSpeichern } from './lib/chatanzeige.svelte.js'
   import { begruessung, begruessungLaden } from './lib/begruessung.svelte.js'
   import { updatesStart } from './lib/updates.svelte.js'
   import { tellShellWords } from './lib/shellWords.js'
   import { chatNameFrom } from './lib/chatName.js'
-  import { verbinden as terminalVerbinden } from './lib/terminalfenster.svelte.js'
+  import { verbinden as terminalVerbinden, STUDIO_RUNS } from './lib/terminalfenster.svelte.js'
   import { klangwahlLaden } from './lib/klaenge.svelte.js'
   import {
     melden, meldewesenLaden, meldeText, schliesseMeldung, WERKZEUG_FEHLER_MS, werkzeugFertigDauer,
@@ -75,7 +75,7 @@
   import {
     anhalten, ausreihen, entfernen, haelt, loesen, zurueckEinreihen,
   } from './lib/warteschlange.svelte.js'
-  import { chatOeffnen, openNewChat, nachrichtenSetzen, nachrichtenAnzeige, eigeneZeilenSichern, eigeneZeilenZurueckgeben, bildlaufPlatzhalter, answerDrawingTile, isDrawingTool } from './lib/zustand.svelte.js'
+  import { chatOeffnen, openNewChat, nachrichtenSetzen, nachrichtenAnzeige, eigeneZeilenSichern, eigeneZeilenZurueckgeben, answerDrawingTile, isDrawingTool } from './lib/zustand.svelte.js'
   import { chosenModelOff } from './lib/modelle.svelte.js'
   import { answerEnding } from './lib/answerEnding.js'
   import { fitColumns, watchWindowWidth } from './lib/columnRoom.svelte.js'
@@ -87,9 +87,10 @@
   $effect(() => watchWindowWidth())
   $effect(() => fitColumns())
 
-  /* The terminal listens to the open chat: its runs, its lines. */
+  /* The terminal listens to the open chat — its runs, its lines — and to the
+     studio's own list while the studio is what the window shows. */
   $effect(() => {
-    terminalVerbinden(zustand.aktiverChat)
+    terminalVerbinden(studioSichtbar() ? STUDIO_RUNS : zustand.aktiverChat)
   })
 
   /* Does this chat still find the folders it shares? Asked once, here, when
@@ -154,8 +155,10 @@
 
   /* The mode lives here since the buttons moved from the menu bar into
      the settings window (3.11). It acts via an attribute on the root
-     element — no component has to know which one currently applies. */
-  let modus = $state(VORGABE_MODUS)
+     element — no component has to know which one currently applies. It
+     begins with the look the page painted before the first frame, so the
+     service's answer finds the look in place instead of Exe. */
+  let modus = $state(startModus())
   begruessungLaden()
   /* What the shell found of a newer version of the program, and every
      change of it from here on. In a browser there is no shell to ask. */
@@ -312,6 +315,12 @@
   let hochSumme = 0
   let runterSumme = 0
 
+  /* The view runs to the floor on a spring while the answer grows under a
+     reader who stands there (`gleiteZumBoden`): the scroll events of that
+     run are the program's own, so `scrollGeprueft` does not snap the view
+     to the floor in the middle of it. */
+  let gleitet = false
+
   function scrollGeprueft() {
     if (!verlauf) return
     const abstand = verlauf.scrollHeight - verlauf.scrollTop - verlauf.clientHeight
@@ -330,7 +339,7 @@
        THIS HANDLER, synchronously — the event runs before the browser
        paints, so the excursion never reaches the screen. runter() with
        its animation frame would be one visible frame too late here. */
-    else if (folgtMit) verlauf.scrollTop = verlauf.scrollHeight
+    else if (folgtMit && !gleitet) verlauf.scrollTop = verlauf.scrollHeight
   }
 
   /* The scroll event, both jobs in order: decide whether we are still
@@ -609,7 +618,7 @@
     if (!verlauf) return
     if (erzwingen) folgtMit = true
     if (!folgtMit) return
-    const schnappen = () => {
+    const schnappen = (sofort = false) => {
       /* Check again at execution time — the user may have bailed out in
          the meantime, and so may the restore of a chat's read position
          above, which turns following off before it puts the view back
@@ -619,7 +628,12 @@
       if (!folgtMit || !verlauf) return
       // Already at the floor: nothing to snap.
       if (verlauf.scrollHeight - verlauf.scrollTop - verlauf.clientHeight <= 0) return
-      verlauf.scrollTop = verlauf.scrollHeight
+      /* A new line moves the floor by a line's height at once; the view
+         follows it on a spring instead of in one step. Where the reader
+         asked for less motion, and from the timer below (a window nobody
+         sees draws no frames), it is one step. */
+      if (sofort || bewegungReduziert()) verlauf.scrollTop = verlauf.scrollHeight
+      else gleiteZumBoden()
     }
     /* Two ways to the same snap, and the frame is the better one: it runs
        once the new text has been laid out, so the view lands at the height
@@ -642,13 +656,54 @@
     let frame = 0
     const nachzuegler = setTimeout(() => {
       cancelAnimationFrame(frame)
-      schnappen()
+      schnappen(true)
     }, 150)
     frame = requestAnimationFrame(() => {
       clearTimeout(nachzuegler)
       schnappen()
     })
   }
+
+  /* The spring: each frame the view covers the share of the way to the floor
+     that the frame's time earns — the distance halves every `GLEIT_HALB_MS` —
+     and at least a pixel, so it arrives. The floor is read again every
+     frame, so lines that arrive while the view runs are part of the same
+     run. It ends at the floor, or the moment the reader's wheel, finger or
+     key has ended the following. */
+  const GLEIT_HALB_MS = 80
+  function gleiteZumBoden() {
+    if (gleitet) return
+    gleitet = true
+    // The first step is taken as one frame's worth (16 ms).
+    let zuletzt = performance.now() - 16
+    const bild = () => {
+      if (!folgtMit || !verlauf) {
+        gleitet = false
+        return
+      }
+      const abstand = verlauf.scrollHeight - verlauf.scrollTop - verlauf.clientHeight
+      if (abstand <= 0) {
+        gleitet = false
+        return
+      }
+      const jetzt = performance.now()
+      const dt = Math.min(100, jetzt - zuletzt)
+      zuletzt = jetzt
+      const weg = abstand <= 1 ? abstand : Math.max(1, abstand * (1 - 0.5 ** (dt / GLEIT_HALB_MS)))
+      const vorher = verlauf.scrollTop
+      verlauf.scrollTop = vorher + weg
+      // A write that moves nothing (a rounding of the browser) ends the run at the floor.
+      if (verlauf.scrollTop === vorher) {
+        verlauf.scrollTop = verlauf.scrollHeight
+        gleitet = false
+        return
+      }
+      requestAnimationFrame(bild)
+    }
+    bild()
+  }
+  const bewegungReduziert = () =>
+    typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
   /* Following means AT the floor — whenever box or content change size,
      not only when a chunk arrives.
@@ -1066,7 +1121,14 @@
     const gezeichnet = geteilteZeilen.reduce(
       (summe, n) => summe + bildDateien(n).length, 0,
     )
-    const gescheitert = von - gezeichnet
+    // Pictures the user took out (a cross, a stop) were never going to be
+    // drawn: they are not ones that "were not generated". The window's own
+    // count is on the run's row (`stats.abgenommen`, written when the run
+    // ended), so the reloaded row says the same as the toast did.
+    const abgenommen = geteilteZeilen.reduce(
+      (summe, n) => summe + (Number(n.stats?.abgenommen) || 0), 0,
+    )
+    const gescheitert = von - gezeichnet - abgenommen
     return gescheitert > 0 ? { gescheitert, von } : null
   }
 
@@ -1352,25 +1414,23 @@
     }
   }
 
-  /* A picture made on this machine, from the click to the frame.
+  /* A picture made on this machine by the picture studio, from the click
+     to the frame.
 
-     The window is already gone by the time this runs — it shrank away, and
-     the work continues here where it can be seen and stopped. The waiting
-     message is the SAME one the picture server's mode uses: one waiting
-     mark for pictures, whoever draws them.
-
-     The pair in the history is written by the server, so when the picture
-     lands there is nothing to assemble — only to catch up. */
-  let bildLokalLaeuft = $state(false)
+     The studio belongs to no chat: its pictures are drawn, listed and shown
+     in the studio, whichever chat is open, and nothing of it is written
+     into a chat. The request names none (`studio`); the finished picture
+     lies in the pictures folder and on the studio's own list, which the
+     studio reads again when a picture leaves the line. */
+  let bildLokalLaeuft = false
   /* Pictures asked for while one is drawing wait here and run one after the
      other — pressing "draw" three times queues three, it does not throw two
      away. Not $state: only the count in the store drives the badge. One GPU
-     draws them serially; the queue stays one shared line regardless of how
-     many chats fed it. */
+     draws them serially. */
   let bildQueue = []
   /* The wish being drawn right now, or null between wishes — kept out of
-     `bildQueue` while it draws (it was shifted off), so the set of chats
-     with something in flight has to add it back explicitly. */
+     `bildQueue` while it draws (it was shifted off), so the line shown has
+     to add it back explicitly. */
   let bildLaufWunsch = null
 
   /* The count shown is every picture still to come — the one drawing now
@@ -1380,27 +1440,13 @@
     zustand.bildWarteschlange = bildQueue.length + (bildLokalLaeuft ? 1 : 0)
   }
 
-  /* Which chats have a picture drawing or waiting, and the ordered size for
-     each — rebuilt from the one live wish plus the shared queue whenever
-     either changes. A chat drops out the moment it has nothing left in
-     flight, the others stay; that is what keeps a filling frame with the
-     chat it belongs to instead of the one on screen. */
-  function bildChatsAktualisieren() {
-    const menge = {}
-    const masse = {}
-    const merken = (w) => {
-      menge[w.chat_id] = true
-      masse[w.chat_id] = { breite: w.breite ?? 512, hoehe: w.hoehe ?? 512 }
-    }
-    for (const w of bildQueue) merken(w)
-    if (bildLaufWunsch) merken(bildLaufWunsch)
-    zustand.bildLaeuftChat = menge
-    zustand.bildMasse = masse
-    const entry = (w, running) => ({
-      id: w.queue_id, chat_id: w.chat_id, prompt: w.prompt, running,
-    })
+  /* The line of pictures still to come, rebuilt from the one live wish plus
+     the queue whenever either changes: the studio's row of pictures shows
+     it. */
+  function pictureLineRefresh() {
+    const entry = (w, running) => ({ id: w.queue_id, prompt: w.prompt, running })
     // A picture already drawn is no picture to come, even before the
-    // chat has caught up with it.
+    // studio has caught up with it.
     zustand.pictureQueue = [
       ...(bildLaufWunsch && !bildLaufWunsch.drawn ? [entry(bildLaufWunsch, true)] : []),
       ...bildQueue.map((w) => entry(w, false)),
@@ -1408,7 +1454,7 @@
   }
 
   /* The picture drawing now, and only that one — the stop on its tile in
-     the picture window's gallery. The line behind it goes on: each waiting
+     the studio's row of pictures. The line behind it goes on: each waiting
      picture there has its own way out. Only while that very picture is the
      one drawing: the stop names no picture on the server, and a tile that
      had not caught up yet would otherwise stop the next one in line. */
@@ -1419,41 +1465,32 @@
   }
 
   /* One waiting picture taken out of the line — only a waiting one: the
-     one drawing is stopped with its stop. The picture that writes its run's
-     question hands that to the next one of the run; a run with nothing
-     left of it, neither waiting nor drawing, ends here (it otherwise ends
-     with its last picture, see `bildEinesZeichnen`'s `finally`). */
+     one drawing is stopped with its stop. A run with nothing left of it,
+     neither waiting nor drawing, ends here (it otherwise ends with its last
+     picture, see `bildEinesZeichnen`'s `finally`). */
   function removeWaitingPicture(id) {
     const gone = bildQueue.find((w) => w.queue_id === id)
     if (!gone) return
     bildQueue = bildQueue.filter((w) => w !== gone)
     const run = gone.lauf_kennung
-    if (run) {
-      const rest = bildQueue.filter((w) => w.lauf_kennung === run)
-      if (gone.frage_erstellen !== false && rest.length) rest[0].frage_erstellen = true
-      if (!rest.length && bildLaufWunsch?.lauf_kennung !== run) {
-        laufFehlerZahl.delete(run)
-        if (laufAktuell === run) laufAktuell = null
-      }
+    if (run && !bildQueue.some((w) => w.lauf_kennung === run) && bildLaufWunsch?.lauf_kennung !== run) {
+      laufFehlerZahl.delete(run)
     }
     bildZahlSetzen()
-    bildChatsAktualisieren()
+    pictureLineRefresh()
   }
 
-  /* Images per run, honest on screen (Schritt 3c, H2): the ONE lauf_kennung
-     the local queue is working through right now, or null between runs.
-     The tile row uses this — not a "finished laufs" memory — to tell
-     "still filling in" from "genuinely short by one": a memory would only
-     live as long as this page does and would have gone quiet on the very
-     next reload, which is exactly the reload this house rule exists to
-     survive. A historical lauf loaded fresh from the server is never the
-     current one, so its shortfall (if any) shows immediately — no waiting
-     for a completion event that already happened before this page ever
-     loaded. */
+  /* The ONE run (`lauf_kennung`) a model's drawing call is writing into a
+     chat right now, or null between runs — the chat's tile row uses it to
+     tell "still filling in" from "genuinely short by one" (`teilausfall`):
+     a memory would only live as long as this page does and would have gone
+     quiet on the very next reload. A historical run loaded fresh from the
+     server is never the current one, so its shortfall (if any) shows
+     immediately. The studio's runs are not among them: they have no row. */
   let laufAktuell = $state(null)
-  /* How many requests of each in-flight lauf have failed so far — plain
-     bookkeeping, not rendered directly, so it does not need to be
-     reactive. One picture failing is not reported on its own; the whole
+  /* How many requests of each in-flight run of the studio have failed so
+     far — plain bookkeeping, not rendered directly, so it does not need to
+     be reactive. One picture failing is not reported on its own; the whole
      run reports once, when its own last request finishes. */
   const laufFehlerZahl = new Map()
 
@@ -1464,7 +1501,7 @@
     queueCounter += 1
     bildQueue.push({ ...wunsch, queue_id: queueCounter })
     bildZahlSetzen()
-    bildChatsAktualisieren()
+    pictureLineRefresh()
     if (!bildLokalLaeuft) workPictureLine()
   }
 
@@ -1475,280 +1512,79 @@
         const naechste = bildQueue.shift()
         bildLaufWunsch = naechste
         bildZahlSetzen()
-        bildChatsAktualisieren()
+        pictureLineRefresh()
         await bildEinesZeichnen(naechste)
-        // This wish is done — the chat it drew for drops out of the set
-        // unless it still has more of its own waiting in the queue.
         bildLaufWunsch = null
-        bildChatsAktualisieren()
+        pictureLineRefresh()
       }
     } finally {
       bildLokalLaeuft = false
       bildLaufWunsch = null
-      // Queue is empty here, so this clears the set and the size map.
-      bildChatsAktualisieren()
+      // The queue is empty here, so this clears the line.
+      pictureLineRefresh()
       bildZahlSetzen()
     }
   }
 
   async function bildEinesZeichnen(wunsch) {
-    const chatId = wunsch.chat_id
-    const masse = { breite: wunsch.breite ?? 512, hoehe: wunsch.hoehe ?? 512 }
-    if (wunsch.lauf_kennung) laufAktuell = wunsch.lauf_kennung
-    /* The queue may reach this wish while ANOTHER chat is on screen. Then
-       the visible list is a foreign one and gets nothing pushed into it —
-       the working message belongs to the drawing chat and comes back
-       through chatOeffnen the moment that chat is opened. Without this
-       guard the pair appeared in whichever chat happened to be open. */
-    let platzhalter = null
-    if (zustand.aktiverChat === chatId) {
-      /* A chat open that lost its race can leave the list
-         tagged for a foreign chat while this one is the one on screen —
-         pushing into it would be invisible, hidden by the tag mismatch. */
-      if (zustand.nachrichtenChatId !== chatId) nachrichtenSetzen(chatId, [])
-      // Images per run: pictures 2+ of a run share the first one's question
-      // text on the server (see frage_erstellen), so the local list must not
-      // grow a bubble for each of them either — one prompt shown, however
-      // many pictures answer it.
-      if (wunsch.frage_erstellen !== false) {
-        zustand.nachrichten.push({ id: 'eigen-' + Date.now(), role: 'user', content: wunsch.prompt })
-      }
-      /* IMPORTANT: fetch the object back OUT of the list after the push —
-         only the list's copy is reactive. Whoever keeps the raw object writes
-         into the void, which is the bug where the picture only appeared after
-         switching chats. `bildChatsAktualisieren` above already set
-         `zustand.bildMasse[chatId]` to this same `masse` for this wish. */
-      zustand.nachrichten.push(bildlaufPlatzhalter(chatId))
-      platzhalter = zustand.nachrichten[zustand.nachrichten.length - 1]
-      runter(true)
-    }
-    // Which chats have a picture in flight (and each one's ordered size) is
-    // kept by `bildChatsAktualisieren` from the caller — switching away and
-    // back reads it to put the working message and its filling frame back,
-    // since neither is on the server yet.
     try {
       // The line's own marks stay here; the service takes no field it does
       // not know.
       const { queue_id: _, ...request } = wunsch
       const antwort = await api.bildZeichnen(request)
-      // Drawn: it leaves the line to come at once, not only once the chat
-      // has caught up with it.
+      // Drawn: it leaves the line to come at once, not only once the studio
+      // has read its list again.
       wunsch.drawn = true
-      bildChatsAktualisieren()
+      pictureLineRefresh()
       // The seed the picture was ACTUALLY drawn with — also when the server
-      // picked it. The picture window shows it and the seed plan continues
-      // from it.
+      // picked it. The studio shows it and the seed plan continues from it.
       if (Number.isInteger(antwort?.seed)) seedlage.letzter = antwort.seed
-      /* Whoever switched chats meanwhile is looking at a foreign list —
-         then touch nothing. The pair lives on the server and shows itself
-         the next time the chat is opened. */
-      if (zustand.aktiverChat !== chatId) return
-      /* The finished picture first lands in the SAME working message: the
-         frame stays the same element, so it can grow smoothly from the 75%
-         working size to the full display size with the picture inside.
-         Only after that little growth does the list reconcile with the
-         server — same content, so nothing visibly changes.
-
-         Resolve the working message from the CURRENT list first: leaving
-         and re-entering the chat replaces the list and re-creates the
-         placeholder, and a write into the discarded object would leave the
-         visible one drawing forever. */
-      const ziel = zustand.nachrichten.includes(platzhalter)
-        ? platzhalter
-        : zustand.nachrichten.find((n) => n.bildLaeuft && !n.answerId)
-      if (ziel) {
-        ziel.bildMasse = ziel.bildMasse ?? masse
-        ziel.bildLaeuft = false
-        // Images per run (Weg A): the server writes every picture of a
-        // lauf into the SAME one row — the local, not-yet-reconciled view
-        // follows that here instead of growing a standalone bubble per
-        // picture. The run's own FIRST picture still grows in place as an
-        // ordinary single-picture frame (no `bilder` yet, so `bildKacheln`
-        // leaves it alone) — only from the SECOND picture on is there
-        // already a shared row to fold into, and this working placeholder
-        // then joins it instead of standing next to it as its own bubble.
-        //
-        // The row it looks for is normally the SERVER's — pictures are
-        // drawn strictly one after the other, and each one's own reconcile
-        // 700ms later replaces the list before the next begins. So this
-        // asks for the run id the way the server sends it (`lauf_id`, via
-        // `laufKennung`), and the two writes below hand the placeholder the
-        // same field rather than the retired `stats.lauf` — a row the
-        // window builds itself must be shaped like the row that replaces
-        // it, or the next picture fails to recognise its own run and opens
-        // a second tile wall beside the first.
-        if (wunsch.lauf_kennung) {
-          const geteilt = zustand.nachrichten.find(
-            (n) => n !== ziel && n.role === 'assistant' && laufKennung(n) === wunsch.lauf_kennung,
-          )
-          if (geteilt) {
-            geteilt.bilder = geteilt.bilder ?? new Array(wunsch.von).fill(null)
-            geteilt.bilder[wunsch.nr - 1] = antwort.bild
-            const seeds = geteilt.stats?.seeds ?? new Array(wunsch.von).fill(null)
-            seeds[wunsch.nr - 1] = antwort.seed
-            geteilt.lauf_id = wunsch.lauf_kennung
-            geteilt.stats = { ...geteilt.stats, von: wunsch.von, seeds }
-            const stelle = zustand.nachrichten.indexOf(ziel)
-            if (stelle !== -1) zustand.nachrichten.splice(stelle, 1)
-          } else {
-            ziel.bilder = new Array(wunsch.von).fill(null)
-            ziel.bilder[wunsch.nr - 1] = antwort.bild
-            const seeds = new Array(wunsch.von).fill(null)
-            seeds[wunsch.nr - 1] = antwort.seed
-            ziel.lauf_id = wunsch.lauf_kennung
-            ziel.stats = { von: wunsch.von, seeds }
-          }
-        } else {
-          ziel.bild = antwort.bild
-          ziel.stats = { ...ziel.stats, seed: antwort.seed }
-        }
-      }
-      /* Glued to the floor for the growth's length: the frame's bottom
-         stands, its top rises — the growth reads upward. */
-      runterGleiten()
-      /* From here on the picture is drawn and on screen. A reconcile that
-         fails must not take it away again — the server has the pair, and
-         the list heals on the next chat open. */
-      try {
-        await new Promise((frei) => setTimeout(frei, 700))
-        if (zustand.aktiverChat !== chatId) return
-        // The question bubble of a send still on its way — the same rescue
-        // `chatOeffnen` runs before it replaces the list, missing here
-        // until now: a question sent while this picture was still drawing
-        // vanished until the upload finished.
-        const eigeneZeilen = eigeneZeilenSichern(chatId)
-        // Only the messages matter here — a picture finishing is not a text
-        // run resuming, `laufend` (if any) is for chatOeffnen to act on.
-        const frischeNachrichten = (await api.nachrichten(chatId)).nachrichten
-        /* The user can have switched to and successfully opened a different
-           chat during this fetch — that chat's own, already-correct list
-           must not be overwritten by this one arriving late. */
-        if (zustand.aktiverChat !== chatId) return
-        nachrichtenSetzen(chatId, frischeNachrichten)
-        /* But a text answer may be streaming into this same chat right now:
-           sending is deliberately allowed while a picture is being drawn
-           (Eingabeleiste.svelte). Replacing the list drops the object the
-           stream writes into — the answer stops growing on screen, and the
-           server row that takes its place still says `zustand: 'laeuft'`,
-           which nothing in this window would ever clear again. The bubble
-           then carries a waiting mark for the rest of the session and the
-           context bar reads that frozen row.
-
-           `chatOeffnen` puts the placeholder back for exactly this reason
-           (zustand.svelte.js). The same rescue belongs here, because the
-           same thing was replaced. Matched by identity first and by id
-           second, like over there: the id is only there once the run's
-           `start` event has arrived. */
-        const meiner = zustand.laufenderPlatzhalter[chatId]
-        if (zustand.laeuft[chatId] && meiner) {
-          const stelle = zustand.nachrichten.findIndex(
-            (n) => n === meiner || (meiner.id != null && n.id === meiner.id),
-          )
-          if (stelle === -1) zustand.nachrichten.push(meiner)
-          else if (zustand.nachrichten[stelle] !== meiner) {
-            zustand.nachrichten[stelle] = meiner
-          }
-        }
-        eigeneZeilenZurueckgeben(eigeneZeilen)
-        /* The server's copy of the message does not know the ordered size.
-           Hand it over, so the sized stage stays after the reconcile and the
-           picture keeps its exact geometry — a natural-size re-render would
-           reflow on image load and yank the view away from the picture.
-           For a run this sizes the WHOLE shared row's message once, not
-           per tile — the individual tiles are synthetic views built fresh
-           from it on every render (see `bildKacheln`).
-
-           The list searched here is the one the fetch above just put in
-           place, so the row to hand the size to is the SERVER's — which is
-           why this lookup, alone among the six, could never have limped
-           along on a local row still carrying the old key. Failing to find
-           it costs precisely what this comment promises to prevent. */
-        const frisch = wunsch.lauf_kennung
-          ? zustand.nachrichten.find(
-              (n) => n.role === 'assistant' && laufKennung(n) === wunsch.lauf_kennung,
-            )
-          : [...zustand.nachrichten].reverse()
-              .find((n) => n.role === 'assistant' && n.bild === antwort.bild)
-        if (frisch) frisch.bildMasse = masse
-        /* A short glide, not one snap: the reconciled message renders its
-           stats foot a frame later, and a single snap lands just above the
-           true floor. */
-        runterGleiten(300)
-        await chatsLaden()
-      } catch {
-        /* the picture stands; the fresh list arrives with the next open */
-      }
     } catch (fehler) {
-      if (zustand.aktiverChat === chatId) {
-        /* The visible placeholder may be a re-created twin of the captured
-           one (chat left and re-entered) — remove whichever still claims to
-           be drawing, or a dust frame stands in the chat forever. */
-        const stelle = zustand.nachrichten.findIndex(
-          (n) => n === platzhalter || (n.bildLaeuft && n.id === null),
-        )
-        if (stelle !== -1) zustand.nachrichten.splice(stelle, 1)
-      }
       /* A stopped picture is not an error. It is what was just asked for,
-         and the working message disappearing IS the answer. */
+         and the tile disappearing IS the answer. */
       if (fehler.status !== 499) {
         if (wunsch.lauf_kennung) {
-          // Images per run: one picture failing is not news on its own —
-          // the run's own last request (below) reports once for however
-          // many failed, not once per failure.
+          // One picture of a run failing is not news on its own — the run's
+          // own last request (below) reports once for however many failed,
+          // not once per failure.
           laufFehlerZahl.set(wunsch.lauf_kennung, (laufFehlerZahl.get(wunsch.lauf_kennung) ?? 0) + 1)
         } else {
           melde(String(fehler.message || fehler), 'fehler')
         }
       }
     } finally {
-      // Images per run: the request carrying the run's own last position
-      // is the one point that always runs, whichever pictures around it
-      // succeeded or failed — the run is done exactly when it finishes,
-      // never before. That is what lets the tile row tell "still filling
-      // in" from "genuinely short by one": while laufAktuell still names
-      // this lauf, its shortfall is not shown yet; clearing it here is
-      // what un-hides a real gap.
-      // The last picture left of its run ends it — by position, or
-      // because the ones after it were taken out of the line.
+      /* The request carrying the run's own last position is the one point
+         that always runs, whichever pictures around it succeeded or failed
+         — the run is done exactly when it finishes, never before. The last
+         picture left of its run ends it — by position, or because the ones
+         after it were taken out of the line. */
       const lauf = wunsch.lauf_kennung
       if (lauf && (wunsch.nr === wunsch.von || !bildQueue.some((w) => w.lauf_kennung === lauf))) {
-        // C5 (Aufseher): the SAME shortfall count exists twice — here,
-        // computed from the in-flight request queue at the moment the
-        // run's own last request finishes, and again in `teilausfall`,
-        // computed from the saved message's own `bilder` once the run
-        // is reloaded from the server. They cannot share one
-        // computation (this one only knows the wish that was sent,
-        // `teilausfall` only knows the row that was stored) — kept in
-        // step by comment, not by one shared source, so a change to
-        // either one's arithmetic is a prompt to check the other.
-        const gescheitert = laufFehlerZahl.get(wunsch.lauf_kennung) ?? 0
-        laufFehlerZahl.delete(wunsch.lauf_kennung)
+        const gescheitert = laufFehlerZahl.get(lauf) ?? 0
+        laufFehlerZahl.delete(lauf)
         if (gescheitert > 0) {
           meldeText('bild.lauf_teilweise', { gescheitert, von: wunsch.von }, 'fehler')
         }
-        if (laufAktuell === wunsch.lauf_kennung) laufAktuell = null
       }
     }
   }
 
   /* A picture or a video the model makes while it answers (`draw_image`,
-     `draw_video`) goes the picture window's way on screen too: the same
-     working tile while it is drawn, and the same run row its finished
-     pictures stand in. The server writes that row itself, the answer's id
-     is its run, and every result of a drawing call hands the row over as it
-     stands (`bildlauf`) — so the window only puts it in place, it never
-     builds a row of its own. Only on the drawing chat's own list: another
-     chat's gets nothing, the row is on the server and comes with the next
-     open. */
+     `draw_video`) stands in the chat: a working tile while it is drawn, and
+     the run row its finished pictures stand in. The server writes that row
+     itself, the answer's id is its run, and every result of a drawing call
+     hands the row over as it stands (`bildlauf`) — so the window only puts
+     it in place, it never builds a row of its own. Only on the drawing
+     chat's own list: another chat's gets nothing, the row is on the server
+     and comes with the next open. */
   function drawingStarted(chatId, answerId) {
     if (zustand.aktiverChat !== chatId || zustand.nachrichtenChatId !== chatId) return
     if (!zustand.nachrichten.some((n) => n.answerId === answerId)) {
       zustand.nachrichten.push(answerDrawingTile(chatId, answerId))
     }
     // The tile joins this answer's run as its next cell once the run has a
-    // row — unless the picture window's queue is working through a run of
-    // its own, which keeps the current one.
-    if (!bildLokalLaeuft) laufAktuell = answerId
+    // row.
+    laufAktuell = answerId
   }
 
   function drawingDone(chatId, answerId, row) {
@@ -1768,32 +1604,6 @@
     } else if (tile !== -1) {
       list.splice(tile, 1)
     }
-  }
-
-  /* The stop button of image generation: tells the server, which
-     interrupts the generator — the waiting request above resolves itself
-     as a result. */
-  function bildStoppen() {
-    // Cancel everything, not only the one drawing: the queued ones were
-    // asked for by the same hand and stopping means stopping.
-    bildQueue = []
-    bildZahlSetzen()
-    // The queued chats drop from the set right away; the one still drawing
-    // stays until its stopped request resolves and the loop's finally runs.
-    bildChatsAktualisieren()
-    // C4 (Aufseher): `laufAktuell` and `laufFehlerZahl` are otherwise
-    // cleared only by the run's OWN last request finishing
-    // (`bildEinesZeichnen`'s `finally`) or by `removeWaitingPicture`
-    // taking the last one left — a stop mid-run means that
-    // request never happens, so a run stopped at picture 5 of 8 left
-    // `laufAktuell` stuck naming it. `teilausfall` reads that as "still
-    // being drawn" and stays silent about the three that never came,
-    // exactly the shortfall B15 exists to report, until either a NEW
-    // run overwrites the same one value or a reload starts fresh.
-    // Cleared here instead of waiting on either.
-    laufAktuell = null
-    laufFehlerZahl.clear()
-    if (bildLokalLaeuft) api.bildZeichnenStoppen().catch(() => {})
   }
 
   /* The arrow under the last answer (3.4), without sending the question
@@ -1857,10 +1667,6 @@
         const frisch = await api.nachrichten(chatId)
         if (zustand.aktiverChat === chatId) {
           nachrichtenSetzen(chatId, frisch.nachrichten)
-          // A picture drawing in this chat lives only in this list.
-          if (zustand.bildLaeuftChat[chatId] && !zustand.nachrichten.some((n) => n.bildLaeuft)) {
-            zustand.nachrichten.push(bildlaufPlatzhalter(chatId))
-          }
         }
       } else if (antwort.result === 'too_short') {
         melde(t('eingabe.compact_too_short'))
@@ -2083,9 +1889,8 @@
        this runs replaces `zustand.nachrichten` wholesale with the server's
        fetch (zustand.svelte.js, chatOeffnen) — losing the array entry, but
        not this reference. chatOeffnen puts the SAME object back when
-       reopening the chat this run belongs to, same as bildLaeuftChat
-       already does for a running picture. Keyed by chat so a second run in
-       another chat keeps its own placeholder. */
+       reopening the chat this run belongs to. Keyed by chat so a second run
+       in another chat keeps its own placeholder. */
     zustand.laufenderPlatzhalter[zielChat] = platzhalter
     /* How many files the answers before this one carry. File names count
        across the whole chat (lib/markdown.js, dateienDavor), and the list
@@ -3406,15 +3211,6 @@
           })
           if (zielChat === zustand.aktiverChat) {
             nachrichtenSetzen(zielChat, frisch.nachrichten)
-            /* A picture can be drawing in this same chat right now — sending
-               is deliberately allowed while one runs (Eingabeleiste.svelte).
-               Its working row lives only here, not on the server, so this
-               reload just as freely dropped it — the same rescue chatOeffnen
-               already runs for its own reload (zustand.svelte.js). */
-            if (zustand.bildLaeuftChat[zielChat]
-                && !zustand.nachrichten.some((n) => n.bildLaeuft)) {
-              zustand.nachrichten.push(bildlaufPlatzhalter(zielChat))
-            }
             /* A run the service reports as going NOW has a live row in
                the list just fetched. Usually it is somebody else's — the
                service releases this run before it sends `done`, and a wake
@@ -3554,8 +3350,7 @@
                or already over — and a named run is claimed
                synchronously before the mark goes — waiting for a fetch inside
                the reattach would open the gate first. Not over a run that
-               another open attached meanwhile, and with a picture drawing here
-               put back the way the reconcile above puts it back. */
+               another open attached meanwhile. */
             let named = run
             try {
               const fresh = await api.nachrichten(zielChat, {
@@ -3567,10 +3362,6 @@
               named = fresh?.laufend?.generation_id ? fresh.laufend : null
               if (zielChat === zustand.aktiverChat && !laufVon(zielChat)) {
                 nachrichtenSetzen(zielChat, fresh.nachrichten)
-                if (zustand.bildLaeuftChat[zielChat]
-                    && !zustand.nachrichten.some((n) => n.bildLaeuft)) {
-                  zustand.nachrichten.push(bildlaufPlatzhalter(zielChat))
-                }
               }
             } catch {
               /* No fresher word: a run the claim turned into is attached as
@@ -3929,9 +3720,10 @@
 
 <!-- The live waiting mark, drawn by the answer it waits for (Nachricht.svelte,
      `marke`). -->
-{#snippet wartemarke()}
+{#snippet wartemarke(nurMarke = false)}
   {#if laufMarke}
     <Wartezeile
+      {nurMarke}
       art={laufMarke.art}
       text={laufMarke.kontext
         ? t('nachricht.verarbeitet_kontext', { zeit: laufZeit })
@@ -4149,7 +3941,7 @@
                date are those of that moment, not of the program's start. -->
           {#key nochLeer}<Begruessungsecke />{/key}
         </div>
-        <Eingabeleiste bind:this={eingabe} {senden} {abbrechen} {bildStoppen} {compactChat} {bildLokalLaeuft}
+        <Eingabeleiste bind:this={eingabe} {senden} {abbrechen} {compactChat}
           vektoren={eingabeZeichnung}
           gruss={nochLeer && begruessung.an ? t('eingabe.los') : null} />
       </div>
@@ -4395,18 +4187,24 @@
        height instead, and a message scrolled up disappears under the name.
        Both edges live in this one mask and hold while scrolling — no
        scroll fade writes a mask of its own over it. */
+    --head-clear: 0px;
     --head-fade: 0px;
     -webkit-mask-image: linear-gradient(
-      to bottom, transparent, #000 var(--head-fade),
+      to bottom, transparent, transparent var(--head-clear), #000 var(--head-fade),
       #000 calc(100% - var(--auslauf)), transparent
     );
     mask-image: linear-gradient(
-      to bottom, transparent, #000 var(--head-fade),
+      to bottom, transparent, transparent var(--head-clear), #000 var(--head-fade),
       #000 calc(100% - var(--auslauf)), transparent
     );
   }
+  /* Over the height of the chat's name the text is not there at all, the
+     way it is in every chat app that has a name on top; only below the name
+     it melts in. `--head-clear` is the name's lower edge (the 44 px head,
+     the 13 px name centred in it). */
   .verlauf.under-head {
-    --head-fade: 44px;
+    --head-clear: 32px;
+    --head-fade: 56px;
   }
   /* The measuring point for anything that wants to be wider than the text
      column. A code block may reach past the reading width, but only where

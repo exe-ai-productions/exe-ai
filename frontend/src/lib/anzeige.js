@@ -140,9 +140,31 @@ export function layoutSpeichern(teil) {
    storage just paints the root look first, as before. */
 export const MODUS_SCHLUESSEL = 'exe-modus'
 
+// The browser's storage, in one place; absent where there is no window.
+const browserSpeicher = () => globalThis.localStorage ?? null
+
+/* The looks the service knows (app/moduswahl.py, MODI). */
+const MODI = ['auto', 'hell', 'dunkel', 'darkmatter', 'heaven', 'moune', 'eigen']
+
+/* The look the app begins with: the one the page already put on the root
+   element before the first paint (index.html reads the same key), not the
+   default — the app's first run of the look's effect would otherwise paint
+   the default over it until the service answered, and the frame colour the
+   shell remembers would be written with it. Exe is the answer only where no
+   look was ever chosen. `speicher` is for tests. */
+export function startModus(speicher = browserSpeicher()) {
+  try {
+    const gemerkt = speicher?.getItem(MODUS_SCHLUESSEL)
+    if (gemerkt && MODI.includes(gemerkt)) return gemerkt
+  } catch {
+    /* No storage: the default, as before. */
+  }
+  return VORGABE_MODUS
+}
+
 function modusVormerken(modus) {
   try {
-    localStorage.setItem(MODUS_SCHLUESSEL, modus)
+    browserSpeicher().setItem(MODUS_SCHLUESSEL, modus)
   } catch {
     /* No storage, no mirror. */
   }

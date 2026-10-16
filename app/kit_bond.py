@@ -85,7 +85,54 @@ def _in_kit(folder: Path, model: str, field: str, name: str) -> bool:
 
 def offered(folder: Path, field: str) -> list[str]:
     """The files the picture side offers for this field."""
-    return bildrunner.vaes(folder) if field == "vae" else bildrunner.textversteher(folder)
+    if field == "vae":
+        return bildrunner.vaes(folder)
+    if field == "llm_vision":
+        return bildrunner.sehteile(folder)
+    return bildrunner.textversteher(folder)
+
+
+def matching_parts(folder: Path, family: image_families.Family) -> dict[str, str]:
+    """The first file per part of a kit whose own header says it is that
+    part. A part with no such file is left out — the field stays the
+    user's. An LLM is put in only when its header names an architecture and
+    width the family reads (``Family.llms``), and only when every fitting
+    LLM in the folder has the same width: Flux.2 klein reads Qwen3 4B or
+    8B, depending on the model, so a folder holding both leaves the choice
+    to the user. A VAE only where its channels tell it apart from every
+    other VAE (``image_families.vae_by_itself``) — otherwise the model's own
+    setting holds it."""
+    parts: dict[str, str] = {}
+    # Each list is read once; a name in it sits in its own folder or, when
+    # the catch net found it loose, in the main folder.
+    def where(name: str, below: str) -> Path:
+        inside = folder / below / name
+        return inside if inside.is_file() else folder / name
+
+    fitting_llms: list[tuple[str, int]] = []
+    for name in bildrunner.textversteher(folder):
+        path = where(name, bildrunner.TEXTVERSTEHER_ORDNER)
+        kind, _ = bildinhalt.companion(path)
+        # The t5xxl field takes the one kind of T5 its family reads.
+        if kind in ("umt5", "t5xxl"):
+            kind = "t5xxl" if kind == family.t5_kind else ""
+        if kind == "llm":
+            read = bildinhalt.llm(path)
+            if read is not None and read in family.llms:
+                fitting_llms.append((name, read[1]))
+            continue
+        if kind in family.encoders and kind not in parts:
+            parts[kind] = name
+    if "llm" in family.encoders and len({width for _, width in fitting_llms}) == 1:
+        parts["llm"] = fitting_llms[0][0]
+    if image_families.vae_by_itself(family):
+        vae_kind = bildinhalt.VIDEO_VAE if family.video_vae else bildinhalt.VAE
+        for name in bildrunner.vaes(folder):
+            kind, channels = bildinhalt.companion(where(name, bildrunner.VAE_ORDNER))
+            if kind == vae_kind and channels == family.vae_channels:
+                parts["vae"] = name
+                break
+    return parts
 
 
 def tie(

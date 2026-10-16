@@ -1,44 +1,35 @@
 <script>
-  /* The dictation button, on its own so it can stand in two places.
+  /* The voice button, on its own so it can stand in two places.
 
      It used to live only in the bar's footer, and the footer is folded away
      while a chat is still empty — so the one thing dictation is FOR, opening
      your mouth before anything has been written, was the one moment the
      button was not there.
 
-     THE MARK is a microphone: capsule, arc, foot. It was five bars before —
-     a level meter, and a level meter is also a diagram. Nothing about it
-     said that this is where you speak; this one needs no explaining, which
-     is the whole of the argument for it.
+     THE MARK is a microphone: capsule, arc, foot. In rest the button has no
+     fill and the mark wears the quiet text colour, so it stands apart from
+     the send button beside it, which carries the fill.
 
-     THE MOVEMENT is around the mark, never in it. While it records, two
-     rings open out of the button and fade, one behind the other, and the
-     mark itself only brightens. Three other movements were drawn and put
-     aside: the mark drawing itself on, a level rising inside the capsule,
-     and the arc sweeping like a needle. All three move the glyph, and a
-     glyph this small that moves is a glyph that flickers. This one is the
-     quiet one — it says "listening" without asking the eye to follow
-     anything.
+     DICTATION turns the mark into a stop square, in the text colour, still
+     with no fill. While the text of a dictation is being fetched the mark
+     is dimmed and the button waits. What is heard is shown by the line that
+     takes the left of the row (VoiceLine.svelte), not by anything on the
+     button: no rings, no spinner, no counter.
 
-     Its drawing lives here and nowhere else. The comment it was born with
-     says the mark is meant to be swapped, and a second copy beside the
-     first would make that a lie the day somebody swapped one of them.
+     THE CONVERSATION is the one state with a colour: a quiet blue fill and a
+     blue ring. The ring breathes while the model thinks — its depth is a
+     registered number that glides to its new value, so the breathing dies
+     away instead of snapping back.
 
      A HOLD, next to the click: a short click still means what it always
      did, but holding for one second toggles a free conversation — a blue
-     arc fills while the second runs, so letting go early costs nothing.
-     `onhalten` fires once the second is up; a release before that instead
-     fires `onschalten`, exactly as a plain click always has. The one
-     timer decides which of the two happened, so the two can never both
-     fire for the same press.
+     arc runs around the button while the second runs, so letting go early
+     costs nothing: the arc runs back. `onhalten` fires once the second is
+     up; a release before that instead fires `onschalten`, exactly as a
+     plain click always has. The one timer decides which of the two
+     happened, so the two can never both fire for the same press.
 
-     THE CONVERSATION RING is a third movement, on top of the two above,
-     never at once with them: a blue arc turns slowly the whole time a
-     conversation runs, and three of its own states ride on it — a slow
-     wobble while it listens, a faster spin while it thinks, a flicker
-     while it speaks. `prefers-reduced-motion` leaves the ring standing
-     lit rather than turning it off outright: the state stays readable,
-     only the motion goes. */
+     Its drawing lives here and nowhere else. */
   import { t } from '../lib/texte.svelte.js'
 
   let {
@@ -171,6 +162,7 @@
 <button
   class="mikro"
   class:nimmt
+  class:diktat={nimmt && !gespraech}
   class:holt
   class:haelt
   class:gespraech
@@ -199,31 +191,27 @@
     <path d="M15 29 a17 17 0 0 0 34 0" stroke-width="5" />
     <path d="M32 46 V56" stroke-width="5" />
   </svg>
-  <!-- The two breathing rings, and the spinner for the third state. Both
-       sit outside the sign so neither can push it around. -->
-  <span class="atem" aria-hidden="true"></span>
-  <span class="atem zwei" aria-hidden="true"></span>
-  <span class="ring"></span>
+  <!-- The stop square of a dictation: in the same place as the mark, which
+       leaves as the square arrives. -->
+  <span class="stopp" aria-hidden="true"></span>
+  <!-- The conversation's ring, its own layer: it fades in and out, and its
+       ::after breathes. -->
+  <span class="ring" aria-hidden="true"></span>
   <!-- The hold arc: empty until a press begins, drawn to full over the one
-       second that decides click from hold. -->
-  <svg class="halten" viewBox="0 0 32 32" aria-hidden="true">
-    <circle cx="16" cy="16" r="15.2" pathLength="100" />
+       second that decides click from hold, around the button's own outline. -->
+  <svg class="halten" viewBox="0 0 30 30" aria-hidden="true">
+    <rect x="0.75" y="0.75" width="28.5" height="28.5" rx="14.25" pathLength="100" />
   </svg>
-  <!-- The conversation ring, always present in the markup so its opacity
-       transition has something to animate between; invisible until
-       `gespraech` is on. -->
-  <span class="blau" aria-hidden="true"></span>
 </button>
 
 <style>
-  /* The action button's own box, at its own size and radius, in the quiet
-     construction that button already wears while it is stopping something —
-     no fill, a sign in the resting brightness. */
+  /* The button's own box: no fill, a sign in the quiet text colour. The
+     send button beside it is the one that wears the fill. */
   .mikro {
-    width: 32px;
-    height: 32px;
+    width: 30px;
+    height: 30px;
     flex: none;
-    border-radius: 50%;
+    border-radius: 15px;
     border: none;
     padding: 0;
     cursor: pointer;
@@ -233,8 +221,8 @@
     background: none;
     color: var(--text-leise);
     /* Slower than a hover, because this one is the state changing and not a
-       pointer passing over. */
-    transition: color 0.24s ease, transform 0.1s ease;
+       pointer passing over. The depth of the ring's breathing glides too. */
+    transition: color 0.24s ease, background-color 0.24s ease, transform 0.1s ease, --tiefe 0.3s ease;
     /* A finger held on the button is a hold, not a scroll, a text selection
        or the system's callout: without these the browser may take the touch
        for itself and cancel the pointer halfway through the second. */
@@ -243,143 +231,125 @@
     -webkit-user-select: none;
     -webkit-touch-callout: none;
   }
-  .mikro:not(:disabled):hover { color: var(--text); }
+  .mikro:not(.gespraech):not(:disabled):hover { color: var(--text); }
   .mikro:not(:disabled):active { transform: scale(0.94); }
   .mikro:disabled { cursor: default; }
   /* 20, not the 16 the other signs in the bar wear. The microphone is a
      NARROW drawing — its widest part, the arc, fills barely half the box,
      where a plus or an arrow fills all of it. At the same number it reads
-     as the smaller sign; at 20 it reads as an equal, and there is still
-     6 px of air on either side of it inside the button. Only the sign: a
-     rule on every svg in here would also shrink the hold arc below to 20 px
-     and pin it to the button's top-left corner. */
-  .mikro .zeichen { width: 20px; height: 20px; overflow: visible; }
-  /* Recording is the sign at full brightness. Brightness, not colour: the
-     four colours of the palette mean a state of the program, and this is a
-     state of one button. */
-  .mikro.nimmt { color: var(--text); }
+     as the smaller sign; at 20 it reads as an equal. Only the sign: a rule
+     on every svg in here would also shrink the hold arc below. */
+  .mikro .zeichen {
+    width: 20px;
+    height: 20px;
+    overflow: visible;
+    transition: opacity 0.18s, transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
 
-  /* The breath. Two rings on the same 2.4s, the second half a cycle behind,
-     so there is always one on its way out and the ring never appears to
-     stop. They open just outside the sign and end exactly on the button's
-     own edge, faded to nothing before they get there.
-
-     ENDING ON THE EDGE is not a taste, it is the measurement: the input bar
-     clips its content (`overflow: hidden`), so a ring that grew past the
-     button would be cut off flat at the bar's rim — half a circle, top and
-     bottom shaved. Contained, it looks the same wherever the button stands.
-
-     `currentColor`, so it is the sign's own brightness that breathes, and
-     `pointer-events: none`, so a ring on its way out cannot swallow the
-     click that stops the recording. */
-  .atem {
+  /* Dictation: the sign becomes the stop square, in the text colour. */
+  .mikro.diktat { color: var(--text); }
+  .mikro.diktat .zeichen { opacity: 0; transform: scale(0.6); }
+  .stopp {
     position: absolute;
-    inset: 0;
-    border-radius: 50%;
-    border: 1.5px solid currentColor;
+    left: 50%;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    margin: -5px 0 0 -5px;
+    border-radius: 2.5px;
+    background: currentColor;
     opacity: 0;
+    transform: scale(0.6);
     pointer-events: none;
+    transition: opacity 0.14s, transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1);
   }
-  /* Not while a conversation runs: `nimmt` is also true for the recording
-     a conversation's own "hoert" phase keeps open, and the conversation
-     ring below already says so on its own — two rings breathing under a
-     third one turning would be three movements standing for one state. */
-  .mikro.nimmt:not(.gespraech) .atem {
-    animation: atmen 2.4s cubic-bezier(0.25, 0.6, 0.3, 1) infinite;
-  }
-  .mikro.nimmt .atem.zwei { animation-delay: 1.2s; }
-  @keyframes atmen {
-    0% { transform: scale(0.55); opacity: 0; }
-    20% { opacity: 0.55; }
-    100% { transform: scale(1); opacity: 0; }
-  }
-
-  .ring {
-    position: absolute;
-    inset: 0;
-    border-radius: 50%;
-    border: 1.5px solid var(--linie-stark);
-    border-top-color: var(--blau);
-    opacity: 0;
-    transition: opacity 0.16s;
-  }
-  /* The spinner the action button already has, in the third state. */
-  .mikro.holt .ring {
-    opacity: 1;
-    animation: dreht 1.4s linear infinite;
-  }
-  @keyframes dreht {
-    to { transform: rotate(360deg); }
-  }
+  .mikro.diktat .stopp { opacity: 1; transform: none; }
+  /* The text of the dictation is being fetched: the sign waits, dimmed. */
+  .mikro.holt .zeichen { opacity: 0.45; }
 
   /* The hold arc: empty until a press begins, drawn to full stroke over the
-     one second a hold takes — `pathLength="100"` on the circle itself is
-     what lets the dash numbers below read as a plain percentage regardless
-     of the radius. */
+     one second a hold takes — `pathLength="100"` on the outline itself is
+     what lets the dash numbers below read as a plain percentage. Let go
+     early and it runs back instead of vanishing. */
   .halten {
     position: absolute;
-    inset: 0;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
     pointer-events: none;
     opacity: 0;
+    overflow: visible;
     transition: opacity 0.12s;
   }
-  .halten circle {
+  .halten rect {
     fill: none;
     stroke: var(--blau);
     stroke-width: 1.5;
     stroke-dasharray: 100;
     stroke-dashoffset: 100;
-    transform: rotate(-90deg);
-    transform-origin: 50% 50%;
+    transition: stroke-dashoffset 0.2s ease-out;
   }
   .mikro.haelt .halten { opacity: 1; }
-  .mikro.haelt .halten circle {
+  .mikro.haelt .halten rect {
     transition: stroke-dashoffset 1s linear;
     stroke-dashoffset: 0;
   }
 
-  /* The conversation ring: a turning arc the whole time a conversation
-     runs, with a state of its own riding on top for listening, thinking
-     and speaking. The mask cuts a hole the size of the sign out of the
-     middle, so the ring reads as a ring around it and not a disc behind
-     it. */
-  .blau {
+  /* The conversation: a quiet blue fill, the sign and the ring in blue.
+     The ring is a layer of its own: `.ring` fades it in and out, its
+     ::after breathes. `--atem` is the beat (it runs all the time), `--tiefe`
+     says how strongly it breathes and glides when the state changes — the
+     breathing dies away instead of springing back. */
+  @property --tiefe {
+    syntax: '<number>';
+    inherits: true;
+    initial-value: 0;
+  }
+  @property --atem {
+    syntax: '<number>';
+    inherits: false;
+    initial-value: 0;
+  }
+  .ring {
     position: absolute;
-    inset: 1px;
-    border-radius: 50%;
-    opacity: 0;
+    inset: 0;
+    border-radius: inherit;
     pointer-events: none;
-    background: conic-gradient(
-      from 0deg, transparent 0deg, var(--blau) 120deg, transparent 240deg,
-      var(--blau) 330deg, transparent 360deg
-    );
-    -webkit-mask: radial-gradient(circle, transparent 12.5px, #000 13px);
-    mask: radial-gradient(circle, transparent 12.5px, #000 13px);
-    transition: opacity 0.2s;
+    opacity: 0;
+    transition: opacity 0.24s;
   }
-  .mikro.gespraech .blau { opacity: 0.9; animation: dreht 4s linear infinite; }
-  .mikro.gespraech.hoert .blau {
-    animation: dreht 4s linear infinite, schwingt 1.6s ease-in-out infinite;
+  .ring::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1.5px var(--blau);
+    opacity: calc(1 - 0.65 * var(--atem) * var(--tiefe));
+    animation: ringatem 1.2s ease-in-out infinite;
   }
-  .mikro.gespraech.denkt .blau { opacity: 0.55; animation: dreht 1.2s linear infinite; }
-  .mikro.gespraech.spricht .blau {
-    animation: dreht 4s linear infinite, spricht 0.45s ease-in-out infinite alternate;
+  @keyframes ringatem {
+    50% { --atem: 1; }
   }
-  @keyframes schwingt {
-    50% { transform: scale(0.9) rotate(180deg); }
+  .mikro.gespraech {
+    background: color-mix(in srgb, var(--blau) 16%, transparent);
+    color: var(--blau);
   }
-  @keyframes spricht {
-    from { opacity: 0.5; }
-    to { opacity: 1; }
-  }
+  .mikro.gespraech .ring { opacity: 1; }
+  .mikro.gespraech.denkt { --tiefe: 1; }
 
-  /* Whoever asked for less movement gets none: the sign still brightens and
-     the conversation ring still shows, so both states stay readable — it is
-     only the motion that goes. */
+  /* Whoever asked for less movement gets none: the ring does not breathe and
+     the sign does not scale — the fades stay, so nothing switches hard. The
+     page-wide rule for less motion cuts every transition to a hundredth of a
+     millisecond with `!important`; the fades of the button's own states are
+     the exception, so they say their length with it as well. */
   @media (prefers-reduced-motion: reduce) {
-    .mikro.nimmt .atem,
-    .mikro.gespraech .blau {
-      animation: none;
-    }
+    .ring::after { animation: none; }
+    .mikro .zeichen,
+    .stopp { transform: none; }
+    .mikro { transition-duration: 0.24s !important; }
+    .mikro .zeichen { transition-duration: 0.18s !important; }
+    .stopp { transition-duration: 0.14s !important; }
+    .ring { transition-duration: 0.24s !important; }
   }
 </style>

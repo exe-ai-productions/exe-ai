@@ -17,8 +17,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from app.api.abhaengigkeiten import hole_config, hole_sprache
-from app.api.v1.runner import Modelldatei, _fehler
+from app import embedding_start_choice
+from app.api.abhaengigkeiten import hole_config, hole_repositories, hole_sprache
+from app.db import Repositories
+from app.api.v1.runner import Modelldatei, ProgramState, _fehler, program_state
 from app.config import Config
 from app.einbettung import modelle as einbettungsmodelle
 from app.einbettungsserver import STAPEL
@@ -29,8 +31,7 @@ from app.ordner_oeffnen import OeffnenNichtMoeglich, ordner_oeffnen
 router = APIRouter(prefix="/einbettungsserver", tags=["einbettungsserver"])
 
 
-class Auskunft(BaseModel):
-    programm: str | None = None
+class Auskunft(ProgramState):
     ordner: str
     modelle: list[Modelldatei]
     laeuft: bool
@@ -72,13 +73,17 @@ def _auskunft(request: Request, config: Config) -> Auskunft:
         except OSError:
             continue
         modelle.append(Modelldatei(name=name, groesse_gb=groesse))
+    # Idle, the window shows what is stored for the next start (the file,
+    # while it is still in the folder, and the port); running, what runs.
+    gespeichert = embedding_start_choice.wahl(request.app.state.repositories)
+    gewaehlt = gespeichert["model"] if gespeichert["model"] in {m.name for m in modelle} else None
     return Auskunft(
-        programm=str(runner.programm) if runner.programm else None,
+        **program_state(runner, request.app.state.config),
         ordner=str(ordner),
         modelle=modelle,
         laeuft=runner.laeuft(),
-        modell=lauf.modell if lauf else None,
-        port=lauf.port if lauf else runner.port_vorgabe,
+        modell=lauf.modell if lauf else gewaehlt,
+        port=lauf.port if lauf else (gespeichert["port"] or runner.port_vorgabe),
         belegt_gb=runner.belegt_gb(),
         unknown_architecture=runner.unknown_architecture(),
     )
@@ -99,13 +104,17 @@ def starten(
     daten: Start,
     request: Request,
     config: Config = Depends(hole_config),
+    repositories: Repositories = Depends(hole_repositories),
     sprache: str = Depends(hole_sprache),
 ) -> Auskunft:
+    # The request's port, else the one stored with the file choice
+    # (app/embedding_start_choice.py), else the server's own.
+    port = daten.port or embedding_start_choice.wahl(repositories)["port"]
     try:
         # The window travels as a start value, not as an extra flag — one
         # `--ctx-size` on the command line, written by the one place that
         # writes command lines.
-        _runner(request).starten(daten.modell, port=daten.port, kontext=STAPEL)
+        _runner(request).starten(daten.modell, port=port, kontext=STAPEL)
     except RunnerFehler as fehler:
         raise _fehler(fehler.grund, sprache) from None
     # Deliberately NOT registered with the discovery: this server answers

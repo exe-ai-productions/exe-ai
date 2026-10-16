@@ -533,22 +533,24 @@ def test_die_wartezeile_kennt_das_verdichtungszeichen(client):
     assert "art === 'verdichtung'" in quelle
 
 
-def test_die_karte_zeigt_den_exit_code_statt_des_wortes(client):
-    """Source-text guard: the card shows the exit code, not the word.
+def test_the_card_names_the_exit_code_instead_of_the_word(client):
+    """Source-text guard: a call's row carries no word at its end any more;
+    the label of the row names the exit code, not the word.
 
-    The word "failed" and the exit code must not stand next to each other:
-    the code says everything the word says and names itself as well, and
-    three items at the far end of a 12.5px row is where the line stops being
-    readable. So it is an either/or in the template, and a future edit that
-    turns it back into two siblings has to walk past this test.
-    """
+    The code says everything the word "failed" says and names itself as
+    well, so the label is an either/or: the exit code first, the word only
+    where there is none. A future edit that turns it back into two parts has
+    to walk past this test."""
 
     quelle = (WURZEL / "frontend/src/teile/Nachricht.svelte").read_text()
-    assert "{#if teil.werkzeug.exit_code}" in quelle
-    assert "{:else if teil.werkzeug.fehlgeschlagen}" in quelle, (
+    wort = quelle.split("  function callWord(werkzeug, stand) {", 1)[1].split("\n  }\n", 1)[0]
+    assert "if (werkzeug.exit_code) return t('werkzeug.exit'" in wort
+    assert "if (werkzeug.fehlgeschlagen) return t('werkzeug.marke_fehlgeschlagen')" in wort
+    assert wort.index("werkzeug.exit_code") < wort.index("werkzeug.fehlgeschlagen"), (
         "exit code and the word stand side by side again"
     )
-    assert "teil.werkzeug.lauf_nummer" in quelle
+    zeile = quelle.split("{#snippet callRow(teil, i)}", 1)[1].split("{/snippet}", 1)[0]
+    assert "werkzeug.lauf_nummer" in zeile
 
 
 def test_loeschen_ab_gibt_die_gefalteten_zeilen_frei(client):

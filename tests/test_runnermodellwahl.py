@@ -102,7 +102,8 @@ def test_unsinn_faellt_durch():
 def test_ohne_gespeichertes_gelten_die_vorgaben(repos):
     werte = wahl.startwerte(repos, "m.gguf")
     assert werte["kontext"] == wahl.KONTEXT_VORGABE
-    assert werte["schichten"] == wahl.SCHICHTEN_VORGABE
+    # No layer count named: the runner then sends no flag (llama.cpp's auto).
+    assert werte["schichten"] is None
     assert werte["port"] is None
     assert werte["drafter"] is None
     assert werte["vision"] is None
@@ -266,7 +267,7 @@ def test_ein_ungewaehlter_wert_startet_trotzdem_auf_der_vorgabe(repos):
     _setzen(repos, {"kontext": None, "schichten": None})
     werte = wahl.startwerte(repos, "m.gguf")
     assert werte["kontext"] == wahl.KONTEXT_VORGABE
-    assert werte["schichten"] == wahl.SCHICHTEN_VORGABE
+    assert werte["schichten"] is None
 
 
 def test_null_schichten_bleiben_null(repos):

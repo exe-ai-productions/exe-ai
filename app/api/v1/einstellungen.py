@@ -37,6 +37,8 @@ from app.bildgeraete import SCHLUESSEL as BILDGERAETE
 from app.bildgeraete import pruefen as bildgeraete_pruefen
 from app.bildmodellwerte import SCHLUESSEL as BILDMODELLWERTE
 from app.bildmodellwerte import pruefen as bildmodellwerte_pruefen
+from app.picture_program_choice import KEY as PICTURE_PROGRAM_KEY
+from app.picture_program_choice import check_choice as check_picture_program_choice
 from app.bildstandardmodell import SCHLUESSEL as BILD_STANDARDMODELL
 from app.bildstandardmodell import pruefen as bild_standardmodell_pruefen
 from app.darstellungwahl import SCHLUESSEL as DARSTELLUNG
@@ -70,12 +72,16 @@ from app.scrollwahl import wahl_pruefen as scrollstelle_pruefen
 from app.sprachwahl import SCHLUESSEL as SPRACHE
 from app.sprachwahl import wahl_pruefen as sprache_pruefen
 from app.diktatsprachewahl import SCHLUESSEL as DIKTAT
+from app.diktatsprachewahl import vorgaben as diktat_vorgaben
+from app.embedding_start_choice import SCHLUESSEL as EMBEDDING
+from app.embedding_start_choice import wahl_pruefen as embedding_pruefen
 from app.diktatsprachewahl import wahl_pruefen as diktat_pruefen
 # The one field (Stage 8): which model an agent or cron run uses when nobody
 # picked one for that run. The retired guardian's own `waechter` key is NOT
 # listed any more — the row that used to write it writes this one now, and an
 # old database simply keeps its stored value lying there, unread.
 from app.agentenmodellwahl import SCHLUESSEL as AGENTENMODELL
+from app.agentenmodellwahl import row_check as agentenmodell_row_check
 from app.agentenmodellwahl import wahl_pruefen as agentenmodell_pruefen
 # Stage 11: how the MAIN model server starts — the file, the window, the
 # layers, the port and the module chosen per file. It stood in the browser's
@@ -134,9 +140,11 @@ PRUEFER: dict[str, Callable[[Any], Any]] = {
     AGENTENMODELL: agentenmodell_pruefen,
     RUNNERMODELL: runnermodell_pruefen,
     DIKTAT: diktat_pruefen,
+    EMBEDDING: embedding_pruefen,
     BILDFENSTER: bildfenster_pruefen,
     BILDSTILE: bildstile_pruefen,
     BILDMODELLWERTE: bildmodellwerte_pruefen,
+    PICTURE_PROGRAM_KEY: check_picture_program_choice,
     BILDGERAETE: bildgeraete_pruefen,
     BILD_STANDARDMODELL: bild_standardmodell_pruefen,
     BILDAUFBEREITUNG: bildaufbereitung_pruefen,
@@ -158,6 +166,7 @@ GLOBAL_ONLY: frozenset[str] = frozenset(BERECHTIGUNGSMODUS.values())
 # Checks on a whole row, old and new side by side, that refuse a write by
 # raising ``WriteRefused`` instead of trimming it.
 ROW_CHECKS: dict[str, Callable[[Any, Any], None]] = {
+    AGENTENMODELL: agentenmodell_row_check,
     RUNNERMODELL: runnermodell_row_check,
 }
 
@@ -165,6 +174,7 @@ ROW_CHECKS: dict[str, Callable[[Any, Any], None]] = {
 # stored set first. The module memory: its entries each stand alone, and the
 # cap on its size is the whole-row check's (``ROW_CHECKS``).
 AS_SENT: dict[str, frozenset[str]] = {
+    AGENTENMODELL: frozenset({"module"}),
     RUNNERMODELL: frozenset({"module"}),
 }
 
@@ -175,6 +185,15 @@ AS_SENT: dict[str, frozenset[str]] = {
 # generator starts without the switch.
 AS_KEPT: dict[str, frozenset[str]] = {
     BILDGERAETE: frozenset({"switches"}),
+}
+
+
+# Single values a PATCH takes out of the stored row when they are sent as
+# null, so the works answer stands again: every dictation value, because an
+# emptied number field means "back to automatic", and an answer of "could
+# not be saved" for it is a lie about a field that can always be unset.
+NULL_UNSETS: dict[str, frozenset[str]] = {
+    DIKTAT: frozenset(diktat_vorgaben()),
 }
 
 
@@ -317,8 +336,11 @@ def aufgeloest(
     return AufgeloesteAntwort(schluessel=schluessel, wert=wert, herkunft=herkunft, scope=scope)
 
 
+# The scope of a model's settings is ``modell:<id>`` and a cloud model id may
+# hold slashes (``vendor/model``). A plain path part ends at the first one, so
+# the scope takes the whole rest of the path before the last part — the setting.
 @router.get(
-    "/{bereich}/{schluessel}",
+    "/{bereich:path}/{schluessel}",
     response_model=WertAntwort,
     summary="Settings stored in this scope",
 )
@@ -343,7 +365,7 @@ def _model_switch_changed(schluessel: str) -> None:
 
 
 @router.put(
-    "/{bereich}/{schluessel}",
+    "/{bereich:path}/{schluessel}",
     response_model=WertAntwort,
     summary="Set a value of a scope",
 )
@@ -404,7 +426,7 @@ def setzen(
 
 
 @router.patch(
-    "/{bereich}/{schluessel}",
+    "/{bereich:path}/{schluessel}",
     response_model=WertAntwort,
     summary="Set single values of a scope",
 )
@@ -437,7 +459,9 @@ def teilweise_setzen(
     (``zusammenlegen``). When the check keeps none of the values sent, the
     write is refused and the stored row stays as it was — except for a set
     that is stored as the check leaves it (``AS_KEPT``): there an entry sent
-    as unset is taken out, down to an empty set.
+    as unset is taken out, down to an empty set. And except for a value sent
+    as ``null`` where the row lists it in ``NULL_UNSETS``: it is taken out of
+    the stored row and the works answer stands again.
     """
     _bereich_pruefen(bereich, sprache)
     if schluessel not in PRUEFER:
@@ -452,6 +476,7 @@ def teilweise_setzen(
             pruefen=PRUEFER[schluessel], row_check=ROW_CHECKS.get(schluessel),
             as_sent=AS_SENT.get(schluessel, frozenset()),
             as_kept=AS_KEPT.get(schluessel, frozenset()),
+            null_unsets=NULL_UNSETS.get(schluessel, frozenset()),
         )
     except WriteRefused:
         # The merged row was refused (a cap on its size): the stored row

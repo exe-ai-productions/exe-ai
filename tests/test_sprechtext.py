@@ -139,3 +139,55 @@ def test_nach_einer_aenderung_hinter_dem_gelesenen_wird_neu_ausgerichtet():
 def test_ohne_anker_wird_das_alte_script_weitergelesen():
     stand = _js('neuAusrichten("First sentence is here. Rest", 24, "Something else entirely.")')
     assert stand == {"script": "First sentence is here. Rest", "gelesen": 24}
+
+
+def test_das_erste_stueck_endet_am_ersten_komma_nach_zwanzig_zeichen():
+    """The voice starts on the first clause; every further piece ends at a
+    sentence's end as before."""
+    script = "Well, here is how this works in practice, and then more follows. A second sentence ends here. Tail"
+    ergebnis = _schneiden(script)
+    assert ergebnis["stuecke"] == [
+        "Well, here is how this works in practice,",
+        "and then more follows.",
+        "A second sentence ends here.",
+    ]
+    assert script[ergebnis["bis"]:].strip() == "Tail"
+
+
+def test_ein_komma_vor_dem_zwanzigsten_zeichen_schneidet_nicht():
+    ergebnis = _schneiden("Yes, of course it does, and that is exactly the point. More text here follows", fertig=False)
+    # "Yes," is far short; the next comma stands at 23 characters.
+    assert ergebnis["stuecke"] == ["Yes, of course it does,", "and that is exactly the point."]
+
+
+def test_ein_komma_in_einer_zahl_schneidet_nicht():
+    ergebnis = _schneiden("The price is 3,50 euros for the whole thing, so please keep that in mind. And more", fertig=False)
+    assert ergebnis["stuecke"] == ["The price is 3,50 euros for the whole thing,", "so please keep that in mind."]
+
+
+def test_nach_dem_ersten_stueck_schneidet_ein_komma_nicht_mehr():
+    """`ab` > 0 is a later piece: the comma rule is the first piece's only."""
+    script = "First piece is long enough here. Then comes a clause, which goes on and on, until the sentence ends. Tail"
+    erstes = _schneiden(script)
+    assert erstes["stuecke"][0] == "First piece is long enough here."
+    assert erstes["stuecke"][1] == "Then comes a clause, which goes on and on, until the sentence ends."
+    spaeter = _schneiden(script, ab=len("First piece is long enough here. "))
+    assert spaeter["stuecke"] == ["Then comes a clause, which goes on and on, until the sentence ends."]
+
+
+def test_beim_schreiben_entsteht_das_erste_stueck_am_komma_wie_am_stueck():
+    antwort = "Sure thing, I can explain that to you in a few words, so listen closely. It is simple."
+    skript = f"""
+const antwort = {json.dumps(antwort)};
+let gelesen = 0; const alle = [];
+for (let i = 1; i <= antwort.length; i += 3) {{
+  const r = stueckeSchneiden(antwort.slice(0, i), gelesen, false);
+  gelesen = r.bis; alle.push(...r.stuecke);
+}}
+const r = stueckeSchneiden(antwort, gelesen, true);
+alle.push(...r.stuecke);
+console.log(JSON.stringify({{ alle, amStueck: stueckeSchneiden(antwort, 0, true).stuecke }}));
+"""
+    ergebnis = _lauf(skript)
+    assert ergebnis["alle"] == ergebnis["amStueck"], ergebnis
+    assert ergebnis["alle"][0] == "Sure thing, I can explain that to you in a few words,"

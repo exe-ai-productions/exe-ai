@@ -891,38 +891,32 @@ let dienstVorgefunden = null
 let bleibenGesagt = false
 
 // Before a service is started: one of ours may already be running on this
-// folder and port — started by the terminal client without a window, or
-// left running on purpose. Its note in the data folder names it, and its
-// page answering says it is alive (dienstsuche.js); then this window uses
-// it and starts nothing. Found nothing, the start below probes the port the
-// way it always did.
+// folder and port — started by the terminal client without a window, left
+// running on purpose, or left behind by the installation of this program.
+// Its note in the data folder names it, and its page answering says it is
+// alive (dienstsuche.js). It is always ended and this window starts its own:
+// whatever version it says it is, it was built before this program, and a
+// build with the same number is not the same build. Where the client's stop
+// does not end it, its process id does (endFoundService). Only a service
+// that dienstsuche proves to be ours is ended; whatever else answers on the
+// port is never touched.
 //
-// One exception: a service that says it is another version than this
-// program. It is what an installation by hand leaves behind, or what a
-// terminal client started in the gap of an update; this window would attach
-// to it and show an interface that is not there. It is ended the way an
-// update ends it (endRunningService) and this window starts its own. A
-// version that cannot be read, or a service that does not end, leaves it as
-// it has always been: the service found is used, and the log says why.
+// A service that cannot be ended at all (the system refuses the signal)
+// stays in use, and the log says why — the one case left where this window
+// attaches to a service it did not start.
 async function dienstAnbinden() {
   const root = dienstsuche.dataRoot({
     packaged: app.isPackaged, repoRoot: path.join(__dirname, '..'),
   })
   const gefunden = await dienstsuche.runningService({ port: PORT, root })
   if (!gefunden) return false
-  const ownVersion = app.getVersion()
-  const foundVersion = await dienstsuche.serviceVersion(gefunden.port)
-  if (!foundVersion) {
-    console.log(`Service: the version of the running service on port ${gefunden.port} could not be read; it is used as it is`)
-  } else if (foundVersion !== ownVersion) {
-    console.log(`Service: the running service on port ${gefunden.port} is version ${foundVersion}, this program is ${ownVersion}; ending it`)
-    try {
-      const words = await endRunningService(gefunden)
-      console.log(`Service: ended (pid ${gefunden.pid}; ${words}); this program starts its own`)
-      return false
-    } catch (failure) {
-      console.error(`Service: the service of version ${foundVersion} did not end, it is used as it is: ${failure.message}`)
-    }
+  console.log(`Service: a service of ours is running on port ${gefunden.port} (pid ${gefunden.pid}); ending it, this program starts its own`)
+  try {
+    const words = await endFoundService(gefunden)
+    console.log(`Service: ended (pid ${gefunden.pid}; ${words}); this program starts its own`)
+    return false
+  } catch (failure) {
+    console.error(`Service: the running service did not end, it is used as it is: ${failure.message}`)
   }
   dienstVorgefunden = gefunden
   console.log(`Service: using the running service on port ${gefunden.port} (pid ${gefunden.pid}); none started`)
@@ -1272,15 +1266,55 @@ const LOOK_PAUSE_MS = 300
 
 // The end of a service of ours that is running (`running`: its note's
 // `{ pid, port }`, or null where none is known): the client's stop, and then
-// the end of the process itself, waited for with no time of its own. One way
-// for both users of it — before an update, and at the start, where the
-// service found is of another version than this program.
+// the end of the process itself, waited for with no time of its own — the
+// way before an update, where the service may be writing an answer to its
+// end. The start has its own, bounded one (endFoundService).
 async function endRunningService(running) {
   const words = await clientStop()
   while (running && dienstsuche.processAlive(running.pid)) {
     await new Promise((next) => setTimeout(next, LOOK_PAUSE_MS))
   }
   return words
+}
+
+// How long a process that was asked to end may live before it is made to.
+const KILL_AFTER_MS = 5000
+
+// A signal to the process of a service that was proved to be ours. A process
+// that is already gone is the end that was wanted, not a failure.
+function signalProcess(pid, signal) {
+  try {
+    process.kill(pid, signal)
+  } catch (failure) {
+    if (!failure || failure.code !== 'ESRCH') throw failure
+  }
+}
+
+// The end of the service found at the start (`running`: its note's
+// `{ pid, port }`, proved to be ours by dienstsuche.runningService): the
+// client's stop first, the way an update ends it; where that fails the
+// process is asked to end by its id (SIGTERM). A process that still lives
+// after KILL_AFTER_MS is made to end (SIGKILL). Resolves with the words of
+// how it ended; rejects where the process cannot be ended.
+async function endFoundService(running) {
+  let words
+  try {
+    words = await clientStop()
+  } catch (failure) {
+    words = `the client's stop failed (${failure.message}); the process was asked to end`
+    signalProcess(running.pid, 'SIGTERM')
+  }
+  const waitFor = async () => {
+    const until = Date.now() + KILL_AFTER_MS
+    while (dienstsuche.processAlive(running.pid) && Date.now() < until) {
+      await new Promise((next) => setTimeout(next, LOOK_PAUSE_MS))
+    }
+    return !dienstsuche.processAlive(running.pid)
+  }
+  if (await waitFor()) return words
+  signalProcess(running.pid, 'SIGKILL')
+  if (await waitFor()) return `${words}; it lived ${KILL_AFTER_MS / 1000} s on and was ended by force`
+  throw new Error(`pid ${running.pid} is still alive after SIGKILL`)
 }
 
 // The service's end before an update: the client's stop, and then the end

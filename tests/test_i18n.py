@@ -143,6 +143,8 @@ def test_kein_text_steht_unuebersetzt_in_beiden_katalogen():
         "bild.medium_video",
         # Words English and German share unchanged.
         "downloads.titel",
+        # The badge on the studio's original picture: the same word in both languages.
+        "studio.original",
         # The fetch button of the model-server row says the same word in
         # both languages.
         "modell.server_download",

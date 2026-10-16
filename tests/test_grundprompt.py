@@ -1019,6 +1019,40 @@ def test_the_dock_and_the_image_folder_stand_apart_last():
     assert "- /data/images" in text
 
 
+def _dock_paragraph(**extra) -> str:
+    text = grundprompt.bauen(
+        werkzeuge=True,
+        ordner=["/u/a", "/data/agent_dock"],
+        dock="/data/agent_dock",
+        dateiwerkzeuge=["read_file"],
+        **extra,
+    )
+    start = text.index("The dock folder holds")
+    return text[start:text.index("- /data/agent_dock", start)]
+
+
+def test_a_chat_is_not_promised_that_the_user_finds_dock_files_in_the_doc_folder():
+    """The Doc folder shows a chat only its own folder: a file in the dock
+    is not there to be found, and the sentence must not say it is."""
+    paragraph = _dock_paragraph()
+
+    assert paragraph.startswith("The dock folder holds finished files delivered to the user. It belongs")
+    assert "who can find" not in paragraph
+    assert "Doc folder" not in paragraph
+    # The rest of the paragraph is as it was.
+    assert "rather than the folders\nshared by the user. Do not create an `exe.md` file in it:" in paragraph
+
+
+def test_silence_a_run_keeps_the_dock_paragraph_word_for_word():
+    paragraph = _dock_paragraph(agentenlauf=grundprompt.Agentenlauf(runden=8, minuten=20))
+
+    assert paragraph == (
+        "The dock folder holds finished files delivered to the user, who can find\n"
+        "them in the Doc folder. It belongs to the program, rather than the folders\n"
+        "shared by the user. Do not create an `exe.md` file in it:\n\n"
+    )
+
+
 def test_the_own_folder_paragraph_is_empty_without_an_own_folder():
     assert own_folder_line(["/u/a"], None, None, None) == ""
     # Not among the folders the run may reach: the prompt names no other.

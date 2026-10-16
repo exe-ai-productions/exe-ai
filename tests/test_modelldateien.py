@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from app.api.v1 import modelldateien
+from tests.conftest import sized_file
 
 
 class FalscheAntwort:
@@ -432,10 +433,11 @@ def _picture_files(client, repo="wer/was"):
 
 
 def _file_of_size(pfad, groesse):
-    """A file of exactly ``groesse`` bytes, sparse: nothing of it is written."""
+    """A file of exactly ``groesse`` bytes, sparse: nothing of it is written
+    (on Windows a plain ``truncate`` writes every byte, so the helper that
+    marks the file sparse first does the work)."""
     pfad.parent.mkdir(parents=True, exist_ok=True)
-    with pfad.open("wb") as handle:
-        handle.truncate(groesse)
+    sized_file(pfad, groesse)
 
 
 def test_a_z_image_names_its_kit(client, baum, tmp_path):
@@ -468,6 +470,63 @@ def test_a_z_image_names_its_kit(client, baum, tmp_path):
     assert teile["vae"]["ordner"] == "vae"
     assert teile["vae"]["groesse_gb"] == 0.3
     assert teile["vae"]["da"] is True
+
+
+_QWEN_21_LLM = ("Qwen/Qwen3-VL-8B-Instruct-GGUF", "Qwen3VL-8B-Instruct-Q4_K_M.gguf")
+_QWEN_21_VAE = ("Comfy-Org/Qwen-Image-2.1", "vae/qwen_image_2.1_vae_bf16.safetensors")
+_QWEN_21_EYES = ("Qwen/Qwen3-VL-8B-Instruct-GGUF", "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf")
+
+
+def _qwen_21_row(client, baum, tmp_path):
+    SIZES[_QWEN_21_LLM] = 5_030_000_000
+    SIZES[_QWEN_21_VAE] = 253_806_278
+    SIZES[_QWEN_21_EYES] = 752_289_728
+    client.app.state.modellordner_je_art = {"bild": str(tmp_path)}
+    baum([_eintrag("qwen-image-2.1-turbo-Q4_K_M.gguf", 11_000_000_000)])
+    return {teil["feld"] or "modell": teil
+            for teil in _picture_files(client)[0]["bausatz"]["teile"]}
+
+
+def test_an_encoder_of_another_quantisation_counts_as_there(client, baum, tmp_path):
+    """The drawing sets in the Qwen3-VL it finds by its head, whatever its
+    name or bits: the kit counts it as there and fetches only the rest."""
+    from tests.test_image_families import _gguf
+
+    _gguf(tmp_path / "text_encoders" / "Qwen3-VL-8B-Instruct-Q8_0.gguf", "qwen3vl",
+          {"token_embd.weight": [151936, 4096]})
+    teile = _qwen_21_row(client, baum, tmp_path)
+    assert teile["llm"]["da"] is True
+    assert teile["llm"]["local_name"] == "Qwen3-VL-8B-Instruct-Q8_0.gguf"
+    assert teile["llm"]["collision"] is False
+    # What is not found stays to fetch: the model, the VAE and the vision part.
+    assert teile["modell"]["da"] is False
+    assert teile["vae"]["da"] is False
+    assert teile["llm_vision"]["da"] is False
+
+
+def test_silence_an_encoder_of_another_width_is_not_the_part(client, baum, tmp_path):
+    """A Qwen3-VL 4B is 2560 wide: Qwen-Image 2.1 does not read it."""
+    from tests.test_image_families import _gguf
+
+    _gguf(tmp_path / "text_encoders" / "Qwen3-VL-4B-Instruct-Q8_0.gguf", "qwen3vl",
+          {"token_embd.weight": [151936, 2560]})
+    teile = _qwen_21_row(client, baum, tmp_path)
+    assert teile["llm"]["da"] is False
+    assert teile["llm"]["local_name"] == "Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+
+
+def test_the_kit_of_qwen_image_2_1_names_the_vision_part(client, baum, tmp_path):
+    teile = _qwen_21_row(client, baum, tmp_path)
+    eyes = teile["llm_vision"]
+    assert eyes["rolle"] == "textleser"
+    assert eyes["repo"] == "Qwen/Qwen3-VL-8B-Instruct-GGUF"
+    assert eyes["datei"] == "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf"
+    assert eyes["ordner"] == "text_encoders"
+    assert eyes["bytes"] == 752_289_728
+    assert eyes["da"] is False
+    # Its file of this size in the folder is the part.
+    _file_of_size(tmp_path / "text_encoders" / "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf", 752_289_728)
+    assert _qwen_21_row(client, baum, tmp_path)["llm_vision"]["da"] is True
 
 
 def test_a_model_in_the_folder_counts_as_there(client, baum, tmp_path):

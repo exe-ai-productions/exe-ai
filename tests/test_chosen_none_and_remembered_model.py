@@ -196,28 +196,28 @@ def test_kein_kommentar_behauptet_noch_der_startknopf_schreibe_die_module():
     )
 
 
-# --- One module pair for every file --------------------------------
+# --- One module pair per file --------------------------------------
 
 
 def test_ein_modellwechsel_gibt_die_gemerkte_modulwahl_zurueck():
-    """The slot key holds ONE pair, not a table per file.
+    """The slot key holds a pair per file, so a switch hands back nothing.
 
-    So a draft picked by hand for one model stood in the row for the next one
-    — and went out on its command line, measured: after switching to
+    It used to hold ONE pair, and a draft picked by hand for one model stood
+    in the row for the next one — measured: after switching to
     ``gross-12B.gguf`` the start carried ``--model-draft …/mtp-gemma.gguf``.
-    Handing the pair back to ``null`` is what lets the folder manifest declare
-    the pairing for the file that was actually picked.
+    The pair is remembered per file now: the switch changes nothing in the
+    row, and the rows on the page are read again for the file that was
+    chosen.
     """
     quelle = ohne_kommentare(AGENTSERVER.read_text(encoding="utf-8"))
     koerper = rumpf(quelle, "async function modellGewaehlt(wahl)")
-    zuruecksetzen = koerper.index("werteSetzen({ drafter: null, vision: null })")
-    waehlen = koerper.index("agentenmodellWaehlen(wahl)")
-    assert zuruecksetzen < waehlen, (
-        "Agentserver.svelte: the module choice is not handed back before choosing "
-        "— choosing starts the slot at once, and the process "
-        "reads the stored choice on its way up"
+    assert "werteSetzen({ drafter: null, vision: null })" not in koerper, (
+        "Agentserver.svelte: the module choice is handed back at a switch — "
+        "then the pair of the file before is lost for the file itself"
     )
-    assert "wahl !== alsWahl()" in koerper, (
-        "Agentserver.svelte: the module choice is handed back even when "
-        "no other file was chosen at all"
+    waehlen = koerper.index("agentenmodellWaehlen(wahl)")
+    lesen = koerper.index("moduleUebernehmen()")
+    assert waehlen < lesen, (
+        "Agentserver.svelte: the rows are read before the file is chosen — "
+        "they would show the pair of the file before"
     )

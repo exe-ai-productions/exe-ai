@@ -29,14 +29,20 @@
   import { t } from '../lib/texte.svelte.js'
   import { zustand } from '../lib/zustand.svelte.js'
   import { modellwahl, auswahlLaden, istAn, schalten, lokale } from '../lib/modelle.svelte.js'
-  import { agentenmodell, HAUPTMODELL, SLOT_ENDPUNKT } from '../lib/agentenserver.svelte.js'
+  import {
+    agentenmodell,
+    HAUPTMODELL,
+    SLOT_ENDPUNKT,
+    modulesFor as slotModulesFor,
+  } from '../lib/agentenserver.svelte.js'
   import {
     gemerkteDatei,
     modulFuer,
     runnermodell,
     standLaden as runnermodellLaden,
   } from '../lib/runnermodell.svelte.js'
-  import { serverAnteil } from '../lib/speicherschaetzung.js'
+  import { isEightBitCache, serverAnteil } from '../lib/speicherschaetzung.js'
+  import { FEINEINSTELLUNGEN } from '../lib/feineinstellungen.js'
 
   /* `offen`: this menu is the one showing. The component stays mounted
      while it is not, so the chosen server survives a look at the cloud
@@ -78,6 +84,10 @@
   let bereinigungStand = $state(null)
   let bildStand = $state(null)
   let agentStand = $state(null)
+  /* The model server's stored engine levers — only the cache type is read
+     from them here, for the resting estimate; the agent server's sit in its
+     own choice. */
+  let modellFein = $state(null)
   $effect(() => {
     if (!offen) return
     const holen = () => {
@@ -86,6 +96,9 @@
       api.bereinigungAuskunft().then((a) => (bereinigungStand = a)).catch(() => {})
       api.turboStand().then((a) => (bildStand = a)).catch(() => {})
       api.agentenmodellAuskunft().then((a) => (agentStand = a)).catch(() => {})
+      api.einstellungAufgeloest(FEINEINSTELLUNGEN)
+        .then((a) => (modellFein = a?.wert ?? null))
+        .catch(() => {})
     }
     holen()
     const takt = setInterval(holen, 15_000)
@@ -155,10 +168,14 @@
        stored number, and where nothing was stored the slot's own fallback,
        sent along in its answer so there is one place that decides it. */
     const v = agentStand.vorgaben ?? {}
+    const z = agentStand.zuordnung?.[agentenmodell.wert]
     return serverAnteil(agentStand.modelle, agentStand.mtp, {
       modell: agentenmodell.wert,
       kontext: agentenmodell.kontext ?? v.kontext,
-      drafter: agentenmodell.drafter ?? v.drafter ?? '',
+      drafter: slotModulesFor(agentenmodell.wert).drafter ?? z?.mtp ?? '',
+      eightBit: isEightBitCache(agentenmodell.fein?.kv_cache),
+      vision: slotModulesFor(agentenmodell.wert).vision ?? z?.mmproj ?? '',
+      projectors: agentStand.projector_size_gb,
     })
   }
   function modellAnteilRuhe() {
@@ -183,6 +200,10 @@
       kontext: runnermodell.kontext ?? auskunft.vorgaben?.kontext,
       drafter:
         modul.drafter !== null ? modul.drafter : (auskunft.zuordnung?.[modell]?.mtp ?? ''),
+      eightBit: isEightBitCache(modellFein?.kv_cache),
+      vision:
+        modul.vision !== null ? modul.vision : (auskunft.zuordnung?.[modell]?.mmproj ?? ''),
+      projectors: auskunft.projector_size_gb,
     })
   }
   /* The speech and embedding servers carry no "next start" estimate — unlike

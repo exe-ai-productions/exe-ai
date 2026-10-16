@@ -1,14 +1,14 @@
 <script>
-  /* The studio's left column: the basics of a picture for this chat — what
-     it is drawn with, in which format, at what size and with which LoRAs.
-     It stands where the chat list stands, between the mark and the window
-     row, and melts out over its last 40 px like the list.
+  /* The studio's left column: the basics of a picture — what it is drawn
+     with, in which format, at what size and with which LoRAs. It stands
+     where the chat list stands, between the mark and the window row, and
+     melts out over its last 40 px like the list.
 
-     The values are the chat's own (lib/studio.svelte.js reads and writes
-     them): a value changed here
-     stands when the chat is opened again. What the chat has no value of its
-     own for starts at what the model starts with and is only shown, not
-     written — a chat merely looked at keeps its store as it was.
+     The values are the studio's own (lib/studio.svelte.js reads and writes
+     them): a value changed here stands whichever chat is opened, and after
+     a restart. What the studio has no value of its own for starts at what
+     the model starts with and is only shown, not written — a studio merely
+     looked at keeps its store as it was.
 
      Every row is one setting: its name on the left, the ⓘ beside the name
      and outside the label, so a screen reader hears the setting's name and
@@ -24,15 +24,15 @@
   import StudioSwitches from './StudioSwitches.svelte'
   import Zahlenfeld from './Zahlenfeld.svelte'
   import { api } from '../lib/api.js'
-  import { chatanzeige } from '../lib/chatanzeige.svelte.js'
   import { familyOf, imageFamilies } from '../lib/imageFamilies.svelte.js'
   import { rollfade } from '../lib/rollfade.js'
   import { seedlage } from '../lib/bildseed.svelte.js'
   import {
-    EDGE_GRID, EDGE_MAX, EDGE_MIN, art, auswahl, familie, kindsOf, layingStartValues, listen, listenLaden,
-    pictureInArea, search, searchRows, searching, startwerte, vorgabenHolen,
-    werte, werteFuellen, werteSchreiben, werteVorschlagen,
+    EDGE_GRID, EDGE_MAX, EDGE_MIN, art, auswahl, familie, fillDue, filledFromStore, kindsOf,
+    layingStartValues, listen, listenLaden, pictureInArea, search, searchRows, searching,
+    startwerte, vorgabenHolen, werte, werteFuellen, werteSchreiben, werteVorschlagen,
   } from '../lib/studio.svelte.js'
+  import { studioStore, readStudioStore } from '../lib/studioStore.svelte.js'
   import { t, texte } from '../lib/texte.svelte.js'
 
   const uid = $props.id()
@@ -158,7 +158,7 @@
     setTimeout(() => (gezogen = false))
   }
 
-  /* A model chosen by hand starts the chat at its values: the measures, the
+  /* A model chosen by hand starts the studio at its values: the measures, the
      CFG and what goes with them. A model whose header names its family
      takes that one, and a family said by hand goes. */
   async function modellGewaehlt(name) {
@@ -196,28 +196,26 @@
   // The lists, read each time the studio opens.
   const listenDa = listenLaden()
 
-  /* Filled from the chat's store whenever another chat opens or its read
-     comes back. A model that is not in the folder (any more) shows the
-     picture server's default model; every value the chat has none of its
-     own for shows the model's start value — each on its own, the CFG of a
-     chat with a size of its own too. All of these are shown, not written.
-     Nothing is written for a chat this column has not been filled for.
-     A value changed since the filling — set by hand while the start values
-     were on their way — stays as it was set. Answers whether the start
-     values were laid in: a draw waits for that (lib/studio.svelte.js). */
-  let gefuellterChat = null
-  async function fuellen(id, dabei) {
+  /* Filled from the studio's store once it is read — and once before, so
+     the column is never empty. A model that is not in the folder (any
+     more) shows the picture server's default model; every value the studio
+     has none of its own for shows the model's start value — each on its
+     own, the CFG of a studio with a size of its own too. All of these are
+     shown, not written. Nothing is written before the column has been
+     filled from the store. A value changed since the filling — set by hand
+     while the start values were on their way — stays as it was set.
+     Answers whether the start values were laid in: a draw waits for that
+     (lib/studio.svelte.js). */
+  async function fuellen() {
     const fehlen = werteFuellen()
     const filled = $state.snapshot(werte)
-    gefuellterChat = dabei ? id : null
     return layingStartValues(async () => {
       await listenDa
-      if (chatanzeige.chatId !== id) return false
       if (listen.geladen && !listen.modelle.includes(werte.modell)) {
         werteVorschlagen({ modell: listen.standardmodell })
       }
       const v = await vorgabenHolen()
-      if (!v || chatanzeige.chatId !== id) return false
+      if (!v) return false
       const teil = startwerte(v)
       for (const name of Object.keys(teil)) {
         const asFilled = JSON.stringify(werte[name]) === JSON.stringify(filled[name])
@@ -227,17 +225,19 @@
       return true
     })
   }
+  // The studio's store, read once whenever the column comes up.
+  readStudioStore()
   $effect(() => {
-    const id = chatanzeige.chatId
-    const dabei = chatanzeige.geladen
+    void studioStore.loaded
     untrack(() => {
-      fuellen(id, dabei)
+      // Opened again with the values already filled in: nothing to refill.
+      if (fillDue()) fuellen()
     })
   })
 
   $effect(() => {
     void JSON.stringify(werte)
-    if (gefuellterChat === null || gefuellterChat !== chatanzeige.chatId) return
+    if (!filledFromStore()) return
     untrack(werteSchreiben)
   })
 

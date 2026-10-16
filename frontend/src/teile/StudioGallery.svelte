@@ -1,58 +1,55 @@
 <script>
   /* The studio's row of pictures, at the right edge of the surface. On top
      the picture drawing now with its progress and its stop, then the
-     waiting ones with their ✕, then the pictures, newest first — of this
-     chat or of the whole project. Shut, one tile stays: the picture
-     drawing, or else the newest; with no picture at all only the button
-     that opens the row stays.
+     waiting ones with their ✕, then the pictures the studio drew, newest
+     first. Shut, one tile stays: the picture drawing, or else the newest;
+     with no picture at all only the button that opens the row stays.
 
-     Above the tiles stands the row's head, built like the zoom above it:
-     the house's selection field in glass for "this chat or the whole
-     project", and a glass button that folds the row. A chat in no project
-     has only its own pictures to show, so its field rests.
+     Above all of them stands the original — the picture that last came
+     from outside — with its badge, shut as well as open. A click lays it
+     in the area again, with no mask. No such picture, or its file gone: no
+     tile.
+
+     Above the tiles stands the row's head: a glass button that folds the
+     row, built like the zoom beside it.
 
      A picture clicked stands in the generation area; "···" on each opens
-     the picture menu (StudioPictureMenu.svelte). A picture lies once in the picture folder; it belongs to a chat through
-     the message that names it and to a project through its chat. */
-  import { untrack } from 'svelte'
-  import Auswahlfeld from './Auswahlfeld.svelte'
+     the picture menu (StudioPictureMenu.svelte). A picture lies once in the
+     picture folder; the studio keeps the list of those it drew
+     (app/studio_pictures.py) and belongs to no chat. */
   import Hauszeichen from './Hauszeichen.svelte'
   import StudioPictureMenu from './StudioPictureMenu.svelte'
   import { api } from '../lib/api.js'
   import { draussen } from '../lib/draussen.js'
-  import { chatanzeige } from '../lib/chatanzeige.svelte.js'
   import { pictureProgress, watchPicturePreview, watchPictureProgress } from '../lib/pictureProgress.svelte.js'
-  import { chatPictures, startbildWaehlen, werte } from '../lib/studio.svelte.js'
+  import { startbildWaehlen, studioPictures, werte } from '../lib/studio.svelte.js'
+  import { rowPictures } from '../lib/studioRow.js'
   import { zeichnung } from '../lib/studiozeichnen.svelte.js'
   import { t } from '../lib/texte.svelte.js'
-  import { aktuellerChat, zustand } from '../lib/zustand.svelte.js'
+  import { zustand } from '../lib/zustand.svelte.js'
 
   let offen = $state(true)
-  let bereich = $state('chat')
-  let projectPictures = $state([])
-  const scopes = $derived([
-    { wert: 'chat', text: t('studio.dieser_chat') },
-    { wert: 'projekt', text: t('studio.ganzes_projekt') },
-  ])
 
-  const projekt = $derived(aktuellerChat()?.project_id ?? null)
-  const chatId = $derived(chatanzeige.chatId)
-  const ofProject = $derived(bereich === 'projekt' && Boolean(projekt))
-  /* The chat's pictures are read once for the whole studio
-     (lib/studio.svelte.js `chatPictures`); the project's are read here. */
-  const bilder = $derived(
-    ofProject ? projectPictures : chatPictures.chat === chatId ? chatPictures.names : [],
-  )
-  const laufend = $derived(zustand.pictureQueue.find((w) => w.running && w.chat_id === chatId) ?? null)
-  const wartend = $derived(zustand.pictureQueue.filter((w) => !w.running && w.chat_id === chatId))
+  /* The studio's pictures are read once for the whole studio
+     (lib/studio.svelte.js `studioPictures`). */
+  const bilder = $derived(studioPictures.names)
+  /* The original's file may be gone (the pictures folder was cleared): its
+     tile then does not show. */
+  let originalGone = $state('')
+  const original = $derived(werte.original && originalGone !== werte.original ? werte.original : '')
+  // The line holds the studio's pictures only.
+  const laufend = $derived(zustand.pictureQueue.find((w) => w.running) ?? null)
+  const wartend = $derived(zustand.pictureQueue.filter((w) => !w.running))
   const prozent = $derived(Math.round((pictureProgress.share || 0) * 100))
-  /* The glass under the tiles is there only while a tile is: open, every
-     tile counts; shut, the one that stays. */
-  const hasTiles = $derived(Boolean(laufend || bilder.length || (offen && wartend.length)))
+  // The studio's pictures the row shows: all of them open, the one that stays shut.
+  const row = $derived(rowPictures({ original, names: bilder, open: offen, running: Boolean(laufend) }))
+  /* The glass under the tiles is there only while a tile is: the original,
+     the picture drawing, a studio's picture, or — open — a waiting one. */
+  const hasTiles = $derived(Boolean(original || laufend || bilder.length || (offen && wartend.length)))
 
-  /* Asked only while a picture of this chat is drawing — its counter, and
-     its live preview where the picture is drawn with one. The watch follows
-     the picture, not the line: a line rebuilt around the same picture must
+  /* Asked only while a picture is drawing — its counter, and its live
+     preview where the picture is drawn with one. The watch follows the
+     picture, not the line: a line rebuilt around the same picture must
      not end it and start it over. */
   const runningId = $derived(laufend?.id ?? null)
   $effect(() => {
@@ -65,34 +62,10 @@
     }
   })
 
-  /* The project's pictures, read again when the chat, the choice or the
-     line changes — a picture finished is a picture more. Only the newest
-     answer counts. */
-  let anfrage = 0
-  async function laden() {
-    const nr = ++anfrage
-    if (!ofProject) return
-    try {
-      const antwort = await api.bilderListe({ projekt })
-      if (nr === anfrage) projectPictures = antwort.bilder ?? []
-    } catch {
-      /* The row keeps what it showed. */
-    }
-  }
-  $effect(() => {
-    void chatId
-    void ofProject
-    void projekt
-    void zustand.pictureQueue.length
-    void zustand.nachrichten.length
-    untrack(laden)
-  })
-  $effect(() => {
-    if (!projekt && bereich === 'projekt') bereich = 'chat'
-  })
   // Tiles that move take the menu's place away from it: it shuts.
   $effect(() => {
     void bilder
+    void original
     void laufend
     void wartend.length
     menue = null
@@ -116,12 +89,6 @@
 
 <div class="gallery" use:draussen={() => (menue = null)}>
   <div class="kopf">
-    {#if offen}
-      <div class="scope">
-        <Auswahlfeld bind:wert={bereich} eintraege={scopes} gesperrt={!projekt}
-                     beschriftung={t('studio.bilder')} />
-      </div>
-    {/if}
     <button class="step glas" onclick={() => (offen = !offen)}
             aria-label={offen ? t('studio.bilder_zu') : t('studio.bilder_auf')}
             title={offen ? t('studio.bilder_zu') : t('studio.bilder_auf')}>
@@ -135,6 +102,18 @@
   {#if hasTiles}
     <div class="leiste glas" bind:this={leisteKnoten}>
       <div class="kacheln" onscroll={() => (menue = null)}>
+        {#if original}
+          <div class="kachel bild" class:gewaehlt={werte.startbild === original}>
+            <button class="flaeche" onclick={() => startbildWaehlen(original)} title={t('bild.als_eingabe')}
+                    aria-label={t('bild.als_eingabe')}>
+              <img src={api.bildAdresse(original)} alt="" draggable="false"
+                   onerror={() => (originalGone = original)} />
+            </button>
+            <span class="schild">{t('studio.original')}</span>
+            <button class="mehr" onclick={(e) => menueAuf(original, e)} aria-label="···" aria-haspopup="menu">···</button>
+          </div>
+          <span class="trenner" aria-hidden="true"></span>
+        {/if}
         {#if laufend}
           <div class="kachel lauf">
             {#if pictureProgress.previewUrl}<img src={pictureProgress.previewUrl} alt="" />{/if}
@@ -152,7 +131,7 @@
             </div>
           {/each}
           {#if laufend || wartend.length}<span class="trenner" aria-hidden="true"></span>{/if}
-          {#each bilder as name (name)}
+          {#each row.pictures as name (name)}
             <div class="kachel bild" class:gewaehlt={werte.startbild === name}>
               <button class="flaeche" onclick={() => startbildWaehlen(name)} title={t('bild.als_eingabe')}
                       aria-label={t('bild.als_eingabe')}>
@@ -161,10 +140,10 @@
               <button class="mehr" onclick={(e) => menueAuf(name, e)} aria-label="···" aria-haspopup="menu">···</button>
             </div>
           {/each}
-        {:else if !laufend && bilder.length}
+        {:else if row.pictures.length}
           <div class="kachel bild">
-            <button class="flaeche" onclick={() => startbildWaehlen(bilder[0])} aria-label={t('bild.als_eingabe')}>
-              <img src={api.bildAdresse(bilder[0])} alt="" draggable="false" />
+            <button class="flaeche" onclick={() => startbildWaehlen(row.pictures[0])} aria-label={t('bild.als_eingabe')}>
+              <img src={api.bildAdresse(row.pictures[0])} alt="" draggable="false" />
             </button>
           </div>
         {/if}
@@ -197,18 +176,12 @@
     flex-direction: column;
     align-items: flex-end;
     gap: 6px;
-    /* Wide enough that both entries of the list are read whole, and with
-       the button beside it as wide as the zoom above. */
-    --scope-field: 160px;
   }
   .kopf {
     flex: none;
     display: flex;
     align-items: center;
     gap: 4px;
-  }
-  .scope {
-    width: var(--scope-field);
   }
   /* The button that folds the row: the size of the zoom's steps. */
   .step {
@@ -266,6 +239,18 @@
   }
   .kachel.bild.gewaehlt {
     box-shadow: 0 0 0 2px var(--text);
+  }
+  .schild {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 1px 0;
+    background: color-mix(in srgb, var(--bg) 75%, transparent);
+    color: var(--text);
+    font: 600 10px/14px var(--schrift);
+    text-align: center;
+    pointer-events: none;
   }
   .kachel .mehr {
     position: absolute;

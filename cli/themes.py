@@ -13,11 +13,18 @@ The styles set only foregrounds; the one place they paint a ground is the
 list of completions, which lies over the history and has to cover it. The
 terminal's own ground belongs to the look as a whole: at start and on a
 switch the terminal is asked to take the look's ground and text colour, and
-to draw its cursor in that text colour; when the client leaves it is given
-its own three back. A terminal that does not take the request keeps what it
-has. In the window the terminal lies on the window's own ground and is left
-alone — so is an output that is no terminal, and one that is to stay
-without colours.
+to draw its cursor in the look's mark colour (below); when the client leaves
+it is given its own three back. A terminal that does not take the request
+keeps what it has. In the window the terminal lies on the window's own
+ground and its ground and text colour are left alone — only the cursor is
+asked for, so it has the same colour there as in a terminal; an output that
+is no terminal, and one that is to stay without colours, is left alone
+altogether.
+
+The program's mark — the big block letters of the head — and the cursor
+carry the text colour with a fifth of the look's accent in it, one colour
+for both (``mark_colour``). A look without an accent of its own, the first,
+keeps both in the text colour.
 
 A terminal that cannot show the full colours gets the nearest ones it has —
 both libraries pick them. Where the environment asks for no colours at all,
@@ -44,7 +51,7 @@ from rich.theme import Theme as RichTheme
 
 from cli import appearance, prefs
 
-# The names every look answers to. The first eleven say what a piece of
+# The names every look answers to. The first twelve say what a piece of
 # text is; the last five are the parts of the fixed block, set as the class
 # of a whole line there.
 STYLE_NAMES = (
@@ -59,6 +66,7 @@ STYLE_NAMES = (
     "red",
     "blue",
     "violet",
+    "mark",
     "thinking",
     "status",
     "input",
@@ -140,11 +148,29 @@ class Theme:
         colour = self._colour(colour_name)
         return " ".join([*([colour] if colour else []), *words])
 
+    def mark_colour(self) -> str | None:
+        """The colour of the program's mark and of the cursor: the text
+        colour with a fifth of the accent in it. A look that sets things
+        apart by brightness alone has no accent to give, and its mark stays
+        in the text colour. ``None`` where the look names no text colour."""
+        text, accent = self.colours.get("text"), self.colours.get("accent")
+        if not text:
+            return None
+        if not accent or not self._has_accent():
+            return text
+        return _mixed(accent, text, MARK_ACCENT_SHARE)
+
     def _has_accent(self) -> bool:
         """Whether the look sets things apart in a colour of its own. One
         whose accent is its text colour sets them apart by brightness
         alone."""
         return self.colours.get("accent") != self.colours.get("text")
+
+    def _mark_style(self) -> str:
+        """The style of the mark: its colour, or nothing where the screen is
+        to stay without colours."""
+        colour = self.mark_colour() if colours_enabled() else None
+        return colour or ""
 
     def styles(self) -> dict[str, str]:
         """The style behind each style name — a string both libraries read
@@ -168,6 +194,7 @@ class Theme:
             "red": self._paint("red"),
             "blue": self._paint("blue"),
             "violet": self._paint("violet"),
+            "mark": self._mark_style(),
             "thinking": self._paint("muted"),
             "status": self._paint("muted"),
             "input": self._paint("text"),
@@ -264,16 +291,23 @@ class Theme:
 
     def ground(self) -> str:
         """What asks a terminal to take this look's ground and text colour
-        and to draw its cursor in that text colour — an empty string for a
+        and to draw its cursor in the mark colour — an empty string for a
         look that names no ground or no text colour."""
         ground, text = self.colours.get("ground"), self.colours.get("text")
         if not ground or not text:
             return ""
         return (
-            _TAKE_CURSOR.format(colour=text)
+            self.cursor()
             + _TAKE_GROUND.format(colour=ground)
             + _TAKE_TEXT.format(colour=text)
         )
+
+    def cursor(self) -> str:
+        """What asks a terminal to draw its cursor in the mark colour — the
+        one request the window's tab takes from the look — or an empty
+        string for a look that names no text colour."""
+        colour = self.mark_colour()
+        return _TAKE_CURSOR.format(colour=colour) if colour else ""
 
     def terminal_theme(self) -> TerminalTheme | None:
         """The terminal a recording of this look is shown on — the look's
@@ -297,6 +331,10 @@ class Theme:
 
 # How much of the text colour the quiet tone keeps; the rest is the ground.
 _QUIET_SHARE = 0.62
+
+# How much of the accent the program's mark and the cursor carry; the rest is
+# the text colour.
+MARK_ACCENT_SHARE = 0.2
 
 
 def _mixed(colour: str, other: str, share: float) -> str:
@@ -399,28 +437,37 @@ def current() -> Theme:
     return _current
 
 
+def _shows_colours(out: TextIO) -> bool:
+    """Whether ``out`` is a terminal and the screen may show colours."""
+    is_terminal = getattr(out, "isatty", None)
+    return colours_enabled() and is_terminal is not None and bool(is_terminal())
+
+
 def owns_ground(out: TextIO | None = None) -> bool:
     """Whether the look paints the ground of ``out`` (the standard output
     where none is named): not in the window, not where the screen is to
     stay without colours, and not where the output is no terminal."""
     out = sys.stdout if out is None else out
-    is_terminal = getattr(out, "isatty", None)
-    return (
-        colours_enabled()
-        and WINDOW_VARIABLE not in os.environ
-        and is_terminal is not None
-        and bool(is_terminal())
-    )
+    return _shows_colours(out) and WINDOW_VARIABLE not in os.environ
+
+
+def _owns_cursor_only(out: TextIO) -> bool:
+    """Whether ``out`` is the window's terminal, where the look asks for the
+    cursor and nothing else."""
+    return _shows_colours(out) and WINDOW_VARIABLE in os.environ
 
 
 def paint(out: TextIO | None = None) -> None:
     """Asks the terminal behind ``out`` to take the ground and text colour
-    of the look in use and to draw its cursor in that text colour — where
-    the look owns the ground."""
+    of the look in use and to draw its cursor in the mark colour — where the
+    look owns the ground; in the window's tab only the cursor."""
     out = sys.stdout if out is None else out
-    if not owns_ground(out):
+    if owns_ground(out):
+        sequence = current().ground()
+    elif _owns_cursor_only(out):
+        sequence = current().cursor()
+    else:
         return
-    sequence = current().ground()
     if sequence:
         out.write(sequence)
         out.flush()
@@ -429,12 +476,17 @@ def paint(out: TextIO | None = None) -> None:
 def unpaint(out: TextIO | None = None) -> None:
     """Gives the terminal behind ``out`` its own cursor colour, ground and
     text colour back — where the look owns the ground, which is where they
-    were taken. A terminal that is gone has nothing left to give back."""
+    were taken; in the window's tab the cursor colour. A terminal that is
+    gone has nothing left to give back."""
     out = sys.stdout if out is None else out
-    if not owns_ground(out):
+    if owns_ground(out):
+        sequence = _OWN_CURSOR + _OWN_GROUND + _OWN_TEXT
+    elif _owns_cursor_only(out):
+        sequence = _OWN_CURSOR
+    else:
         return
     try:
-        out.write(_OWN_CURSOR + _OWN_GROUND + _OWN_TEXT)
+        out.write(sequence)
         out.flush()
     except OSError as error:
         if not went_away(error):

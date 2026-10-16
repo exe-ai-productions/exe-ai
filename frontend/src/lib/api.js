@@ -433,13 +433,19 @@ export const api = {
     }),
   /* The voice, reading one sentence back — the WAV comes back raw, the same
      shape `spracheTranskribieren` sends in, just the other way round. */
-  spracheSprechen: async (text) => {
+  spracheSprechen: async (text, { signal } = {}) => {
     const antwort = await rufRoh('/sprachserver/sprechen', {
       method: 'POST',
       body: alsText({ text }),
+      signal,
     })
     return antwort.blob()
   },
+  /* The voice kept loaded while a conversation lasts: announced when it
+     begins and repeated while it goes on, given back when it ends. The
+     answer says whether it is kept (the switch is on and the engine can). */
+  voiceHold: () => ruf('/sprachserver/voice/hold', { method: 'POST' }),
+  voiceRelease: () => ruf('/sprachserver/voice/release', { method: 'POST', keepalive: true }),
 
   /* The clean-up server: its own window, its own port, its own buttons —
      started and stopped by hand, never with the speech server. Which file
@@ -454,10 +460,12 @@ export const api = {
   /* The assets view: the saved pictures, and the storage locations behind
      them — one place to see what was drawn and to move where it is kept. */
   /* The saved pictures; with `chat` only that chat's, with `projekt` those
-     of every chat in the project. */
-  bilderListe: ({ chat, projekt } = {}) => {
+     of every chat in the project, with `studio` those the picture studio
+     drew. */
+  bilderListe: ({ chat, projekt, studio } = {}) => {
     const frage = new URLSearchParams()
-    if (chat) frage.set('chat', chat)
+    if (studio) frage.set('studio', 'true')
+    else if (chat) frage.set('chat', chat)
     else if (projekt) frage.set('projekt', projekt)
     const anhang = frage.toString()
     return ruf('/bilder' + (anhang ? `?${anhang}` : ''))

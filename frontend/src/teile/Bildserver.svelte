@@ -56,6 +56,15 @@
   }
   loadServer()
   const serverRunning = $derived(server?.zustand === 'bereit' || server?.zustand === 'zeichnet')
+  /* The pill's word follows its colour: a server that was started and is
+     gone is red and says "error", not "inactive". */
+  const serverText = $derived(
+    server?.zustand === 'fehler'
+      ? t('status.fehler')
+      : serverRunning
+        ? t('status.aktiv')
+        : t('status.inaktiv'),
+  )
   // The default model, as the service reads it: empty while none is
   // chosen or its file left the folder.
   const startModel = $derived(stand?.standardmodell ?? '')
@@ -304,7 +313,7 @@
   titel={t('bildserver.titel')}
   zeichen="bild"
   standfarbe={SERVER_COLOURS[server?.zustand] ?? 'still'}
-  standtext={serverRunning ? t('status.aktiv') : t('status.inaktiv')}
+  standtext={serverText}
   modelle={stand?.modelle ?? []}
   modellBeschriftung={t('bildserver.modell')}
   leerText={stand ? t('bildserver.kein_modell_lang') : ''}

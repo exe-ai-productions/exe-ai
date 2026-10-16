@@ -22,11 +22,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from app import kit_bond, modellzuordnung, paketierung, runnermodellwahl, serverdownload
+from app.feineinstellungen import context_per_request
 from app.api.abhaengigkeiten import hole_config, hole_sprache
 from app.config import Config, EndpointConfig
 from app.i18n import t
 from app.modelldownload import BILD_ENDUNGEN, DownloadFehler, Modelldownload, place_for
-from app.modellrunner import Modellrunner, RunnerFehler, SCHLUESSEL_VARIABLE
+from app.modellrunner import (
+    Modellrunner,
+    RunnerFehler,
+    SCHLUESSEL_VARIABLE,
+    passende_mmproj,
+)
 from app.systemspeicher import gesamt_gb
 from app.ordner_oeffnen import OeffnenNichtMoeglich, ordner_oeffnen
 from app.serverdownload import Serverdownload, ServerdownloadFehler
@@ -63,8 +69,12 @@ class Modelldatei(BaseModel):
     groesse_gb: float
 
 
-class Auskunft(BaseModel):
-    programm: str | None
+class ProgramState(BaseModel):
+    """What every server window says about the program its server starts —
+    the section "llama.cpp" of each window reads exactly these fields, so the
+    five servers answer them through the one function `program_state`."""
+
+    programm: str | None = None
     # The build of the program that starts, as a build tag — None when
     # there is no program or it does not say which build it is.
     version: str | None = None
@@ -75,11 +85,17 @@ class Auskunft(BaseModel):
     # Whether the build that starts was fetched and is not the tested one —
     # the one case in which there is something to go back from.
     restorable: bool = False
+
+
+class Auskunft(ProgramState):
     ordner: str
     modelle: list[Modelldatei]
     # Vision companions in the folder. Their own list, not model entries:
     # they cannot start, but the window needs to know they are there.
     mmproj: list[str] = []
+    # The size in gigabytes of each projector above, by name — a passenger in
+    # the memory estimate when a model starts with its eyes.
+    projector_size_gb: dict[str, float] = {}
     # Prediction modules in the folder — the built-in drafts. Their own
     # list for the same reason, with sizes because a draft is a passenger
     # in the memory plan.
@@ -98,6 +114,10 @@ class Auskunft(BaseModel):
     modell: str | None = None
     kontext: int | None = None
     schichten: int | None = None
+    # The context one request gets while the slots do not share the cache
+    # (several slots, `kv_unified` off) — None where every request may use
+    # the whole window.
+    kontext_je_anfrage: int | None = None
     port: int | None = None
     drafter: str | None = None
     # The vision projector the running server was started with by hand — None
@@ -153,7 +173,9 @@ def hole_runner(request: Request) -> Modellrunner:
 
 
 def _zuordnung(runner: Modellrunner) -> dict[str, dict[str, str | None]]:
-    """The folder manifest, filtered to model files that are still present.
+    """The folder manifest, filtered to model files that are still present,
+    plus the projector the name rule finds for a model the manifest does not
+    pair.
 
     A model whose file is gone drops out entirely, and inside each entry a
     deleted companion drops out too, so the window never offers a bond to a
@@ -168,6 +190,19 @@ def _zuordnung(runner: Modellrunner) -> dict[str, dict[str, str | None]]:
         if ziel.parent != basis or not ziel.is_file():
             continue
         ergebnis[modell] = modellzuordnung.fuer(ordner, modell)
+    # A projector the name rule attaches at the start is a pairing like any
+    # other: without it here the row of the window said "none" about a
+    # server that came up with eyes. The declared one wins, as at the start.
+    for datei in runner.modelle():
+        if (ergebnis.get(datei.name) or {}).get("mmproj"):
+            continue
+        gefunden = passende_mmproj(ordner, datei.name)
+        if gefunden is not None:
+            ergebnis[datei.name] = {
+                "mtp": None,
+                **ergebnis.get(datei.name, {}),
+                "mmproj": gefunden.name,
+            }
     return ergebnis
 
 
@@ -236,24 +271,33 @@ def server_status(
     return auskunft(runner, config)
 
 
-def auskunft(runner: Modellrunner, config: Config | None = None) -> Auskunft:
-    """What the window shows about the server. ``config`` carries the one
-    setting that matters here — a program named by hand; without it none
-    counts as named."""
-    lauf = runner.lauf()
+def program_state(runner: Modellrunner, config: Config | None = None) -> dict[str, str | bool | None]:
+    """The program a server starts, in the fields of `ProgramState` — one
+    reading for all five server windows. ``config`` carries the one setting
+    that matters here — a program named by hand; without it none counts as
+    named."""
     program = _program(runner, config)
-    return Auskunft(
-        programm=str(program.path) if program.path else None,
-        version=program.version,
-        updatable=program.own_first and program.path is not None,
-        restorable=(
+    return {
+        "programm": str(program.path) if program.path else None,
+        "version": program.version,
+        "updatable": program.own_first and program.path is not None,
+        "restorable": (
             program.own_first
             and program.fetched is not None
             and program.fetched != serverdownload.BUILD
         ),
+    }
+
+
+def auskunft(runner: Modellrunner, config: Config | None = None) -> Auskunft:
+    """What the window shows about the server."""
+    lauf = runner.lauf()
+    return Auskunft(
+        **program_state(runner, config),
         ordner=str(runner.ordner),
         modelle=[Modelldatei(name=m.name, groesse_gb=m.groesse_gb) for m in runner.modelle()],
         mmproj=runner.mmproj(),
+        projector_size_gb=runner.projector_sizes(),
         mtp=[Modelldatei(name=m.name, groesse_gb=m.groesse_gb) for m in runner.mtp()],
         speicher_gb=gesamt_gb(),
         kerne=os.cpu_count(),
@@ -262,6 +306,9 @@ def auskunft(runner: Modellrunner, config: Config | None = None) -> Auskunft:
         modell=lauf.modell if lauf else None,
         kontext=lauf.kontext if lauf else None,
         schichten=lauf.schichten if lauf else None,
+        kontext_je_anfrage=(
+            context_per_request(lauf.kontext, lauf.fein) if lauf else None
+        ),
         # Idle, this is the port a start would take — the server's own,
         # which only the server knows. The page needs it to be able to show
         # the port field without repeating the number; the
@@ -350,7 +397,9 @@ class Holen(BaseModel):
     # picture model it came for in the model's own values (app/kit_bond.py),
     # not in the folder manifest.
     gehoert_zu: str | None = Field(None, min_length=1, max_length=200)
-    rolle: Literal["mmproj", "mtp", "vae", "llm", "t5xxl", "clip_l", "clip_g"] | None = None
+    rolle: Literal[
+        "mmproj", "mtp", "vae", "llm", "llm_vision", "t5xxl", "clip_l", "clip_g"
+    ] | None = None
     # Which kind of model this is — one of the catalogue's tabs. It decides
     # the destination folder, because each server reads only its own folder:
     # an embedding model in the chat folder is invisible to the embedding
@@ -639,8 +688,10 @@ def server_holen(
     the user's data folder, where the runner looks by itself.
 
     One program serves every server this program starts, so a fetch lifts
-    them all. A server that is running keeps running and takes the new
-    build at its next start.
+    them all. A server that is running is started again on the new build
+    once it is in place, with the values it ran with; the build that ran
+    until then stays until every model is loaded again, and is the program
+    again if one does not start. A server that is not running stays off.
     """
     build: str | None = None
     previous: str | None = None

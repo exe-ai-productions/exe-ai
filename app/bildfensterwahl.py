@@ -1,16 +1,16 @@
-"""What the picture window was left standing at, in one conversation.
+"""What the picture studio was left standing at.
 
 Its own module for the same reason the sound switch has one: the settings
 route only writes what somebody vouches for, and a JSON column cannot vouch
 for anything by itself.
 
-Deliberately per CHAT, and all of it: every value of the four tabs —
-General, Model & components, Face & reference, Refinement — the style
-addition, the pictures the window was given (start picture, PuLID photo,
-ControlNet guide) and the mask with its start picture. Coming back to a
-conversation has to find the picture one was working on exactly as it was
-left, not with the resolution, the model and the face pass of whatever was
-drawn elsewhere in between.
+Kept ONCE, for the studio, in the global scope — and all of it: every value
+of the four tabs — General, Model & components, Face & reference,
+Refinement — the style addition, the pictures the studio was given (start
+picture, PuLID photo, ControlNet guide) and the mask with its start
+picture. The studio belongs to no chat: opening, switching or deleting a
+chat changes none of it, and no chat reads it. (Chats that stored a window
+of their own before the studio stood apart keep it, unread.)
 
 What is NOT in here, on purpose:
 
@@ -22,8 +22,8 @@ backend, and every further switch of the memory block or marked
     (app/bildgeraete.py, app/bildmodellwerte.py).
 
 ``breite``, ``hoehe``, ``schritte``, ``sampler`` and ``scheduler`` are here
-too: a chat that has its own stands as it was left, and only a chat without
-one starts from its family's start values (``app/image_families.py``).
+too: the studio stands as it was left, and only a value it never set starts
+from its family's start values (``app/image_families.py``).
 
 The pictures and the mask travel by the NAME the picture route gave them
 (``app/api/v1/bilder.py``); the files stay in the pictures folder. A mask
@@ -66,10 +66,10 @@ CFG_MIN = 0
 BILDER_MIN = 1
 
 # The values of the picture studio, by the kind of value it holds them as
-# (frontend lib/studio.svelte.js `ANFANG`): every field a chat can store,
-# and no other. The studio checks each field itself; this only makes sure a
-# stored value is of a shape the studio can take back. A value a chat does
-# not store is the start value of its model, never one built in here.
+# (frontend lib/studio.svelte.js `ANFANG`): every field it can store, and no
+# other. The studio checks each field itself; this only makes sure a stored
+# value is of a shape the studio can take back. A value it does not store
+# is the start value of its model, never one built in here.
 #
 # PROMPT  a string of any length — the prompt and the negative
 # CFG     a number, never negative, kept as the fraction it was set as
@@ -134,6 +134,8 @@ FELDER: dict[str, str] = {
     "increase_ref_index": SCHALTER,
     # Face & reference
     "startbild": BILD,
+    # The picture that last came from outside — kept on top of the row
+    "original": BILD,
     "staerke": WERT,
     "maske": BILD,
     "pm_klasse": TEXT,
@@ -262,7 +264,7 @@ def _feld_pruefen(art: str, wert: Any) -> tuple[bool, Any]:
 
 
 def held_pictures(stored: Any) -> set[str]:
-    """The pictures a chat's stored studio holds, by the names the picture
+    """The pictures a stored window holds, by the names the picture
     route gave them: every field that keeps a picture or a list of them —
     the start and end picture, the mask, the reference pictures, the guide
     picture — and the pictures its further switches name. Anything that is
@@ -357,107 +359,3 @@ def _check_measures(values: dict[str, Any]) -> dict[str, Any]:
             if text == "" or text in allowed:
                 checked[name] = text
     return checked
-
-
-def _number(value: Any, empty: Any) -> Any:
-    """A window number field: '' (or anything that is no finite number)
-    means the field's own empty value."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        try:
-            number = float(str(value))
-        except (TypeError, ValueError):
-            return empty
-        return number if math.isfinite(number) else empty
-    return value
-
-
-def draw_request(stored: dict[str, Any]) -> dict[str, Any]:
-    """The draw request the picture studio would send for these stored
-    values, the way its own draw button builds one
-    (frontend lib/studiozeichnen.svelte.js) — without the prompt, which
-    the model brings, and without what the studio was given by the person
-    at it: a start picture and its mask, reference pictures, a face
-    (PuLID, or the PhotoMaker class that draws the face photos in) and a
-    guide picture. Only the
-    fields named below are carried, so none of those can ride along. The
-    model's kit is not the chat's: the draw route adds it.
-
-    Only what the chat stored is carried; a value it never set is left to
-    the caller, which fills it from the family's start values."""
-    request: dict[str, Any] = {}
-    for name in ("breite", "hoehe", "schritte", "sampler", "scheduler"):
-        if name in stored:
-            request[name] = stored[name]
-    if "cfg" in stored:
-        request["cfg"] = _number(stored["cfg"], 7)
-    if stored.get("negativ"):
-        request["negativ"] = str(stored["negativ"]).strip()
-    seed = _number(stored.get("seed", ""), None)
-    request["seed"] = int(seed) if stored.get("seed_modus") == "fest" and seed is not None else -1
-    request["loras"] = [
-        {"name": e["name"], "staerke": e.get("staerke", 1.0)}
-        for e in stored.get("stapel") or [] if isinstance(e, dict) and e.get("name")
-    ]
-    if stored.get("lora_modus"):
-        request["lora_apply_mode"] = stored["lora_modus"]
-    if "clip_skip" in stored:
-        clip_skip = _number(stored["clip_skip"], -1)
-        request["clip_skip"] = -1 if stored["clip_skip"] == "auto" else int(clip_skip)
-    for name in ("vae_format", "weight_type", "prediction"):
-        if stored.get(name):
-            request[name] = "" if stored[name] == "auto" else stored[name]
-    if stored.get("rng"):
-        request["rng"] = stored["rng"]
-    if stored.get("familie"):
-        request["familie"] = stored["familie"]
-    guidance = _number(stored.get("guidance", ""), None)
-    if guidance is not None:
-        request["guidance"] = guidance
-    if stored.get("model_args"):
-        request["model_args"] = str(stored["model_args"]).strip()
-    if stored.get("ad_modell"):
-        request["ad_modell"] = stored["ad_modell"]
-        request["ad_prompt"] = str(stored.get("ad_prompt") or "").strip()
-        request["ad_negativ"] = str(stored.get("ad_negativ") or "").strip()
-        request["ad_confidence"] = _number(stored.get("ad_confidence", ""), None)
-        request["ad_loras"] = [
-            {"name": e["name"], "staerke": e.get("staerke", 1.0)}
-            for e in stored.get("ad_stapel") or [] if isinstance(e, dict) and e.get("name")
-        ]
-    hires = stored.get("hires_wahl")
-    if hires not in (None, ""):
-        request["hires"] = True
-        request["hires_scale"] = _number(hires, 1.5)
-        request["hires_steps"] = int(_number(stored.get("hires_steps", ""), 0))
-        request["hires_denoise"] = _number(stored.get("hires_denoise", ""), 0)
-        request["hires_upscaler"] = str(stored.get("hires_upscaler") or "")
-        request["hires_width"] = int(_number(stored.get("hires_breite", ""), 0))
-        request["hires_height"] = int(_number(stored.get("hires_hoehe", ""), 0))
-    request["slg_scale"] = _number(stored.get("slg_scale", ""), 0)
-    for name in ("skip_layer_start", "skip_layer_end"):
-        number = _number(stored.get(name, ""), None)
-        if number is not None:
-            request[name] = number
-    for name in ("skip_layers", "sigmas", "extra_sample_args"):
-        if stored.get(name):
-            request[name] = str(stored[name]).strip()
-    for name in ("eta", "flow_shift"):
-        number = _number(stored.get(name, ""), None)
-        if number is not None:
-            request[name] = number
-    if stored.get("live_preview"):
-        request["live_preview"] = stored["live_preview"]
-        interval = _number(stored.get("preview_interval", ""), None)
-        if interval is not None:
-            request["preview_interval"] = int(interval)
-        request["preview_noisy"] = bool(stored.get("preview_noisy"))
-        if stored["live_preview"] == "tae" and stored.get("taesd"):
-            request["taesd"] = stored["taesd"]
-    # A picture the person gave the window stays behind, like the others.
-    switches = {
-        key: value for key, value in (stored.get("switches") or {}).items()
-        if (switch := image_switches.get(key)) is not None and switch.kind != "picture"
-    }
-    if switches:
-        request["switches"] = switches
-    return request

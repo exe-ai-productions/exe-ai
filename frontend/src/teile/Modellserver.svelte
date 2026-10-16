@@ -1,4 +1,5 @@
 <script>
+  import { onDestroy } from 'svelte'
   import { rollfade } from '../lib/rollfade.js'
   /* The model server — switched from here instead of from a terminal.
 
@@ -18,7 +19,7 @@
   import { api } from '../lib/api.js'
   import { t } from '../lib/texte.svelte.js'
   import { katalogOeffnen, melde, modelleLaden, zustand } from '../lib/zustand.svelte.js'
-  import { serverAnteil } from '../lib/speicherschaetzung.js'
+  import { isEightBitCache, serverAnteil } from '../lib/speicherschaetzung.js'
   import { empfehlungFuer } from '../lib/modellempfehlungen.js'
   import { FEINEINSTELLUNGEN } from '../lib/feineinstellungen.js'
   import { nurGeaendert } from '../lib/nurgeaendert.js'
@@ -36,9 +37,8 @@
   import Startknopf from './Startknopf.svelte'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import Serverreihe from './Serverreihe.svelte'
-  import Serverabschnitt from './Serverabschnitt.svelte'
   import Serverlogkopf from './Serverlogkopf.svelte'
-  import UpToDateMark from './UpToDateMark.svelte'
+  import LlamaCppSection from './LlamaCppSection.svelte'
   import {
     protokollOffen,
     oeffneProtokoll,
@@ -88,7 +88,8 @@
      agree with it right up until somebody changed one of the two. */
   let zahlenStehen = $state(false)
   let kontext = $state(0)
-  let schichten = $state(0)
+  /* `null` is "Auto": no layer count is sent and the engine places the layers. */
+  let schichten = $state(null)
   let port = $state(0)
   let modell = $state('')
   let drafter = $state('')
@@ -137,7 +138,14 @@
   })
 
   const schaetzung = $derived(
-    serverAnteil(auskunft?.modelle, auskunft?.mtp, { modell, kontext, drafter }),
+    serverAnteil(auskunft?.modelle, auskunft?.mtp, {
+      modell,
+      kontext,
+      drafter,
+      eightBit: isEightBitCache(fein.kv_cache),
+      vision,
+      projectors: auskunft?.projector_size_gb,
+    }),
   )
   /* This server's entry in the head's figure, live while the page is open —
      the hand moves the window slider here, and the head must move with it
@@ -214,6 +222,8 @@
     kv_cache: 'f16',
     moe_auf_cpu: false,
     festnageln: false,
+    /* On: the slots share one cache of the window's size (`--kv-unified`). */
+    kv_unified: true,
   }
   let fein = $state({ ...FEIN_VORGABE })
   /* Kept as plain numbers here because the number field speaks numbers; 0
@@ -257,9 +267,9 @@
      shipped default never reached anybody who once opened the page. Measured,
      not argued — see the report of 02.09.
 
-     What this does NOT fix is the second window on this key: PUT replaces the
-     whole row, so the only real cure is a merging write, and that needs the
-     key's own module to accept a partial value. Reported. */
+     The second window on this key is cured the way the numbers are: only the
+     levers that changed travel (PATCH, see `feinSchreiben`), so a lever the
+     other window moved is not this window's stale copy to put back. */
   let feinStand = null
 
   /* The levers the form ships with, as the form itself sends them. */
@@ -270,19 +280,36 @@
     parallel: null,
   }
 
-  /* Whether the levers say anything that is not already stored — the same
-     filter, and the same two rules, the numbers go through
-     (lib/nurgeaendert.js). */
-  function feinNachzutragen() {
-    return Object.keys(
-      nurGeaendert({ fein: feindaten }, { fein: feinStand }, { fein: feinVorgabewerte }),
-    ).length > 0
+  /* The levers that say something the setting does not already say — the
+     same two rules the numbers go through (lib/nurgeaendert.js), lever by
+     lever: where nothing is stored a lever is compared with the shipped one
+     and a shipped value is no choice; where something is stored, any other
+     value is a change, the shipped one included. */
+  function changedLevers() {
+    const stand = feinStand ?? {}
+    const changed = {}
+    for (const [name, wert] of Object.entries(feindaten)) {
+      const bisher = name in stand ? stand[name] : feinVorgabewerte[name]
+      if (JSON.stringify(wert ?? null) !== JSON.stringify(bisher ?? null)) {
+        changed[name] = wert
+      }
+    }
+    return changed
   }
 
+  /* Whether the levers say anything that is not already stored. */
+  function feinNachzutragen() {
+    return Object.keys(changedLevers()).length > 0
+  }
+
+  /* Only the levers that changed, merged into the stored row: the setting
+     is shared with every other window and the command line, and the whole
+     row sent from here carried this window's copy of all of them. */
   async function feinSchreiben() {
-    const werte = { ...feindaten }
-    await api.einstellungSetzen('global', FEINEINSTELLUNGEN, werte)
-    feinStand = werte
+    const changed = changedLevers()
+    if (!Object.keys(changed).length) return
+    await api.einstellungMischen('global', FEINEINSTELLUNGEN, changed)
+    feinStand = { ...(feinStand ?? {}), ...changed }
   }
 
   function feinUebernehmen(daten) {
@@ -293,6 +320,7 @@
       kv_cache: daten.kv_cache === 'q4_0' ? 'q8_0' : (daten.kv_cache ?? fein.kv_cache),
       moe_auf_cpu: Boolean(daten.moe_auf_cpu),
       festnageln: Boolean(daten.festnageln),
+      kv_unified: daten.kv_unified !== false,
     }
     faeden = daten.faeden || 0
     /* The stored kinds of "all experts on the CPU": the older switch
@@ -410,7 +438,7 @@
   function werteUebernehmen() {
     const v = auskunft?.vorgaben ?? {}
     kontext = runnermodell.kontext ?? v.kontext
-    schichten = runnermodell.schichten ?? v.schichten
+    schichten = runnermodell.schichten ?? v.schichten ?? null
     /* Null means "the server's own port", and only the server knows what
        that is — it comes back in `port` while nothing runs. */
     port = runnermodell.port ?? auskunft?.port
@@ -453,6 +481,11 @@
         modulUebernehmen(modell)
       }
       if (auskunft.laeuft) {
+        /* The file the server holds is the file the row names — also when it
+           was started from outside this window, which the row would
+           otherwise go on denying until the window was opened again. The
+           row is locked while a server runs, so no hand is moved here. */
+        if (auskunft.modell && auskunft.modell !== modell) modell = auskunft.modell
         kontext = auskunft.kontext
         schichten = auskunft.schichten
         port = auskunft.port
@@ -529,9 +562,15 @@
            saying why. Measured: 15 seconds into a second run, still locked. */
         werteUebernehmen()
         if (modell) modulUebernehmen(modell)
+        /* The levers the same way: handed back out of the copy this window
+           holds, then read again — another window or the command line may
+           have moved one while the run was going, and the run's own values
+           are a report, not an answer, once it is over. */
+        feinUebernehmen(feinStand ?? feinVorgabewerte)
         await standLaden(true)
         werteUebernehmen()
         if (modell) modulUebernehmen(modell)
+        await feinLaden()
       }
       liefVorher = auskunft.laeuft
       if (!feinGeladen && !auskunft.laeuft) await feinLaden()
@@ -590,22 +629,35 @@
      default from being written back as a choice, which is what the port
      already had a brake of its own for and the window and the layers did
      not. */
+  function writeNumbers() {
+    /* The same fallbacks `werteUebernehmen` fills the form from — the
+       server owns its port, and the rest come from the one place that
+       decides them (app/runnermodellwahl.py `vorgaben`). */
+    const nachtrag = nurGeaendert(
+      { kontext, schichten, port, vorladen },
+      runnermodell,
+      { ...(auskunft?.vorgaben ?? {}), port: auskunft?.port },
+    )
+    if (!Object.keys(nachtrag).length) return
+    werteSetzen(nachtrag).catch(() => {})
+  }
+
   $effect(() => {
     const _ = JSON.stringify({ kontext, schichten, port, vorladen })
     if (!zahlenStehen || laeuft) return
-    const uhr = setTimeout(() => {
-      /* The same fallbacks `werteUebernehmen` fills the form from — the
-         server owns its port, and the rest come from the one place that
-         decides them (app/runnermodellwahl.py `vorgaben`). */
-      const nachtrag = nurGeaendert(
-        { kontext, schichten, port, vorladen },
-        runnermodell,
-        { ...(auskunft?.vorgaben ?? {}), port: auskunft?.port },
-      )
-      if (!Object.keys(nachtrag).length) return
-      werteSetzen(nachtrag).catch(() => {})
-    }, 600)
+    const uhr = setTimeout(writeNumbers, 600)
     return () => clearTimeout(uhr)
+  })
+
+  /* What waited for the quiet is written when the window goes away. The
+     clock above is taken down with the window, and a change made in the last
+     600 ms before closing it was simply gone — the next opening showed the
+     old value. The write is the one the clock would have made (nothing
+     changed, nothing sent), through the same queue, which outlives the
+     window; a start writes the open values the same way before it runs. */
+  onDestroy(() => {
+    if (zahlenStehen && !laeuft) writeNumbers()
+    if (feinGeladen && !laeuft && feinNachzutragen()) feinSchreiben().catch(() => {})
   })
 
   /* Picking a model pre-picks its speed module: first the choice the hand
@@ -726,98 +778,6 @@
     api.serverProgrammHolen().then((s) => (programmStand = s)).catch((f) => melde(f.message, 'fehler'))
   }
 
-  /* The builds of the server this machine could fetch — a list only on
-     Windows on x64, empty everywhere else — and the one that was fetched.
-     Read once and again whenever a fetch ends, never on the poll above. */
-  let varianten = $state(null)
-  async function variantenLaden() {
-    try {
-      varianten = await api.serverProgrammVarianten()
-    } catch {
-      varianten = null
-    }
-  }
-  variantenLaden()
-
-  /* The list stands where the server is ours to choose: with no program at
-     all, or where the fetched copy is the one that starts. Beside a program
-     the settings name, or an installed one that comes first, a fetched
-     build would never run — nothing is offered. */
-  const variantenZeigen = $derived(
-    Boolean(varianten?.varianten?.length) && (!hatProgramm || Boolean(auskunft?.updatable)),
-  )
-
-  function groesseText(bytes) {
-    return `${Math.round(bytes / (1024 * 1024))} MB`
-  }
-
-  function variantHolen(variante) {
-    api
-      .serverProgrammHolen(variante)
-      .then((s) => (programmStand = s))
-      .catch((f) => melde(f.message, 'fehler'))
-  }
-
-  /* Whether a newer build of the server program exists — asked only when
-     the button is pressed, never on opening and never inside the poll
-     above: nothing looks for updates by itself. */
-  let updateAnswer = $state(null)
-  let checking = $state(false)
-
-  // Only the newest check may answer: a fetch landing meanwhile clears the
-  // answer, and an older one arriving after that must not bring it back.
-  let checkRun = 0
-
-  async function checkForUpdate() {
-    const run = ++checkRun
-    checking = true
-    // The last answer goes while the new one is asked, so it cannot stand
-    // beside the running check as if it were its result.
-    updateAnswer = null
-    try {
-      const answer = await api.serverProgramUpdateCheck()
-      if (run === checkRun) {
-        updateAnswer = answer
-        // A list that could not be read compares nothing: said at the top,
-        // so the button does not look as if it did nothing.
-        if (answer.unreadable) melde(t('bildserver.updates_nicht_pruefbar'), 'fehler')
-      }
-    } catch (fehler) {
-      if (run === checkRun) melde(fehler.message, 'fehler')
-    } finally {
-      if (run === checkRun) checking = false
-    }
-  }
-
-  /* Once a fetch actually FINISHES the last answer is cleared — it spoke of
-     the build before, and the next press asks again. A fetch that failed
-     says so: the version row still names the build that was there, and
-     without a word it would look as if nothing had been tried. */
-  let fetchingBefore = false
-  $effect(() => {
-    if (fetchingBefore && !programmLaedt) {
-      updateAnswer = null
-      checkRun += 1
-      checking = false
-      if (programmStand?.fehler) melde(t('bildserver.generator_fehler'), 'fehler')
-      variantenLaden()
-    }
-    fetchingBefore = programmLaedt
-  })
-
-  /* The server reads the release list again itself rather than trust the
-     build this window showed a moment ago, so a stale offer never fetches
-     what is already there. */
-  function updateProgram() {
-    api.serverProgramUpdate().then((s) => (programmStand = s)).catch((f) => melde(f.message, 'fehler'))
-  }
-
-  /* The way back from an update: the tested build takes the place of the
-     newer one. Offered only while a fetched build other than the tested one
-     runs (`auskunft.restorable`). */
-  function restoreProgram() {
-    api.serverProgramRestore().then((s) => (programmStand = s)).catch((f) => melde(f.message, 'fehler'))
-  }
 </script>
 
 {#if erststart}
@@ -930,6 +890,8 @@
               bind:faeden
               maxFaeden={MAX_FAEDEN}
               bind:moeSchichten
+              {parallel}
+              {fein}
               {schaetzung}
               {maschineGb}
             />
@@ -947,98 +909,9 @@
             />
           {/snippet}
         </Serverreihe>
-        <!-- The program every server of this page starts, in one row: the
-             build that starts on the left — a dash for a program that does
-             not say which build it is — and on the right what can be done
-             about it, in the order it is done: look for a newer build,
-             fetch the one that was found, go back to the tested one. The
-             answer "up to date" stands beside the button that asked.
-
-             The check stands only where a fetched copy would be the program
-             that starts; beside a program the settings name, or an
-             installed one that comes first, the build is named and nothing
-             is offered.
-
-             The section stands whether the program is there or not: without
-             it the row holds the one button that fetches it — the first-run
-             board carries the same button, but that board goes with the
-             first model, and a machine with models and no program was left
-             with no way to get one. -->
-        <Serverabschnitt zeichen="server" titel="llama.cpp">
-          <div class="zeile">
-            <span class="name build">{t('bildserver.version_zeile', { bau: auskunft?.version ?? '—' })}</span>
-            {#if hatProgramm}
-              {#if auskunft.updatable && updateAnswer?.aktuell}
-                <UpToDateMark />
-              {/if}
-              {#if auskunft.updatable || auskunft.restorable}
-                <span class="buttons">
-                  {#if auskunft.updatable}
-                    <button class="feldknopf" disabled={checking || programmLaedt} onclick={checkForUpdate}>
-                      {t('bildserver.nach_updates_suchen')}
-                    </button>
-                    {#if updateAnswer?.verfuegbar}
-                      <button class="feldknopf" disabled={programmLaedt} onclick={updateProgram}>
-                        {t('bildserver.generator_aktualisieren')}
-                      </button>
-                    {/if}
-                  {/if}
-                  {#if auskunft.restorable}
-                    <button class="feldknopf" disabled={programmLaedt} onclick={restoreProgram}>
-                      {t('bildserver.restore_tested_build')}
-                    </button>
-                  {/if}
-                </span>
-              {/if}
-            {:else if variantenZeigen}
-              <!-- The list below is the way to fetch it. -->
-            {:else if programmLaedt}
-              <!-- The program on its way down: the bar and its share after
-                   the dash, where the buttons stand otherwise. -->
-              <span class="balken"><i style="width:{Math.round(programmStand.anteil * 100)}%"></i></span>
-              <span class="balkenzahl">{Math.round(programmStand.anteil * 100)} %</span>
-            {:else}
-              <!-- No program: the one button that fetches it, at the right end
-                   of the row where the check stands once there is one. A
-                   fetch that ended in an error says so beside the button
-                   that tries again; without it the button simply stood
-                   there again, as if nothing had been tried. -->
-              {#if programmStand?.fehler}
-                <span class="v_fehler">{t('bildserver.generator_fehler')}</span>
-              {/if}
-              <span class="buttons">
-                <button class="feldknopf" onclick={programmHolen}>{t('modell.server_download')}</button>
-              </span>
-            {/if}
-          </div>
-          <!-- Windows on x64: the builds of the server, as the picture
-               generator lists its own — the CPU build runs everywhere and
-               is the one a first fetch brings; the others use the graphics
-               card. -->
-          {#if variantenZeigen}
-            {#each varianten.varianten as v (v.variante)}
-              <div class="zeile">
-                <span class="name">{v.variante}</span>
-                {#if v.variante === varianten.installiert}
-                  <span class="v_still">{t('bildserver.variante_installiert')}</span>
-                {:else}
-                  <button class="feldknopf" disabled={programmLaedt}
-                          onclick={() => variantHolen(v.variante)}>
-                    {t('bildserver.variante_holen', { groesse: groesseText(v.groesse) })}
-                  </button>
-                {/if}
-              </div>
-            {/each}
-            {#if programmLaedt}
-              <div class="zeile">
-                <span class="balken"><i style="width:{Math.round(programmStand.anteil * 100)}%"></i></span>
-                <span class="balkenzahl">{Math.round(programmStand.anteil * 100)} %</span>
-              </div>
-            {:else if programmStand?.fehler}
-              <div class="zeile"><span class="name v_fehler">{t('bildserver.generator_fehler')}</span></div>
-            {/if}
-          {/if}
-        </Serverabschnitt>
+        <!-- The program every server starts: one section, the same in the
+             window of each of them (LlamaCppSection.svelte). -->
+        <LlamaCppSection {auskunft} onrefresh={laden} />
       {/snippet}
       {#snippet unten()}
         <div class="log">
@@ -1241,23 +1114,5 @@
   .knopf.gesperrt {
     opacity: 0.5;
     cursor: default;
-  }
-
-  /* The build number in digits of one width: the row keeps its place when
-     an update changes the number. */
-  .build {
-    font-variant-numeric: tabular-nums;
-  }
-  /* A fetch that failed, in the colour of a failure, beside the button. */
-  .v_fehler {
-    color: var(--rot);
-  }
-  /* A build that is there: a quiet word where the button would stand. */
-  .v_still {
-    flex: none;
-    font-size: 12px;
-    line-height: 16px;
-    color: var(--text-still);
-    white-space: nowrap;
   }
 </style>

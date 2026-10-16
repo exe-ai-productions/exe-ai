@@ -14,6 +14,8 @@
      reminder its text. Once a schedule exists its kind stays — the tool
      refuses a change of kind, and a control offering one would lie. */
   import { untrack } from 'svelte'
+  import cronstrue from 'cronstrue'
+  import 'cronstrue/locales/de'
   import { api } from '../lib/api.js'
   import { t, texte } from '../lib/texte.svelte.js'
   import { melde, zustand } from '../lib/zustand.svelte.js'
@@ -95,26 +97,46 @@
     if (repeat === 'weekly' && !untrack(() => weekdays.length)) weekdays = [chipOf(untrack(() => chosenDay))]
   })
 
-  /* What a typed expression means: its next runs, read by the service on
-     its own clock. Asked a moment after the typing stops. */
+  /* What a typed expression means: the sentence the library makes of it,
+     and under it the next run, read by the service on its own clock. The
+     service answers first — a phrase it refuses stands as its refusal, with
+     no sentence — and the sentence is only made of a phrase it accepted.
+     Asked a moment after the typing stops. */
   let customLine = $state('')
   let customFault = $state(false)
+  let accepted = $state('')
+  const customSentence = $derived(accepted ? sentenceOf(accepted, texte.sprache) : '')
+
+  function sentenceOf(phrase, language) {
+    try {
+      return cronstrue.toString(phrase, {
+        locale: language === 'de' ? 'de' : 'en',
+        use24HourTimeFormat: true,
+      })
+    } catch {
+      return ''
+    }
+  }
+
   $effect(() => {
     if (repeat !== 'custom') return
     const phrase = cron.trim()
     if (!phrase) {
       customLine = ''
+      accepted = ''
       return
     }
     const wait = setTimeout(async () => {
       try {
         const next = await api.cronjobPreview(phrase)
         customFault = false
+        accepted = phrase
         customLine = t('cronjobs.naechste_faelligkeit', {
           wann: next.map((moment) => zeitpunkt(moment, zustand.timezone)).join(' · '),
         })
       } catch (fault) {
         customFault = true
+        accepted = ''
         customLine = String(fault.message || fault)
       }
     }, 300)
@@ -216,6 +238,9 @@
       <label class="field">
         <span>{t('cronjobs.cron_phrase')}</span>
         <input class="fixed" bind:value={cron} />
+        {#if customSentence}
+          <span class="explain">{customSentence}</span>
+        {/if}
         {#if customLine}
           <span class="explain" class:fault={customFault}>{customLine}</span>
         {/if}

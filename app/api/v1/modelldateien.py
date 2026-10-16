@@ -352,8 +352,8 @@ async def _head_family(
             continue
         if head is None:
             return None
-        is_gguf, architecture, names = head
-        return bildinhalt.read_header(names, architecture, is_gguf=is_gguf)
+        is_gguf, architecture, names, vision = head
+        return bildinhalt.read_header(names, architecture, is_gguf=is_gguf, vision=vision)
     return None
 
 
@@ -379,6 +379,9 @@ _ART_OF_KIND = {
     bildinhalt.BILDMODELL: "modell",
     bildinhalt.VAE: "vae",
     bildinhalt.TEXTVERSTEHER: "textleser",
+    # A vision projector is kept with the text encoders, so it is fetched
+    # into the same folder as one.
+    bildinhalt.SEHTEIL: "textleser",
 }
 
 
@@ -436,15 +439,25 @@ async def _add_kits(
     # same lists a drawing reads, so "there" means the same in both places.
     vaes: set[str] = set()
     encoders: set[str] = set()
+    vision: set[str] = set()
     if ordner is not None:
         vaes = set(await asyncio.to_thread(bildrunner.vaes, ordner))
         encoders = set(await asyncio.to_thread(bildrunner.textversteher, ordner))
+        vision = set(await asyncio.to_thread(bildrunner.sehteile, ordner))
+    # What the drawing takes of a family's parts by itself, asked once per
+    # family: a part counts as there when the drawing finds a file of the
+    # right kind for it, whatever its name or quantisation.
+    taken: dict[str, dict[str, str]] = {}
     for datei in liste.dateien:
         kit = kit_of(datei)
         familie = families[datei.datei][0]
         if not kit or familie is None:
             continue
         name = datei.datei.rsplit("/", 1)[-1]
+        if ordner is not None and familie.name not in taken:
+            taken[familie.name] = await asyncio.to_thread(
+                kit_bond.matching_parts, ordner, familie
+            )
         teile = [
             Bausatzteil(
                 rolle="modell", repo=repo, datei=datei.datei, name=name, ordner="",
@@ -454,9 +467,14 @@ async def _add_kits(
         ]
         for teil in kit:
             part_size = sizes[(teil.repo, teil.file)]
-            listed = teil.name in (vaes if teil.part == "vae" else encoders)
+            listed = teil.name in {"vae": vaes, "llm_vision": vision}.get(teil.part, encoders)
             local_name, da, collision = teil.name, listed, False
-            if ordner is not None and part_size is not None:
+            fitting = taken.get(familie.name, {}).get(teil.part)
+            if fitting is not None:
+                # The drawing sets this part in by itself: the file it takes
+                # is the part, and nothing of it is fetched.
+                local_name, da, collision = fitting, True, False
+            elif ordner is not None and part_size is not None:
                 # In its own sub-folder, or loose in the main folder where
                 # its content names it: a file of its name and size is it.
                 place = place_for(

@@ -30,8 +30,12 @@
      trusting the source. Turned on, the glow breathes between the same two
      states the standing glow already sits between, just further apart — the
      fill itself never moves, which is the one thing the reduced-motion
-     header above forbids touching. */
-  let { farbe = 'gruen', groesse = 10, atmet = false } = $props()
+     header above forbids touching.
+
+     `quiet` is the dot of the answer's line: no standing glow, and a dot
+     that goes breathes a glow out of nothing and back. Off by default, so
+     every other caller draws what it always did. */
+  let { farbe = 'gruen', groesse = 10, atmet = false, quiet = false } = $props()
 
   /* The box is what the layout sees: the disc and one pixel of air around
      it. */
@@ -48,6 +52,7 @@
 <svg
   class="lp"
   class:atmet
+  class:quiet
   data-farbe={farbe}
   width={kasten}
   height={kasten}
@@ -81,6 +86,31 @@
   }
   .lp[data-farbe='rot'] {
     filter: drop-shadow(0 0 2.5px color-mix(in srgb, var(--rot) 55%, transparent));
+  }
+
+  /* The quiet dot: nothing stands around it. */
+  .lp.quiet[data-farbe] {
+    filter: none;
+  }
+  .lp.quiet.atmet[data-farbe='gruen'] { animation: breathe-quiet-green 2.2s ease-in-out infinite; }
+  .lp.quiet.atmet[data-farbe='blau'] { animation: breathe-quiet-blue 2.2s ease-in-out infinite; }
+  .lp.quiet.atmet[data-farbe='gelb'] { animation: breathe-quiet-yellow 2.2s ease-in-out infinite; }
+  .lp.quiet.atmet[data-farbe='rot'] { animation: breathe-quiet-red 2.2s ease-in-out infinite; }
+  @keyframes breathe-quiet-green {
+    0%, 100% { filter: drop-shadow(0 0 0 transparent); }
+    50% { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--gruen) 70%, transparent)); }
+  }
+  @keyframes breathe-quiet-blue {
+    0%, 100% { filter: drop-shadow(0 0 0 transparent); }
+    50% { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--blau) 70%, transparent)); }
+  }
+  @keyframes breathe-quiet-yellow {
+    0%, 100% { filter: drop-shadow(0 0 0 transparent); }
+    50% { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--gelb) 70%, transparent)); }
+  }
+  @keyframes breathe-quiet-red {
+    0%, 100% { filter: drop-shadow(0 0 0 transparent); }
+    50% { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--rot) 70%, transparent)); }
   }
 
   /* `atmet`: the same drop-shadow, breathing between a lighter and a
@@ -120,6 +150,7 @@
      same specificity, and it wins on being the later declaration. */
   @media (prefers-reduced-motion: reduce) {
     .lp.atmet[data-farbe] { animation: none; }
+    .lp.quiet.atmet[data-farbe] { animation: none; }
   }
 
   .scheibe {

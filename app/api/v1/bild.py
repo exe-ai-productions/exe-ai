@@ -26,8 +26,9 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -36,24 +37,24 @@ from pydantic_core import PydanticCustomError
 from app.api.abhaengigkeiten import hole_config, hole_repositories, hole_sprache
 from app import (
     bildbausatz, bildgeraete, bildinhalt, bildmodellwerte, bildstandardmodell, bildstile,
-    gesichteraufbereitung, image_families,
-    image_switches, photomaker, picture_info,
+    gesichteraufbereitung, image_families, kit_bond,
+    image_switches, photomaker, picture_info, studio_pictures,
 )
 from app.api.v1.bilder import ERLAUBTE_TYPEN
 from app.bildmetadaten import metadaten_entfernen
 from app.bildschutz import putzen_an
 from app.bildturbo import Bildturbo, BildturboFehler, start_deadline, start_parts
 from app.bildrunner import (
-    Auftrag, BildFehler, Bildrunner, LoRA, TEXTVERSTEHER_ORDNER, UPSCALER_ORDNER, VAE_ORDNER,
+    Auftrag, BildFehler, Bildrunner, LoRA, UPSCALER_ORDNER, VAE_ORDNER,
     controlnet_pfad, controlnets, embeddings, loras, lora_pfad, modelle,
     modell_pfad, pulid_embedding_pfad, pulid_embeddings, pulid_pfad, pulids,
-    textversteher, textversteher_pfad, tokenizer_pfad, tokenizers,
+    vision_part_path, sehteile, textversteher, textversteher_pfad, tokenizer_pfad, tokenizers,
     imatrix_path, taesd_path, taesd_files, upscaler_path, upscalers, vaes, vae_pfad, video_parts,
     yolos, yolo_pfad,
 )
 from app import bildwahlen
 from app.bildwahlen import MAX_KANTE, MIN_KANTE, MIN_SCHRITTE, RASTER
-from app import bildlauf, bildspeicher, draw_input, paste_back, systemspeicher
+from app import bildlauf, bildspeicher, draw_input, image_start_values, paste_back, systemspeicher
 from pathlib import Path
 
 from app.config import Config
@@ -61,7 +62,8 @@ from app.db import Repositories
 from app.i18n import t
 from app.ordner_oeffnen import OeffnenNichtMoeglich, ordner_oeffnen
 from app.speicherorte import ort, scratch_pictures_dir
-from app import sddownload
+from app.tools import bild_werkzeug
+from app import picture_program_choice, sddownload
 from app.sddownload import Sddownload, SddownloadFehler
 
 log = logging.getLogger(__name__)
@@ -91,6 +93,10 @@ class BildWunsch(BaseModel):
     # made and named — useful for a script, and the one case in which
     # nothing is written to the history.
     chat_id: str | None = None
+    # The picture studio's own draw: the finished picture is put on the
+    # studio's list of pictures (app/studio_pictures.py), where its row of
+    # pictures reads it. A draw without this belongs to no list.
+    studio: bool = False
     # Which chat's little history this RUN is written into. Normally the same
     # chat the picture lands in; the picture server's test run sets only this
     # one, because that run is worth showing but the picture is not worth
@@ -335,6 +341,27 @@ class BildAntwort(BaseModel):
     antwort_id: str | None = None
 
 
+class PictureFromSentence(BaseModel):
+    """One sentence and the chat whose picture window gives every value."""
+
+    # Whitespace alone is no sentence: the tool strips the prompt and would
+    # refuse it after the request had been taken.
+    prompt: str = Field(min_length=1, pattern=r"\S")
+    chat_id: str = Field(min_length=1, max_length=200)
+
+
+class PictureFromSentenceAnswer(BaseModel):
+    bild: str
+    # Where the finished picture lies, in the pictures folder.
+    pfad: str
+    seed: int | None = None
+    modell: str
+    # The prompt it was drawn with, after the prompt preparation.
+    prompt: str
+    # The values it was drawn with, by the names of the draw request.
+    werte: dict[str, Any] = Field(default_factory=dict)
+
+
 class BildmodellAntwort(BaseModel):
     modelle: list[str]
     # Each model's family, read from its own header (app/bildinhalt.py);
@@ -352,6 +379,9 @@ class BildmodellAntwort(BaseModel):
     taesd_files: list[str] = Field(default_factory=list)
     embeddings: list[str] = Field(default_factory=list)
     textversteher: list[str] = Field(default_factory=list)
+    # The vision parts (mmproj files) of the text encoder folder: what the
+    # kit's vision field takes, never the text encoders above.
+    sehteile: list[str] = Field(default_factory=list)
     tokenizers: list[str] = Field(default_factory=list)
     # The finished PuLID face embeddings (``.pulidembd``).
     pulid_embeddings: list[str] = Field(default_factory=list)
@@ -466,6 +496,7 @@ def bildmodelle(
     runner = _runner(request)
     gefunden = modelle(_bildordner(config))
     programm_da = runner.programm is not None
+    picked_variant = picture_program_choice.picked(repositories)
     # Asked once for the whole folder: a model whose family is not to be
     # read is listed without one.
     unread = bildmodellwerte.without_family_detection(repositories)
@@ -483,6 +514,7 @@ def bildmodelle(
         taesd_files=taesd_files(_bildordner(config)),
         embeddings=embeddings(_bildordner(config)),
         textversteher=textversteher(_bildordner(config)),
+        sehteile=sehteile(_bildordner(config)),
         tokenizers=tokenizers(_bildordner(config)),
         pulid_embeddings=pulid_embeddings(_bildordner(config)),
         upscalers=upscalers(_bildordner(config)),
@@ -491,8 +523,8 @@ def bildmodelle(
         scheduler=list(bildwahlen.SCHEDULER),
         standardmodell=bildstandardmodell.lesen(repositories, gefunden),
         programm_da=programm_da,
-        bau=sddownload.installierter_bau(config.datenverzeichnis),
-        restorable=sddownload.restorable(config.datenverzeichnis),
+        bau=sddownload.installierter_bau(config.datenverzeichnis, picked_variant),
+        restorable=sddownload.restorable(config.datenverzeichnis, picked_variant),
         ordner=str(_bildordner(config)),
         lora_ordner=str(_bildordner(config) / bildwahlen.LORA_ORDNER),
         vae_ordner=str(_bildordner(config) / VAE_ORDNER),
@@ -690,7 +722,7 @@ _KIT_PART_FOLDERS = {
     "clip_l": (textversteher, textversteher_pfad),
     "clip_g": (textversteher, textversteher_pfad),
     "llm": (textversteher, textversteher_pfad),
-    "llm_vision": (textversteher, textversteher_pfad),
+    "llm_vision": (sehteile, vision_part_path),
     "tokenizer": (tokenizers, tokenizer_pfad),
     "uncond_diffusion_model": (modelle, modell_pfad),
     "high_noise_diffusion_model": (modelle, modell_pfad),
@@ -723,7 +755,7 @@ def _model_kit(
     """A model's kit by file name, as the picture server holds it for every
     chat: a kit family's own diffusion model brings itself as
     ``diffusion_model`` and the parts the folder offers for its family
-    (``_matching_parts``); a part given to the model in the picture server
+    (``kit_bond.matching_parts``); a part given to the model in the picture server
     (app/bildmodellwerte.py) wins over the offered one. A given part whose
     file left its folder counts as none, so a missing part is named rather
     than an unknown file. Any other model has only its VAE here.
@@ -753,10 +785,10 @@ def _model_kit(
             kit["diffusion_model"] = chosen
     elif standalone and family is not None:
         kit["diffusion_model"] = model
-        kit.update(_matching_parts(folder, family))
+        kit.update(kit_bond.matching_parts(folder, family))
     elif bare and family is not None:
         kit.update({
-            field: name for field, name in _matching_parts(folder, family).items()
+            field: name for field, name in kit_bond.matching_parts(folder, family).items()
             if field in family.encoders
         })
     # Each folder is listed once, however many parts it holds.
@@ -797,6 +829,14 @@ def _kit_has_high_noise(
     return "high_noise_diffusion_model" in kit
 
 
+def _start_family(repositories: Repositories, path: Path, model: str) -> str:
+    """The family a model is started and drawn as: its header's, empty when
+    the user switched reading it off for this model."""
+    if not bildmodellwerte.family_detection(repositories, model):
+        return ""
+    return bildinhalt.family(path) or ""
+
+
 def _kit_for_start(
     config: Config, path: Path, model: str, repositories: Repositories, sprache: str,
 ) -> dict:
@@ -806,7 +846,7 @@ def _kit_for_start(
     part, when one is missing; any other model starts with ``-m`` and the
     VAE it was given."""
     free = not bildmodellwerte.family_detection(repositories, model)
-    family_name = "" if free else bildinhalt.family(path) or ""
+    family_name = _start_family(repositories, path, model)
     family = image_families.get(family_name)
     names = _model_kit(config, repositories, model, path, family)
     parts = {
@@ -868,15 +908,31 @@ def turbo_starten(
         # and devices come from the one setting every picture reads
         # (app/bildgeraete.py) — not a second copy of what "unset" means.
         geraete = bildgeraete.lesen(repositories)
+        # The model's start values — the random source, the weight type, the
+        # VAE format, the prediction and the switches its family starts with
+        # — are read from the same places a picture of the default model
+        # takes them from (app/image_start_values.py), and the machine's
+        # switches are laid over the picture's as a draw lays them: so the
+        # first picture finds a server that already carries its start values.
+        family_name = _start_family(repositories, pfad, daten.modell)
+        anfang = image_start_values.lesen(repositories, family_name, daten.modell)
+        family = image_families.get(family_name)
         speicherschalter, speicherpfade = _switches(
-            config, geraete.switches, sprache, on={"video": False},
+            config,
+            {**bildgeraete.ohne_speicherschalter(anfang.switches), **geraete.switches},
+            sprache,
+            on={
+                "video": bool(family and family.video),
+                "high_noise": "high_noise_diffusion_model" in (kit.get("video_parts") or {}),
+            },
         )
         turbo.starten(
             pfad,
             lora_ordner=_bildordner(config) / bildwahlen.LORA_ORDNER,
             embd_ordner=_embd_ordner(config),
-            rng=bildwahlen.rng_pruefen(None),
-            weight_type=bildwahlen.weight_type_pruefen(None),
+            rng=anfang.rng,
+            weight_type=anfang.weight_type,
+            vae_format=anfang.vae_format,
             threads=geraete.threads,
             vram_limit=geraete.vram_limit,
             offload_to_cpu=geraete.offload_to_cpu,
@@ -895,7 +951,7 @@ def turbo_starten(
             # parameter defaults (J4).
             ad_negativ="",
             ad_confidence=None,
-            prediction=bildwahlen.prediction_pruefen(None),
+            prediction=anfang.prediction,
             **kit,
         )
     except BildturboFehler as fehler:
@@ -1001,49 +1057,6 @@ def image_switch_table(config: Config = Depends(hole_config)) -> dict:
             folder: image_switches.files(_bildordner(config), folder) for folder in sorted(folders)
         },
     }
-
-
-def _matching_parts(folder: Path, family: image_families.Family) -> dict[str, str]:
-    """The first file per part of a kit whose own header says it is that
-    part. A part with no such file is left out — the field stays the
-    user's. An LLM is put in only when its header names an architecture and
-    width the family reads (``Family.llms``), and only when every fitting
-    LLM in the folder has the same width: Flux.2 klein reads Qwen3 4B or
-    8B, depending on the model, so a folder holding both leaves the choice
-    to the user. A VAE only where its channels tell it apart from every
-    other VAE (``image_families.vae_by_itself``) — otherwise the model's own
-    setting holds it."""
-    parts: dict[str, str] = {}
-    # Each list is read once; a name in it sits in its own folder or, when
-    # the catch net found it loose, in the main folder.
-    def where(name: str, below: str) -> Path:
-        inside = folder / below / name
-        return inside if inside.is_file() else folder / name
-
-    fitting_llms: list[tuple[str, int]] = []
-    for name in textversteher(folder):
-        path = where(name, TEXTVERSTEHER_ORDNER)
-        kind, _ = bildinhalt.companion(path)
-        # The t5xxl field takes the one kind of T5 its family reads.
-        if kind in ("umt5", "t5xxl"):
-            kind = "t5xxl" if kind == family.t5_kind else ""
-        if kind == "llm":
-            read = bildinhalt.llm(path)
-            if read is not None and read in family.llms:
-                fitting_llms.append((name, read[1]))
-            continue
-        if kind in family.encoders and kind not in parts:
-            parts[kind] = name
-    if "llm" in family.encoders and len({width for _, width in fitting_llms}) == 1:
-        parts["llm"] = fitting_llms[0][0]
-    if image_families.vae_by_itself(family):
-        vae_kind = bildinhalt.VIDEO_VAE if family.video_vae else bildinhalt.VAE
-        for name in vaes(folder):
-            kind, channels = bildinhalt.companion(where(name, VAE_ORDNER))
-            if kind == vae_kind and channels == family.vae_channels:
-                parts["vae"] = name
-                break
-    return parts
 
 
 def _kit_complete(family_name: str, parts: dict[str, object | None], sprache: str) -> None:
@@ -1223,13 +1236,18 @@ def generator_fortschritt(
     response_model=GeneratorVariantenAntwort,
     summary="GPU builds available for this PC",
 )
-def generator_varianten(config: Config = Depends(hole_config)) -> GeneratorVariantenAntwort:
+def generator_varianten(
+    config: Config = Depends(hole_config),
+    repositories: Repositories = Depends(hole_repositories),
+) -> GeneratorVariantenAntwort:
     return GeneratorVariantenAntwort(
         varianten=[
             GeneratorVariante(variante=variante, groesse=groesse)
             for variante, groesse in sddownload.waehlbare_varianten()
         ],
-        installiert=sddownload.installierte_variante(config.datenverzeichnis),
+        installiert=sddownload.installierte_variante(
+            config.datenverzeichnis, variante=picture_program_choice.picked(repositories)
+        ),
     )
 
 
@@ -1238,13 +1256,18 @@ def generator_varianten(config: Config = Depends(hole_config)) -> GeneratorVaria
     response_model=GeneratorAktualisierung,
     summary="Whether a newer generator version is available",
 )
-def generator_aktualisierung(config: Config = Depends(hole_config)) -> GeneratorAktualisierung:
+def generator_aktualisierung(
+    config: Config = Depends(hole_config),
+    repositories: Repositories = Depends(hole_repositories),
+) -> GeneratorAktualisierung:
     """Asked when the panel's check is pressed, never on opening and never
     on a timer: reads the project's newest release and compares its build
     number against whichever build is actually on disk (the pinned one, on
     a fresh install). Nothing installed yet has nothing to compare against —
     the plain fetch below already covers that case."""
-    installiert = sddownload.installierter_bau(config.datenverzeichnis)
+    installiert = sddownload.installierter_bau(
+        config.datenverzeichnis, picture_program_choice.picked(repositories)
+    )
     if installiert is None:
         return GeneratorAktualisierung(verfuegbar=False)
     veroeffentlichung = sddownload.neueste_veroeffentlichung()
@@ -1256,6 +1279,48 @@ def generator_aktualisierung(config: Config = Depends(hole_config)) -> Generator
 
 
 @router.post(
+    "/bild/satz",
+    response_model=PictureFromSentenceAnswer,
+    status_code=status.HTTP_201_CREATED,
+    summary="Draw a picture from one sentence with the default model",
+)
+async def picture_from_sentence(
+    wunsch: PictureFromSentence,
+    request: Request,
+    config: Config = Depends(hole_config),
+    sprache: str = Depends(hole_sprache),
+) -> PictureFromSentenceAnswer:
+    """Draws from the sentence with exactly the values ``draw_image`` takes:
+    the default model of the picture server and its start values, in the
+    ONE place the tool reads them (``bild_werkzeug.draw_with_window``).
+
+    The picture stays in the pictures folder; the answer says where. It is not
+    written into the chat — nobody is writing an answer there. Progress and
+    stop are the ones every picture has (``/bild/fortschritt``,
+    ``/bild/stop``)."""
+    if _chat(request, wunsch.chat_id) is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, t("fehler.chat_nicht_gefunden", sprache)
+        )
+    drawn = await bild_werkzeug.draw_with_window(
+        {"prompt": wunsch.prompt}, "http://dienst/api/v1", request.app.state.sitzungsschluessel,
+        chat_id=wunsch.chat_id, transport=httpx.ASGITransport(app=request.app),
+    )
+    if isinstance(drawn, str):
+        # The sentence the tool would read: the picture was not drawn, and why.
+        raise HTTPException(status.HTTP_409_CONFLICT, drawn)
+    name = str(drawn.answer["bild"])
+    values = {
+        key: value for key, value in drawn.body.items()
+        if key not in ("prompt", "negativ", "modell", "chat_id", "lauf_kennung")
+    }
+    return PictureFromSentenceAnswer(
+        bild=name, pfad=str(ort(config, "images") / name), seed=drawn.answer.get("seed"),
+        modell=drawn.model, prompt=drawn.prepared.prompt, werte=values,
+    )
+
+
+@router.post(
     "/bild/programm", response_model=GeneratorFortschritt, summary="Download the image "
                                                                    "generator"
 )
@@ -1263,6 +1328,7 @@ def generator_holen(
     anfrage: GeneratorHolenAnfrage | None = None,
     download: Sddownload = Depends(hole_sddownload),
     config: Config = Depends(hole_config),
+    repositories: Repositories = Depends(hole_repositories),
     sprache: str = Depends(hole_sprache),
 ) -> GeneratorFortschritt:
     """Fetches sd-cli from a release of the project's own stable-diffusion.cpp
@@ -1278,23 +1344,29 @@ def generator_holen(
     variante = anfrage.variante if anfrage else None
     veroeffentlichung = None
     restore = bool(anfrage and anfrage.restore)
+    # The variant picked earlier: the one whose build folder runs, and so
+    # the one an update or a way back is about.
+    picked_variant = picture_program_choice.picked(repositories)
+    wechsel = False
     if restore:
         # The way back from an update, and nothing else: with the tested
         # build installed, or a generator unpacked by hand, there is
         # nothing to go back from.
-        if not sddownload.restorable(config.datenverzeichnis):
+        if not sddownload.restorable(config.datenverzeichnis, picked_variant):
             raise HTTPException(
                 status.HTTP_409_CONFLICT, t("fehler.sddownload_schon_da", sprache)
             )
         if variante is None:
             # The variant that is installed, exactly as an update takes it.
-            variante = sddownload.installierte_variante(config.datenverzeichnis)
+            variante = sddownload.installierte_variante(
+                config.datenverzeichnis, variante=picked_variant
+            )
     elif anfrage and anfrage.aktualisieren:
         # An update is a catch-up on an existing install, not a second way
         # to bootstrap one — a fresh install already has the plain fetch
         # below, at the pinned, tested build. Nothing on disk means nothing
         # to compare a release against, exactly as the GET route reports.
-        installiert = sddownload.installierter_bau(config.datenverzeichnis)
+        installiert = sddownload.installierter_bau(config.datenverzeichnis, picked_variant)
         # Re-read just before fetching rather than trust whatever the panel
         # showed a moment ago — an offer that went stale between the poll
         # and the click must not silently re-fetch the build already there.
@@ -1309,7 +1381,21 @@ def generator_holen(
             # not yet loaded) at the moment the button was pressed. `bau`
             # is passed straight in — `installiert` above already walked
             # the folder once to find it.
-            variante = sddownload.installierte_variante(config.datenverzeichnis, bau=installiert)
+            variante = sddownload.installierte_variante(
+                config.datenverzeichnis, bau=installiert, variante=picked_variant
+            )
+    elif variante is not None and sddownload.waehlbare_varianten():
+        # A switch to another variant of a program that is installed brings
+        # that variant's newest number, not the pinned one — a release page
+        # unreadable, or a release without that variant, leaves the pinned
+        # build to fetch. A fresh install has no program to switch from and
+        # takes the pinned, tested build.
+        installiert = sddownload.installierter_bau(config.datenverzeichnis, picked_variant)
+        if installiert is not None and variante != sddownload.installierte_variante(
+            config.datenverzeichnis, bau=installiert, variante=picked_variant
+        ):
+            wechsel = True
+            veroeffentlichung = sddownload.latest_for(variante)
     if variante is not None and not sddownload.gueltige_variante(variante):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, t("fehler.sddownload_unbekannte_variante", sprache)
@@ -1317,11 +1403,23 @@ def generator_holen(
     try:
         download.starten(variante, veroeffentlichung, replace_newer=restore)
     except SddownloadFehler as fehler:
+        if (
+            fehler.grund == "schon_da"
+            and wechsel
+            and sddownload.variante_installiert(config.datenverzeichnis, variante)
+        ):
+            # The variant switched to is on disk already, in the number that
+            # would be fetched: nothing to fetch, and the pick is all that
+            # is left. Asking for the variant that runs stays "already there".
+            picture_program_choice.remember(repositories, variante)
+            return GeneratorFortschritt(geladen=0, gesamt=0, anteil=1.0, fertig=True)
         lage = {
             "laeuft_schon": status.HTTP_409_CONFLICT,
             "schon_da": status.HTTP_409_CONFLICT,
         }.get(fehler.grund, status.HTTP_400_BAD_REQUEST)
         raise HTTPException(lage, t(f"fehler.sddownload_{fehler.grund}", sprache)) from None
+    if variante is not None and sddownload.waehlbare_varianten():
+        picture_program_choice.remember(repositories, variante)
     stand = _generatorstand(download)
     assert stand is not None
     return stand
@@ -1640,7 +1738,7 @@ async def bild_erzeugen(
     bausatz_clip_l = _begleiter(textversteher_pfad, config, wunsch.clip_l, sprache)
     bausatz_clip_g = _begleiter(textversteher_pfad, config, wunsch.clip_g, sprache)
     bausatz_llm = _begleiter(textversteher_pfad, config, wunsch.llm, sprache)
-    bausatz_llm_vision = _begleiter(textversteher_pfad, config, wunsch.llm_vision, sprache)
+    bausatz_llm_vision = _begleiter(vision_part_path, config, wunsch.llm_vision, sprache)
     bausatz_tokenizer = _begleiter(tokenizer_pfad, config, wunsch.tokenizer, sprache)
     bausatz_uncond = _begleiter(modell_pfad, config, wunsch.uncond_diffusion_model, sprache)
     bausatz_high_noise = _begleiter(
@@ -1917,10 +2015,13 @@ async def bild_erzeugen(
     name = uuid.uuid4().hex + image_switches.output_suffix(auftrag.switches, auftrag.video)
     ziel = _bilderziel(config) / name
 
-    # The run appears in the chat's little history the moment it starts, so a
-    # picture that takes half a minute is visible as work rather than as
-    # nothing happening.
-    lauf = bildlauf.beginnen(wunsch.lauf_chat or wunsch.chat_id, wunsch.prompt, wunsch)
+    # The run appears in the little history of the chat — or of the studio —
+    # the moment it starts, so a picture that takes half a minute is visible
+    # as work rather than as nothing happening.
+    lauf = bildlauf.beginnen(
+        wunsch.lauf_chat or wunsch.chat_id or (bildlauf.STUDIO if wunsch.studio else None),
+        wunsch.prompt, wunsch,
+    )
 
     # The generator runs for half a minute either way; run in a thread so
     # the service keeps answering while it draws.
@@ -2033,7 +2134,13 @@ async def bild_erzeugen(
     try:
         frage_id, antwort_id = _ins_gespraech(
             request, wunsch, name, sprache, seed,
-            drawn_with=_drawn_with(wunsch, auftrag, seed),
+            drawn_with=_drawn_with(
+                wunsch, auftrag, seed,
+                original=(
+                    request.app.state.repositories.messages.drawn_with(wunsch.startbild)
+                    if auftrag.mode == "upscale" and wunsch.startbild else None
+                ),
+            ),
             frage_erstellen=wunsch.frage_erstellen,
             lauf_kennung=wunsch.lauf_kennung,
             nr=wunsch.nr, von=wunsch.von,
@@ -2050,6 +2157,8 @@ async def bild_erzeugen(
         code = (status.HTTP_499_CLIENT_CLOSED_REQUEST
                 if hasattr(status, "HTTP_499_CLIENT_CLOSED_REQUEST") else 499)
         raise HTTPException(code, t("bild.abgebrochen", sprache)) from gone
+    if wunsch.studio:
+        studio_pictures.add(request.app.state.repositories, name)
     return BildAntwort(
         bild=name, seed=seed, frage_id=frage_id, antwort_id=antwort_id,
     )
@@ -2427,11 +2536,25 @@ def _chat(request: Request, chat_id: str):
     return request.app.state.repositories.chats.holen(chat_id, user_id=benutzer)
 
 
-def _drawn_with(wunsch: BildWunsch, auftrag: Auftrag, seed: int | None) -> dict:
+def _drawn_with(
+    wunsch: BildWunsch, auftrag: Auftrag, seed: int | None, original: dict | None = None,
+) -> dict:
     """What a picture is kept with: the prompt and its negative as they were
     asked for, the model, and the values the painter drew with — under the
     names the reading of a picture's file answers with (app/picture_info.py).
-    What the run did not set is left out, as there."""
+    What the run did not set is left out, as there.
+
+    An enlarging draws nothing and reads no value of its request: the new
+    picture is kept with what its original was kept with (``original``, as
+    the program kept it for the original), and with the prompt the request
+    carries where the original has none. An original with no kept values
+    leaves the new picture with that prompt alone — never with the values
+    the route would have drawn with."""
+    if auftrag.mode == "upscale":
+        kept = dict(original or {})
+        if not kept.get("prompt") and wunsch.prompt:
+            kept["prompt"] = wunsch.prompt
+        return kept
     values: dict = {
         "prompt": wunsch.prompt, "negativ": wunsch.negativ, "modell": wunsch.modell,
         "breite": auftrag.breite, "hoehe": auftrag.hoehe, "schritte": auftrag.schritte,

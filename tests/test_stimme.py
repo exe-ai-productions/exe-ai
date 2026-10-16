@@ -59,7 +59,7 @@ def test_der_befehl_traegt_alle_fuenf_werte_und_die_probe(tmp_path, monkeypatch)
         ziel.write_bytes(b"RIFF-WAV")
         return _Lauf()
 
-    monkeypatch.setattr(stimme.subprocess, "run", falsch)
+    monkeypatch.setattr(stimme, "_laufen", falsch)
     wav = stimme.sprechen(
         Path("/bin/llama-tts"),
         ordner / "modell.gguf",
@@ -93,7 +93,7 @@ def test_die_temperatur_kommt_vom_aufrufer_und_nur_sie(tmp_path, monkeypatch):
         Path(befehl[befehl.index("-o") + 1]).write_bytes(b"x")
         return _Lauf()
 
-    monkeypatch.setattr(stimme.subprocess, "run", falsch)
+    monkeypatch.setattr(stimme, "_laufen", falsch)
     stimme.sprechen(
         Path("/bin/llama-tts"), tmp_path / "m.gguf", tmp_path / "mm.gguf",
         "Text", sprache="de", ordner=tmp_path, sampling={"temperature": 0.35},
@@ -117,7 +117,7 @@ def test_die_gesetzten_werte_stehen_auf_der_befehlszeile(tmp_path, monkeypatch):
         Path(befehl[befehl.index("-o") + 1]).write_bytes(b"x")
         return _Lauf()
 
-    monkeypatch.setattr(stimme.subprocess, "run", falsch)
+    monkeypatch.setattr(stimme, "_laufen", falsch)
     stimme.sprechen(
         Path("/bin/llama-tts"), tmp_path / "m.gguf", tmp_path / "mm.gguf",
         "Text", sprache="de", ordner=tmp_path,
@@ -139,8 +139,8 @@ def test_die_gesetzten_werte_stehen_auf_der_befehlszeile(tmp_path, monkeypatch):
 
 
 def test_ohne_einstellung_bleiben_die_speicherwerte_wie_sie_waren(tmp_path, monkeypatch):
-    """The silence check for the memory pair: nothing set leaves every layer
-    on the card and no threads lever at all."""
+    """The silence check for the memory pair: nothing set names no layer
+    count (the engine places the layers) and sets no threads lever."""
     gesehen: dict = {}
 
     def falsch(befehl, **kw):
@@ -148,13 +148,13 @@ def test_ohne_einstellung_bleiben_die_speicherwerte_wie_sie_waren(tmp_path, monk
         Path(befehl[befehl.index("-o") + 1]).write_bytes(b"x")
         return _Lauf()
 
-    monkeypatch.setattr(stimme.subprocess, "run", falsch)
+    monkeypatch.setattr(stimme, "_laufen", falsch)
     stimme.sprechen(
         Path("/bin/llama-tts"), tmp_path / "m.gguf", tmp_path / "mm.gguf",
         "Text", sprache="de", ordner=tmp_path,
     )
     befehl = gesehen["befehl"]
-    assert befehl[befehl.index("--n-gpu-layers") + 1] == "99"
+    assert "--n-gpu-layers" not in befehl
     assert "-t" not in befehl
 
 
@@ -166,7 +166,7 @@ def test_ohne_probe_bleibt_das_flag_weg(tmp_path, monkeypatch):
         Path(befehl[befehl.index("-o") + 1]).write_bytes(b"x")
         return _Lauf()
 
-    monkeypatch.setattr(stimme.subprocess, "run", falsch)
+    monkeypatch.setattr(stimme, "_laufen", falsch)
     stimme.sprechen(
         Path("/bin/llama-tts"), tmp_path / "m.gguf", tmp_path / "mm.gguf",
         "Text", sprache="en", ordner=tmp_path,
@@ -180,7 +180,7 @@ def test_eine_probe_ausserhalb_des_ordners_wird_abgewiesen(tmp_path, monkeypatch
     aussen = tmp_path.parent / "aussen.wav"
     aussen.write_bytes(b"RIFF")
     gerufen = []
-    monkeypatch.setattr(stimme.subprocess, "run", lambda *a, **kw: gerufen.append(1))
+    monkeypatch.setattr(stimme, "_laufen", lambda *a, **kw: gerufen.append(1))
     with pytest.raises(stimme.SprechenNichtMoeglich) as ausfall:
         stimme.sprechen(
             Path("/bin/llama-tts"), tmp_path / "m.gguf", tmp_path / "mm.gguf",
@@ -192,7 +192,7 @@ def test_eine_probe_ausserhalb_des_ordners_wird_abgewiesen(tmp_path, monkeypatch
 
 def test_ein_fehlschlag_wird_gemeldet(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        stimme.subprocess, "run", lambda *a, **kw: _Lauf(returncode=1, stderr="boom")
+        stimme, "_laufen", lambda *a, **kw: _Lauf(returncode=1, stderr="boom")
     )
     with pytest.raises(stimme.SprechenNichtMoeglich) as ausfall:
         stimme.sprechen(
@@ -206,7 +206,7 @@ def test_eine_zeitueberschreitung_wird_gemeldet(tmp_path, monkeypatch):
     def falsch(*a, **kw):
         raise subprocess.TimeoutExpired(cmd="llama-tts", timeout=1)
 
-    monkeypatch.setattr(stimme.subprocess, "run", falsch)
+    monkeypatch.setattr(stimme, "_laufen", falsch)
     with pytest.raises(stimme.SprechenNichtMoeglich) as ausfall:
         stimme.sprechen(
             Path("/bin/llama-tts"), tmp_path / "m.gguf", tmp_path / "mm.gguf",

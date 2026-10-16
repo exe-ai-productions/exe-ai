@@ -145,6 +145,7 @@ CHAT_A = {
     "familie": "flux",
     "guidance": 3.5,
     "startbild": "a" * 32 + ".png",
+    "original": "c" * 32 + ".png",
     "staerke": 0.6,
     "maske": "b" * 32 + ".png",
     "pm_klasse": "man",
@@ -283,19 +284,11 @@ def test_switches_keep_only_what_their_row_takes():
     assert kept == {"switches": {"timestep_shift": 250}}
 
 
-def test_draw_request_carries_switches_but_no_picture():
-    request = bildfensterwahl.draw_request(
-        {"switches": {"timestep_shift": 250, "ip_adapter_image": "a" * 32 + ".png"}},
-    )
-    assert request["switches"] == {"timestep_shift": 250}
-
-
-def test_the_upscale_model_is_kept_per_chat_but_not_drawn_with():
-    """The file "Upscale" enlarges with is a choice of the chat, kept like
-    the highres upscaler; a drawing does not carry it."""
+def test_the_upscale_model_is_kept_like_the_highres_upscaler():
+    """The file "Upscale" enlarges with is a choice of the studio, kept like
+    the highres upscaler."""
     kept = bildfensterwahl.wahl_pruefen({"upscale_model": "4x.pth", "hires_upscaler": "RealESRGAN"})
     assert kept == {"upscale_model": "4x.pth", "hires_upscaler": "RealESRGAN"}
-    assert "upscale_model" not in bildfensterwahl.draw_request(kept)
 
 
 def test_a_stored_infinite_switch_value_is_dropped_alone():
@@ -329,36 +322,37 @@ STUDIO_A = {
 }
 
 
-def test_a_studio_value_stands_after_another_chat(client):
-    client.put("/api/v1/settings/chat:a/bildfenster", json={"wert": STUDIO_A})
+def test_the_studio_s_values_stand_whatever_a_chat_stored(client):
+    """The studio keeps its values once, in the global scope: what a chat
+    stored for its own window is another row, and a read without a chat
+    returns the studio's whole."""
+    answer = client.put("/api/v1/settings/global/bildfenster", json={"wert": STUDIO_A})
+    assert answer.status_code == 200, answer.text
     client.put("/api/v1/settings/chat:b/bildfenster", json={"wert": {"breite": 512, "schritte": 20}})
 
-    a = client.get("/api/v1/settings/resolved/bildfenster?chat=a").json()["wert"]
+    read = client.get("/api/v1/settings/resolved/bildfenster").json()["wert"]
     for name, wert in STUDIO_A.items():
-        assert a[name] == wert, name
+        assert read[name] == wert, name
 
 
 def test_a_chat_stored_with_the_metadata_field_reads_without_it(client):
-    """The studio had a metadata field of its own per chat. Whether the
-    settings stay in the file is the one switch's to say now
-    (app/bildschutz.py): a chat stored with the old field is read without an
-    error, the field is gone, and a drawing asks for nothing of the kind."""
+    """The studio had a metadata field of its own. Whether the settings stay
+    in the file is the one switch's to say now (app/bildschutz.py): a window
+    stored with the old field is read without an error, and the field is
+    gone."""
     stored = {**STUDIO_A, "metadaten_wahl": "aus"}
-    answer = client.put("/api/v1/settings/chat:a/bildfenster", json={"wert": stored})
+    answer = client.put("/api/v1/settings/global/bildfenster", json={"wert": stored})
     assert answer.status_code < 300, answer.text
-    read = client.get("/api/v1/settings/resolved/bildfenster?chat=a").json()["wert"]
+    read = client.get("/api/v1/settings/resolved/bildfenster").json()["wert"]
     assert "metadaten_wahl" not in read
     assert read["breite"] == STUDIO_A["breite"]
-    assert "metadaten" not in bildfensterwahl.draw_request(stored)
-    assert "metadaten" not in bildfensterwahl.draw_request(read)
 
 
 def test_the_lora_mode_the_studio_no_longer_offers_reads_as_its_start():
-    """A chat left at "immediately" stands at "at runtime", the mode the
-    studio starts with — on the way in and on the way out."""
+    """A window left at "immediately" stands at "at runtime", the mode the
+    studio starts with."""
     kept = bildfensterwahl.wahl_pruefen({"lora_modus": "immediately"})
     assert kept == {"lora_modus": "at_runtime"}
-    assert bildfensterwahl.draw_request(kept)["lora_apply_mode"] == "at_runtime"
 
 
 def test_the_lora_modes_the_studio_offers_stay():

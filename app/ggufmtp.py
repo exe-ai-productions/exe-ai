@@ -251,9 +251,12 @@ def _walk_header(
 
 
 def _wanted(key: bytes) -> bool:
-    """The keys any reader here looks at: the architecture and the
-    prediction-layer marker."""
-    return key == ARCHITEKTUR_SCHLUESSEL or key.endswith(_SCHLUESSEL_ENDUNG)
+    """The keys any reader here looks at: the architecture, the
+    prediction-layer marker and the vision-encoder flag."""
+    return (
+        key == ARCHITEKTUR_SCHLUESSEL or key == SEHTEIL_SCHLUESSEL
+        or key.endswith(_SCHLUESSEL_ENDUNG)
+    )
 
 
 def read_header(pfad: Path) -> Header | None:
@@ -346,6 +349,9 @@ BEIFAHRER = "beifahrer"
 MODELL = "modell"
 BEIFAHRER_ARCHITEKTUREN = frozenset({"gemma4-assistant"})
 ARCHITEKTUR_SCHLUESSEL = b"general.architecture"
+# The flag a vision projector file (mmproj) carries: the weights of a
+# vision encoder, which a text encoder of the same architecture lacks.
+SEHTEIL_SCHLUESSEL = b"clip.has_vision_encoder"
 _FIRST_LAYER_TENSOR = b"blk.0.attn_norm.weight"
 
 def dateiart(pfad: Path) -> str | None:

@@ -20,7 +20,8 @@
   import { t, texte } from '../lib/texte.svelte.js'
   import { fractionDigits, formatNumber } from '../lib/numberDisplay.js'
   import { katalogOeffnen, melde } from '../lib/zustand.svelte.js'
-  import { diktat, standLaden, werteSetzen } from '../lib/diktat.svelte.js'
+  import { diktat, schreibenAbwarten, standLaden, werteSetzen } from '../lib/diktat.svelte.js'
+  import { createDelayedWriter } from '../lib/delayedWriter.js'
   import { SPRACHEN } from '../lib/diktatsprachen.js'
   import { STIMMSPRACHEN } from '../lib/stimmsprachen.js'
   import Servertafel from './Servertafel.svelte'
@@ -31,6 +32,7 @@
   import Serverabschnitt from './Serverabschnitt.svelte'
   import Serverreihe from './Serverreihe.svelte'
   import Serverlogkopf from './Serverlogkopf.svelte'
+  import LlamaCppSection from './LlamaCppSection.svelte'
   import Auswahlfeld from './Auswahlfeld.svelte'
   import Schalter from './Schalter.svelte'
   import Schieberegler from './Schieberegler.svelte'
@@ -95,13 +97,14 @@
     if (protokollOffen()) setzeProtokollZeilen(protokoll)
   })
 
-  /* The four numbers the speech server starts with. Held in the page and
-     sent with the start, the way the embedding panel holds its port: they
-     describe one run, and the answer reports back what is actually
-     running. */
+  /* The four numbers the speech server starts with, beside its file. Shown
+     from what is stored for the next start (the dictation setting) and sent
+     with the start; while a server runs, the answer reports back what is
+     actually running. */
   let port = $state(8084)
   let kontext = $state(4096)
-  let schichten = $state(MAX_SCHICHTEN)
+  /* `null` is "Auto": no layer count is sent. */
+  let schichten = $state(null)
   let faeden = $state(0)
   let werteGesetzt = false
 
@@ -117,6 +120,10 @@
   let anweisungstext = $state(null)
   let putzanweisungstext = $state(null)
   let vorlesenwahl = $state(true)
+  let keepModelLoaded = $state(true)
+  /* Seconds of silence before a spoken sentence is sent. `null`: nothing
+     stored, the field says "Auto" and the service goes by its works number. */
+  let pauseSeconds = $state(null)
   let automatikwahl = $state(false)
   let stimmewahl = $state('')
   let stimmprobewahl = $state('')
@@ -129,11 +136,15 @@
      and a value read from it while the hand is on a slider would move under
      it. */
   let stimmregler = $state({ temperatur: 0.9, top_k: 50, top_p: 1, min_p: 0, strafe: 1.05 })
-  let stimmSchichten = $state(MAX_SCHICHTEN)
+  let stimmSchichten = $state(null)
   let stimmFaeden = $state(0)
   let werkStimm = null
-  let werkSchichten = MAX_SCHICHTEN
+  let werkSchichten = null
   let werkFaeden = 0
+  /* The works answers of the start values, frozen when the fields are
+     filled: the poll replaces `auskunft` every three seconds and a number
+     read from it while the hand is on a field would move under it. */
+  let werkStart = {}
   let gespiegelt = false
 
   async function laden() {
@@ -152,14 +163,14 @@
     if (auskunft.laeuft) {
       port = auskunft.port ?? port
       kontext = auskunft.kontext ?? kontext
-      schichten = auskunft.schichten ?? schichten
+      schichten = auskunft.schichten ?? null
       faeden = auskunft.threads ?? 0
       werteGesetzt = true
     } else if (!werteGesetzt) {
       const v = auskunft.vorgaben ?? {}
       port = auskunft.port ?? port
       kontext = v.kontext ?? kontext
-      schichten = v.schichten ?? schichten
+      schichten = v.schichten ?? null
       faeden = v.threads ?? 0
       werteGesetzt = true
     }
@@ -188,6 +199,9 @@
     putzanweisungstext = diktat.bereinigung_anweisung || werk.bereinigung_anweisung || ''
     // `??`, not `||`: an explicit `false` is a real choice, not a missing one.
     vorlesenwahl = diktat.vorlesen ?? werk.vorlesen ?? true
+    // The service says what the works answer is (off on a small machine); nothing is assumed here.
+    keepModelLoaded = diktat.keep_model_in_memory ?? werk.keep_model_in_memory ?? false
+    pauseSeconds = diktat.conversation_pause_seconds
     automatikwahl = diktat.automatik ?? werk.automatik ?? false
     stimmewahl = diktat.stimme ?? ''
     stimmprobewahl = diktat.stimmprobe ?? ''
@@ -200,7 +214,7 @@
       min_p: werk.stimmmin_p,
       strafe: werk.stimmstrafe,
     }
-    werkSchichten = werk.stimmschichten
+    werkSchichten = werk.stimmschichten ?? null
     werkFaeden = werk.stimmfaeden
     stimmregler = {
       temperatur: diktat.stimmtemperatur ?? werkStimm.temperatur,
@@ -211,19 +225,51 @@
     }
     stimmSchichten = diktat.stimmschichten ?? werkSchichten
     stimmFaeden = diktat.stimmfaeden ?? werkFaeden
+    /* The server's start values: what is stored, else the works answer. A
+       server that runs shows what runs (the poll above), and a stored file
+       that has left the folder is not shown. */
+    const v = auskunft.vorgaben ?? {}
+    werkStart = {
+      speech_model: auskunft.modelle[0]?.name ?? '',
+      speech_context: v.kontext ?? 4096,
+      speech_gpu_layers: v.schichten ?? null,
+      speech_threads: v.threads ?? 0,
+      speech_port: auskunft.port ?? 8084,
+    }
+    if (!auskunft.laeuft) {
+      port = diktat.speech_port ?? werkStart.speech_port
+      kontext = diktat.speech_context ?? werkStart.speech_context
+      schichten = diktat.speech_gpu_layers ?? werkStart.speech_gpu_layers
+      faeden = diktat.speech_threads ?? werkStart.speech_threads
+      if (diktat.speech_model && auskunft.modelle.some((m) => m.name === diktat.speech_model)) {
+        gewaehlt = diktat.speech_model
+      }
+      werteGesetzt = true
+    }
     gespiegelt = true
   })
 
   function sichern(werte) {
-    werteSetzen(werte).catch(() => melde(t('fehler.einstellung_speichern'), 'fehler'))
+    return werteSetzen(werte).catch(() => melde(t('fehler.einstellung_speichern'), 'fehler'))
   }
+
+  /* Every field here writes itself a beat after the last change. The beat is
+     kept by key and made at once — when the window goes away, and before
+     "Start" — so a value typed a moment before closing or starting is not
+     dropped with its timer. */
+  const writer = createDelayedWriter(400)
+  async function alleSichern() {
+    await writer.flush()
+    await schreibenAbwarten()
+  }
+  $effect(() => () => {
+    writer.flush()
+  })
 
   /* The three instructions are typed rather than picked, so each is written
      a beat after the last keystroke instead of on every one. Its own timer
      per field — one shared timer would let the second field cancel the
      first field's write. */
-  let stiftAnweisung = null
-  let stiftPutz = null
   /* Cleared BEFORE the guards, not after them. Returning at a guard with a
      timer still pending is how a text typed and taken back inside the beat
      was written anyway: the change that undid it hit the guard, and the timer
@@ -231,31 +277,27 @@
      rule past the panel closing. */
   $effect(() => {
     const text = anweisungstext
-    if (stiftAnweisung) clearTimeout(stiftAnweisung)
+    writer.cancel('anweisung')
     if (text === null || !gespiegelt || text === diktat.anweisung) return
     /* A shipped text nobody moved is not an answer this panel gave. Storing
        it would turn the works text into a choice, and a later change of it
        would never reach anybody who once opened this panel. */
     if (!diktat.anweisung && text === werkAnweisung) return
-    stiftAnweisung = setTimeout(() => sichern({ anweisung: text }), 600)
-    return () => clearTimeout(stiftAnweisung)
+    writer.plan('anweisung', () => sichern({ anweisung: text }), 600)
   })
   $effect(() => {
     const text = putzanweisungstext
-    if (stiftPutz) clearTimeout(stiftPutz)
+    writer.cancel('putzanweisung')
     if (text === null || !gespiegelt || text === diktat.bereinigung_anweisung) return
     if (!diktat.bereinigung_anweisung && text === werkBereinigung) return
-    stiftPutz = setTimeout(() => sichern({ bereinigung_anweisung: text }), 600)
-    return () => clearTimeout(stiftPutz)
+    writer.plan('putzanweisung', () => sichern({ bereinigung_anweisung: text }), 600)
   })
-  let stiftGespraech = null
   $effect(() => {
     const text = gespraechsanweisungstext
-    if (stiftGespraech) clearTimeout(stiftGespraech)
+    writer.cancel('gespraechsanweisung')
     if (text === null || !gespiegelt || text === diktat.gespraechsanweisung) return
     if (!diktat.gespraechsanweisung && text === werkGespraechsanweisung) return
-    stiftGespraech = setTimeout(() => sichern({ gespraechsanweisung: text }), 600)
-    return () => clearTimeout(stiftGespraech)
+    writer.plan('gespraechsanweisung', () => sichern({ gespraechsanweisung: text }), 600)
   })
 
   /* The five generation values, written a beat after the hand stops — a
@@ -265,7 +307,7 @@
   $effect(() => {
     const _ = JSON.stringify(stimmregler)
     if (!gespiegelt) return
-    const uhr = setTimeout(() => {
+    writer.plan('stimmregler', () => {
       const nachtrag = {}
       for (const { knopf, schluessel } of PARAMETER) {
         const wert = stimmregler[knopf]
@@ -274,7 +316,7 @@
         nachtrag[schluessel] = wert
       }
       if (!Object.keys(nachtrag).length) return
-      werteSetzen(nachtrag).catch(() => {
+      return werteSetzen(nachtrag).catch(() => {
         melde(t('fehler.einstellung_speichern'), 'fehler')
         // Back to what is stored: left standing, the value would differ
         // from the store again and the effect would retry for ever.
@@ -286,39 +328,85 @@
           strafe: diktat.stimmstrafe ?? werkStimm.strafe,
         }
       })
-    }, 400)
-    return () => clearTimeout(uhr)
+    })
   })
 
   /* The voice's layers and threads, the same beat and the same rule. Its
      own timer per value, like the instructions. */
-  let stiftStimmSchichten = null
   $effect(() => {
     const wert = stimmSchichten
-    if (stiftStimmSchichten) clearTimeout(stiftStimmSchichten)
+    writer.cancel('stimmschichten')
     if (!gespiegelt || wert === diktat.stimmschichten) return
     if (diktat.stimmschichten === null && wert === werkSchichten) return
-    stiftStimmSchichten = setTimeout(() => {
+    writer.plan('stimmschichten', () =>
       werteSetzen({ stimmschichten: wert }).catch(() => {
         melde(t('fehler.einstellung_speichern'), 'fehler')
         stimmSchichten = diktat.stimmschichten ?? werkSchichten
-      })
-    }, 400)
-    return () => clearTimeout(stiftStimmSchichten)
+      }),
+    )
   })
-  let stiftStimmFaeden = null
   $effect(() => {
     const wert = stimmFaeden
-    if (stiftStimmFaeden) clearTimeout(stiftStimmFaeden)
+    writer.cancel('stimmfaeden')
     if (!gespiegelt || wert === diktat.stimmfaeden) return
     if (diktat.stimmfaeden === null && wert === werkFaeden) return
-    stiftStimmFaeden = setTimeout(() => {
+    writer.plan('stimmfaeden', () =>
       werteSetzen({ stimmfaeden: wert }).catch(() => {
         melde(t('fehler.einstellung_speichern'), 'fehler')
         stimmFaeden = diktat.stimmfaeden ?? werkFaeden
-      })
-    }, 400)
-    return () => clearTimeout(stiftStimmFaeden)
+      }),
+    )
+  })
+
+  /* The pause before sending, written a beat after the hand stops. An empty
+     field is `null`: the stored number is taken away and the works one
+     stands. */
+  $effect(() => {
+    const wert = pauseSeconds
+    writer.cancel('pause')
+    if (!gespiegelt || wert === diktat.conversation_pause_seconds) return
+    // The field shows tenths: what is kept is what it shows.
+    if (wert !== null && Math.round(wert * 10) / 10 !== wert) {
+      pauseSeconds = Math.round(wert * 10) / 10
+      return
+    }
+    writer.plan('pause', () =>
+      werteSetzen({ conversation_pause_seconds: wert }).catch(() => {
+        melde(t('fehler.einstellung_speichern'), 'fehler')
+        pauseSeconds = diktat.conversation_pause_seconds
+      }),
+    )
+  })
+
+  /* The server's start values — its file, context, GPU layers, threads and
+     port — written as they are touched, one key each, so the next start and
+     the next opening of this window find them. Only while the server is
+     off: a running server's own numbers are not a choice made here. A value
+     nobody moved off the works answer is not stored, and one that could not
+     be stored goes back to what is. */
+  const STARTWERTE = {
+    speech_model: { aus: () => gewaehlt, zurueck: (w) => (gewaehlt = w) },
+    speech_context: { aus: () => kontext, zurueck: (w) => (kontext = w) },
+    speech_gpu_layers: { aus: () => schichten, zurueck: (w) => (schichten = w) },
+    speech_threads: { aus: () => faeden, zurueck: (w) => (faeden = w) },
+    speech_port: { aus: () => port, zurueck: (w) => (port = w) },
+  }
+  $effect(() => {
+    const jetzt = Object.fromEntries(Object.entries(STARTWERTE).map(([name, f]) => [name, f.aus()]))
+    for (const name of Object.keys(STARTWERTE)) writer.cancel(`start:${name}`)
+    if (!gespiegelt || auskunft?.laeuft) return
+    for (const [name, wert] of Object.entries(jetzt)) {
+      // `''` and `null` are the placeholders of "nothing stored"; a stored
+      // zero (threads: automatic) is an answer.
+      const stand = diktat[name] === '' ? null : (diktat[name] ?? null)
+      if (wert === '' || wert === (stand ?? werkStart[name])) continue
+      writer.plan(`start:${name}`, () =>
+        werteSetzen({ [name]: wert }).catch(() => {
+          melde(t('fehler.einstellung_speichern'), 'fehler')
+          STARTWERTE[name].zurueck(stand ?? werkStart[name])
+        }),
+      )
+    }
   })
 
   /* The log is read when it is asked for — opening the drawer fetches it
@@ -346,6 +434,9 @@
     if (arbeitet) return
     arbeitet = true
     try {
+      /* What was typed a moment ago is written before the start is asked:
+         the server reads its numbers from what is stored. */
+      await alleSichern()
       auskunft = auskunft?.laeuft
         ? await api.spracheStoppen()
         : await api.spracheStarten(gewaehlt, { port, kontext, schichten, threads: faeden })
@@ -625,6 +716,29 @@
               onschalten={(neu) => { vorlesenwahl = neu; sichern({ vorlesen: neu }) }}
             />
           </div>
+          <div class="zeile niedrig">
+            <span class="name">{t('sprachserver.keep_model_loaded')}</span>
+            <Schalter
+              id="sp-keep-model-loaded"
+              an={keepModelLoaded}
+              beschriftung={t('sprachserver.keep_model_loaded')}
+              onschalten={(neu) => { keepModelLoaded = neu; sichern({ keep_model_in_memory: neu }) }}
+            />
+          </div>
+          <div class="zeile">
+            <label class="zahlname" for="sp-pause-before-sending">{t('sprachserver.pause_before_sending')}</label>
+            <div class="zahlplatz">
+              <Zahlenfeld
+                id="sp-pause-before-sending"
+                bind:wert={pauseSeconds}
+                min={0.1}
+                max={600}
+                schritt={0.1}
+                nullwort={t('parameter.auto')}
+                beschriftung={t('sprachserver.pause_before_sending')}
+              />
+            </div>
+          </div>
           <div class="zeile probezeile">
             <label class="name" for="sp-stimmprobe">{t('sprachserver.feld_stimmprobe')}</label>
             <div class="probewahl">
@@ -694,6 +808,7 @@
         </div>
       {/each}
     </Serverabschnitt>
+    <LlamaCppSection {auskunft} onrefresh={laden} />
   {/snippet}
 
   {#snippet unten()}

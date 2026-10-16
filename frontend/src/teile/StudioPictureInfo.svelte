@@ -3,7 +3,6 @@
      with, as the program kept it, else read from the picture itself. "Use"
      writes the values into the fields (lib/studiobilder.svelte.js). */
   import Hauszeichen from './Hauszeichen.svelte'
-  import { chatanzeige } from '../lib/chatanzeige.svelte.js'
   import { bildInfo, infoUebernehmen } from '../lib/studiobilder.svelte.js'
   import { t } from '../lib/texte.svelte.js'
 
@@ -20,11 +19,8 @@
   const rows = $derived(INFO_ZEILEN.filter(([name]) =>
     info && info[name] !== undefined && info[name] !== null && info[name] !== ''))
 
-  // The card belongs to the chat it was opened in and to the open studio.
-  $effect(() => {
-    void chatanzeige.chatId
-    return () => (bildInfo.werte = null)
-  })
+  // The card belongs to the open studio.
+  $effect(() => () => (bildInfo.werte = null))
 </script>
 
 {#if info}

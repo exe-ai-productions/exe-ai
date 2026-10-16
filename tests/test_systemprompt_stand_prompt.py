@@ -294,7 +294,7 @@ def test_the_notes_of_a_folder_are_not_called_the_users_alone():
 
 
 def _draw(tmp_path, monkeypatch, **options) -> str:
-    service = Bilddienst({})
+    service = Bilddienst()
     monkeypatch.setattr(bild_werkzeug.httpx, "AsyncClient", lambda timeout, headers: service)
     return asyncio.run(
         bild_werkzeug.ausfuehren(
@@ -304,9 +304,7 @@ def _draw(tmp_path, monkeypatch, **options) -> str:
 
 
 def test_a_job_is_told_where_its_picture_is_and_how_to_hand_it_on(tmp_path, monkeypatch):
-    text = _draw(
-        tmp_path, monkeypatch, job_id="j1", deliver_with=agentendock.WERKZEUG_NAME
-    )
+    text = _draw(tmp_path, monkeypatch, deliver_with=agentendock.WERKZEUG_NAME)
     assert "attached to this response" not in text
     assert f"saved as {tmp_path / 'out.png'}" in text
     assert (
@@ -316,7 +314,7 @@ def test_a_job_is_told_where_its_picture_is_and_how_to_hand_it_on(tmp_path, monk
 
 
 def test_a_job_without_the_delivery_tool_is_not_sent_to_it(tmp_path, monkeypatch):
-    text = _draw(tmp_path, monkeypatch, job_id="j1")
+    text = _draw(tmp_path, monkeypatch)
     assert f"saved as {tmp_path / 'out.png'}" in text
     assert agentendock.WERKZEUG_NAME not in text
 

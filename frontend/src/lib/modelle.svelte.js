@@ -177,8 +177,42 @@ export function lokale() {
     Grouped by the provider the server names — before, the group was guessed
     from the host name in the address, which was only ever right by accident. */
 export function anbieter() {
+  return anbieterAus(zustand.modelle)
+}
+
+/* Every provider the service carries, the unreachable ones too — what the
+   cloud window lists, so a provider with a wrong key or a server that is
+   switched off can still be looked at and taken away. The chat's choice
+   keeps reading `zustand.modelle`, which holds only what answers. */
+export const alleAnbieter = $state({ modelle: [], geladen: false })
+
+/* Every load counts; only the newest one may write. */
+let alleLadung = 0
+
+/** Asks the service for the full list and keeps it for the cloud window. A
+    failed read leaves what stands as it is. */
+export async function alleAnbieterLaden() {
+  const meine = ++alleLadung
+  try {
+    const liste = await api.modelleAlle()
+    if (meine !== alleLadung) return
+    alleAnbieter.modelle = Array.isArray(liste) ? liste : []
+    alleAnbieter.geladen = true
+  } catch {
+    /* The window keeps the list it had; the reachable models still show. */
+  }
+}
+
+/** The providers of the full list, same shape as `anbieter()`. Until the
+    full list has come once, the reachable ones stand in: the window opens
+    with what the chat's list holds instead of with an empty notice. */
+export function anbieterAlle() {
+  return anbieterAus(alleAnbieter.geladen ? alleAnbieter.modelle : zustand.modelle)
+}
+
+function anbieterAus(modelle) {
   const haeuser = []
-  for (const modell of zustand.modelle) {
+  for (const modell of modelle) {
     if (modell.group === 'local') continue
     let haus = haeuser.find((h) => h.id === modell.anbieter)
     if (!haus) {

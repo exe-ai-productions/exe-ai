@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -61,6 +61,13 @@ _LEAST_ENTRY_ROWS = 3
 # The field of a choice's answer that names the entry picked from a
 # selection.
 _PICKED = "picked"
+
+# The field of the answer that carries the positions ticked in a checklist.
+_CHECKED = "checked"
+
+# How long the typing pauses before a selection that searches asks for its
+# entries anew, in seconds.
+_SEARCH_PAUSE = 0.22
 
 
 def build_asker(ctx: Context) -> Asker:
@@ -105,11 +112,26 @@ class _Question:
     # The entries of a selection, one for every choice; ``None`` for a
     # question of the service.
     entries: list[Entry] | None = None
+    # The positions ticked in a checklist, which is a selection that is
+    # confirmed instead of picked from; ``None`` for any other question.
+    checked: set[int] | None = None
+    # What a selection that searches asks with what was typed, the entries
+    # it opened with, the sentence for no entry, and which asking is the
+    # youngest: an answer of an older one is no answer any more.
+    find: Callable[[str], Sequence[Entry]] | None = None
+    first_entries: list[Entry] = field(default_factory=list)
+    empty: str = ""
+    youngest: int = 0
+    asked: int = 0
+    timer: threading.Timer | None = None
     # A question of a command that asks for a line of text and nothing
     # else, and whether that line is typed hidden. It leaves nothing in the
     # history — a hidden one least of all.
     text: bool = False
     secret: bool = False
+    # The value a line of text starts out with: nothing typed takes it.
+    # ``None`` where nothing typed closes the question.
+    default: str | None = None
     # The first entry of a selection that is in sight, where the window has
     # no room for all of them.
     first: int = 0
@@ -308,7 +330,105 @@ class TerminalAsker(Asker):
         )
         return answer.get(_PICKED) if answer else None
 
-    def ask_text(self, head: str, *, secret: bool = False) -> str | None:
+    def check(
+        self, entries: Sequence[Entry], head: str = "", checked: Collection[int] = ()
+    ) -> list[int] | None:
+        listed = list(entries)
+        if not listed:
+            return None
+        answer = self._ask(
+            _Question(
+                head=[_Line([("text", line)]) for line in head.splitlines()],
+                choices=[_Choice("", {_PICKED: number}) for number in range(len(listed))],
+                # Closed with nothing confirmed.
+                declined={},
+                foot=self._ctx.texts.t("cli.select_keys_check"),
+                entries=listed,
+                checked={number for number in checked if 0 <= number < len(listed)},
+            )
+        )
+        confirmed = answer.get(_CHECKED) if answer else None
+        return list(confirmed) if isinstance(confirmed, list) else None
+
+    def search(
+        self,
+        entries: Sequence[Entry],
+        find: Callable[[str], Sequence[Entry]],
+        head: str = "",
+        empty: str = "",
+    ) -> Entry | None:
+        listed = list(entries)
+        question = _Question(
+            head=[_Line([("text", line)]) for line in head.splitlines()],
+            choices=[_Choice("", {_PICKED: number}) for number in range(len(listed))],
+            # Closed with nothing picked.
+            declined={},
+            foot=self._ctx.texts.t("cli.select_keys_search"),
+            entries=listed,
+            find=find,
+            first_entries=listed,
+            empty=empty,
+        )
+        answer = self._ask(question)
+        picked = answer.get(_PICKED) if answer else None
+        current = question.entries or []
+        if isinstance(picked, int) and 0 <= picked < len(current):
+            return current[picked]
+        return None
+
+    def typed(self, text: str) -> None:
+        """What the input field holds now. A selection that searches runs
+        its search a moment after the typing paused; a number, or nothing,
+        shows the entries it opened with again at once."""
+        question = self._open
+        if question is None or question.find is None:
+            return
+        word = text.strip()
+        with self._lock:
+            if question.timer is not None:
+                question.timer.cancel()
+                question.timer = None
+            question.asked += 1
+            asked = question.asked
+        if not word or word.isdecimal():
+            self._show(question, asked, question.first_entries)
+            return
+        timer = threading.Timer(_SEARCH_PAUSE, self._search, args=(question, asked, word))
+        timer.daemon = True
+        with self._lock:
+            if question.asked != asked:
+                return
+            question.timer = timer
+        timer.start()
+
+    def _search(self, question: _Question, asked: int, word: str) -> None:
+        find = question.find
+        if find is None:
+            return
+        try:
+            found = list(find(word))
+        except Exception:  # noqa: BLE001 - a search that fails changes nothing
+            return
+        self._show(question, asked, found)
+
+    def _show(self, question: _Question, asked: int, entries: Sequence[Entry]) -> None:
+        """Puts ``entries`` in the place of the selection's — unless a
+        younger asking came meanwhile or the selection is gone."""
+        listed = list(entries)
+        with self._lock:
+            if self._open is not question or question.asked != asked:
+                return
+            question.entries = listed
+            question.choices = [_Choice("", {_PICKED: number}) for number in range(len(listed))]
+            question.marked = 0
+            question.first = 0
+            question.youngest = asked
+            question.drawn_for = None
+        self._ctx.screen.invalidate()
+
+    def ask_text(
+        self, head: str, *, secret: bool = False, default: str | None = None
+    ) -> str | None:
         answer = self._ask(
             _Question(
                 head=[_Line([("text", line)]) for line in head.splitlines()],
@@ -318,10 +438,13 @@ class TerminalAsker(Asker):
                 free_text=True,
                 text=True,
                 secret=secret,
+                default=default,
             )
         )
         typed = answer.get("antwort") if answer else None
-        return typed if isinstance(typed, str) and typed else None
+        if not isinstance(typed, str):
+            return None
+        return typed if typed or default is not None else None
 
     def secret(self) -> bool:
         question = self._open
@@ -409,6 +532,9 @@ class TerminalAsker(Asker):
         the mark, ``None`` for none of them."""
         mark = glyphs.glyph("prompt")
         lines = list(question.head)
+        if question.text and question.default:
+            # The value that stands, as the line a typed answer replaces.
+            lines.append(_Line([("accent", mark + " "), ("text", question.default)]))
         for number, choice in enumerate(question.choices):
             chosen = number == marked
             pieces: list[Piece] = [
@@ -436,12 +562,27 @@ class TerminalAsker(Asker):
         in as many rows as before, whichever entries they are."""
         entries = question.entries or []
         head = question.head
+        if not entries:
+            # A search that found nothing: the sentence for it stands where
+            # the entries stood, and the keys below.
+            lines = list(head)
+            if question.empty:
+                lines.append(_Line([("muted", question.empty)]))
+            lines.extend(
+                _Line([("muted", line)]) for line in _wrapped(question.foot, columns, _BETWEEN_GROUPS)
+            )
+            return lines
         mark = glyphs.glyph("prompt")
+        ticked, unticked = glyphs.glyph("checked"), glyphs.glyph("unchecked")
         in_use = glyphs.glyph("in_use")
+        checklist = question.checked is not None
+        # The sign stands in the place of the one of the entry in use: in a
+        # checklist it says whether the entry is ticked.
+        sign = max(get_cwidth(ticked), get_cwidth(unticked)) if checklist else get_cwidth(in_use)
         digits = len(str(len(entries)))
         # In front of the columns: the mark, the number with its full stop,
-        # and the sign of the entry in use, each with a blank behind it.
-        lead = get_cwidth(mark) + 1 + digits + 2 + get_cwidth(in_use) + 1
+        # and the sign, each with a blank behind it.
+        lead = get_cwidth(mark) + 1 + digits + 2 + sign + 1
         widths = [
             max(get_cwidth(entry.cells[column][1]) for entry in entries if column < len(entry.cells))
             for column in range(max(len(entry.cells) for entry in entries))
@@ -457,10 +598,14 @@ class TerminalAsker(Asker):
         def lines_of(number: int) -> list[_Line]:
             entry = entries[number]
             marked = number == question.marked
+            if checklist:
+                shown = ticked if number in (question.checked or ()) else unticked
+            else:
+                shown = in_use if entry.in_use else " " * sign
             pieces: list[Piece] = [
                 ("accent", (mark if marked else " " * get_cwidth(mark)) + " "),
                 ("accent" if marked else "text", f"{number + 1:>{digits}}. "),
-                ("accent", (in_use if entry.in_use else " " * get_cwidth(in_use)) + " "),
+                ("accent", _padded(shown, sign) + " "),
             ]
             remark = _wrapped(entry.note, remark_room) if entry.note else []
             cells = [*entry.cells, *[("text", "")] * (len(widths) - len(entry.cells))]
@@ -541,6 +686,10 @@ class TerminalAsker(Asker):
         # with Alt, and such a key must not decline a question on its way.
         # Escape by itself counts once nothing has followed it.
         keys.add("escape")(self._on_escape)
+        # In a checklist the space bar ticks the marked entry — and writes
+        # no blank into the input field.
+        checking = Condition(self._checking)
+        keys.add("space", filter=checking, eager=True)(lambda event: self._tick())
         # An open selection is the first thing Ctrl+C closes, like Escape,
         # and the client stays. Under a question of the service the key keeps
         # what the screen gives it: it stops the answer that is running.
@@ -550,6 +699,19 @@ class TerminalAsker(Asker):
     def _selecting(self) -> bool:
         question = self._open
         return question is not None and question.entries is not None
+
+    def _checking(self) -> bool:
+        question = self._open
+        return question is not None and question.checked is not None
+
+    def _tick(self) -> None:
+        question = self._open
+        if question is None or question.checked is None:
+            return
+        question.checked ^= {question.marked}
+        # The lines are laid out again for the new signs.
+        question.drawn_for = None
+        self._ctx.screen.invalidate()
 
     def _move(self, step: int) -> None:
         question = self._open
@@ -563,12 +725,32 @@ class TerminalAsker(Asker):
         if question is None:
             return
         buffer = event.current_buffer
+        if question.checked is not None:
+            # A checklist is confirmed as it stands; what was typed is no
+            # answer to it.
+            buffer.reset()
+            self._settle(question, {_CHECKED: sorted(question.checked)}, None, "")
+            return
         typed = buffer.text.strip()
         taken: int | None = None
+        if question.find is not None and typed and not typed.isdecimal():
+            # A word typed in a selection that searches: what was found so
+            # far — or, where the pause is not over yet, what is found for
+            # it now — is picked from, the marked entry first.
+            self._settle_search(question, typed)
+            if question.choices:
+                taken = question.marked
+                buffer.reset()
+                self._settle(question, question.choices[taken].answer, taken, typed)
+            return
         if not typed and question.text:
+            buffer.reset()
+            if question.default is not None:
+                # Nothing typed keeps the value that stands.
+                self._settle(question, {"antwort": question.default}, None, "")
+                return
             # Nothing typed answers a question for text with nothing: it
             # is closed, and what the command asks about stays as it was.
-            buffer.reset()
             self._settle(question, question.declined, None, "")
             return
         if not typed:
@@ -587,10 +769,33 @@ class TerminalAsker(Asker):
         buffer.reset()
         self._settle(question, answer, taken, typed)
 
+    def _settle_search(self, question: _Question, word: str) -> None:
+        """Brings a search that is still waiting for its pause to its end
+        now, for ``word`` as it stands in the field."""
+        with self._lock:
+            waiting = question.timer
+            question.timer = None
+            if question.youngest == question.asked and waiting is None:
+                return
+        if waiting is not None:
+            waiting.cancel()
+        find = question.find
+        if find is None:
+            return
+        try:
+            found = list(find(word))
+        except Exception:  # noqa: BLE001 - a search that fails changes nothing
+            return
+        self._show(question, question.asked, found)
+
     def _on_escape(self, event: KeyPressEvent) -> None:
         question = self._open
         if question is None:
             return
+        if question.find is not None:
+            # What was typed was a search and no message: it goes with the
+            # selection.
+            event.current_buffer.reset()
         declining = [
             number
             for number, choice in enumerate(question.choices)
@@ -606,6 +811,8 @@ class TerminalAsker(Asker):
                 # Withdrawn in the meantime; nobody waits for this answer.
                 return
             self._open = None
+        if question.timer is not None:
+            question.timer.cancel()
         question.answer = dict(answer)
         if question.entries is None and not question.text:
             # A selection leaves nothing behind: what was picked shows in

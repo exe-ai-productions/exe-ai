@@ -13,7 +13,7 @@ import {
   VORGABE_DARSTELLUNG, VORGABE_LAYOUT,
   darstellungSpeichern, keptModelName, layoutSpeichern, modellSpeichern, storedModelId,
 } from './anzeige.js'
-import { chatZustandLaden, chatanzeige, chatless } from './chatanzeige.svelte.js'
+import { chatZustandLaden, chatanzeige } from './chatanzeige.svelte.js'
 import { VORGABE_CHATLAYOUT, chatlayoutAnwenden, chatlayoutAusGespeichert, chatlayoutZumSpeichern } from './chatlayout.js'
 import { ausFenster, ohneWeg } from './fensterweg.svelte.js'
 import { melde, melden } from './meldewesen.svelte.js'
@@ -38,22 +38,13 @@ export const zustand = $state({
   nachrichtenChatId: null,
   version: '',
   aktiverChat: null,
-  /* Every chat that has a picture drawing right now OR waiting in the local
-     queue behind it, as a set: { [chatId]: true }. The working message that
-     carries the filling frame is only a local placeholder — it is not on
-     the server yet — so leaving and reopening the chat reloads the server's
-     messages without it. This remembers which chats have one in flight so
-     the placeholder can be put back on reopen. One GPU still draws them one
-     at a time; this is only about which chats the display owes a frame. */
-  bildLaeuftChat: {},
-  /* The placeholder message of a running TEXT answer, held here for the
-     same reason `bildLaeuftChat` holds a picture's: switching chats
-     replaces `nachrichten` wholesale with the server's fetch below, which
-     would otherwise lose the one message still living only in the client
-     while its run is in flight. Unlike the picture, this keeps the actual
-     object (with its `abschnitte`) rather than rebuilding one — App.svelte
-     is still writing into it by reference, so putting the SAME object back
-     picks the stream up exactly where it stood.
+  /* The placeholder message of a running TEXT answer, held here because
+     switching chats replaces `nachrichten` wholesale with the server's
+     fetch below, which would otherwise lose the one message still living
+     only in the client while its run is in flight. This keeps the actual
+     object (with its `abschnitte`) — App.svelte is still writing into it
+     by reference, so putting the SAME object back picks the stream up
+     exactly where it stood.
 
      Keyed by chat id: this window follows one run per chat at the same
      time, so a second run cannot overwrite the first one's placeholder. */
@@ -69,21 +60,15 @@ export const zustand = $state({
      longer lose A's owed reattachment — each chat keeps its own entry
      until the window gets around to it. */
   wiederanhaengen: {},
-  /* The ordered size of the picture in flight, per chat: { [chatId]: {
-     breite, hoehe } }. The working frame stands at 75% of the finished
-     display size and needs the ordered dimensions for that — also when the
-     placeholder is put back on reopen, which is why it travels with the
-     chat rather than being one app-wide value that flips between them. */
-  bildMasse: {},
   /* How many more pictures are queued behind the one being drawn. Pressing
      "draw" again while one runs adds to the queue instead of being ignored;
      this count feeds the little house-style badge that says how many are
      still to come. */
   bildWarteschlange: 0,
-  /* The pictures still to come, in order: the one drawing first, then the
-     waiting ones — `{ id, chat_id, prompt, running }` each. The picture
-     window's gallery shows its own chat's; the queue itself lives in
-     App.svelte, which rebuilds this list whenever it changes. */
+  /* The studio's pictures still to come, in order: the one drawing first,
+     then the waiting ones — `{ id, prompt, running }` each. The studio's
+     row of pictures shows them; the queue itself lives in App.svelte, which
+     rebuilds this list whenever it changes. */
   pictureQueue: [],
   modellId: '',
   /* The chosen model while it is not among the reachable ones: the entry
@@ -477,18 +462,12 @@ export function aktuellerChat() {
   return zustand.chats.find((c) => c.id === zustand.aktiverChat) || null
 }
 
-/* The one way a chat comes into being in this window. It is created, takes
-   over the picture values the window held while no chat was open, and is
+/* The one way a chat comes into being in this window. It is created and is
    the open chat from then on — for the message list and for everything
-   that reads `chatanzeige`. A chat that was only made the active one left
-   the picture studio without a chat: it kept none of that chat's values and
-   opened a second chat to draw into. */
+   that reads `chatanzeige`. The picture studio takes nothing along and
+   gives nothing: it belongs to no chat. */
 export async function openNewChat(data) {
   const chat = await api.chatAnlegen(data)
-  /* Into the chat's store before it is read below, so the read brings the
-     values back instead of the defaults. */
-  const held = chatless.pictureValues?.(chat.id) ?? null
-  if (held) await api.einstellungSetzen(`chat:${chat.id}`, 'bildfenster', held).catch(() => {})
   zustand.aktiverChat = chat.id
   nachrichtenSetzen(chat.id, [])
   chatZustandLaden(chat.id)
@@ -1110,13 +1089,9 @@ export function nachrichtenAnzeige() {
   return zustand.nachrichtenChatId === zustand.aktiverChat ? zustand.nachrichten : []
 }
 
-/* The one shape of a picture still drawing, wherever its row has to be put
-   back after something else replaced the list out from under it: a chat
-   reopened while it drew (below), and a text run's own end-of-run reload
-   finding one going in the same chat (App.svelte). Reads the ordered size
-   `bildChatsAktualisieren` already keeps per chat, so a caller never has to
-   carry it along separately. */
-export function bildlaufPlatzhalter(chatId) {
+/* The one shape of a picture still drawing in a chat — the working tile of
+   a model's drawing call. */
+function bildlaufPlatzhalter(chatId) {
   return {
     // Own stable key, not null: the list's #each keys on `id`, and a
     // message without one used to fall back to its POSITION — two
@@ -1127,7 +1102,6 @@ export function bildlaufPlatzhalter(chatId) {
     // unique, and no server id ever looks like it.
     id: `bildlauf-${chatId}`,
     role: 'assistant', content: '', bildLaeuft: true, stats: {}, werkzeuge: [],
-    bildMasse: zustand.bildMasse[chatId],
   }
 }
 
@@ -1365,14 +1339,6 @@ export async function chatOeffnen(id) {
   } else {
     delete zustand.benutzerfrage[id]
   }
-  /* A picture still being drawn for this chat: its working message lives only
-     here, not on the server, so the reload above dropped it. Put it back, so
-     the filling frame is there again instead of a chat that looks finished
-     while the indicator below still turns. */
-  if (zustand.bildLaeuftChat[id]
-      && !zustand.nachrichten.some((n) => n.bildLaeuft && !n.answerId)) {
-    zustand.nachrichten.push(bildlaufPlatzhalter(id))
-  }
   /* Same rescue for a running TEXT answer: the reload above just as freely
      dropped the platzhalter message App.svelte is still writing into. The
      run itself was never touched — it kept going in the background the
@@ -1566,8 +1532,6 @@ function forgetChat(id) {
   delete zustand.sendet[id]
   delete zustand.laufenderPlatzhalter[id]
   delete zustand.wiederanhaengen[id]
-  delete zustand.bildLaeuftChat[id]
-  delete zustand.bildMasse[id]
   delete zustand.werkzeugfrage[id]
   delete zustand.benutzerfrage[id]
   delete zustand.jobfrage[id]

@@ -205,6 +205,7 @@ const terminals = t.createTerminals({
   ipcMain, pty, address: 'http://127.0.0.1:8123',
   command: { file: '/repo/.venv/bin/python', args: ['-m', 'cli'], cwd: '/repo' },
   log: (line) => logged.push(line),
+  exists: () => true,
 })
 """
 
@@ -305,7 +306,7 @@ const none = t.createTerminals({{ ipcMain, pty: null, address: 'http://127.0.0.1
 const withoutPty = none.start(contents, {{}})
 const failing = t.createTerminals({{
   ipcMain, pty: {{ spawn() {{ throw new Error('ENOENT: no such file') }} }}, address: 'http://127.0.0.1:8123',
-  command: {{ file: '/missing/exe', args: [] }}, log: (line) => logged.push(line),
+  command: {{ file: '/missing/exe', args: [] }}, log: (line) => logged.push(line), exists: () => true,
 }})
 const broken = failing.start(contents, {{}})
 console.log(JSON.stringify({{ withoutPty, broken, logged, running: failing.running(1) }}))
@@ -318,6 +319,64 @@ console.log(JSON.stringify({{ withoutPty, broken, logged, running: failing.runni
     assert "reason" not in ergebnis["broken"]
     assert ergebnis["running"] is False
     assert any("could not be started" in line for line in ergebnis["logged"])
+
+
+def test_a_program_that_is_not_there_is_never_started_and_the_answer_names_the_file():
+    """The child of a missing program ends at once, without node-pty
+    throwing, and the page would only see that it ended. So the file is
+    looked for first: nothing is spawned, the answer carries its own reason
+    and the path, and the log names the path and no start."""
+    skript = f"""
+const t = require({json.dumps(str(TERMINAL))})
+const handlers = {{}}
+const ipcMain = {{ handle: (n, f) => {{ handlers[n] = f }}, on: (n, f) => {{ handlers[n] = f }} }}
+const contents = {{ id: 1, isDestroyed: () => false, send: () => {{}}, once: () => {{}} }}
+const logged = []
+let spawns = 0
+const pty = {{ spawn() {{ spawns += 1; return {{ pid: 9, onData() {{}}, onExit() {{}}, kill() {{}} }} }} }}
+const make = (exists) => t.createTerminals({{
+  ipcMain, pty, address: 'http://127.0.0.1:8123',
+  command: {{ file: '/tmp/gone/exe', args: [] }}, log: (line) => logged.push(line), exists,
+}})
+const missing = make(() => false)
+const answer = missing.start(contents, {{}})
+const spawnedWithout = spawns
+const present = make((file) => file === '/tmp/gone/exe')
+const started = present.start(contents, {{}})
+console.log(JSON.stringify({{ answer, spawnedWithout, started, spawnsAfter: spawns, logged, running: missing.running(1) }}))
+"""
+    ergebnis = _laufe(skript)
+    assert ergebnis["answer"] == {
+        "error": "/tmp/gone/exe was not found.",
+        "reason": "no-file",
+        "path": "/tmp/gone/exe",
+    }
+    assert ergebnis["spawnedWithout"] == 0
+    # Silence probe: a program that is there starts as before.
+    assert ergebnis["started"] == {"pid": 9}
+    assert ergebnis["spawnsAfter"] == 1
+    assert any("/tmp/gone/exe was not found" in line for line in ergebnis["logged"])
+    assert ergebnis["logged"][0] == "Terminal: /tmp/gone/exe was not found, nothing was started"
+
+
+def test_the_default_looks_for_the_file_on_the_disk():
+    """Without a stand-in the check is the disk's: a file that is not there
+    is refused, one that is there is started."""
+    skript = f"""
+const t = require({json.dumps(str(TERMINAL))})
+const handlers = {{}}
+const ipcMain = {{ handle: (n, f) => {{ handlers[n] = f }}, on: (n, f) => {{ handlers[n] = f }} }}
+const contents = {{ id: 1, isDestroyed: () => false, send: () => {{}}, once: () => {{}} }}
+let spawns = 0
+const pty = {{ spawn() {{ spawns += 1; return {{ pid: 5, onData() {{}}, onExit() {{}}, kill() {{}} }} }} }}
+const run = (file) => t.createTerminals({{
+  ipcMain, pty, address: 'http://127.0.0.1:8123', command: {{ file, args: [] }}, log: () => {{}},
+}}).start(contents, {{}})
+console.log(JSON.stringify({{ gone: run('/definitely/not/here/exe'), there: run(process.execPath) }}))
+"""
+    ergebnis = _laufe(skript)
+    assert ergebnis["gone"]["reason"] == "no-file"
+    assert ergebnis["there"] == {"pid": 5}
 
 
 def test_the_bridge_and_the_shell_speak_the_same_channel_names():
@@ -471,66 +530,6 @@ server.listen(0, '127.0.0.1', async () => {{
     assert ergebnis["refused"] is False
 
 
-_VERSION = """
-const d = require(%(modul)s)
-const http = require('http')
-const server = http.createServer((request, answer) => {
-  if (request.url !== '/health') { answer.writeHead(404); answer.end(); return }
-  const mode = process.env.HEALTH_MODE
-  if (mode === 'ok') { answer.writeHead(200, { 'content-type': 'application/json' }); answer.end(JSON.stringify({ status: 'ok', version: ' 0.6.10 ' })) }
-  else if (mode === 'no-version') { answer.writeHead(200); answer.end(JSON.stringify({ status: 'ok' })) }
-  else if (mode === 'number') { answer.writeHead(200); answer.end(JSON.stringify({ version: 610 })) }
-  else if (mode === 'garbage') { answer.writeHead(200); answer.end('<html>not json</html>') }
-  else if (mode === 'refused') { answer.writeHead(401); answer.end(JSON.stringify({ version: '9.9.9' })) }
-  else if (mode === 'slow') { /* never answers */ }
-})
-server.listen(0, '127.0.0.1', async () => {
-  const port = server.address().port
-  const version = await d.serviceVersion(port, { timeout: 400 })
-  server.close()
-  server.closeAllConnections?.()
-  console.log(JSON.stringify({ version }))
-})
-"""
-
-
-def _version(modus: str) -> object:
-    if not shutil.which("node"):
-        pytest.skip("node is missing")
-    lauf = subprocess.run(
-        ["node", "-e", _VERSION % {"modul": json.dumps(str(DIENSTSUCHE))}],
-        capture_output=True, text=True, encoding="utf-8", timeout=30,
-        env={**os.environ, "HEALTH_MODE": modus},
-    )
-    assert lauf.returncode == 0, (lauf.stdout + lauf.stderr)[-2000:]
-    return json.loads(lauf.stdout.strip().splitlines()[-1])["version"]
-
-
-def test_the_version_of_a_service_comes_from_its_open_health_address():
-    assert _version("ok") == "0.6.10"
-
-
-@pytest.mark.parametrize("modus", ["no-version", "number", "garbage", "refused", "slow"])
-def test_a_version_that_cannot_be_read_is_none_never_a_difference(modus):
-    """A missing field, a field of the wrong kind, a page that is no JSON, a
-    refusal and a service that never answers all say "could not be read"."""
-    assert _version(modus) is None
-
-
-def test_a_port_nobody_listens_on_has_no_version():
-    skript = f"""
-const d = require({json.dumps(str(DIENSTSUCHE))})
-const net = require('net')
-const server = net.createServer(() => {{}})
-server.listen(0, '127.0.0.1', async () => {{
-  const taken = server.address().port
-  server.close()
-  console.log(JSON.stringify({{ version: await d.serviceVersion(taken, {{ timeout: 500 }}) }}))
-}})
-"""
-    assert _laufe(skript)["version"] is None
-
-
 # --- main.js: the window uses the service it finds -------------------------
 
 
@@ -542,27 +541,26 @@ def _dienstAnbinden() -> str:
     ])
 
 
-def _anbinden_mit_fassung(version: str, *, own: str = "0.6.11", stop: str = "ok") -> dict:
-    """`dienstAnbinden` with a service of `version` found on the port. `stop`:
-    how the end of that service goes — `ok`, or `refused` (the client's stop
-    rejects and the service stays)."""
+def _anbinden_mit_dienst(*, stop: str = "ok") -> dict:
+    """`dienstAnbinden` with a service of ours found on the port. `stop`: how
+    the end of that service goes — `ok`, or `refused` (it cannot be ended and
+    stays). The window never asks which version it is."""
     skript = f"""
 const path = require('path')
 const PORT = 8123
-const app = {{ isPackaged: false, getVersion: () => {json.dumps(own)} }}
+const app = {{ isPackaged: false, getVersion: () => '0.6.11' }}
 const asked = []
 const dienstsuche = {{
   dataRoot: () => '/root',
   runningService: async () => ({{ pid: 31337, port: 8123 }}),
-  serviceVersion: async (port) => {{ asked.push(['version', port]); return {json.dumps(version) if version is not None else "null"} }},
 }}
 const logged = []
 const errors = []
 console.log = (line) => logged.push(line)
 console.error = (line) => errors.push(line)
-async function endRunningService(running) {{
+async function endFoundService(running) {{
   asked.push(['end', running.pid])
-  if ({json.dumps(stop)} === 'refused') throw new Error('the service did not end')
+  if ({json.dumps(stop)} === 'refused') throw new Error('the system refused the signal')
   return 'stopped'
 }}
 {_dienstAnbinden()}
@@ -582,10 +580,10 @@ const asked = []
 const dienstsuche = {{
   dataRoot: (options) => {{ asked.push(['root', options.packaged]); return '/root' }},
   runningService: async (options) => {{ asked.push(['service', options.port, options.root]); return {gefunden} }},
-  serviceVersion: async () => '0.6.11',
 }}
 const logged = []
 console.log = (line) => logged.push(line)
+async function endFoundService(running) {{ asked.push(['end', running.pid]); return 'stopped' }}
 {_dienstAnbinden()}
 dienstAnbinden().then((attached) => {{
   process.stdout.write(JSON.stringify({{ attached, logged, asked, dienstVorgefunden }}) + '\\n')
@@ -594,13 +592,11 @@ dienstAnbinden().then((attached) => {{
     return _laufe(skript)
 
 
-def test_with_a_running_service_the_window_attaches_and_starts_none():
+def test_with_a_running_service_the_window_ends_it_and_does_not_attach():
     ergebnis = _anbinden("{ pid: 31337, port: 8123 }")
-    assert ergebnis["attached"] is True
-    assert ergebnis["dienstVorgefunden"] == {"pid": 31337, "port": 8123}
-    assert ergebnis["asked"] == [["root", False], ["service", 8123, "/root"]]
-    assert len(ergebnis["logged"]) == 1
-    assert "using the running service on port 8123 (pid 31337); none started" in ergebnis["logged"][0]
+    assert ergebnis["attached"] is False
+    assert ergebnis["dienstVorgefunden"] is None
+    assert ergebnis["asked"] == [["root", False], ["service", 8123, "/root"], ["end", 31337]]
 
 
 def test_without_a_running_service_the_window_starts_its_own_as_before():
@@ -623,55 +619,117 @@ def test_the_shell_asks_before_it_starts_and_lets_a_found_service_stand():
     assert "kind = gefunden" not in quelle
 
 
-def test_a_service_of_another_version_is_ended_and_the_window_starts_its_own():
-    """Falls over without the fix: the service found was used whatever its
-    version, and nothing was ended or started."""
-    ergebnis = _anbinden_mit_fassung("0.6.10")
+def test_a_running_service_of_ours_is_always_ended_and_the_window_starts_its_own():
+    """Falls over without the fix: a service of the same version — every test
+    build is called 0.6.13 — or one whose version could not be read was used
+    as it was found."""
+    ergebnis = _anbinden_mit_dienst()
     assert ergebnis["attached"] is False
     assert ergebnis["dienstVorgefunden"] is None
-    assert ergebnis["asked"] == [["version", 8123], ["end", 31337]]
+    assert ergebnis["asked"] == [["end", 31337]]
     assert len(ergebnis["logged"]) == 2
-    assert "is version 0.6.10, this program is 0.6.11; ending it" in ergebnis["logged"][0]
+    assert "is running on port 8123 (pid 31337); ending it, this program starts its own" in ergebnis["logged"][0]
     assert "ended (pid 31337; stopped); this program starts its own" in ergebnis["logged"][1]
     assert ergebnis["errors"] == []
 
 
-def test_a_newer_service_is_ended_as_well():
-    """"Another version" is meant literally: the window is the program that
-    was installed, and the service has to be its own."""
-    ergebnis = _anbinden_mit_fassung("0.7.0")
-    assert ergebnis["attached"] is False
-    assert ["end", 31337] in ergebnis["asked"]
+def test_the_window_never_asks_which_version_the_running_service_is():
+    quelle = MAIN.read_text(encoding="utf-8")
+    assert "serviceVersion" not in quelle
+    assert "serviceVersion" not in DIENSTSUCHE.read_text(encoding="utf-8")
 
 
-def test_the_same_version_is_used_without_a_stop():
-    """Silence probe: nothing is ended, the one line is the one it always was."""
-    ergebnis = _anbinden_mit_fassung("0.6.11")
-    assert ergebnis["attached"] is True
-    assert ergebnis["dienstVorgefunden"] == {"pid": 31337, "port": 8123}
-    assert ergebnis["asked"] == [["version", 8123]]
-    assert len(ergebnis["logged"]) == 1
-    assert "using the running service on port 8123 (pid 31337); none started" in ergebnis["logged"][0]
-
-
-def test_a_version_that_cannot_be_read_leaves_the_service_in_use_and_says_so():
-    ergebnis = _anbinden_mit_fassung(None)
-    assert ergebnis["attached"] is True
-    assert not any(a[0] == "end" for a in ergebnis["asked"])
-    assert "could not be read; it is used as it is" in ergebnis["logged"][0]
-
-
-def test_a_service_that_does_not_end_stays_in_use_and_the_reason_is_logged():
-    ergebnis = _anbinden_mit_fassung("0.6.10", stop="refused")
+def test_a_service_that_cannot_be_ended_stays_in_use_and_the_reason_is_logged():
+    ergebnis = _anbinden_mit_dienst(stop="refused")
     assert ergebnis["attached"] is True
     assert ergebnis["dienstVorgefunden"] == {"pid": 31337, "port": 8123}
     assert len(ergebnis["errors"]) == 1
-    assert "did not end, it is used as it is: the service did not end" in ergebnis["errors"][0]
+    assert "did not end, it is used as it is: the system refused the signal" in ergebnis["errors"][0]
 
 
-def test_the_start_and_the_update_end_a_service_by_the_same_function():
-    """One way for both: the stop of an update and the stop at the start
-    run the client's stop and then wait for the process, in one place."""
+# --- main.js: how the found service is ended --------------------------------
+
+
+def _endFoundService() -> str:
     quelle = MAIN.read_text(encoding="utf-8")
-    assert len(re.findall(r"await endRunningService\(", quelle)) == 2
+    return "\n".join([
+        _stueck(quelle, r"\nfunction signalProcess\(pid, signal\) \{\n.*?\n\}\n", "signalProcess"),
+        _stueck(quelle, r"\nasync function endFoundService\(running\) \{\n.*?\n\}\n", "endFoundService"),
+    ])
+
+
+def _end_found(*, client: str, lives: str) -> dict:
+    """`endFoundService` for a process 4242. `client`: `ok` or `fails` (the
+    client's stop). `lives`: when the process is gone — `now` (with the
+    client's stop), `after-term` (once SIGTERM reached it), `after-kill`
+    (only SIGKILL ends it), `never`. The constants are shortened so the test
+    runs in a second; the shapes are the real ones."""
+    skript = f"""
+const KILL_AFTER_MS = 400
+const LOOK_PAUSE_MS = 20
+const signals = []
+let alive = {json.dumps(lives != "now")}
+process.kill = (pid, signal) => {{
+  signals.push([pid, signal])
+  if (signal === 'SIGTERM' && {json.dumps(lives)} === 'after-term') alive = false
+  if (signal === 'SIGKILL' && {json.dumps(lives)} === 'after-kill') alive = false
+}}
+const dienstsuche = {{ processAlive: () => alive }}
+async function clientStop() {{
+  if ({json.dumps(client)} === 'fails') throw new Error('exe service stop: 1')
+  return 'stopped'
+}}
+{_endFoundService()}
+endFoundService({{ pid: 4242, port: 8123 }}).then(
+  (words) => process.stdout.write(JSON.stringify({{ words, signals, rejected: null }}) + '\\n'),
+  (failure) => process.stdout.write(JSON.stringify({{ words: null, signals, rejected: failure.message }}) + '\\n'),
+)
+"""
+    return _laufe(skript)
+
+
+def test_a_service_the_client_ends_gets_no_signal():
+    """Silence probe: the client's stop works and the process is gone — the
+    window sends nothing to anybody."""
+    ergebnis = _end_found(client="ok", lives="now")
+    assert ergebnis["signals"] == []
+    assert ergebnis["words"] == "stopped"
+
+
+def test_where_the_clients_stop_fails_the_process_is_asked_to_end_by_its_id():
+    ergebnis = _end_found(client="fails", lives="after-term")
+    assert ergebnis["signals"] == [[4242, "SIGTERM"]]
+    assert "the client's stop failed (exe service stop: 1)" in ergebnis["words"]
+
+
+def test_a_process_that_lives_on_is_killed_after_the_wait():
+    ergebnis = _end_found(client="fails", lives="after-kill")
+    assert ergebnis["signals"] == [[4242, "SIGTERM"], [4242, "SIGKILL"]]
+    assert "ended by force" in ergebnis["words"]
+
+
+def test_a_process_the_client_could_not_end_is_killed_without_a_second_term():
+    ergebnis = _end_found(client="ok", lives="after-kill")
+    assert ergebnis["signals"] == [[4242, "SIGKILL"]]
+
+
+def test_a_process_that_survives_everything_rejects():
+    ergebnis = _end_found(client="fails", lives="never")
+    assert ergebnis["signals"] == [[4242, "SIGTERM"], [4242, "SIGKILL"]]
+    assert "pid 4242 is still alive after SIGKILL" in ergebnis["rejected"]
+
+
+def test_the_wait_before_the_kill_is_five_seconds():
+    assert re.search(r"const KILL_AFTER_MS = 5000\n", MAIN.read_text(encoding="utf-8"))
+
+
+def test_the_start_and_the_update_both_begin_with_the_clients_stop():
+    """One way in: the stop of an update and the stop at the start both run
+    the client's `service stop`; the start adds the process id and the kill
+    for the service the client cannot end, the update waits as long as it
+    lives."""
+    quelle = MAIN.read_text(encoding="utf-8")
+    assert len(re.findall(r"await endRunningService\(", quelle)) == 1
+    assert len(re.findall(r"await endFoundService\(", quelle)) == 1
     assert re.search(r"async function endRunningService\(running\) \{.*?clientStop\(\).*?processAlive", quelle, re.S)
+    assert re.search(r"async function endFoundService\(running\) \{.*?clientStop\(\).*?processAlive", quelle, re.S)

@@ -21,8 +21,10 @@
 
 import { Terminal as Xterm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { api } from './api.js'
+import { droppedText } from './droppedPaths.js'
 import { system } from './keyNames.js'
 import { followTheBox } from './terminalResize.js'
 import { t, texte } from './texte.svelte.js'
@@ -65,24 +67,124 @@ function sheetColour(name, fallback) {
 /* The tone under a selection: the look's ground with a quarter of its ink
    mixed in, channel by channel — a faint wash of the ink, handed to the
    drawing as one solid colour, so it paints exactly that. In a dark look
-   the tone is lighter than the ground, in a light look darker. */
-const INK_IN_A_SELECTION = 0.25
+   the tone is lighter than the ground, in a light look darker.
 
-function selectionTone(ground, ink) {
-  const channels = (colour) => [1, 3, 5].map((at) => parseInt(colour.slice(at, at + 2), 16))
-  const [from, to] = [channels(ground), channels(ink)]
-  const mixed = from.map((value, at) => Math.round(value + (to[at] - value) * INK_IN_A_SELECTION))
+   Heaven and Moune need more: Heaven's column lies on a gradient whose
+   darkest colour stands as close to a quarter-ink tone in lightness as
+   1.0 : 1 (measured: the two differ in hue only), Moune's at 1.3 : 1. There
+   the share is the smallest one that
+   lifts the tone to 1.5 : 1 against every colour of the gradient — the
+   stops and what lies between two of them: a blend of two stops can be
+   darker than either (measured at the top of the tab, a hair under the
+   middle stop). */
+const INK_IN_A_SELECTION = 0.25
+const MIN_SELECTION_CONTRAST = 1.5
+// The looks whose tone sits too close to their column to stand off it with a
+// quarter of ink (measured: Heaven 1.0 : 1, Moune 1.3 : 1).
+const MEASURED_SHARE_LOOKS = new Set(['heaven', 'moune'])
+
+function channelsOf(colour) {
+  return [1, 3, 5].map((at) => parseInt(colour.slice(at, at + 2), 16))
+}
+
+function selectionTone(ground, ink, share = INK_IN_A_SELECTION) {
+  const [from, to] = [channelsOf(ground), channelsOf(ink)]
+  const mixed = from.map((value, at) => Math.round(value + (to[at] - value) * share))
   return `#${mixed.map((value) => value.toString(16).padStart(2, '0')).join('')}`
+}
+
+// The relative luminance of three channels and the contrast of two of them,
+// as WCAG 2.1 states them.
+function luminance(channels) {
+  const [red, green, blue] = channels.map((value) => {
+    const share = value / 255
+    return share <= 0.03928 ? share / 12.92 : ((share + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+}
+
+function contrastOf(one, other) {
+  const [lighter, darker] = [luminance(one), luminance(other)].sort((a, b) => b - a)
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+/* Every colour a gradient shows between its stops, sampled: each stop and
+   sixteen steps between two neighbours, blended channel by channel as the
+   browser blends them. The screen shows whole steps of a channel and a
+   blend that lands between two of them may show the lower: a colour of the
+   gradient that stands a step darker than the blend itself (measured: the
+   top of Heaven's tab, 1.497 : 1 where the blend said 1.5002 : 1). So the
+   blends are taken down to whole steps, the darker reading of each. */
+const BLEND_STEPS = 16
+
+function coloursBetween(stops) {
+  const found = [...stops]
+  for (let at = 1; at < stops.length; at += 1) {
+    for (let step = 1; step < BLEND_STEPS; step += 1) {
+      const share = step / BLEND_STEPS
+      found.push(
+        stops[at - 1].map((value, channel) =>
+          Math.floor(value + (stops[at][channel] - value) * share)
+        )
+      )
+    }
+  }
+  return found
+}
+
+/* The share of ink in the tone under a selection in this look: a quarter
+   everywhere but in Heaven and Moune, where it is the smallest (in
+   hundredths) that stands at least MIN_SELECTION_CONTRAST off every colour of
+   the gradient behind the drawing. */
+function selectionShare(look, ground, ink, stops) {
+  if (!MEASURED_SHARE_LOOKS.has(look) || !stops.length) return INK_IN_A_SELECTION
+  const shown = coloursBetween(stops)
+  for (let hundredths = Math.round(INK_IN_A_SELECTION * 100); hundredths <= 100; hundredths += 1) {
+    const share = hundredths / 100
+    const tone = channelsOf(selectionTone(ground, ink, share))
+    if (shown.every((colour) => contrastOf(tone, colour) >= MIN_SELECTION_CONTRAST)) return share
+  }
+  return 1
+}
+
+/* What lies under the drawing, as a colour with no opacity. The drawing
+   paints a cell that carries a link or an underline on a solid ground made
+   of its ground colour's red, green and blue and ignores the opacity, so
+   with the ground black those cells stand on a black box. Given the colour
+   of what lies under the drawing, the box has the colour of the column and
+   cannot be seen; the drawing still lets the column show through
+   everywhere else. Where the column lies on a gradient, the mean of the
+   gradient's colours is the nearest solid one. */
+function surfaceStops() {
+  const frame = getComputedStyle(document.documentElement).getPropertyValue('--frame')
+  return (frame.match(/#[0-9a-f]{6}\b|rgba?\([^)]*\)/gi) ?? []).map((stop) =>
+    stop.startsWith('#')
+      ? channelsOf(stop)
+      : stop.match(/[\d.]+/g).slice(0, 3).map(Number)
+  )
+}
+
+function groundBehind() {
+  const stops = surfaceStops()
+  if (!stops.length) return NO_GROUND
+  const mean = [0, 1, 2].map((at) =>
+    Math.round(stops.reduce((sum, stop) => sum + stop[at], 0) / stops.length)
+  )
+  return `#${mean.map((value) => value.toString(16).padStart(2, '0')).join('')}00`
 }
 
 export function theme() {
   const ink = sheetColour('--text', FALLBACK_INK)
+  const ground = sheetColour('--bg', FALLBACK_GROUND)
+  const share = selectionShare(currentLook(), ground, ink, surfaceStops())
   return {
-    background: NO_GROUND,
+    background: groundBehind(),
     foreground: ink,
+    // Until the client says otherwise: it asks for the cursor in the look's
+    // mark colour (OSC 12) and gives it back at its end.
     cursor: ink,
     cursorAccent: NO_GROUND,
-    selectionBackground: selectionTone(sheetColour('--bg', FALLBACK_GROUND), ink),
+    selectionBackground: selectionTone(ground, ink, share),
   }
 }
 
@@ -150,6 +252,9 @@ const session = {
   // by a change.
   look: '',
   lang: '',
+  // The theme the drawing holds, as text — to tell whether a change of the
+  // page changes it.
+  theme: '',
 }
 
 /* The width of the drawing's own scrollbar, which its fit takes off the box
@@ -162,6 +267,13 @@ const SCROLLBAR_WIDTH = 14
 
 function endedLine() {
   return t('cli.window.ended')
+}
+
+/** Opens an address of the history in the system's browser: the window
+    switch of the shell hands every address that is not the program's own on
+    to it. Only http and https. */
+function openAddress(address) {
+  if (/^https?:\/\//i.test(address)) window.open(address, '_blank')
 }
 
 /** The drawing, built on first use and kept from then on. */
@@ -179,9 +291,15 @@ export function ensureTerminal() {
     lineHeight: 1.25,
     cursorBlink: true,
     scrollback: 5000,
+    // A link the client writes itself (OSC 8) opens at a click; without
+    // this the drawing asks with a browser dialog.
+    linkHandler: { activate: (_event, address) => openAddress(address) },
   })
   const fit = new FitAddon()
   xterm.loadAddon(fit)
+  // An address in the text that carries no link opens at a click as well,
+  // as in a terminal that knows links.
+  xterm.loadAddon(new WebLinksAddon((_event, address) => openAddress(address)))
   xterm.open(holder)
   // A key the page keeps goes up to the page and not to the client; every
   // other key goes to the client and stops there — the page's own key
@@ -248,7 +366,14 @@ export function ensureTerminal() {
      Told only while it runs, and only what is another than the one it was
      given last. */
   const windowChanged = () => {
-    xterm.options.theme = theme()
+    /* Assigned only where it differs: an assignment resets what the client
+       asked of the drawing — its cursor colour — and a change of language
+       alone would take the cursor's accent away. */
+    const next = JSON.stringify(theme())
+    if (next !== session.theme) {
+      session.theme = next
+      xterm.options.theme = JSON.parse(next)
+    }
     if (!session.running) return
     const told = {}
     const look = currentLook()
@@ -270,6 +395,7 @@ export function ensureTerminal() {
   // preference is what tells.
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', windowChanged)
   session.xterm = xterm
+  session.theme = JSON.stringify(theme())
   session.fit = fit
   session.holder = holder
   session.gate = gate
@@ -313,11 +439,30 @@ export async function start() {
   if (answer && answer.error) {
     session.running = false
     session.ended = true
-    // A missing node-pty is the one failure the shell names by itself, in
-    // English; the catalogue has that sentence in the interface's language.
-    const said = answer.reason === 'no-pty' ? t('cli.window.pty_unavailable') : answer.error
+    // A missing node-pty and a missing program are the failures the shell
+    // names by itself, in English; the catalogue has those sentences in the
+    // interface's language.
+    let said = answer.error
+    if (answer.reason === 'no-pty') said = t('cli.window.pty_unavailable')
+    else if (answer.reason === 'no-file') said = t('cli.window.not_found', { path: answer.path })
     session.xterm.write(`\r\n${said}\r\n${endedLine()}\r\n`)
   }
+}
+
+/** Types the paths of files dropped on the tab, the way a terminal of the
+ *  computer types a dropped file. The text goes in as a paste, so the client
+ *  reads it as what a dropped file is — and through the same gate as every
+ *  key, so before its first screen it waits like the keys do. Only files
+ *  that lie on the disk count (the bridge names none for another); answers
+ *  whether anything was typed. */
+export function typeDropped(files) {
+  const shell = bridge()
+  const { xterm } = session
+  if (!shell?.pathOf || !xterm || session.ended) return false
+  const text = droppedText([...files].map((file) => shell.pathOf(file)), system)
+  if (!text) return false
+  xterm.paste(text)
+  return true
 }
 
 /** Shows the drawing in `root`: fits it, follows the size of `root`, starts

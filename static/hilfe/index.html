@@ -508,16 +508,32 @@
       <tbody>
       <tr><td><code>exe new</code></td><td>New chat</td></tr>
       <tr><td><code>exe chats</code></td><td>Choose a chat</td></tr>
+      <tr><td><code>exe rename</code></td><td>Rename the chat</td></tr>
+      <tr><td><code>exe delete</code></td><td>Delete the chat</td></tr>
+      <tr><td><code>exe archive</code></td><td>Archive the chat</td></tr>
+      <tr><td><code>exe project</code></td><td>Create, rename or delete projects, and move the chat into one</td></tr>
       <tr><td><code>exe model</code></td><td>Choose a model</td></tr>
       <tr><td><code>exe server</code></td><td>Start or stop a server, or view its log</td></tr>
       <tr><td><code>exe download</code></td><td>Search for a model and download it</td></tr>
+      <tr><td><code>exe provider</code></td><td>Add or remove a cloud provider</td></tr>
       <tr><td><code>exe status</code></td><td>Show the service, the servers and memory use</td></tr>
       <tr><td><code>exe theme</code></td><td>Choose a theme</td></tr>
       <tr><td><code>exe lang</code></td><td>Choose a language</td></tr>
-      <tr><td><code>exe settings</code></td><td>Show settings</td></tr>
-      <tr><td><code>exe set</code></td><td>Change a setting</td></tr>
-      <tr><td><code>exe tools</code></td><td>List tools</td></tr>
+      <tr><td><code>exe setup</code></td><td>Set up language, theme, preferred name and model</td></tr>
+      <tr><td><code>exe settings</code></td><td>Show and change settings</td></tr>
+      <tr><td><code>exe agents</code></td><td>Start and follow tasks for agents, or edit agents</td></tr>
+      <tr><td><code>exe cron</code></td><td>Create, run, pause or remove cronjobs</td></tr>
+      <tr><td><code>exe tools</code></td><td>Activate or deactivate tools</td></tr>
+      <tr><td><code>exe ps</code></td><td>Show and stop the model's running commands in the chat</td></tr>
+      <tr><td><code>exe mcp</code></td><td>Add, change or remove MCP servers, or sign in to one</td></tr>
+      <tr><td><code>exe skills</code></td><td>View, write or edit skills</td></tr>
+      <tr><td><code>exe files</code></td><td>Show the chat's files</td></tr>
+      <tr><td><code>exe image</code></td><td>Generate an image from a description</td></tr>
+      <tr><td><code>exe memory</code></td><td>Read and edit the memory in a text editor</td></tr>
+      <tr><td><code>exe system</code></td><td>Read and edit the instructions in a text editor</td></tr>
+      <tr><td><code>exe dir</code></td><td>Show, share or stop sharing working folders</td></tr>
       <tr><td><code>exe think</code></td><td>Choose a thinking level</td></tr>
+      <tr><td><code>exe compact</code></td><td>Compact the chat</td></tr>
       <tr><td><code>exe export</code></td><td>Save the chat to a file</td></tr>
       <tr><td><code>exe clear</code></td><td>Clear the screen; keep the chat</td></tr>
       <tr><td><code>exe help</code></td><td>List available commands</td></tr>
@@ -532,6 +548,8 @@
       <tr><td><code>--lang</code></td><td>Set the client language: de, en</td></tr>
       <tr><td><code>--theme</code></td><td>Set the theme: auto, exe, darkmatter, moune, heaven, pearl</td></tr>
       <tr><td><code>--chat</code></td><td>Open a chat by ID or title</td></tr>
+      <tr><td><code>--continue</code></td><td>Open the chat used most recently</td></tr>
+      <tr><td><code>-p</code></td><td>Send one message, print the response and exit; text piped in is sent along, and tools run without asking. Example: cat error.log | exe -p "explain this error"</td></tr>
       <tr><td><code>--password-file</code></td><td>Read the password from a file: the one the service requires beyond this machine, or the one a remote address asks for</td></tr>
       <tr><td><code>--version</code></td><td>Show the version</td></tr>
       <tr><td><code>--help</code></td><td>Show this help</td></tr>
@@ -544,17 +562,33 @@
       <thead><tr><th>Command</th><th>What it does</th></tr></thead>
       <tbody>
       <tr><td><code>/new</code></td><td>New chat</td></tr>
-      <tr><td><code>/chats</code></td><td>Choose a chat</td></tr>
+      <tr><td><code>/chats</code></td><td>Choose a chat<br>Typing in the list searches; digits choose by number. Examples: /chats 2 opens chat 2; /chats archive shows archived chats.</td></tr>
+      <tr><td><code>/rename</code></td><td>Rename the chat<br>Example: /rename Tax return 2026</td></tr>
+      <tr><td><code>/delete</code></td><td>Delete the chat</td></tr>
+      <tr><td><code>/archive</code></td><td>Archive the chat<br>Archived chats are listed with /chats archive.</td></tr>
+      <tr><td><code>/project</code></td><td>Create, rename or delete projects, and move the chat into one<br>Example: /project 2 opens project 2.</td></tr>
       <tr><td><code>/model</code></td><td>Choose a model</td></tr>
       <tr><td><code>/server</code></td><td>Start or stop a server, or view its log<br>Examples: /server stop stops the model server; /server log agent shows the agent server's log.</td></tr>
       <tr><td><code>/download</code></td><td>Search for a model and download it<br>Example: /download gemma 3 12b. Cancel a running download with /download stop.</td></tr>
+      <tr><td><code>/provider</code></td><td>Add or remove a cloud provider<br>Example: /provider add anthropic</td></tr>
       <tr><td><code>/status</code></td><td>Show the service, the servers and memory use</td></tr>
       <tr><td><code>/theme</code></td><td>Choose a theme<br>Enable Nerd Font symbols with /theme nerd on; disable them with /theme nerd off.</td></tr>
       <tr><td><code>/lang</code></td><td>Choose a language</td></tr>
-      <tr><td><code>/settings</code></td><td>Show settings</td></tr>
-      <tr><td><code>/set</code></td><td>Change a setting<br>Example: /set global.verdichtung_schwelle 70</td></tr>
-      <tr><td><code>/tools</code></td><td>List tools<br>Revoke the “Always allow” permission for a tool, for example: /tools forget read_file</td></tr>
+      <tr><td><code>/setup</code></td><td>Set up language, theme, preferred name and model<br>Run a single step with, for example: /setup model</td></tr>
+      <tr><td><code>/settings</code></td><td>Show and change settings<br>Example: /settings global.verdichtung_schwelle 70</td></tr>
+      <tr><td><code>/agents</code></td><td>Start and follow tasks for agents, or edit agents<br>Start a task, for example: /agents run researcher summarize the open issues. Edit an agent with /agents edit researcher.</td></tr>
+      <tr><td><code>/cron</code></td><td>Create, run, pause or remove cronjobs<br>Examples: /cron add asks for each field in turn; /cron run 2 runs cronjob 2 now; /cron pause 2, /cron resume 2 and /cron remove 2 work the same way.</td></tr>
+      <tr><td><code>/tools</code></td><td>Activate or deactivate tools<br>Examples: /tools 3 switches tool 3 between active and inactive; /tools forget read_file revokes the “Always allow” permission for read_file.</td></tr>
+      <tr><td><code>/ps</code></td><td>Show and stop the model's running commands in the chat<br>Example: /ps 2 stops command 2.</td></tr>
+      <tr><td><code>/mcp</code></td><td>Add, change or remove MCP servers, or sign in to one<br>Example: /mcp 2 opens MCP server 2.</td></tr>
+      <tr><td><code>/skills</code></td><td>View, write or edit skills<br>Example: /skills handoff opens the skill handoff.</td></tr>
+      <tr><td><code>/files</code></td><td>Show the chat's files</td></tr>
+      <tr><td><code>/image</code></td><td>Generate an image from a description<br>Example: /image a lighthouse at dusk, oil painting. Cancel with Ctrl+C.</td></tr>
+      <tr><td><code>/memory</code></td><td>Read and edit the memory in a text editor</td></tr>
+      <tr><td><code>/system</code></td><td>Read and edit the instructions in a text editor</td></tr>
+      <tr><td><code>/dir</code></td><td>Show, share or stop sharing working folders<br>Examples: /dir add ~/Projects/website shares a folder; /dir remove 2 stops sharing folder 2.</td></tr>
       <tr><td><code>/think</code></td><td>Choose a thinking level</td></tr>
+      <tr><td><code>/compact</code></td><td>Compact the chat<br>Focus the summary on a topic, for example: /compact only the open tasks</td></tr>
       <tr><td><code>/export</code></td><td>Save the chat to a file<br>Use /export to save the chat as an HTML file, or /export notes.md to save it as a Markdown file.</td></tr>
       <tr><td><code>/stop</code></td><td>Stop response</td></tr>
       <tr><td><code>/clear</code></td><td>Clear the screen; keep the chat</td></tr>

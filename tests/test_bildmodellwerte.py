@@ -151,8 +151,8 @@ _FLUX = {
 }
 
 
-def _draw(tmp_path, monkeypatch, vorgaben, fenster=None, chat_id=None):
-    service = Bilddienst(fenster or {}, modelle=["flux.gguf"], vorgaben=vorgaben)
+def _draw(tmp_path, monkeypatch, vorgaben, chat_id=None):
+    service = Bilddienst(modelle=["flux.gguf"], vorgaben=vorgaben)
     monkeypatch.setattr(bild_werkzeug.httpx, "AsyncClient", lambda timeout, headers: service)
     asyncio.run(
         bild_werkzeug.ausfuehren(
@@ -177,22 +177,6 @@ def test_a_model_without_values_of_its_own_draws_at_its_family(tmp_path, monkeyp
     assert (body["schritte"], body["cfg"]) == (20, 1.0)
     assert "vae" not in body
     assert "clip_skip" not in body
-
-
-def test_the_chat_s_own_window_wins_over_the_model_s_values(tmp_path, monkeypatch):
-    vorgaben = {**_FLUX, "schritte": 6, "eigene": ["schritte"]}
-    body = _draw(tmp_path, monkeypatch, vorgaben,
-                 fenster={"c1": {"modell": "flux.gguf", "schritte": 30}}, chat_id="c1")
-    assert body["schritte"] == 30
-
-
-def test_a_family_named_by_hand_starts_at_its_own_values(tmp_path, monkeypatch):
-    """The model's values were set for the family its header names; a window
-    that says another family draws another model, at that family's start."""
-    vorgaben = {**_FLUX, "schritte": 6, "eigene": ["schritte"]}
-    body = _draw(tmp_path, monkeypatch, vorgaben,
-                 fenster={"c1": {"modell": "flux.gguf", "familie": "sdxl"}}, chat_id="c1")
-    assert body["schritte"] != 6
 
 
 # --- The switch for reading the family --------------------------------------------

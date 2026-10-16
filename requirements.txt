@@ -2,6 +2,12 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic==2.10.4
 PyYAML==6.0.2
+
+# Writing config.yaml back without losing its comments, blank lines, key order
+# and quotes (app/api/v1/anbieter.py): adding, changing and removing a provider
+# changes that provider's entry and nothing else. PyYAML above reads the file
+# everywhere else.
+ruamel.yaml==0.19.1
 python-dotenv==1.0.1
 httpx==0.28.1
 

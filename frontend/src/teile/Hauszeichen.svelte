@@ -37,7 +37,7 @@
        keyboard   the shortcuts       microphone  the microphone key
        sprechblase  a chat           puzzle      an add-on (accessories)
        download   a download (arrow onto a line)
-       neu_laden  loading again (an open arc with a tip)
+       neu_laden  loading again (a clockwise arc with its tip at the end)
        ecken      the layout mode (two opposite corners)
        clapperboard  a video (the clapper above its board)
 
@@ -304,11 +304,11 @@
     <path d="M7 11 L12 16 L17 11" />
     <path d="M4 20 H20" />
   {:else if zeichen === 'neu_laden'}
-    <!-- The house icon circular arrow, verbatim: an open arc with a corner
-         for a tip at its upper end. The catalogue draws that corner sharp,
-         so the join is named here instead of taking the round one every
-         other sign on this grid wears. -->
-    <path d="M20 11a8 8 0 10-2.3 5.7M20 5v6h-6" stroke-linejoin="miter" />
+    <!-- The circular arrow of the house: an arc running clockwise whose tip
+         stands at its end, as on every other sign of this 24 grid (stroke 2,
+         round ends and corners). -->
+    <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+    <path d="M21 3v5h-5" />
   {:else if zeichen === 'clapperboard'}
     <!-- The house icon clapperboard, verbatim with its own stroke widths:
          the board and the raised clapper with its stripes. -->

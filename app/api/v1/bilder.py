@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app import ordnerinhalt
+from app import ordnerinhalt, studio_pictures
 from app.api.abhaengigkeiten import hole_config, hole_repositories, hole_sprache
 from app.bildmetadaten import metadaten_entfernen
 from app.bildschutz import putzen_an
@@ -134,6 +134,7 @@ class BilderListe(BaseModel):
 def bilder_auflisten(
     chat: str | None = None,
     projekt: str | None = None,
+    studio: bool = False,
     config: Config = Depends(hole_config),
     repositories: Repositories = Depends(hole_repositories),
 ) -> BilderListe:
@@ -143,7 +144,8 @@ def bilder_auflisten(
 
     With ``chat`` only that chat's pictures, with ``projekt`` those of every
     chat of the project — found through the rows that name them, and only
-    those still in the folder."""
+    those still in the folder. With ``studio`` those the picture studio
+    drew (app/studio_pictures.py), by the same rule."""
     # Whatever is in the folder, by what it IS rather than by what it is
     # called. The list used to be filtered by a name pattern this server
     # mints itself, so a picture a run wrote as `diagramm.png` sat in the
@@ -153,10 +155,13 @@ def bilder_auflisten(
         endungen=ANZEIGBARE_ENDUNGEN,
         mindestgroesse=MINDESTGROESSE,
     )
-    if chat is None and projekt is None:
+    if chat is None and projekt is None and not studio:
         return BilderListe(bilder=[p.name for p in treffer])
     da = {p.name for p in treffer}
-    genannt = repositories.messages.bilder_von(chat_id=chat, projekt_id=None if chat else projekt)
+    genannt = (
+        studio_pictures.names(repositories) if studio
+        else repositories.messages.bilder_von(chat_id=chat, projekt_id=None if chat else projekt)
+    )
     return BilderListe(bilder=[name for name in genannt if name in da])
 
 

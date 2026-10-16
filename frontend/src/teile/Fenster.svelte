@@ -12,6 +12,7 @@
   import { fade, scale } from 'svelte/transition'
   import { t } from '../lib/texte.svelte.js'
   import { cubicIn } from 'svelte/easing'
+  import { toRoot } from '../lib/rootPortal.js'
 
   /* At least three window kinds open from inside `.anlauf` (the wordmark
      and input group) or a sibling menu that shares its ancestor chain —
@@ -45,17 +46,6 @@
      page, not a window that quietly fails to appear — the same "loud is
      right" rule main.js already applies when it can't find the same
      element. */
-  function schleierAnDieWurzel(node) {
-    const wurzel = document.getElementById('wurzel')
-    if (!wurzel) throw new Error('schleierAnDieWurzel: #wurzel not found — every window depends on it')
-    wurzel.appendChild(node)
-    return {
-      destroy() {
-        if (node.parentNode === wurzel) node.remove()
-      },
-    }
-  }
-
   /* `symbol` is an optional icon before the title — the job dialog puts
      the agent mark there. As a snippet and not a fixed component, so the
      frame doesn't have to know what fills it. */
@@ -143,7 +133,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="schleier" class:weit={art === 'vorschau' || art === 'werk' || art === 'liste'}
        class:liste={art === 'liste'} transition:fade={{ duration: 150 }}
-       use:schleierAnDieWurzel
+       use:toRoot
        onclick={(e) => { if (e.target === e.currentTarget) offen = false }}>
     <div class="popup" class:liste={art === 'liste'} class:vorschau={art === 'vorschau'}
          class:gehalten={Boolean(HOEHE[art])}
