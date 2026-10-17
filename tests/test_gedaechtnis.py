@@ -189,3 +189,38 @@ def test_eine_fehlende_datei_ist_kein_fehler(client):
     """The as-shipped state, and the state after somebody deleted everything
     the program had learned about them."""
     assert client.app.state.config.memory_lesen() == ""
+
+
+def test_the_prompt_names_the_memory_tool_only_where_the_model_has_it(client, chat_id):
+    """The sentence about writing things down hangs on the tool being in the
+    model's list, and the tool is there only where the memory travels. Both
+    halves: without the first, a sentence that never appears would pass."""
+    from app.tools.registry import WerkzeugRegistry
+
+    config = client.app.state.config
+    client.app.state.werkzeuge = WerkzeugRegistry(
+        [], memory_pfad=config.pfad(config.app.memory_file)
+    )
+    config.features.mcp = True
+    sentence = "Two things are worth writing down with memory_save"
+    provider = lokaler_endpunkt(
+        client, MockProvider(mock_endpunkt(agentenmodellwahl.HAUPTMODELL), haeppchen=["ok"])
+    )
+    client.app.state.discovery.zustaende[
+        agentenmodellwahl.HAUPTMODELL
+    ].endpunkt.capabilities.tool_calls = True
+
+    def ask() -> str:
+        client.post(
+            "/api/v1/chat/completions",
+            json={
+                "chat_id": chat_id,
+                "endpoint_id": agentenmodellwahl.HAUPTMODELL,
+                "content": "hallo",
+            },
+        )
+        return _system_nachricht(provider)
+
+    assert sentence in ask()
+    client.put("/api/v1/settings/global/gedaechtnis", json={"wert": {"lokal": False}})
+    assert sentence not in ask()

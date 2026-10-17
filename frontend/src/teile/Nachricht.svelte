@@ -14,6 +14,7 @@
   import { aufrufZahl, blockDot, buendeln, lastCall } from '../lib/werkzeugbuendel.js'
   import { makeTextFlow } from '../lib/textFlow.js'
   import { SWITCH_MS, reducedMotion } from '../lib/softSwitch.js'
+  import { glideHeight } from '../lib/glide.js'
   import { folgtUnten } from '../lib/folgtunten.js'
   import { lineFloor } from '../lib/lineFloor.js'
   import { tempoGemessen, tempoTitelSchluessel } from '../lib/tempoquelle.js'
@@ -1554,7 +1555,10 @@
 
         {:else if teil.art === 'content' && teil.text.trim()}
           {@const quelle = textShown(teil, i)}
-          <div class="ereignis textzeile">
+          <!-- While this text flows, the room it takes grows on the spring
+               of the chat's following (lib/glide.js): the line and the mark
+               under it move with it instead of jumping a line at a time. -->
+          <div class="ereignis textzeile" use:glideHeight={flowOn && i === flowIndex}>
             {@render punkt('antwort')}
             <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
             <div class="antwort" onclick={antwortKlick}>

@@ -12,10 +12,16 @@ and it cannot delete: a model that can write the file in one go can also wipe
 it in one go, and clearing the memory is the user's move, one button away in
 the settings window.
 
-The list is a way of its own because the model cannot rely on the memory
-block in its system prompt: that block only travels where the switch for the
-endpoint's side is on (app/gedaechtnis.py), while the tool is offered either
-way. A model that can write but never read cannot correct anything.
+The tool exists only where the memory travels to the model (app/gedaechtnis.py
+``mitschicken``): where the switch for the endpoint's side is off, the model
+has neither the memory block in its prompt nor this tool — not in its list and
+not in a call (app/tools/registry.py). Storing without being shown what is
+stored would tell the model, through the answer to each call, whether a
+sentence is already there.
+
+The list is a way of its own because the entries stand in the system prompt
+only from the start of a conversation: a model that can write but never read
+cannot correct anything that was saved since.
 
 An entry to replace is found by a short part of its text, not by its full
 wording — the model rarely has the exact sentence in front of it. The part
@@ -42,6 +48,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -67,13 +74,6 @@ FAKTUM = "fact"
 _schleuse = asyncio.Lock()
 
 
-# What a model is told where the memory does not travel to it.
-VERBORGEN = (
-    "Stored entries are not shown to this model because memory is disabled for its side in "
-    "the settings."
-)
-
-
 class MemoryVerboten(Exception):
     """The call was refused — nothing was written."""
 
@@ -94,40 +94,26 @@ def _vergleichbar(text: str) -> str:
     return " ".join(text.split()).casefold()
 
 
-def werkzeug_beschreibung(shown: bool = True) -> MCPWerkzeug:
+def werkzeug_beschreibung() -> MCPWerkzeug:
     """The tool as the model sees it.
 
-    ``shown`` is whether the memory travels to THIS model
-    (app/gedaechtnis.py ``mitschicken``) — the same reading ``ausfuehren``
-    takes as ``zeigen``. It decides what the description may promise: where
-    the memory travels, the entries are read when a conversation begins, so
-    a new one is in front of the model from the next conversation on and not
-    at once; where it does not, the model never sees them, cannot list them
-    and can name an entry to replace only by its whole text.
+    It is only ever shown to a model the memory travels to, where the entries
+    are read when a conversation begins: a new one is in front of the model
+    from the next conversation on and not at once.
     """
-    if shown:
-        when = (
-            "Both are saved without confirmation. Memory is loaded at the start of a "
-            "conversation, so newly saved entries become available in the next conversation, "
-            "not immediately. This tool's response confirms that an entry was saved."
-        )
-        correcting = (
-            "to correct something, pass a short part of the existing entry's "
-            "text as 'replaces'; that part must match exactly one entry.\n"
-            "Called with an empty 'text', it saves nothing and lists the "
-            "entries you have stored.\n"
-            "The answer says what happened: saved, replaced, already known, or "
-            "which entries there are when 'replaces' matched none or several."
-        )
-    else:
-        when = (
-            f"Both are saved without confirmation. {VERBORGEN} Saved entries are available to "
-            "models that receive the memory."
-        )
-        correcting = (
-            "to correct an entry, pass its full existing text as 'replaces'.\n"
-            "The response indicates whether it was saved, replaced, or already known."
-        )
+    when = (
+        "Both are saved without confirmation. Memory is loaded at the start of a "
+        "conversation, so newly saved entries become available in the next conversation, "
+        "not immediately. This tool's response confirms that an entry was saved."
+    )
+    correcting = (
+        "to correct something, pass a short part of the existing entry's "
+        "text as 'replaces'; that part must match exactly one entry.\n"
+        "Called with an empty 'text', it saves nothing and lists the "
+        "entries you have stored.\n"
+        "The answer says what happened: saved, replaced, already known, or "
+        "which entries there are when 'replaces' matched none or several."
+    )
     return MCPWerkzeug(
         name=WERKZEUG_NAME,
         beschreibung=(
@@ -181,50 +167,106 @@ def _art_von(argumente: dict[str, Any]) -> str:
     return art if art in (REGEL, FAKTUM) else FAKTUM
 
 
-def _zeilen_teilen(inhalt: str) -> tuple[list[str], list[str]]:
-    """Splits the file into the two lists of entries.
+# A line that is a heading by the rules of Markdown: up to three blanks of
+# indentation, one to six ``#``, then a blank, a tab or the end of the line.
+# ``#hashtag`` is not one.
+_UEBERSCHRIFT = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
 
-    Anything outside the two headings is left out of the lists on purpose:
-    the file is hand-editable, and whatever a person writes above the first
-    heading is theirs to keep — ``_preamble`` hands it back to ``eintragen``,
-    which writes it first again.
+
+def _kopfart(zeile: str) -> str | None:
+    """What a line is as a heading: the kind whose own heading it is, ``""``
+    for any other heading, ``None`` for a line that is no heading."""
+    if zeile.strip() == UEBERSCHRIFT_REGELN:
+        return REGEL
+    if zeile.strip() == UEBERSCHRIFT_FAKTEN:
+        return FAKTUM
+    return "" if _UEBERSCHRIFT.match(zeile.rstrip("\r\n")) else None
+
+
+def _gliedern(inhalt: str) -> tuple[str, list[tuple[str, str]]]:
+    """Cuts the file into what stands above its first own heading and the
+    blocks from there on, each a heading with the lines up to the next
+    heading of any kind: ``(kind, text)``, ``kind`` being ``rule`` or
+    ``fact`` for an own heading and ``""`` for a heading of the person's
+    own. The text keeps every character."""
+    preamble: list[str] = []
+    blocks: list[tuple[str, list[str]]] = []
+    for zeile in inhalt.splitlines(keepends=True):
+        art = _kopfart(zeile)
+        if art is not None and (art or blocks):
+            blocks.append((art, [zeile]))
+        elif blocks:
+            blocks[-1][1].append(zeile)
+        else:
+            preamble.append(zeile)
+    return "".join(preamble), [(art, "".join(lines)) for art, lines in blocks]
+
+
+def _zeilen_teilen(inhalt: str) -> tuple[list[str], list[str]]:
+    """The entries of the two lists, from every block under one of the two
+    headings.
+
+    Whatever stands outside them is left out on purpose: the file is
+    hand-editable, and what a person writes above the first heading or
+    under a heading of their own is theirs to keep — ``_zusammensetzen``
+    writes it back where it stood.
     """
     regeln: list[str] = []
     fakten: list[str] = []
-    ziel: list[str] | None = None
-    for zeile in inhalt.splitlines():
-        kopf = zeile.strip()
-        if kopf == UEBERSCHRIFT_REGELN:
-            ziel = regeln
+    for art, text in _gliedern(inhalt)[1]:
+        if not art:
             continue
-        if kopf == UEBERSCHRIFT_FAKTEN:
-            ziel = fakten
-            continue
-        if ziel is None or not kopf:
-            continue
-        ziel.append(kopf.removeprefix("-").strip() if kopf.startswith("-") else kopf)
+        for zeile in text.splitlines()[1:]:
+            kopf = zeile.strip()
+            if not kopf:
+                continue
+            (regeln if art == REGEL else fakten).append(
+                kopf.removeprefix("-").strip() if kopf.startswith("-") else kopf
+            )
     return regeln, fakten
 
 
-def _preamble(inhalt: str) -> str:
-    """Whatever stands above the first of the two headings, byte for byte
-    — a note of the person's own, which saving an entry must not take away
-    or reshape."""
-    lines: list[str] = []
-    for line in inhalt.splitlines(keepends=True):
-        if line.strip() in (UEBERSCHRIFT_REGELN, UEBERSCHRIFT_FAKTEN):
-            break
-        lines.append(line)
-    return "".join(lines)
+def _zusammensetzen(
+    regeln: list[str], fakten: list[str], blocks: list[tuple[str, str]] | None = None
+) -> str:
+    """The file from the two lists. The blocks the file had stay in their
+    order: a block of the person's own is written as it was, and each list
+    goes under the first of its own headings (one that stood again further
+    down is merged into it). A list without a heading yet gets one, the rules
+    ahead of the facts."""
+    listen = {REGEL: regeln, FAKTUM: fakten}
+    ueberschriften = {REGEL: UEBERSCHRIFT_REGELN, FAKTUM: UEBERSCHRIFT_FAKTEN}
 
+    def stueck(art: str) -> str:
+        return ueberschriften[art] + "\n" + "\n".join(f"- {z}" for z in listen[art])
 
-def _zusammensetzen(regeln: list[str], fakten: list[str]) -> str:
     teile: list[str] = []
-    if regeln:
-        teile.append(UEBERSCHRIFT_REGELN + "\n" + "\n".join(f"- {z}" for z in regeln))
-    if fakten:
-        teile.append(UEBERSCHRIFT_FAKTEN + "\n" + "\n".join(f"- {z}" for z in fakten))
-    return "\n\n".join(teile)
+    geschrieben: set[str] = set()
+    vorhanden = {art for art, _ in blocks or []}
+    for art, text in blocks or []:
+        if not art:
+            teile.append(text)
+            continue
+        if art == FAKTUM and REGEL not in vorhanden and regeln:
+            teile.append(stueck(REGEL))
+            vorhanden.add(REGEL)
+            geschrieben.add(REGEL)
+        if art not in geschrieben and listen[art]:
+            teile.append(stueck(art))
+        geschrieben.add(art)
+    for art in (REGEL, FAKTUM):
+        if art not in geschrieben and listen[art]:
+            teile.append(stueck(art))
+
+    ausgabe = ""
+    for teil in teile:
+        if ausgabe:
+            # A piece of ours has no line break at its end and is set apart
+            # by a blank line; a block of the person's own is written as it
+            # was and has nothing added behind it.
+            ausgabe += "" if ausgabe.endswith("\n") else "\n\n"
+        ausgabe += teil
+    return ausgabe.rstrip("\n")
 
 
 def auflisten(inhalt: str) -> str:
@@ -235,20 +277,20 @@ def auflisten(inhalt: str) -> str:
     return _zusammensetzen(regeln, fakten)
 
 
-def eintragen(
-    inhalt: str, text: str, art: str, ersetzt: str = "", *, teiltext: bool = True
-) -> str:
+def eintragen(inhalt: str, text: str, art: str, ersetzt: str = "") -> str:
     """The new file content — pure text in, pure text out, nothing on disk.
 
     Kept free of the filesystem so the rules of the game can be tested
     without one: replacing hits the entry no matter which heading it sits
     under, and an entry that is already there is not written twice.
 
-    ``ersetzt`` is a part of the entry's text — with ``teiltext=False`` the
-    whole entry. It has to point at one entry; copies of the same sentence
-    (case and spacing aside) count as one, and all of them go. Pointing at
-    none or at several raises ``ErsetztNichtEindeutig``, the entries in its
-    ``eintraege``.
+    ``ersetzt`` is a part of the entry's text. It has to point at one entry;
+    copies of the same sentence (case and spacing aside) count as one, and
+    all of them go. Pointing at none or at several raises
+    ``ErsetztNichtEindeutig``, the entries in its ``eintraege``.
+
+    What the person wrote into the file stays as it stood: the text above the
+    first heading of ours, and every heading of their own with its lines.
     """
     regeln, fakten = _zeilen_teilen(inhalt)
     ersetzt = ersetzt.strip().removeprefix("-").strip()
@@ -260,7 +302,7 @@ def eintragen(
         # The whole entry first: a short entry is also a part of every longer
         # one that repeats it, and could otherwise never be named alone.
         getroffen = {e for e in alle if e == gesucht}
-        if not getroffen and teiltext:
+        if not getroffen:
             getroffen = {e for e in alle if gesucht in e}
         if len(getroffen) != 1:
             grund = (
@@ -284,8 +326,8 @@ def eintragen(
 
     if text not in ziel:
         ziel.append(text)
-    preamble = _preamble(inhalt)
-    entries = _zusammensetzen(regeln, fakten)
+    preamble, blocks = _gliedern(inhalt)
+    entries = _zusammensetzen(regeln, fakten, blocks)
     if not preamble.strip():
         return entries
     # As written, the gap before the first heading included; a note without
@@ -293,19 +335,16 @@ def eintragen(
     return preamble + entries if preamble.endswith("\n") else f"{preamble}\n{entries}"
 
 
-async def ausfuehren(argumente: dict[str, Any], pfad: Path, *, zeigen: bool) -> str:
+async def ausfuehren(argumente: dict[str, Any], pfad: Path) -> str:
     """Writes one entry, or lists them all when no text is given. Returns
     what the model is told about it.
 
-    ``zeigen`` is whether the memory travels to THIS model
-    (app/gedaechtnis.py ``mitschicken``). Where it does not, the entries are
-    not handed over through the tool either — the switch keeps the memory
-    off that side, and a listing is the memory. Saving still works there.
+    Only a model the memory travels to gets here
+    (app/gedaechtnis.py ``mitschicken``): the registry refuses the call for
+    any other (app/tools/registry.py).
     """
     text = _text_von(argumente)
     if not text:
-        if not zeigen:
-            return VERBORGEN
         async with _schleuse:
             alt = pfad.read_text(encoding="utf-8") if pfad.exists() else ""
         return f"No text provided; nothing was saved. Stored entries:\n\n{auflisten(alt)}"
@@ -321,15 +360,8 @@ async def ausfuehren(argumente: dict[str, Any], pfad: Path, *, zeigen: bool) -> 
     async with _schleuse:
         alt = pfad.read_text(encoding="utf-8") if pfad.exists() else ""
         try:
-            # Where the model cannot see the entries, it names one only by its
-            # whole text, as before: a part it guessed could hit a sentence
-            # it has never seen.
-            neu = eintragen(alt, text, art, ersetzt, teiltext=zeigen)
+            neu = eintragen(alt, text, art, ersetzt)
         except ErsetztNichtEindeutig as fehler:
-            if not zeigen:
-                raise MemoryVerboten(
-                    f"No entry exactly matches '{ersetzt}'. Nothing was saved. {VERBORGEN}"
-                ) from fehler
             raise MemoryVerboten(f"{fehler}\n\n{fehler.eintraege}") from fehler
         if neu.strip() == alt.strip():
             return "Already known; nothing changed."

@@ -92,8 +92,10 @@ from app.api.abhaengigkeiten import hole_benutzer_id, hole_repositories, hole_sp
 from app.api.v1.generierung import (
     # One sender for both streams: every event carries `zeitpunkt_ms`, so a
     # reattached job's tool clock starts from when the call began.
+    ZWISCHENSTAND_TAKT,
     _auf_entscheidung_warten,
     _display_name,
+    _kontextstand,
     _sse,
     _werkzeug_ausfuehren,
     hole_discovery,
@@ -1601,37 +1603,37 @@ def laufmodell(
     if not kennung:
         return LaufmodellAntwort()
     gefunden = discovery.aufloesen(kennung)
-    # What the window puts under the row is the display name and not the
-    # reported one: a local server reports its model as the full path it was
-    # started with, and that path carries the user's folder structure into
-    # the window (app/discovery.py `anzeigename`).
+    # What the window puts under the row is the model's name as the model
+    # list names it — the entry's own ``name``, which is the model the run
+    # books with and not the name of the server it stands on, and which
+    # leaves a local server's full path (the user's folder structure) out of
+    # the window (app/discovery.py `als_dict`, `anzeigename`).
     reihe = None
+    name = None
     if gefunden:
         zustand, modell = gefunden
-        reihe = next(
-            (
-                p
-                for p in zustand.als_dict(
-                    modell,
-                    sprache,
-                    # A stage this model has already refused can leave it
-                    # without any thinking at all — the same reading the model
-                    # window gets, so the mask cannot lock where the slider
-                    # does not, or the other way round. Looked up under
-                    # ``refusal_key``, the id the model list reads them under:
-                    # the id a run books with may name a catalogue server
-                    # alone, and would be a second list for the same model.
-                    abgelehnt=denkablehnung.gemerkt(
-                        repositories.einstellungen, refusal_key(zustand, modell)
-                    ),
-                )["parameter"]
-                if p["name"] == "reasoning_budget"
+        entry = zustand.als_dict(
+            modell,
+            sprache,
+            # A stage this model has already refused can leave it
+            # without any thinking at all — the same reading the model
+            # window gets, so the mask cannot lock where the slider
+            # does not, or the other way round. Looked up under
+            # ``refusal_key``, the id the model list reads them under:
+            # the id a run books with may name a catalogue server
+            # alone, and would be a second list for the same model.
+            abgelehnt=denkablehnung.gemerkt(
+                repositories.einstellungen, refusal_key(zustand, modell)
             ),
+        )
+        name = entry["name"]
+        reihe = next(
+            (p for p in entry["parameter"] if p["name"] == "reasoning_budget"),
             None,
         )
     return LaufmodellAntwort(
         endpoint_id=kennung,
-        name=(gefunden[0].anzeigename if gefunden else None) or kennung,
+        name=name or kennung,
         denklaenge=reihe,
     )
 
@@ -2102,17 +2104,19 @@ def _auftragslauf(
     # reads them under (see the docstring).
     refusal_id = refusal_key(zustand, anfrage.modell)
 
-    def protokoll(typ: str, inhalt: str) -> None:
+    def protokoll(typ: str, inhalt: str) -> str | None:
         # A job deleted under its run takes its transcript with it; a line
         # the run still writes afterwards has no row to belong to and is
-        # dropped instead of failing the run.
+        # dropped instead of failing the run. The id of the line written
+        # comes back, None for a dropped one.
         try:
-            repositories.auftraege.schritt_anlegen(auftrag_id, typ, inhalt)
+            return repositories.auftraege.schritt_anlegen(auftrag_id, typ, inhalt).id
         except sqlite3.IntegrityError as error:
             # Only the missing job; any other broken line stays loud.
             if error.sqlite_errorname != "SQLITE_CONSTRAINT_FOREIGNKEY":
                 raise
             log.info("Job %s is gone, its transcript line is dropped", auftrag_id)
+            return None
 
     # One transcript line per running tool call, and its id while the run
     # lasts: the first progress event opens the line, every later one
@@ -2164,18 +2168,46 @@ def _auftragslauf(
             return
         repositories.auftraege.schritt_fortschreiben(zeile, text)
 
-    def kontext_protokollieren(stand: kontextverbrauch.Kontextstand | None) -> None:
+    # The line this round's live context readings rewrite, while the round
+    # lasts — the same way a tool call's progress line is rewritten and not
+    # repeated: a line per reading would bury the transcript.
+    context_lines: dict[str, str] = {}
+
+    def kontext_protokollieren(
+        stand: kontextverbrauch.Kontextstand | None, *, live: bool = False
+    ) -> None:
         """A ``kontext`` step — the one thing a job's context bar reads.
-        Nothing to log without a reading."""
-        if stand is not None:
-            protokoll("kontext", json.dumps(dataclasses.asdict(stand), ensure_ascii=False))
-            bus.veroeffentlichen_ohne_warten(
-                Ereignisse.AUFTRAG_KONTEXT, auftrag_id=auftrag_id
-            )
+        Nothing to log without a reading.
+
+        A live reading (the round is still being written) opens one line
+        and rewrites it. The round's own count is a line of its own and
+        closes the live one — also when it has no count to write, so the
+        next round's readings open a line of their own: the newest line is
+        the one the bar reads."""
+        line_id = context_lines.get("live") if live else context_lines.pop("live", None)
+        if stand is None:
+            return
+        payload = json.dumps(dataclasses.asdict(stand), ensure_ascii=False)
+        if live and line_id is not None:
+            repositories.auftraege.schritt_fortschreiben(line_id, payload)
+        else:
+            opened = protokoll("kontext", payload)
+            if live and opened is not None:
+                context_lines["live"] = opened
+        bus.veroeffentlichen_ohne_warten(
+            Ereignisse.AUFTRAG_KONTEXT, auftrag_id=auftrag_id
+        )
 
     async def arbeit(generierung: Generierung) -> None:
         antwort_text: list[str] = []
         messwerte: dict = {}
+        # The context stand the last round ended with, which a live reading
+        # of the next round is built on (app/api/v1/generierung.py
+        # `_kontextstand`), the reading last reported and the moment one was
+        # last written to the log.
+        last_total: int | None = None
+        reported_total: int | None = None
+        last_context_write = 0.0
         fehlertext: str | None = None
         # The same error in the language of the window, where the two differ
         # (app/providers/base.py): the stored ending is the model's copy, the
@@ -2432,6 +2464,10 @@ def _auftragslauf(
                             versuche=kontextvoll.FALTVERSUCHE,
                         ),
                     )
+                    # The reading the next estimate would build on described
+                    # the longer request; the round about to go out brings
+                    # its own count within seconds.
+                    last_total = None
                     # Folded: the ceiling is worked out again from what is
                     # left, the same question asked of a smaller input.
                     anfrage.max_tokens = antwortgrenze.aufloesen(
@@ -2536,6 +2572,30 @@ def _auftragslauf(
                             elif stueck.sorte == "stats":
                                 messwerte = stueck.daten
                                 runden_messwerte = stueck.daten
+                            elif stueck.sorte == "kontext":
+                                # How full the context is WHILE the round is
+                                # written, as in the chat: the stream and the
+                                # bar of a job stood still until the round's
+                                # own count. The same estimate the chat makes
+                                # (`_kontextstand`); sent when it changed,
+                                # written to the log at the autosave's pace.
+                                stand = _kontextstand(stueck.daten, last_total)
+                                if stand is not None and stand != reported_total:
+                                    reported_total = stand
+                                    generierung.melden(_sse("kontext", gesamt_tokens=stand))
+                                    jetzt = time.monotonic()
+                                    if jetzt - last_context_write >= ZWISCHENSTAND_TAKT:
+                                        last_context_write = jetzt
+                                        kontext_protokollieren(
+                                            kontextverbrauch.stand(
+                                                {"gesamt_tokens": stand}, zustand.context_tokens
+                                            ),
+                                            live=True,
+                                        )
+                            elif stueck.sorte == "denktempo":
+                                # A live speed while the model is still
+                                # thinking, forwarded as the chat does.
+                                generierung.melden(_sse("denktempo", **stueck.daten))
                             elif stueck.sorte == "tool_call_laeuft":
                                 # The same kind the chat run forwards
                                 # (app/api/v1/generierung.py): a tool call is
@@ -2783,6 +2843,7 @@ def _auftragslauf(
                                 break
                             if not gefaltet:
                                 raise
+                            last_total = None
                             protokoll(
                                 "status",
                                 t(
@@ -2997,6 +3058,8 @@ def _auftragslauf(
                 # numbers, or the context size was never confirmed.
                 kontextstand = kontextverbrauch.stand(runden_messwerte, zustand.context_tokens)
                 kontext_protokollieren(kontextstand)
+                if kontextstand is not None:
+                    last_total = kontextstand.tokens
 
                 # The round ran the window out. Until now a run only ever
                 # learned that from the text of a refusal, and a full window
@@ -3739,6 +3802,10 @@ def _auftragslauf(
                     ):
                         if isinstance(schritt, kontextverbrauch.Kontextstand):
                             kontext_protokollieren(schritt)
+                            # The total the next round's live readings build
+                            # on: this round's results are in it, and after a
+                            # fold it is what the folded request weighs.
+                            last_total = schritt.tokens
                         elif isinstance(schritt, round_end.Cleared):
                             protokoll(
                                 "status",

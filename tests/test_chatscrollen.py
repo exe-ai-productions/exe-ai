@@ -18,6 +18,7 @@ import pytest
 
 WURZEL = Path(__file__).resolve().parent.parent
 QUELLE = WURZEL / "frontend/src/App.svelte"
+FEDER = WURZEL / "frontend/src/lib/glide.js"
 
 
 def _funktionen() -> str:
@@ -41,9 +42,17 @@ def _funktionen() -> str:
     treffer = re.search(r"\n  const FANG_WEG = (\d+)\n", quelle)
     assert treffer, "FANG_WEG not found"
     stuecke.insert(2, f"const FANG_WEG = {treffer.group(1)};\nlet fangSumme = 0;\nlet fangZuletzt = 0;\nlet hochSumme = 0;\nlet runterSumme = 0;\n")
-    treffer = re.search(r"\n  const GLEIT_HALB_MS = (\d+)\n", quelle)
+    # The spring itself lives in `lib/glide.js`, shared with the growing text.
+    feder = FEDER.read_text()
+    treffer = re.search(r"\nexport const GLEIT_HALB_MS = (\d+)\n", feder)
     assert treffer, "GLEIT_HALB_MS not found"
-    stuecke.insert(2, f"const GLEIT_HALB_MS = {treffer.group(1)};\nlet gleitet = false;\n")
+    schritt = re.search(r"\nexport function glideStep\(.*?\n\}\n", feder, re.S)
+    assert schritt, "glideStep() not found"
+    stuecke.insert(
+        2,
+        f"const GLEIT_HALB_MS = {treffer.group(1)};\nlet gleitet = false;\n"
+        + schritt.group(0).replace("export function", "function"),
+    )
     reduziert = re.search(r"\n  const bewegungReduziert = \(\) =>\n[^\n]*\n", quelle)
     assert reduziert, "bewegungReduziert not found"
     stuecke.insert(2, reduziert.group(0).replace("const bewegungReduziert", "const bewegungReduziert"))

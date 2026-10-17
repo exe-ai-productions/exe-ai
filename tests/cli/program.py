@@ -33,6 +33,7 @@ from prompt_toolkit.data_structures import Size
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import ColorDepth, DummyOutput, Output
 from prompt_toolkit.output.vt100 import Vt100_Output
+from rich.style import Style
 
 from cli import events, themes
 from cli.interfaces import Context
@@ -144,6 +145,13 @@ def terminal(
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr("rich.console.WINDOWS", False)
+    # rich writes the codes of a style onto the style itself, for whatever
+    # colours the first console that wrote it had, and hands the same style
+    # to every console after that. A test that wrote a look in fewer colours
+    # earlier in the same process would leave these colours behind: styles
+    # parsed anew are written afresh.
+    for cached in (Style.parse, Style._add):
+        cached.cache_clear()  # type: ignore[attr-defined]
     sent = io.StringIO()
     output = Vt100_Output(
         sent,

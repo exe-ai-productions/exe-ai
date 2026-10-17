@@ -144,16 +144,13 @@ async def test_a_shared_folder_keeps_the_note_duty(client, config, tmp_path):
     assert "Keeping each `exe.md` current" in _system(request)
 
 
-def _memory_description(request) -> str:
-    (entry,) = [
-        w for w in request.werkzeuge if w["function"]["name"] == memory.WERKZEUG_NAME
-    ]
-    return entry["function"]["description"]
+def _memory_tools(request) -> list[dict]:
+    return [w for w in request.werkzeuge if w["function"]["name"] == memory.WERKZEUG_NAME]
 
 
 async def test_the_memory_tool_of_a_job_follows_the_switch(client, config, tmp_path):
-    """The test endpoint is a provider: the memory stays away by default,
-    and travels once its side is switched on."""
+    """The test endpoint is a provider: the memory stays away by default and
+    the job has no memory tool then; it has it once its side is switched on."""
     registry = WerkzeugRegistry(
         [], shell_an=True, berechtigungen_pfad=_rules(tmp_path),
         memory_pfad=tmp_path / "memory.md",
@@ -161,7 +158,7 @@ async def test_the_memory_tool_of_a_job_follows_the_switch(client, config, tmp_p
     request, _folder = await _request(
         client, config, tmp_path, tools="memory_save", registry=registry
     )
-    assert memory.VERBORGEN in _memory_description(request)
+    assert _memory_tools(request) == []
 
     client.app.state.repositories.einstellungen.setzen(
         "global", gedaechtnis.SCHLUESSEL, {"lokal": True, "cloud": True}
@@ -169,7 +166,8 @@ async def test_the_memory_tool_of_a_job_follows_the_switch(client, config, tmp_p
     request, _folder = await _request(
         client, config, tmp_path, tools="memory_save", registry=registry
     )
-    assert memory.VERBORGEN not in _memory_description(request)
+    (entry,) = _memory_tools(request)
+    assert "in the next conversation, not immediately" in entry["function"]["description"]
 
 
 async def test_a_job_lists_no_skill_whose_tool_it_lacks(client, config, tmp_path, monkeypatch):

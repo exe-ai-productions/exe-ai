@@ -1006,9 +1006,9 @@ class WerkzeugRegistry:
         says so instead of promising it in the answer.
 
         ``memory_shown`` is whether the memory travels to the model this list
-        goes to (app/gedaechtnis.py ``mitschicken``). ``memory_save``'s
-        description promises only what holds on that side
-        (app/tools/memory.py).
+        goes to (app/gedaechtnis.py ``mitschicken``). Where it does not,
+        ``memory_save`` is not in the list: a model without the entries has
+        no way to store either.
 
         ``helpers`` is whether ``start_job`` may start a helper without an
         agent (app/helper.py). A chat's list may; the one place a job's list
@@ -1070,12 +1070,11 @@ class WerkzeugRegistry:
                 liste.append(e.tool.werkzeug_beschreibung().als_openai_werkzeug())
         if (
             self.memory_pfad is not None
+            and memory_shown
             and (nur is None or memory.WERKZEUG_NAME in nur)
             and memory.WERKZEUG_NAME not in self.abgeschaltet
         ):
-            liste.append(
-                memory.werkzeug_beschreibung(memory_shown).als_openai_werkzeug()
-            )
+            liste.append(memory.werkzeug_beschreibung().als_openai_werkzeug())
         if self.skills_orte is not None:
             liste += [
                 b.als_openai_werkzeug()
@@ -1416,9 +1415,9 @@ class WerkzeugRegistry:
         as for a chat's own call.
 
         ``gedaechtnis_zeigen`` is whether the memory travels to the model
-        asking (app/gedaechtnis.py ``mitschicken``) — read only by
-        ``memory_save``, which hands its entries over only then. Left out,
-        it hands over none.
+        asking (app/gedaechtnis.py ``mitschicken``) — read only for
+        ``memory_save``, which exists only then. Left out, a call to it is
+        refused.
 
         ``bild_senke`` saves image blocks from the result (see
         ``ergebnis_zu_text``) — the chat run passes it through, jobs leave
@@ -1477,6 +1476,11 @@ class WerkzeugRegistry:
         if self._merkmal_abgeschaltet(name):
             raise WerkzeugVerboten(f"Tool '{name}' is not enabled.")
 
+        # The memory tool belongs only to a model the memory travels to. A
+        # call from any other is refused the same way, and nothing is written.
+        if name == memory.WERKZEUG_NAME and not gedaechtnis_zeigen:
+            raise WerkzeugVerboten(f"Tool '{name}' is not enabled.")
+
         urteil = self.urteil(name, argumente, ordner, herkunft, agent, rules_of)
         if urteil.antwort == "nein":
             raise WerkzeugVerboten(
@@ -1510,9 +1514,7 @@ class WerkzeugRegistry:
 
         if name == memory.WERKZEUG_NAME:
             try:
-                return await memory.ausfuehren(
-                    argumente, self.memory_pfad, zeigen=gedaechtnis_zeigen
-                )
+                return await memory.ausfuehren(argumente, self.memory_pfad)
             except memory.MemoryVerboten as fehler:
                 raise WerkzeugVerboten(str(fehler)) from fehler
 

@@ -77,16 +77,33 @@ def _resolve(name: str) -> Path | None:
         return None
 
 
+def _same_file(first: Path, second: Path) -> bool:
+    try:
+        return first.samefile(second)
+    except OSError:
+        return False
+
+
 def mentioned_files(text: str) -> Iterator[Path]:
     """The existing files the words with ``@`` in front of them name, in the
     order they stand. A word that is no file — or an address such as
-    ``name@example.com``, whose ``@`` stands inside a word — is none."""
+    ``name@example.com``, whose ``@`` stands inside a word — is none.
+
+    A sentence that ends right behind the path leaves a mark at its end. The
+    name without it wins wherever it leads to the same file — Windows reads
+    ``note.txt.`` as ``note.txt``, and the ending of the file is what decides
+    between a picture and a document, so the file must go under the name that
+    carries it. A file whose name really ends in the mark, with no other one
+    beside it, is found under its full name.
+    """
     for found in _MENTION.finditer(text):
         name = _unescape(found.group(1))
         path = _resolve(name)
-        if path is None and name.rstrip(_TRAILING) != name:
-            # A sentence that ends right behind the path.
-            path = _resolve(name.rstrip(_TRAILING))
+        bare = name.rstrip(_TRAILING)
+        if bare and bare != name:
+            plain = _resolve(bare)
+            if plain is not None and (path is None or _same_file(path, plain)):
+                path = plain
         if path is not None:
             yield path
 

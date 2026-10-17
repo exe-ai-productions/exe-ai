@@ -17,7 +17,7 @@
 ### Chat
 
 - We improved the flow of a running answer: text and thinking fade in, the text follows at most a quarter of a second behind, the view glides along, and thinking and tool calls form one block per run.
-- We improved the line beside an answer, which now always ends at its mark: the mark keeps drawing itself without disappearing and stays still once the answer is done.
+- We improved the line beside an answer, which now grows smoothly with the text and always ends at its mark: the mark keeps drawing itself without disappearing and stays still once the answer is done.
 - Fixed an issue that pulled a running answer up when its first tool calls folded into a bundle.
 - We improved the speed of the chat list with many chats.
 - We improved the arrow of the Regenerate button.
@@ -45,6 +45,8 @@
 - Fixed an issue that lost the model, context, GPU layers, CPU threads and port of the speech, clean-up and embedding servers.
 - Fixed an issue where every sentence of the voice ended with "Speech generation failed." on computers with little memory.
 - Fixed an issue that refused a voice sample saved in the extensible WAV format.
+- Fixed an issue where a model could still save to the memory after the memory was switched off for it; it no longer gets the memory tool.
+- Fixed an issue where a heading you wrote yourself in the memory file was turned into an entry; it now stays as you wrote it.
 
 ### Images and video
 
@@ -74,6 +76,8 @@
 - Fixed an issue that shrank the task field of the job windows to a single row.
 - Fixed an issue that refused a helper at the wrong count when the limit was one.
 - We improved the schedule form, which now says in a sentence what a typed schedule means and when it runs next.
+- Fixed an issue where a running job did not show how full its context is or how fast it thinks; it now shows both, as the chat does.
+- Fixed an issue where a job on a model without a catalogue entry showed the name of its endpoint instead of the model's name.
 
 ### Tools, files and MCP
 

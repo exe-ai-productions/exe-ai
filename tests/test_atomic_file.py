@@ -400,7 +400,7 @@ async def test_the_memory_tool_writes_in_a_thread_and_the_entry_lands(tmp_path, 
     from app.tools import memory
 
     pfad = tmp_path / "memory.md"
-    antwort = await memory.ausfuehren({"text": "Mag Tee.", "kind": "fact"}, pfad, zeigen=True)
+    antwort = await memory.ausfuehren({"text": "Mag Tee.", "kind": "fact"}, pfad)
     assert antwort == "Saved."
     assert to_thread_spy == [atomic_file.write]
     assert "Mag Tee." in pfad.read_text(encoding="utf-8")

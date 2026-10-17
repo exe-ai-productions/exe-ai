@@ -1018,6 +1018,7 @@ def _system_bauen(
         for w in (
             registry.als_openai_werkzeuge(
                 bild_fenster=lambda: bild_werkzeug.fensterbild(repositories, config),
+                memory_shown=gedaechtnis_da,
             )
             if werkzeuge_da
             else []

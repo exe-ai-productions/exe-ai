@@ -21,6 +21,10 @@ running state to its end and reports what the layout says:
 * the mark at the end of the line never goes away while the answer runs: its
   outer form stands and the line ends inside its stroke, only the inside
   draws itself again and fades;
+* a new line of the running text lets the line grow and the mark glide down
+  on the chat's spring instead of jumping a line in one frame (measured frame
+  by frame), and with less motion asked for it stands at its new place in the
+  first frame;
 * once the answer is over, a stored one too and with no readings, the mark
   stands completely drawn and still in the row of the readings, and the
   line ends on it; with less motion asked for everything stands finished.
@@ -131,6 +135,57 @@ const markGeometry = () => {
   return { lineEnd, strokeTop, gap: strokeTop - lineEnd, piece: piece.display }
 }
 const dashOf = (node) => parseFloat(getComputedStyle(node).strokeDashoffset)
+// The top of the mark's outer form, frame by frame, and whether the line of
+// the text entry reaches the line of the row under it (`hole`, 0 = it does).
+const recordFrames = (count) => new Promise((resolve) => {
+  const frames = []
+  const next = () => {
+    const outline = document.querySelector('.place .outline')
+    const entries = Array.from(document.querySelectorAll('.ereignis.textzeile'))
+    const text = entries[entries.length - 1]
+    const place = document.querySelector('.ereignis.place')
+    if (outline && text && place) {
+      const textPiece = getComputedStyle(text, '::before')
+      const placePiece = getComputedStyle(place, '::before')
+      const textEnd = text.getBoundingClientRect().top + parseFloat(textPiece.top) + parseFloat(textPiece.height)
+      const placeStart = place.getBoundingClientRect().top + parseFloat(placePiece.top)
+      frames.push({ top: outline.getBoundingClientRect().top, hole: placeStart - textEnd })
+    }
+    if (frames.length < count) requestAnimationFrame(next)
+    else resolve(frames)
+  }
+  requestAnimationFrame(next)
+})
+const paragraph = 'This is a paragraph of the running answer. It has enough words to take a line or two of the column. '
+const grownAnswer = async (id) => {
+  // An answer whose text has run out, then one more paragraph: the frames of
+  // the growth are recorded.
+  const base = [paragraph, paragraph, paragraph].join('\n\n')
+  const stand = (text) => ({
+    id, rolle: 'assistant', content: text, abschnitte: [{ art: 'content', text }], werkzeuge: [], stats: {},
+  })
+  scene.again += 1
+  scene.laeuft = true
+  scene.nachricht = stand(base)
+  for (let k = 0; k < 150 && (document.querySelector('.fliesstext')?.textContent.length ?? 0) < base.length - 20; k += 1) {
+    await wait(100)
+  }
+  await wait(600)
+  const before = document.querySelector('.place .outline').getBoundingClientRect().top
+  const lineHeight = parseFloat(getComputedStyle(document.querySelector('.fliesstext')).lineHeight)
+  scene.nachricht = stand(base + '\n\n' + paragraph)
+  const frames = await recordFrames(110)
+  const tops = frames.map((f) => f.top)
+  const steps = tops.slice(1).map((top, k) => Math.abs(top - tops[k]))
+  return {
+    lineHeight, before, first: tops[0], last: tops[tops.length - 1],
+    total: tops[tops.length - 1] - before,
+    maxStep: Math.max(...steps),
+    settled: Math.abs(tops[tops.length - 1] - tops[tops.length - 6]),
+    maxHole: Math.max(...frames.map((f) => Math.abs(f.hole))),
+    frames: frames.length,
+  }
+}
 if (location.hash === '#calm') {
   // Less motion asked for (the browser is started with the setting): the
   // mark stands finished, nothing moves.
@@ -148,6 +203,7 @@ if (location.hash === '#calm') {
     animations: row ? row.getAnimations({ subtree: true }).length : -1,
     drawn: row ? Array.from(row.querySelectorAll('.strich')).map(dashOf) : [],
     inside: row ? Array.from(row.querySelectorAll('.inside')).map((n) => Number(getComputedStyle(n).opacity)) : [],
+    grow: await grownAnswer('c2'),
   } })
   return
 }
@@ -190,6 +246,16 @@ const textCount = () => {
 }
 let tries = 0
 while (textCount() < 300 && tries < 150) { await wait(100); tries += 1 }
+// The row follows the growing text on the spring: wait until the text has
+// stopped growing and the row has come to rest before it is measured.
+let steady = 0
+let lastCount = -1
+while (steady < 6 && tries < 300) {
+  await wait(100)
+  tries += 1
+  steady = textCount() === lastCount ? steady + 1 : 0
+  lastCount = textCount()
+}
 report.flow = { chars: textCount(), tries }
 const running = measure()
 report.marke = Boolean(document.querySelector('.place .wartet'))
@@ -425,6 +491,10 @@ report.stored13 = {
     && Boolean(noteRows[noteRows.length - 1].querySelector('.punkt')),
   continues: storedRow ? getComputedStyle(storedRow, '::after').content !== 'none' : false,
 }
+
+// 14. A new line of the running text: the mark glides down frame by frame on
+// the spring, the line stays whole between the text and the mark.
+report.glide = await grownAnswer('m14')
 
 // 7. The window opens and closes in 280 ms, over several frames.
 scene.laeuft = false
@@ -855,3 +925,24 @@ def test_with_less_motion_asked_for_everything_stands_finished(report):
     assert calm["animations"] == 0, calm
     assert calm["drawn"] and all(offset == 0 for offset in calm["drawn"]), calm
     assert calm["inside"] and all(opacity == 1 for opacity in calm["inside"]), calm
+
+
+def test_the_mark_glides_down_with_a_new_line_instead_of_jumping(report):
+    """The text of a running answer gets a new line: the mark at the end of
+    the line is measured in every frame. No single frame moves it by a whole
+    line (before: one frame by the full line and its spacing), it comes to
+    rest at its new place, and the line of the text entry reaches the line of
+    the mark's row in every frame."""
+    glide = report["glide"]
+    assert glide["frames"] == 110, glide
+    assert glide["total"] >= 0.8 * glide["lineHeight"], ("the mark did not move down", glide)
+    assert glide["maxStep"] < 0.5 * glide["lineHeight"], ("a frame jumped", glide)
+    assert glide["settled"] <= 0.5, ("the mark did not come to rest", glide)
+    assert glide["maxHole"] <= 0.5, ("the line broke between text and mark", glide)
+
+
+def test_with_less_motion_the_mark_stands_at_its_new_place_in_the_first_frame(report):
+    grow = report["calm"]["grow"]
+    assert grow["total"] >= 0.8 * grow["lineHeight"], ("the mark did not move down", grow)
+    assert abs(grow["first"] - grow["last"]) <= 0.5, ("the mark glided although less motion was asked for", grow)
+    assert grow["maxHole"] <= 0.5, grow

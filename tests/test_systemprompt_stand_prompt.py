@@ -111,33 +111,22 @@ def test_replacing_an_entry_is_asked_for_only_where_the_entries_are_in_sight():
 
 
 def test_the_memory_tool_says_when_an_entry_is_in_front_of_the_model():
-    shown = memory.werkzeug_beschreibung(True).beschreibung
+    shown = memory.werkzeug_beschreibung().beschreibung
     assert "every conversation from now on" not in shown
     assert "in the next conversation, not immediately" in shown
     assert "lists the entries you have stored" in shown
 
 
-def test_the_memory_tool_promises_no_sight_where_the_memory_stays_away():
-    hidden = memory.werkzeug_beschreibung(False).beschreibung
-    assert memory.VERBORGEN in hidden
-    assert "in front of you" not in hidden
-    assert "lists the entries" not in hidden
-    assert "a short part of" not in hidden
-    assert "full existing text" in hidden
-
-
-def test_the_offer_carries_the_description_for_this_side(tmp_path):
+def test_the_offer_lacks_the_memory_tool_on_a_side_the_memory_stays_away_from(tmp_path):
     registry = WerkzeugRegistry([], memory_pfad=tmp_path / "memory.md")
 
-    def description(shown: bool) -> str:
-        (eintrag,) = [
-            w for w in registry.als_openai_werkzeuge(memory_shown=shown)
-            if w["function"]["name"] == memory.WERKZEUG_NAME
+    def names(shown: bool) -> list[str]:
+        return [
+            w["function"]["name"] for w in registry.als_openai_werkzeuge(memory_shown=shown)
         ]
-        return eintrag["function"]["description"]
 
-    assert memory.VERBORGEN in description(False)
-    assert memory.VERBORGEN not in description(True)
+    assert memory.WERKZEUG_NAME not in names(False)
+    assert memory.WERKZEUG_NAME in names(True)
 
 
 # --- The dock is the program's, not a share ----------------------------------

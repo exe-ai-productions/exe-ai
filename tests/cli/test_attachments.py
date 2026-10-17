@@ -114,10 +114,60 @@ def test_the_home_folder_is_counted(tool, stub, folder):
 
 def test_a_sentence_that_ends_right_behind_the_path_still_finds_the_file(tool, stub):
     chat.send(tool, "have a look at @notiz.txt.")
-    # Windows reads a name with a period at its end as the name without it,
-    # so there the first try already finds the file.
-    assert [upload[1].rstrip(".") for upload in stub.uploads] == ["notiz.txt"]
+    assert [upload[1] for upload in stub.uploads] == ["notiz.txt"]
     assert [upload[3] for upload in stub.uploads] == [b"hello"]
+
+
+def _windows_names(folder: Path, name: str) -> None:
+    """What Windows does by itself: the name with a period at its end leads to
+    the same file as the name without it — two names for one file."""
+    os.link(folder / name, folder / f"{name}.")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has the two names by itself")
+def test_on_windows_a_sentence_end_behind_the_path_attaches_the_file_by_its_own_name(
+    tool, stub, folder
+):
+    _windows_names(folder, "notiz.txt")
+    chat.send(tool, "have a look at @notiz.txt.")
+    assert stub.uploads == [("/documents", "notiz.txt", "", b"hello")]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has the two names by itself")
+def test_on_windows_a_picture_at_the_end_of_a_sentence_goes_up_as_a_picture(tool, stub, folder):
+    _windows_names(folder, "bild.png")
+    chat.send(tool, "what is on @bild.png.")
+    assert stub.uploads == [("/images", "picture-1.png", "image/png", b"\x89PNG-bytes")]
+    assert sent(stub)["bilder"] == ["picture-1.png"]
+    assert "dokumente" not in sent(stub)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has the two names by itself")
+def test_the_file_named_with_and_without_the_period_goes_once(tool, stub, folder):
+    _windows_names(folder, "notiz.txt")
+    chat.send(tool, "@notiz.txt and then @notiz.txt.")
+    assert len(stub.uploads) == 1
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no second name to tell apart")
+def test_a_file_that_is_another_one_than_the_name_without_the_period_keeps_its_name(
+    tool, stub, folder
+):
+    """Silence probe: two different files, ``notiz.txt`` and ``notiz.txt.`` —
+    the full name is the file that was meant."""
+    (folder / "notiz.txt.").write_text("the one with the period", encoding="utf-8")
+    chat.send(tool, "read @notiz.txt.")
+    assert [upload[3] for upload in stub.uploads] == [b"the one with the period"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows reads a name with a period as without")
+def test_a_file_whose_name_ends_in_the_mark_is_found_under_it_when_none_stands_beside_it(
+    tool, stub, folder
+):
+    (folder / "notiz.").write_text("a name that ends in a period", encoding="utf-8")
+    chat.send(tool, "read @notiz.")
+    assert [upload[3] for upload in stub.uploads] == [b"a name that ends in a period"]
+    assert [upload[1] for upload in stub.uploads] == ["notiz."]
 
 
 def test_the_same_file_named_twice_goes_once(tool, stub):

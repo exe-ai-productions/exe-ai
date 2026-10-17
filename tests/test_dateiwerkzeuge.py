@@ -1362,7 +1362,7 @@ async def test_the_memory_is_written_with_line_feeds_only(tmp_path, atomic_write
     from app.tools import memory
 
     pfad = tmp_path / "memory.md"
-    await memory.ausfuehren({"text": "Mag Tee.", "kind": "fact"}, pfad, zeigen=True)
+    await memory.ausfuehren({"text": "Mag Tee.", "kind": "fact"}, pfad)
     roh = pfad.read_bytes()
     assert b"\n" in roh and b"\r" not in roh
     assert atomic_write_spy[-1].get("newline") == ""

@@ -80,6 +80,7 @@
   import { answerEnding } from './lib/answerEnding.js'
   import { fitColumns, watchWindowWidth } from './lib/columnRoom.svelte.js'
   import { chatFehlerGesehen, chatFehlerMerken, fragtNach } from './lib/chatringe.svelte.js'
+  import { glideStep } from './lib/glide.js'
 
   /* The window gives the chat its minimum width before it gives a column its
      own: when the room runs short the tools fold first, then the sidebar,
@@ -664,13 +665,13 @@
     })
   }
 
-  /* The spring: each frame the view covers the share of the way to the floor
-     that the frame's time earns — the distance halves every `GLEIT_HALB_MS` —
-     and at least a pixel, so it arrives. The floor is read again every
-     frame, so lines that arrive while the view runs are part of the same
-     run. It ends at the floor, or the moment the reader's wheel, finger or
-     key has ended the following. */
-  const GLEIT_HALB_MS = 80
+  /* The spring (lib/glide.js, the same one the growing text of a running
+     answer moves on): each frame the view covers the share of the way to the
+     floor that the frame's time earns — the distance halves every
+     `GLEIT_HALB_MS` — and at least a pixel, so it arrives. The floor is read
+     again every frame, so lines that arrive while the view runs are part of
+     the same run. It ends at the floor, or the moment the reader's wheel,
+     finger or key has ended the following. */
   function gleiteZumBoden() {
     if (gleitet) return
     gleitet = true
@@ -689,7 +690,7 @@
       const jetzt = performance.now()
       const dt = Math.min(100, jetzt - zuletzt)
       zuletzt = jetzt
-      const weg = abstand <= 1 ? abstand : Math.max(1, abstand * (1 - 0.5 ** (dt / GLEIT_HALB_MS)))
+      const weg = glideStep(abstand, dt)
       const vorher = verlauf.scrollTop
       verlauf.scrollTop = vorher + weg
       // A write that moves nothing (a rounding of the browser) ends the run at the floor.

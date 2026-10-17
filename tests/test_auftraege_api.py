@@ -17,13 +17,14 @@ from pathlib import Path
 import pytest
 
 from app import (
-    kontextdruck, cronmeldung, fenstergroesse, skills, skillwahl,
+    agentenmodellwahl, kontextdruck, cronmeldung, fenstergroesse, skills, skillwahl,
     verdichtung, werkzeugwahl, wiederversuch, zwischenstand,
 )
 from app.agenten import agenten_laden
 from app.api.v1.auftraege import auftrag_anstossen
 from app.providers import MockProvider, ProviderFehler, Stueck, mock_endpunkt
-from app.providers.base import Werkzeugaufruf
+from app.generationen import Generierung
+from app.providers.base import Werkzeugaufruf, kontext_stueck
 from app.tools.mcp_client import MCPWerkzeug
 from app.tools.registry import WerkzeugRegistry, WerkzeugVerboten
 from tests.conftest import MitNutzung, agentenmodell_leer, provider_setzen
@@ -5184,3 +5185,179 @@ def test_a_run_without_a_parent_creates_a_schedule_as_before(config, mcp_client_
     results = _tool_ergebnisse(daten)
     assert results and results[0]["fehlgeschlagen"] is False
     assert len(mcp_client_echt.app.state.repositories.cronjobs.auflisten()) == 1
+
+
+# --- A job's stream carries the live context and speed, as the chat's does --
+
+
+class WithLivePieces(MockProvider):
+    """One round that reports, on its way, how full the context is and how
+    fast the model thinks — and then ends with its own count of 150."""
+
+    async def streamen(self, anfrage):
+        yield kontext_stueck(100, True, 20)
+        yield Stueck("denktempo", daten={"tokens_pro_sekunde": 12.5, "tempo_quelle": "server"})
+        yield Stueck("content", "Done")
+        yield kontext_stueck(100, True, 30)
+        yield Stueck(
+            "stats",
+            daten={
+                "dauer_sekunden": 0.0,
+                "nutzung": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+            },
+        )
+
+
+@pytest.fixture
+def run_events(monkeypatch):
+    """Every event a run puts on its stream, in order."""
+    ereignisse: list[dict] = []
+    original = Generierung.melden
+
+    def erfassen(self, zeile):
+        try:
+            ereignisse.append(json.loads(zeile.removeprefix("data: ")))
+        except ValueError:
+            pass
+        return original(self, zeile)
+
+    monkeypatch.setattr(Generierung, "melden", erfassen)
+    return ereignisse
+
+
+def _context_numbers(daten: dict) -> list[int]:
+    return [
+        json.loads(schritt["inhalt"])["tokens"]
+        for schritt in daten["schritte"]
+        if schritt["typ"] == "kontext"
+    ]
+
+
+def test_a_job_forwards_context_and_thinking_speed_on_its_stream(
+    config, client, run_events
+):
+    agent_schreiben(config)
+    provider_setzen(client, WithLivePieces(mock_endpunkt("test")))
+    client.app.state.discovery.zustaende["test"].context_tokens = 1000
+
+    kennung = client.post(
+        "/api/v1/jobs", json={"agent": "recherche", "task": "Los"}
+    ).json()["id"]
+    auf_ende_warten(client, kennung)
+
+    kontext = [e["gesamt_tokens"] for e in run_events if e["typ"] == "kontext"]
+    assert kontext == [120, 130]
+    tempo = [e for e in run_events if e["typ"] == "denktempo"]
+    assert [e["tokens_pro_sekunde"] for e in tempo] == [12.5]
+    # The kinds that were already forwarded are unchanged.
+    assert [e["text"] for e in run_events if e["typ"] == "content"] == ["Done"]
+
+
+def test_the_context_bar_of_a_job_moves_while_the_round_is_written(
+    config, client
+):
+    """The bar reads the newest ``kontext`` line. The first live reading opens
+    a line at once and later ones rewrite it (at the autosave's pace, so the
+    second one, a moment later, does not); the round's own count follows as a
+    line of its own — two lines for the round, not one per reading."""
+    agent_schreiben(config)
+    provider_setzen(client, WithLivePieces(mock_endpunkt("test")))
+    client.app.state.discovery.zustaende["test"].context_tokens = 1000
+
+    kennung = client.post(
+        "/api/v1/jobs", json={"agent": "recherche", "task": "Los"}
+    ).json()["id"]
+    daten = auf_ende_warten(client, kennung)
+
+    assert _context_numbers(daten) == [120, 150]
+    assert json.loads(
+        [s for s in daten["schritte"] if s["typ"] == "kontext"][0]["inhalt"]
+    ) == {"tokens": 120, "kontextgroesse": 1000, "prozent": 12.0}
+
+
+def test_silence_a_live_reading_without_a_count_reports_and_writes_nothing(
+    config, client, run_events
+):
+    """A provider that cannot count the prompt, in a run with nothing known
+    before it: a count of the output alone is no context reading."""
+    agent_schreiben(config)
+    provider_setzen(
+        client,
+        MockProvider(
+            mock_endpunkt("test"), kontext_melden=True, kontext_prompt=None,
+            haeppchen=["One ", "Satz"],
+        ),
+    )
+
+    kennung = client.post(
+        "/api/v1/jobs", json={"agent": "recherche", "task": "Los"}
+    ).json()["id"]
+    daten = auf_ende_warten(client, kennung)
+
+    assert [e for e in run_events if e["typ"] in ("kontext", "denktempo")] == []
+    assert _context_numbers(daten) == []
+
+
+def test_a_live_reading_of_the_second_round_builds_on_the_first(
+    config, mcp_client, run_events
+):
+    """Round two names no prompt count: the reading stands on the count round
+    one ended with, plus what round two has written so far."""
+
+    class TwoRounds(MockProvider):
+        async def streamen(self, anfrage):
+            self.durchlaeufe += 1
+            if self.durchlaeufe == 1:
+                yield Stueck(
+                    "tool_call",
+                    werkzeugaufrufe=[Werkzeugaufruf(id="w1", name="addieren", argumente={"a": 1, "b": 2})],
+                )
+                yield Stueck("stats", daten={"nutzung": {"total_tokens": 150}})
+                return
+            yield kontext_stueck(None, False, 10)
+            yield Stueck("content", "Done")
+            yield Stueck("stats", daten={"nutzung": {"total_tokens": 170}})
+
+    agent_schreiben(config, kopf="model: test\ntools:\n  - addieren\nmax_rounds: 3")
+    provider_setzen(mcp_client, TwoRounds(mock_endpunkt("test")))
+
+    kennung = mcp_client.post(
+        "/api/v1/jobs", json={"agent": "recherche", "task": "Rechne"}
+    ).json()["id"]
+    daten = auf_ende_warten(mcp_client, kennung)
+
+    # 151 is the estimate between the rounds (the tool result added to
+    # round one's count); the live reading of round two builds on it.
+    assert [e["gesamt_tokens"] for e in run_events if e["typ"] == "kontext"] == [161]
+    assert _context_numbers(daten) == [150, 151, 161, 170]
+
+
+# --- The name of the model a run takes, as the model list names it ----------
+
+
+async def test_the_run_model_is_named_after_the_model_not_the_endpoint(client):
+    """A model the endpoint does not list and the server does not report:
+    the name under the row is the model's own, the way the model list names
+    it — not the name the configuration gives the server."""
+    await client.app.state.discovery.anmelden(
+        mock_endpunkt("foreign", name="Server name X")
+    )
+    client.app.state.repositories.einstellungen.setzen(
+        "global", agentenmodellwahl.SCHLUESSEL, {"sorte": "kennung", "wert": "foreign:Model-Y"},
+    )
+
+    antwort = client.get("/api/v1/jobs/laufmodell").json()
+
+    assert antwort["endpoint_id"] == "foreign:Model-Y"
+    assert antwort["name"] == "Model-Y"
+
+
+async def test_silence_a_run_model_without_a_model_name_is_named_after_its_endpoint(client):
+    await client.app.state.discovery.anmelden(
+        mock_endpunkt("foreign", name="Server name X")
+    )
+    client.app.state.repositories.einstellungen.setzen(
+        "global", agentenmodellwahl.SCHLUESSEL, {"sorte": "kennung", "wert": "foreign"},
+    )
+
+    assert client.get("/api/v1/jobs/laufmodell").json()["name"] == "Server name X"
