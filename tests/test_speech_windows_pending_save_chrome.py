@@ -43,12 +43,19 @@ pytestmark = [
 SHELL = """<script>
   import Bereinigungsserver from %(bereinigung)r
   import Sprachserver from %(sprach)r
+  import Startknopf from %(startknopf)r
   import { scene } from './scene.svelte.js'
+
+  // The page head draws the start button of the page shown; here the shell does.
+  let head = $state.raw(null)
 </script>
 
 <div style="width: 1000px; margin: 0 auto;">
-  {#if scene.show === 'bereinigung'}<Bereinigungsserver />{/if}
-  {#if scene.show === 'sprach'}<Sprachserver />{/if}
+  {#if head?.tat}
+    <Startknopf text={head.tat.text} punkt={head.tat.punkt} gesperrt={head.tat.gesperrt} onTat={head.tat.onTat} />
+  {/if}
+  {#if scene.show === 'bereinigung'}<Bereinigungsserver bind:head />{/if}
+  {#if scene.show === 'sprach'}<Sprachserver bind:head />{/if}
 </div>
 """
 
@@ -301,6 +308,7 @@ def report() -> dict:
             SHELL % {
                 "bereinigung": "../../src/teile/Bereinigungsserver.svelte",
                 "sprach": "../../src/teile/Sprachserver.svelte",
+                "startknopf": "../../src/teile/Startknopf.svelte",
             },
             encoding="utf-8",
         )
@@ -311,7 +319,7 @@ def report() -> dict:
         )
         (folder / "vite.config.js").write_text(VITE_CONFIG, encoding="utf-8")
         build = subprocess.run(
-            [str(FRONTEND / "node_modules" / ".bin" / "vite"), "build", "--config", "vite.config.js"],
+            [shutil.which("vite", path=str(FRONTEND / "node_modules" / ".bin")), "build", "--config", "vite.config.js"],
             cwd=folder, capture_output=True, text=True, timeout=300,
         )
         assert build.returncode == 0, (build.stdout + build.stderr)[-2500:]

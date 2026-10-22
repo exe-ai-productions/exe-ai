@@ -86,7 +86,7 @@ def test_every_colour_of_the_card_is_a_token_of_the_look():
     assert set(re.findall(r"rgba?\([^)]*\)", style)) == {"rgba(0, 0, 0, 0.55)", "rgba(0, 0, 0, 0.5)"}
 
 
-def test_the_badge_draws_the_question_mark_in_the_pill_colour():
+def test_the_badge_draws_the_question_mark_in_the_text_colour():
     markup = _markup()
     badge = markup[markup.index('class="badge"'):markup.index('class="asker"')]
     assert 'd="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"' in badge
@@ -96,10 +96,11 @@ def test_the_badge_draws_the_question_mark_in_the_pill_colour():
     assert "width: 52px" in rule and "height: 52px" in rule
     assert "background: var(--glass-button)" in rule
     assert "var(--glass-button-edge)" in rule
-    assert "color: var(--blau)" in rule
+    assert "color: var(--text)" in rule
+    assert "--blau" not in rule
 
 
-def test_the_pill_counts_the_question_in_blue():
+def test_the_pill_counts_the_question_in_the_text_colour():
     source = _source()
     pill = source[source.index("const pill = $derived.by"):source.index("/* A tool's arguments as pairs")]
     assert "t('benutzerfrage.nummer', { zahl: question.nummer })" in pill
@@ -107,8 +108,9 @@ def test_the_pill_counts_the_question_in_blue():
     assert "t('werkzeug.permission_label')" in pill
     assert '{#if pill}<div class="pill">{pill}</div>{/if}' in _markup()
     rule = _rule(".pill")
-    assert "color: var(--blau)" in rule
-    assert "color-mix(in srgb, var(--blau) 12%, var(--bg))" in rule
+    assert "color: var(--text)" in rule
+    assert "color-mix(in srgb, var(--text) 12%, var(--bg))" in rule
+    assert "--blau" not in rule
     assert "border-radius: 9px" in rule
 
 
@@ -118,20 +120,21 @@ def test_the_question_is_a_heading_and_who_asks_stands_over_it():
     assert "<h2 class=\"title\">{kind === 'tool' ? t('werkzeug.permission_question') : question.frage}</h2>" in markup
     rule = _rule(".title")
     assert "font-size: 22px" in rule and "font-weight: 600" in rule
-    # A tool's permission still names the tool, in the tool colour.
+    # A tool's permission still names the tool, in the text colour of the line.
     asker = markup[markup.index('class="asker"'):markup.index('class="title"')]
     assert '<b class="werkzeugname">{question.name}</b>' in asker
-    assert "color: var(--werkzeug)" in _rule(".asker b.werkzeugname")
+    assert ".asker b { font-weight: 600; color: var(--text); }" in _style()
+    assert "b.werkzeugname" not in _style()
 
 
 def test_a_permission_keeps_command_arguments_and_reason():
     markup = _markup()
     details = markup[markup.index('class="details"'):markup.index('class="answers"')]
-    assert "{@html commandColoured}" in details
+    assert "{@html shown.html}" in details
     assert "aria-expanded={argumentsOpen}" in details
     assert '<dl class="arguments"' in details
-    assert "{@html reasonText}" in details
-    assert "font: 11.5px var(--schrift-fest)" in _style()
+    assert "<span>{warning}</span>" in details
+    assert "font: 12px/18px var(--schrift-fest)" in _style()
 
 
 def test_the_answers_are_cards_and_the_chosen_one_wears_the_tick():

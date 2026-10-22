@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -30,14 +31,15 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _lauf(quelltext: str) -> dict:
+def _lauf(quelltext: str) -> Any:
     treiber = FRONTEND / "mcp_werkzeuge.pruefung.mjs"
     treiber.write_text(
         textwrap.dedent(
             f"""
             import {{
-              apiKeyUmgebungsname, grundfelder, listenAusZustaenden, naechsterZustand,
-              serverKennung, zustandAusEintrag,
+              apiKeyUmgebungsname, grundfelder, headerFields, headersWithoutKey, keyVariableOf,
+              listenAusZustaenden,
+              naechsterZustand, serverKennung, stateWordKey, zustandAusEintrag,
             }} from {("./" + str(MODUL.relative_to(FRONTEND)))!r}
             {quelltext}
             """
@@ -215,3 +217,95 @@ def test_silence_a_card_with_an_address_writes_kind_and_address_as_before():
         "url": "https://x.invalid/mcp",
         "allowed_tools": ["a", "b"],
     }
+
+
+def test_a_key_in_authorization_goes_as_a_bearer_and_in_any_other_header_as_it_is():
+    ergebnis = _lauf(
+        """
+        console.log(JSON.stringify({
+          bearer: headerFields('MAPS_API_KEY', 'Authorization'),
+          lower: headerFields('MAPS_API_KEY', ' authorization '),
+          google: headerFields('MAPS_API_KEY', 'X-Goog-Api-Key'),
+          empty: headerFields('MAPS_API_KEY', '  '),
+        }))
+        """
+    )
+    assert ergebnis["bearer"] == {
+        "headers": {"Authorization": "Bearer ${MAPS_API_KEY}"}, "api_key_env": None, "auth": None,
+    }
+    assert ergebnis["lower"]["headers"] == {"authorization": "Bearer ${MAPS_API_KEY}"}
+    assert ergebnis["google"] == {
+        "headers": {"X-Goog-Api-Key": "${MAPS_API_KEY}"}, "api_key_env": None, "auth": None,
+    }
+    # No name given: the usual one, with a Bearer.
+    assert ergebnis["empty"]["headers"] == {"Authorization": "Bearer ${MAPS_API_KEY}"}
+
+
+def test_a_typed_key_keeps_the_headers_without_a_key_and_replaces_the_ones_with_one():
+    ergebnis = _lauf(
+        """
+        console.log(JSON.stringify(headerFields(
+          'NEW_KEY', 'X-Goog-Api-Key',
+          { 'X-Org': 'acme', 'Authorization': 'Bearer ${OLD_KEY}', 'x-goog-api-key': '${OLD2}' },
+        )))
+        """
+    )
+    assert ergebnis["headers"] == {"X-Org": "acme", "X-Goog-Api-Key": "${NEW_KEY}"}
+
+
+def test_the_headers_that_carry_a_key_are_told_from_the_ones_that_do_not():
+    ergebnis = _lauf(
+        """
+        console.log(JSON.stringify({
+          name: keyVariableOf({ 'X-Org': 'acme', 'X-Goog-Api-Key': '${MAPS}' }),
+          none: keyVariableOf({ 'X-Org': 'acme' }) ?? null,
+          empty: keyVariableOf(undefined) ?? null,
+          kept: headersWithoutKey({ 'X-Org': 'acme', Authorization: 'Bearer ${OLD}' }),
+          nothing: headersWithoutKey({ Authorization: 'Bearer ${OLD}' }),
+          absent: headersWithoutKey(undefined),
+        }))
+        """
+    )
+    assert ergebnis == {
+        "name": "MAPS", "none": None, "empty": None,
+        "kept": {"X-Org": "acme"}, "nothing": None, "absent": None,
+    }
+
+
+def _catalogue(sprache: str) -> dict:
+    return json.loads((WURZEL / "app" / "locales" / f"{sprache}.json").read_text(encoding="utf-8"))
+
+
+def _word(katalog: dict, schluessel: str) -> str | None:
+    gefunden = katalog
+    for teil in schluessel.split("."):
+        if not isinstance(gefunden, dict) or teil not in gefunden:
+            return None
+        gefunden = gefunden[teil]
+    return gefunden if isinstance(gefunden, str) else None
+
+
+def test_each_state_beside_a_tool_has_a_word_in_both_catalogues():
+    """The word beside a tool is the one the terminal client writes: active,
+    asks, inactive. A key the catalogue does not hold comes back as the key
+    itself and would stand on the screen as ``werkzeuge.an``."""
+    keys = _lauf(
+        """
+        console.log(JSON.stringify(['an', 'fragt', 'aus'].map(stateWordKey)))
+        """
+    )
+    assert keys == ["status.aktiv", "werkzeuge.fragt", "status.inaktiv"]
+    english = [_word(_catalogue("en"), key) for key in keys]
+    assert english == ["active", "asks", "inactive"]
+    assert [_word(_catalogue("de"), key) for key in keys] == ["aktiv", "fragt", "inaktiv"]
+
+
+def test_silence_asks_first_keeps_its_word_and_an_unknown_state_reads_as_on():
+    assert _lauf("console.log(JSON.stringify(stateWordKey('fragt')))") == "werkzeuge.fragt"
+    assert _lauf("console.log(JSON.stringify(stateWordKey('other')))") == "status.aktiv"
+
+
+def test_the_mask_writes_the_word_through_that_mapping_and_not_a_built_key():
+    source = (FRONTEND / "src" / "teile" / "MCPMaske.svelte").read_text(encoding="utf-8")
+    assert "t(stateWordKey(werkzeug.zustand))" in source
+    assert "werkzeuge.${werkzeug.zustand}" not in source

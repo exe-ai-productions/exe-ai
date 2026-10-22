@@ -25,6 +25,9 @@ export const bildschau = $state({
   /* The named storage location the file lives in; empty, and the reader
      offers no folder button. */
   folder: '',
+  /* A clip or a sound handed in as a file: 'video' or 'audio', and its
+     player is drawn instead of a picture. Empty for a picture. */
+  mediaKind: '',
   /* A page: the text when it is at hand, or a way to fetch it, and the
      language it is written in (for colour and the download's type). */
   language: '',
@@ -50,6 +53,7 @@ function clear() {
     name: '',
     origin: '',
     folder: '',
+    mediaKind: '',
     language: '',
     text: null,
     loadText: null,
@@ -83,12 +87,14 @@ export function bildZeigen(adresse, more = {}) {
     name: more.name || nameOf(adresse),
     origin: more.origin || '',
     folder: more.folder || '',
+    mediaKind: more.mediaKind || '',
   })
   bildschau.offen = true
 }
 
 /** A document as a page: its text, or a way to fetch it, or — for what the
- *  browser cannot set as text — a picture of it. */
+ *  browser cannot set as text — a picture of it. `mediaKind` names an Office
+ *  file ('word', 'sheet', 'slides') that the page draws from its address. */
 export function showPage(file) {
   clear()
   Object.assign(bildschau, {
@@ -103,6 +109,7 @@ export function showPage(file) {
     preview: file.preview || '',
     loadPreview: file.loadPreview || null,
     framed: Boolean(file.framed && file.adresse),
+    mediaKind: file.mediaKind || '',
     download: file.download || null,
   })
   bildschau.offen = true

@@ -217,6 +217,9 @@ export const ANFANG = {
   hires_upscaler: '',
   // The model "Upscale" enlarges a finished picture with: a file of the upscaler folder.
   upscale_model: '',
+  // How often it runs over the picture and the size of its tiles: sd.cpp's own start values.
+  upscale_repeats: 1,
+  upscale_tile_size: 128,
   hires_breite: '',
   hires_hoehe: '',
   slg_scale: '',
@@ -262,22 +265,48 @@ export function art() {
 
 export const werte = $state(structuredClone(ANFANG))
 
+/* The size of the picture in the generation area, in pixels, as the area
+   measured it (0 while there is none): the final size of an enlarging is
+   told from it before the press. */
+export const bildmass = $state({ w: 0, h: 0 })
+
+/* The two rows of the enlarging as the numbers the service takes: a field
+   left empty or out of its range is the start value, as the service would
+   read it. */
+export function upscaleWerte() {
+  const repeats = Math.trunc(Number(werte.upscale_repeats))
+  const tile = Math.trunc(Number(werte.upscale_tile_size))
+  return {
+    upscale_repeats: repeats >= 1 && repeats <= 4 ? repeats : 1,
+    upscale_tile_size: tile >= 1 ? tile : 128,
+  }
+}
+
 /* What kind of picture is drawn and which half of the kinds is offered.
-   Not stored: the studio opens on the mode that was standing, or, with a
-   picture in its area, on one that draws from it (`pictureInArea`).
+   Not stored: the studio opens on the mode that was standing; a picture in
+   its area never changes it.
    `art` is 'auto' or a value of KINDS above, `medium` 'bild' or 'video'.
    `klasse` is the family the service read off the chosen model's header,
    `startKante` the long edge the model starts with (what a format tile
    sets). */
-export const auswahl = $state({ art: 'auto', medium: 'bild', klasse: '', startKante: 0 })
+/* `vae` — the VAE choice the model carries, as the model's values name it: a
+   tiny autoencoder there also paints the live preview, so the field of the
+   preview's own one stands locked (StudioDetails.svelte). */
+export const auswahl = $state({ art: 'auto', medium: 'bild', klasse: '', startKante: 0, vae: '' })
+
+/* The further parts of the family that the chosen model takes (GET
+   /bild/vorgaben, `parts_taken`); null while the answer is not in. */
+export const modelParts = $state({ taken: null })
 
 /* What the drawing surface tells the studio (StudioCanvas keeps it; false
    while no surface is mounted): `masked` — whether a mask is painted on the
    picture in the generation area — and `maskOn` — the switch "Mask". The
    switch starts off and the person turns it on: off, the mask is not shown
    and goes nowhere, not into a request and not into what "auto" goes by;
-   on, it is shown and acts. */
-export const surface = $state({ masked: false, maskOn: false })
+   on, it is shown and acts. `brushRow` — whether the surface is too narrow
+   for the brush bar between the tools and the zoom, so the bar stands in a
+   row of its own and the row of pictures steps down under it. */
+export const surface = $state({ masked: false, maskOn: false, brushRow: false })
 
 /* The family the studio draws with: one said by hand, else the header's. */
 export function familie() {
@@ -352,9 +381,44 @@ export function pictureMissing() {
    it in the one answer both columns read. */
 export const listen = $state({
   geladen: false, programmDa: true, modelle: [], standardmodell: '', groessen: {}, families: {},
+  missingParts: {},
   sampler: [], scheduler: [], loras: [], yolos: [], pulids: [], pulidEmbeddings: [], controlnets: [],
-  upscalers: [], upscalerFeste: [], taesd: [], loraOrdner: '', embeddingOrdner: '',
+  upscalers: [], upscalerScales: {}, upscalerFeste: [], taesd: [], loraOrdner: '', embeddingOrdner: '',
 })
+
+/* A model the studio's choice offers and a draw can start: its file is in the
+   folder and none of its kit's parts is missing (`missingParts` of the
+   service's answer). The picture server's page lists every model. */
+export const modellDa = (name) => listen.modelle.includes(name) && !listen.missingParts[name]
+
+/* The choices of the studio that name one file of a companion folder, each
+   with the list of that folder (`listen`), and the two stacks of LoRAs. A
+   choice may name a file the folder does not hold (any more): the draw would
+   be refused with "no such companion file". What the studio stands at for
+   them then is "-" (an empty choice, no row in the stack) and nothing goes
+   out for them; as with the model, this is shown and not written — the file
+   may come back. Nothing is judged before the lists were read. */
+const FILE_CHOICES = [
+  ['pulid_weights', 'pulids'], ['pulid_id_embedding', 'pulidEmbeddings'], ['control_net', 'controlnets'],
+  ['taesd', 'taesd'], ['upscale_model', 'upscalers'], ['ad_modell', 'yolos'],
+]
+export function missingFiles() {
+  const taken = {}
+  if (!listen.geladen) return taken
+  for (const [field, folder] of FILE_CHOICES) {
+    if (werte[field] && !listen[folder].includes(werte[field])) taken[field] = ''
+  }
+  // The highres pass's upscaler is one of sd-cli's built-in names or a file.
+  const upscaler = werte.hires_upscaler
+  if (upscaler && !listen.upscalerFeste.includes(upscaler) && !listen.upscalers.includes(upscaler)) {
+    taken.hires_upscaler = ''
+  }
+  for (const stack of ['stapel', 'ad_stapel']) {
+    const held = werte[stack].filter((entry) => listen.loras.includes(entry.name))
+    if (held.length !== werte[stack].length) taken[stack] = $state.snapshot(held)
+  }
+  return taken
+}
 
 let listenAnfrage = null
 export function listenLaden() {
@@ -368,9 +432,10 @@ export function listenLaden() {
         sampler: stand.sampler ?? [], scheduler: stand.scheduler ?? [], loras: stand.loras ?? [],
         yolos: stand.yolos ?? [], pulids: stand.pulids ?? [], pulidEmbeddings: stand.pulid_embeddings ?? [],
         controlnets: stand.controlnets ?? [], upscalers: stand.upscalers ?? [],
+        upscalerScales: stand.upscaler_scales ?? {},
         upscalerFeste: stand.hires_upscaler_feste ?? [], taesd: stand.taesd_files ?? [],
         loraOrdner: stand.lora_ordner ?? '', embeddingOrdner: stand.embedding_ordner ?? '',
-        groessen: stand.sizes ?? {},
+        groessen: stand.sizes ?? {}, missingParts: stand.missing_parts ?? {},
         geladen: true,
       })
     })
@@ -389,20 +454,19 @@ export function listenLaden() {
 let vorgabenLauf = 0
 // The model whose header `auswahl.klasse` was read off.
 let headerModel = ''
-export async function vorgabenHolen() {
+export async function vorgabenHolen(chosenFamily = werte.familie) {
   const lauf = ++vorgabenLauf
   const model = werte.modell
   try {
-    const [v] = await Promise.all([api.bildVorgaben(model), loadImageFamilies()])
+    // A family the table does not hold (stored by an older program) is not
+    // sent: the service refuses a name it does not know.
+    await loadImageFamilies()
+    const v = await api.bildVorgaben(model, familyOf(chosenFamily) ? chosenFamily : '')
     if (lauf !== vorgabenLauf || !v || typeof v !== 'object') return null
     auswahl.klasse = v.family || ''
+    auswahl.vae = v.parts?.vae ?? ''
+    modelParts.taken = Array.isArray(v.parts_taken) ? v.parts_taken : null
     headerModel = model
-    /* A picture that came into the area before this model's family was
-       known: its mode is settled with the kinds the family really draws. */
-    const due = kindDue
-    kindDue = null
-    const dueModel = due && (due.model || listen.standardmodell)
-    if (due && dueModel === model && werte.startbild) kindOntoPicture()
     return v
   } catch (fehler) {
     if (lauf === vorgabenLauf) melde(String(fehler.message || fehler), 'fehler')
@@ -424,48 +488,39 @@ export const ontoGrid = (edge) =>
    value that acts. */
 const VAE_FORMATS_OFFERED = ['auto', 'flux', 'sd3', 'flux2']
 
-/* What the studio starts at for its model: the family table's start values
-   when a family was said by hand, else the answer above — the measures,
-   the CFG and what goes with them, the VAE format, the RNG and the switch
-   rows a family starts with, and what the model itself sets. */
+/* What the studio starts at for its model: the answer above — the
+   measures, the CFG and what goes with them, the VAE format, the RNG and the
+   switch rows a family starts with, and what the model itself sets. The
+   service works it out from the family (the header's, or the one said by
+   hand) and the model's file name, so a variant's own values arrive the same
+   way for both. */
 export const MASSE = ['breite', 'hoehe', 'schritte', 'sampler', 'scheduler']
 export function startwerte(v) {
-  const start = werte.familie ? familyOf(werte.familie)?.start : null
-  const werteDerKlasse = start
-    ? { breite: start.width, hoehe: start.height, schritte: start.steps, sampler: start.sampler,
-        scheduler: start.scheduler, cfg: start.cfg, guidance: start.guidance,
-        flow_shift: start.flow_shift, video_frames: start.frames, fps: start.fps,
-        model_args: familyOf(werte.familie)?.model_args,
-        vae_format: start.vae_format, rng: start.rng, switches: start.switches }
-    : v
   const teil = {}
   // The empty scheduler is a real start value: sd-cli picks its own.
-  for (const name of MASSE) if (werteDerKlasse[name] != null) teil[name] = werteDerKlasse[name]
+  for (const name of MASSE) if (v[name] != null) teil[name] = v[name]
   // A start size off the grid (Wan's 832 × 480) is shown as it is kept.
   for (const name of ['breite', 'hoehe']) {
     if (typeof teil[name] === 'number' && Number.isFinite(teil[name])) teil[name] = ontoGrid(teil[name])
   }
-  teil.cfg = werteDerKlasse.cfg
-  for (const name of ['guidance', 'flow_shift', 'video_frames', 'fps', 'model_args']) {
-    teil[name] = werteDerKlasse[name] ?? ''
+  teil.cfg = v.cfg
+  for (const name of ['guidance', 'flow_shift', 'video_frames', 'fps', 'model_args', 'sigmas']) {
+    teil[name] = v[name] ?? ''
   }
   // Without a start of the family's the field's own: never the old model's.
-  teil.vae_format = VAE_FORMATS_OFFERED.includes(werteDerKlasse.vae_format)
-    ? werteDerKlasse.vae_format : ANFANG.vae_format
-  teil.rng = werteDerKlasse.rng || ANFANG.rng
+  teil.vae_format = VAE_FORMATS_OFFERED.includes(v.vae_format) ? v.vae_format : ANFANG.vae_format
+  teil.rng = v.rng || ANFANG.rng
   /* A switch row some family starts with is a start value like the rest: it
      gives way, and the shown family's own are laid in. Every other row
      stays as it was set. */
   const started = new Set(imageFamilies.list.flatMap((family) => Object.keys(family.start?.switches ?? {})))
   teil.switches = {
     ...Object.fromEntries(Object.entries(werte.switches ?? {}).filter(([key]) => !started.has(key))),
-    ...werteDerKlasse.switches,
+    ...v.switches,
   }
-  if (!start) {
-    const eigene = v.eigene ?? []
-    if (eigene.includes('clip_skip')) teil.clip_skip = v.clip_skip ?? null
-    if (eigene.includes('prediction')) teil.prediction = v.prediction || 'auto'
-  }
+  const eigene = v.eigene ?? []
+  if (eigene.includes('clip_skip')) teil.clip_skip = v.clip_skip ?? null
+  if (eigene.includes('prediction')) teil.prediction = v.prediction || 'auto'
   const lang = Math.max(Number(teil.breite) || 0, Number(teil.hoehe) || 0)
   if (lang) auswahl.startKante = lang
   return teil
@@ -506,11 +561,11 @@ export async function startValuesThere() {
 }
 
 /* A family said by hand (or "automatic") starts the studio at its values,
-   the same rule a model change follows. */
+   the same rule a model change follows: the service answers with them. */
 export async function familieWaehlen(name) {
   werte.familie = name
   return layingStartValues(async () => {
-    const v = await vorgabenHolen()
+    const v = await vorgabenHolen(name)
     if (!v || werte.familie !== name) return false
     Object.assign(werte, startwerte(v))
     return true
@@ -577,35 +632,19 @@ export function werteFuellen() {
 }
 
 /* A picture stands in the generation area, whichever way it came there: it
-   is what the model draws from. One that would be drawn over completely
-   starts at the strength where it still shows — a video at sd-cli's own.
-   If the kind of the next press does not use the picture after that, the
-   mode gives way to the first kind of the same half that does and that
-   the model's family can draw; "auto" draws from the picture by now
-   wherever the family can and so stays. While the model's family is still
-   unknown every kind counts as drawable; the mode is settled again once
-   the family arrives (`vorgabenHolen`). */
-let kindDue = null
+   is what the model draws from when the kind of the next press draws from
+   it. One that would be drawn over completely starts at the strength where
+   it still shows — a video at sd-cli's own. The mode stays as it was
+   chosen: "generate" draws a new picture and leaves the picture lying. */
 export function pictureInArea() {
   if (Number(werte.staerke) >= 1) werte.staerke = art().video ? 0.75 : 0.6
-  kindOntoPicture()
-  kindDue = familie() ? null : { model: werte.modell }
-}
-
-function kindOntoPicture() {
-  const now = art()
-  if (!FROM_AREA.includes(now.value)) {
-    const next = kindsOf(now.video).find((k) => FROM_AREA.includes(k.value))
-    if (next) auswahl.art = next.value
-  }
 }
 
 /* The start picture is the picture in the generation area. One chosen
    while the studio's store is still on its way is noted, so the store's
    late answer cannot take it back (werteFuellen above). A new picture
-   leaves the old picture's mask behind, and sets the kind and the strength
-   it is drawn from with (`pictureInArea`) — here, for every way into the
-   area. */
+   leaves the old picture's mask behind, and sets the strength it is drawn
+   from with (`pictureInArea`) — here, for every way into the area. */
 let vorgemerkt = null
 export function startbildWaehlen(name) {
   // A picture the area showed by itself is the studio's own once it is chosen.

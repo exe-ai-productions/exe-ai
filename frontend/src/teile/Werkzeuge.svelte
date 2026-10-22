@@ -26,7 +26,7 @@
   import { t } from '../lib/texte.svelte.js'
   import { melde } from '../lib/zustand.svelte.js'
   import {
-    werkzeugansicht, quellen, aktivStand, EINGEBAUTE_NAMEN, auswahlAufloesen,
+    werkzeugansicht, quellen, EINGEBAUTE_NAMEN, auswahlAufloesen,
     istAn, schalten, istGewaehlt, katalogSchalten, katalogAlle, werkzeugeLaden,
   } from '../lib/werkzeuge.svelte.js'
 
@@ -96,12 +96,15 @@
 </script>
 
 <div class="werkzeugseite">
-  <div class="zaehler">
-    {t('werkzeuge.aktiv_zahl', aktivStand(listen))}
-  </div>
-
   <div class="zwei">
     <div class="links" use:rollfade>
+      <!-- The list's own head: its name, a line, and how many sources there
+           are in all. -->
+      <div class="lkopf">
+        <span class="lname">{t('werkzeuge.sources')}</span>
+        <span class="llinie" aria-hidden="true"></span>
+        <span class="lzahl">{listen.length}</span>
+      </div>
       {#each listen as quelle (quelle.id)}
         <!-- A source and its tools in one raised box, like a settings group:
              the source carries the sign, name and its dotted status; each
@@ -145,7 +148,7 @@
             </div>
             <Leuchtpunkt
               farbe={quelle.laeuft ? 'gruen' : stand(quelle) === 'ausgeschaltet' ? 'gelb' : 'still'}
-              groesse={11}
+              groesse={10}
             />
           </button>
             {#if quelle.laeuft && quelle.werkzeuge.length}
@@ -157,8 +160,12 @@
                 aria-label={ansicht.aufgeklappt[quelle.id] ? t('werkzeuge.zuklappen') : t('werkzeuge.aufklappen')}
                 title={ansicht.aufgeklappt[quelle.id] ? t('werkzeuge.zuklappen') : t('werkzeuge.aufklappen')}
               >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg>
               </button>
+            {:else}
+              <!-- Where there is nothing to fold, its place stays: the dots of
+                   all the rows stand under one another. -->
+              <span class="qplatz" aria-hidden="true"></span>
             {/if}
           </div>
 
@@ -176,7 +183,7 @@
               >
                 <span class="wname werkzeugname">{werkzeug.anzeige ?? werkzeug.name}</span>
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <span onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+                <span class="wschalter" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
                   <Schalter
                     an={istAn(werkzeug.name)}
                     beschriftung={werkzeug.anzeige ?? werkzeug.name}
@@ -190,6 +197,7 @@
       {/each}
     </div>
 
+    {#if gewaehltesWerkzeug || gewaehlteQuelle}
     <div class="rechts" use:rollfade>
       {#if gewaehltesWerkzeug}
         <div class="kopfkarte">
@@ -223,7 +231,11 @@
           </span>
         </div>
       {:else if gewaehlteQuelle}
-        <div class="kopfkarte">
+        <div class="kopfkarte" class:mitkasten={gewaehlteQuelle.eingebaut}>
+          {#if gewaehlteQuelle.eingebaut}
+            <!-- A built-in source wears its sign in a box of its own. -->
+            <span class="kasten"><Werkzeugzeichen server={gewaehlteQuelle.kennung} eingebaut={true} /></span>
+          {/if}
           <div class="min">
             <div class="gross schrift">{quellenName(gewaehlteQuelle)}</div>
             <!-- A server REPORTS its tools; the built-in one does not report
@@ -279,85 +291,136 @@
         {/if}
       {/if}
     </div>
+    {/if}
   </div>
 </div>
 
 <style>
   /* The part fills what the settings page leaves under its head; the two
-     halves scroll inside it, the bars invisible house-wide. */
+     halves scroll inside it, the bars invisible house-wide. Each half stands
+     on a card of its own; both end on one line, as high as the longer of the
+     two, and are never stretched down to the foot of the page beyond that. */
   .werkzeugseite {
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
   }
-  .zaehler { font-size: 11.5px; color: var(--text-still); margin: 0 0 10px; }
+  /* The row takes its height from its content and only gives way when the
+     page is shorter; the cards stretch to the row, so both are as high as the
+     longer one and scroll inside once that is more than the page holds. */
   .zwei {
     display: flex;
-    gap: 0;
-    flex: 1;
+    align-items: stretch;
+    gap: 24px;
+    flex: 0 1 auto;
     min-height: 0;
   }
   .links {
-    width: 268px;
+    width: 300px;
     flex: none;
-    padding: 12px 10px;
+    box-sizing: border-box;
+    padding: 16px 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
     overflow-y: auto;
+    border-radius: 9px;
+    background: var(--glass-card);
+    box-shadow: inset 0 0 0 1px var(--glass-card-line);
   }
 
-  /* Each source is a row with its tools indented under it — rows on the
-     ground without boxes. */
-  .qbox {
-    margin-top: 2px;
-  }
-  .qbox:first-child { margin-top: 0; }
-  .qeintrag {
+  /* The head of the list: its name, a line, the number of sources. */
+  .lkopf {
+    flex: none;
+    box-sizing: border-box;
+    height: 44px;
+    padding: 20px 10px 8px;
     display: flex;
     align-items: center;
     gap: 10px;
-    width: 100%;
-    min-height: 36px;
+  }
+  .lname {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 16px;
+    color: var(--text);
+  }
+  .llinie {
+    flex: 1;
+    height: 1px;
+    background: var(--linie);
+  }
+  .lzahl {
+    font-size: 12px;
+    color: var(--text-leise);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Each source is a row of 52 with its tools under it: rows on the card
+     without boxes of their own. */
+  .qbox {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .qeintrag {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    gap: 12px;
     text-align: left;
     border: none;
     background: none;
-    color: var(--text-leise);
+    color: var(--text);
     font: inherit;
-    padding: 6px 8px 6px 10px;
+    padding: 0;
     cursor: pointer;
-    transition: background 0.12s;
   }
+  /* The sign is 18 px in every row; the size reaches the house sign through
+     the variable of the tool mark (Werkzeugzeichen.svelte), the picture of a
+     server's logo through the rule below it. */
   .qzeichen {
-    width: 20px;
-    height: 20px;
+    --wz-groesse: 18px;
+    width: 18px;
+    height: 18px;
     flex: none;
     display: grid;
     place-items: center;
-    color: inherit;
+    color: var(--text);
   }
   .qzeichen :global(svg) { width: 18px; height: 18px; }
   .qmitte { flex: 1; min-width: 0; }
   .qname {
     font-size: 13px;
-    font-weight: 400;
+    font-weight: 500;
+    line-height: 16px;
+    color: var(--text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .qsatz {
-    font-size: 11.5px;
-    color: var(--text-still);
-    margin-top: 1px;
+    font-size: 11px;
+    line-height: 13px;
+    color: var(--text-leise);
+    margin-top: 2px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
+  /* A tool of an unfolded source: 36 high, indented under the sign. */
   .weintrag {
+    box-sizing: border-box;
+    min-height: 36px;
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 6px 10px 6px 40px;
-    border-radius: 9px;
+    gap: 12px;
+    padding: 8px 10px 8px 40px;
+    border-radius: 8px;
     cursor: pointer;
     transition: background 0.12s;
   }
@@ -372,14 +435,46 @@
     text-overflow: ellipsis;
   }
   .weintrag.aus .wname { opacity: 0.42; }
+  /* A flex box, so the wrapper is as high as the switch in it and not a line
+     taller: the row stays 36. */
+  .wschalter { display: flex; flex: none; }
 
-  .rechts { flex: 1; padding: 12px 0 34px 24px; min-width: 0; overflow-y: auto; }
+  /* What is shown stands on a card of its own, 24 px from the list. */
+  .rechts {
+    flex: 1;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 20px 24px 24px;
+    overflow-y: auto;
+    border-radius: 9px;
+    background: var(--glass-card);
+    box-shadow: inset 0 0 0 1px var(--glass-card-line);
+  }
   .kopfkarte {
     display: flex;
     align-items: center;
     gap: 12px;
     padding: 0 2px 6px;
   }
+  .kopfkarte.mitkasten {
+    gap: 14px;
+    padding: 0 0 6px;
+  }
+  /* The box of a built-in source: button glass with its fine edge, the sign
+     22 px in the middle. */
+  .kasten {
+    --wz-groesse: 22px;
+    flex: none;
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    border-radius: 9px;
+    background: var(--glass-button);
+    box-shadow: inset 0 0 0 1px var(--glass-button-edge);
+    color: var(--text);
+  }
+  .kasten :global(svg) { width: 22px; height: 22px; }
   .min { flex: 1; min-width: 0; }
   .gross {
     font-size: 17px;
@@ -393,6 +488,7 @@
      what the model types. */
   .gross.schrift { font-family: inherit; font-size: 20px; letter-spacing: -0.01em; }
   .unter { font-size: 12.5px; color: var(--text-still); margin-top: 4px; }
+  .mitkasten .unter { font-size: 12px; color: var(--text-leise); margin-top: 2px; }
 
   /* Text itself: global.css, .tafelkopf. */
   h4 {
@@ -411,7 +507,7 @@
   /* One row per built-in tool — same icon-name-subtext shape as a source's
      own row on the left, so the two lists read as one language. */
   /* One card, a hairline between its rows. */
-  .eliste { margin-top: 14px; padding: 0 16px; background: var(--glass-card); box-shadow: inset 0 0 0 1px var(--glass-card-line); border-radius: 9px; }
+  .eliste { margin-top: 16px; padding: 0 16px; background: var(--glass-card); box-shadow: inset 0 0 0 1px var(--glass-card-line); border-radius: 9px; }
   .eeintrag {
     display: flex;
     align-items: center;
@@ -430,6 +526,7 @@
   .eliste .eeintrag:first-child { border-top: none; }
   .eeintrag:hover .esatz { color: var(--text-leise); }
   .ezeichen {
+    --wz-groesse: 18px;
     width: 28px;
     height: 28px;
     flex: none;
@@ -485,7 +582,6 @@
   @media (max-width: 720px) {
     .zwei { flex-direction: column; flex: none; }
     .links { width: 100%; }
-    .rechts { padding-left: 0; }
   }
   /* The fold control sits beside the source entry, never inside it — a
      button in a button is not a thing, and the entry keeps its whole face
@@ -494,25 +590,29 @@
      otherwise the fold control keeps the raised colour and shows up as a
      darker rectangle beside the chosen source. */
   .qkopf {
+    box-sizing: border-box;
+    height: 52px;
+    padding: 0 10px;
     display: flex;
-    align-items: stretch;
-    border-radius: 9px;
+    align-items: center;
+    border-radius: 8px;
     transition: background 0.12s;
   }
   .qkopf:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
   .qkopf.gewaehlt { background: var(--glass-button); }
-  .qkopf.gewaehlt .qeintrag { color: var(--text); }
-  .qkopf.gewaehlt .qname { font-weight: 500; }
-  .qkopf :global(.qeintrag) {
-    flex: 1;
-    min-width: 0;
-  }
+  /* The arrow is 14 px, 12 from the dot and 10 from the edge; its hit area
+     is wider than it looks, the extra sitting in the margins. Where a source
+     has nothing to fold, `.qplatz` keeps the same room. */
   .qklapp {
     flex: none;
+    box-sizing: content-box;
+    width: 14px;
+    align-self: stretch;
     border: none;
     background: none;
-    color: var(--text-still);
-    padding: 0 12px 0 4px;
+    color: var(--text-leise);
+    padding: 0 6px;
+    margin: 0 -6px 0 6px;
     cursor: pointer;
     display: grid;
     place-items: center;
@@ -520,10 +620,17 @@
   .qklapp:hover {
     color: var(--text);
   }
+  .qplatz {
+    flex: none;
+    width: 14px;
+    margin-left: 12px;
+  }
+  /* Closed it points right, open down: a quarter turn between the two. */
   .qklapp svg {
+    transform: rotate(-90deg);
     transition: transform 0.15s;
   }
   .qklapp.auf svg {
-    transform: rotate(180deg);
+    transform: none;
   }
 </style>

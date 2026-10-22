@@ -51,7 +51,7 @@ from functools import partial
 from pathlib import Path, PurePath
 from typing import Any
 
-from app import aufgaben, ordnerwissen
+from app import aufgaben, child_environment, command_line_client, ordnerwissen
 from app.no_console import no_window
 from app.tools import hintergrund, ordnergedaechtnis
 from app.tools.grenzen import aufgeloest as _aufgeloest
@@ -96,24 +96,43 @@ MAX_AUSGABE_ZEICHEN = 20_000
 # is a fact, and the user reading the terminal is the one it concerns.
 HINWEIS_ZEILE_ZU_LANG = "[A line exceeded the reader's length limit and was truncated here.]"
 
+# Where a command begins in a line: at its start, after a newline, a `;`, `&`,
+# `|`, a backtick, `(` or `$(`, in the text behind `sh -c`, `bash -c` and the
+# like, and behind the words that only hand the command on (`sudo`, `env`,
+# `exec`, `nohup`, `setsid`, `time`, `xargs`, `then`, `do`, `else` …) and their
+# switches, behind variables set for that one command (`X=1 reboot`), and with
+# a path in front of the name (`/sbin/shutdown`). A name that stands anywhere
+# else — as a search word, in a message, in a note — is only text, and the
+# commands that shut the machine down or stop a service are matched here and
+# nowhere else.
+_COMMAND_START = (
+    r"(?:^|[\n;&|`(]|\$\(|\b(?:ba|z|k|da)?sh\s+(?:-\S+\s+)*?-\w*c\s+[\"']?|\beval\s+[\"']?)"
+    r"\s*"
+    r"(?:[A-Za-z_]\w*=\S*\s+"
+    r"|(?:sudo|env|exec|nohup|setsid|time|command|xargs|then|do|else|elif|if|while|until|!)\s+(?:-\S+\s+)*)*"
+    r"(?:[^\s;&|`$()<>\"']*/)?"
+)
+
 # The tripwire. Deliberately short: every pattern here has to be worth its
 # false positives, otherwise it only trains people to work around it.
 #
 # These are matched against the raw command string, so they also catch what
-# hides in the middle of a pipeline.
+# hides in the middle of a pipeline. The names of programs that shut the
+# machine down or stop a service count only where a command begins
+# (``_COMMAND_START``): a search for the word halt is no halt.
 GEFAEHRLICH: tuple[tuple[str, str], ...] = (
     (r"(^|[;&|]\s*)sudo\b", "sudo"),
     (r"(^|[;&|]\s*)su\s", "su"),
     (r"\brm\s+(-[a-zA-Z]*\s+)*-?[a-zA-Z]*[rf][a-zA-Z]*\s+/(\s|$|\*)", "rm -rf /"),
-    (r"\bmkfs(\.|\s)", "mkfs"),
+    (_COMMAND_START + r"mkfs(\.|\s)", "mkfs"),
     (r"\bdd\b[^|]*\bof=/dev/", "dd onto a device"),
     (r":\(\)\s*\{.*\}\s*;?\s*:", "a fork bomb"),
     (r"\bchmod\s+(-[a-zA-Z]+\s+)*777\s+/(\s|$)", "chmod 777 /"),
-    (r"\b(shutdown|reboot|halt|poweroff)\b", "shutting the machine down"),
+    (_COMMAND_START + r"(shutdown|reboot|halt|poweroff)\b", "shutting the machine down"),
     # curl … | sh — fetching something from the net straight into a shell is
     # how a machine gets taken over, and it is never what file work needs.
     (r"\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(ba|z|k)?sh\b", "a fetch from the net piped into a shell"),
-    (r"\b(launchctl|systemctl)\b", "system services"),
+    (_COMMAND_START + r"(launchctl|systemctl)\b", "system services"),
     (r">\s*/dev/(sd|nvme|disk)", "writing to a device"),
 )
 
@@ -491,11 +510,33 @@ def werkzeug_beschreibung(zeitgrenze: int | None = None) -> MCPWerkzeug:
     )
 
 
-def blockiert(befehl: str) -> str | None:
-    """Name of the pattern that stops this command, or None."""
+# How a command names the machine it runs on: the usual host names and the
+# short forms of the loopback address (``127.1`` is ``127.0.0.1``), and
+# ``0.0.0.0``, which a connection reaches too.
+_LOOPBACK_HOST = r"(?:localhost|127(?:\.\d{1,3}){0,3}|\[::1\]|0\.0\.0\.0)"
+OWN_SERVICE = "Exe AI's own service"
+
+
+def _own_service(befehl: str, port: int) -> bool:
+    """Whether the command speaks to this program's own service: the loopback
+    host with the port the service listens on. The service hands out the
+    session key on its page and answers with everything behind it, so a
+    command that reaches it walks past every lock the tools have. Another
+    port and the port without a host stay free."""
+    muster = rf"(?<![\w.])(?:https?://)?{_LOOPBACK_HOST}:{port}(?!\d)"
+    return re.search(muster, befehl, re.IGNORECASE) is not None
+
+
+def blockiert(befehl: str, service_port: int | None = None) -> str | None:
+    """Name of the pattern that stops this command, or None.
+
+    ``service_port`` is the port this service listens on: a command that
+    speaks to it over the loopback address is stopped as well."""
     for muster, benennung in GEFAEHRLICH:
         if re.search(muster, befehl, re.IGNORECASE):
             return benennung
+    if service_port is not None and _own_service(befehl, service_port):
+        return OWN_SERVICE
     return None
 
 
@@ -1238,6 +1279,12 @@ GRUND_SCHLUESSEL = "werkzeug.grund_ausserhalb"
 GRUND_SCHLUESSEL_NETZ = "werkzeug.grund_netz"
 GRUND_PLATZHALTER = "pfad"
 
+# And a third: the command starts Exe AI's own command line client. It is not
+# a folder and not a net address, but it can do what the user can do in the
+# settings, the approval mode included, so it is asked like a path outside
+# the shared folders and follows the mode the same way.
+GRUND_SCHLUESSEL_CLI = "werkzeug.reason_cli"
+
 
 def aussenpfad(argumente: dict[str, Any], ordner: list[str]) -> str | None:
     """The path this call reaches to outside the shared folders, or None.
@@ -1250,10 +1297,15 @@ def aussenpfad(argumente: dict[str, Any], ordner: list[str]) -> str | None:
     if not befehl or not ordner:
         return None
     # A folder outside is the weightier fact and wins when both are in the
-    # line. The net comes second so that a `curl` with no path at all still
-    # answers "yes, ask" — dropping it here would turn a fixed reason into a
-    # silently skipped prompt.
-    return greift_nach_draussen(befehl, ordner) or netzziel(befehl)
+    # line, then the client, which acts on the program itself. The net comes
+    # last so that a `curl` with no path at all still answers "yes, ask" —
+    # dropping it here would turn a fixed reason into a silently skipped
+    # prompt.
+    return (
+        greift_nach_draussen(befehl, ordner)
+        or command_line_client.starts(befehl)
+        or netzziel(befehl)
+    )
 
 
 def private_target(
@@ -1267,7 +1319,7 @@ def private_target(
 
 
 def grundschluessel(argumente: dict[str, Any], ordner: list[str]) -> str:
-    """Which of the two sentences explains THIS call's confirmation.
+    """Which of the three sentences explains THIS call's confirmation.
 
     Text only. Whether it is asked was settled by ``braucht_bestaetigung``
     and is not touched here; anything this cannot place falls back to the
@@ -1276,7 +1328,11 @@ def grundschluessel(argumente: dict[str, Any], ordner: list[str]) -> str:
     befehl = str(argumente.get("command") or "").strip()
     if not befehl or not ordner:
         return GRUND_SCHLUESSEL
-    if greift_nach_draussen(befehl, ordner) is None and netzziel(befehl):
+    if greift_nach_draussen(befehl, ordner) is not None:
+        return GRUND_SCHLUESSEL
+    if command_line_client.starts(befehl):
+        return GRUND_SCHLUESSEL_CLI
+    if netzziel(befehl):
         return GRUND_SCHLUESSEL_NETZ
     return GRUND_SCHLUESSEL
 
@@ -1521,6 +1577,7 @@ async def ausfuehren(
     argumente: dict[str, Any], ordner: list[str], chat_id: str | None = None,
     zeitgrenze: int | None = None, hintergrund_erlaubt: bool = True,
     data_dir: Path | str | None = None, abbruch: asyncio.Event | None = None,
+    service_port: int | None = None,
 ) -> str:
     """Runs the command and returns output the way a terminal would show it.
 
@@ -1561,7 +1618,7 @@ async def ausfuehren(
             "folder icon in the input bar. Commands cannot run until then."
         )
 
-    if (grund := blockiert(befehl)) is not None:
+    if (grund := blockiert(befehl, service_port)) is not None:
         log.warning("Shell command refused (%s): %s", grund, befehl)
         raise ShellVerboten(
             f"The command was rejected because it matches a blocked pattern ({grund}). This "
@@ -1940,8 +1997,12 @@ async def _starten(befehl: str, wurzel: Path):
     folder marker needs to read the exit code after the command, not before.
 
     PYTHONUNBUFFERED keeps a python one-liner from withholding its output.
+
+    The environment is the service's own without the keys it keeps
+    (app/child_environment.py): ``env`` must not hand the model the keys of
+    every provider.
     """
-    environment = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    environment = {**child_environment.without_secrets(), "PYTHONUNBUFFERED": "1"}
     if WINDOWS:
         # As ONE STRING, never as a list of arguments, and with no shell
         # around it. A list is joined into a command line by the rules of the

@@ -57,8 +57,8 @@ def test_die_toten_schluessel_sind_weg():
     name.
 
     A key removed from only one language is a new defect, so the test asks
-    both. And it asks the other way round too: the five groups the editor
-    really shows have to stay — a sweep that took one of them with it would
+    both. And it asks the other way round too: the five groups the list of
+    the settings really shows have to stay — a sweep that took one of them with it would
     leave a heading blank on screen.
     """
     kataloge = {
@@ -72,13 +72,20 @@ def test_die_toten_schluessel_sind_weg():
         "agenten.modell_frei",
         "editor.folgt_geraet",
         "editor.fest_gewaehlt",
-    }
-    lebt = {
+        # The list of the settings has five other groups now; the five
+        # headings it wore before are gone with it.
         "editor.gruppe_general",
         "editor.gruppe_verhalten",
         "editor.gruppe_prompts",
         "editor.gruppe_verbindungen",
         "editor.gruppe_dateien",
+    }
+    lebt = {
+        "einstellungen.gruppe_oberflaeche",
+        "einstellungen.gruppe_verhalten",
+        "einstellungen.gruppe_modelle",
+        "einstellungen.gruppe_server",
+        "einstellungen.gruppe_system",
     }
     for sprache, katalog in kataloge.items():
         vorhanden = set(_schluessel_sammeln(katalog))
@@ -97,6 +104,20 @@ def test_kein_text_steht_unuebersetzt_in_beiden_katalogen():
     gleich_erlaubt = {
         # Proper names and marks.
         "app.ok",
+        # The name of the file that holds a key, the same in both languages.
+        "werkzeuge.platzhalter_gesetzt", "werkzeuge.platzhalter_fehlt",
+        # The name of the network, the word the page and the tool both use, and
+        # the page's row, picture and tab names that read the same in German.
+        # "Web App" is the name of the page in both languages.
+        "webapp.tailscale", "webapp.status", "webapp.picture_chat", "webapp.title",
+        # The name of the matrix and the type tag of a GGUF copy are the same
+        # word in both languages.
+        "bildserver.imatrix", "bildserver.gguf_typ",
+        # The names of the two tabs of the conversion block: the formats' own names.
+        "bildserver.tab_gguf", "bildserver.tab_fp16",
+        # The pooling kinds and their word are the names the engine knows.
+        "modell.feld_pooling", "einbettungsserver.pooling_mean",
+        "einbettungsserver.pooling_cls", "einbettungsserver.pooling_last",
         # A number with a percent sign is written the same in both languages.
         "bild.fortschritt_prozent",
         # Bare step marks — plus or minus one is no language at all.
@@ -105,8 +126,18 @@ def test_kein_text_steht_unuebersetzt_in_beiden_katalogen():
         # technical names, the same word in both languages.
         "katalog.sorte_vae", "katalog.sorte_lora", "katalog.sorte_adetailer",
         "katalog.sorte_mmproj",
+        # A hyphen shown for "nothing chosen" or "no log yet" is no word of
+        # any language; it stands the same in both files.
+        "bereinigungsserver.leer", "modell.drafter_keiner", "modell.modell_keiner",
+        "modell.vision_keiner", "sprachserver.bereinigung_aus", "studio.stil_keiner",
+        # A part that is not there shows the hyphen as well.
+        "bildserver.teil_fehlt_kurz", "katalog.bausatz_fehlt",
         # A port is a port in both languages.
         "kopf.port",
+        # The button that plays a sound as a trial is called "Test" in both,
+        # the column of the popup switches "Popup", and the row of an agent's
+        # or a cronjob's good ending names both in one phrase.
+        "meldewesen.probe", "meldewesen.spalte_popup", "meldewesen.agent_cronjob",
         # The three words of the server behind a model — active, idle,
         # offline — are English in both languages: they are the wire itself
         # (app/server_state.py).
@@ -118,7 +149,7 @@ def test_kein_text_steht_unuebersetzt_in_beiden_katalogen():
         "modell.feld_kv_wert",
         # "Version" is the same word in both languages; only the build tag
         # behind it changes.
-        "bildserver.version_zeile",
+        "bildserver.version_zeile", "bildserver.version_label",
         # The same word again, before the program's own version number.
         "updates.version",
         # Memory Lock is what the flag is called, in both languages.
@@ -157,7 +188,10 @@ def test_kein_text_steht_unuebersetzt_in_beiden_katalogen():
         # The names of the kinds of tool that are a product or a tool's own
         # name in both languages.
         "werkzeug.art_web", "werkzeug.art_terminal", "werkzeug.art_github", "werkzeug.art_gmail",
-        "editor.gruppe_prompts", "jobs.agent_waehlen",
+        "jobs.agent_waehlen",
+        # The last group of the settings list and its row for the program's
+        # version are named "System" and "Updates" in both languages.
+        "einstellungen.gruppe_system", "einstellungen.updates",
         # The first of a schedule's three kinds — "Agent", the same word in
         # both languages, like the field above.
         "cronjobs.kind_agent",
@@ -193,6 +227,9 @@ def test_kein_text_steht_unuebersetzt_in_beiden_katalogen():
         # VRAM is the label on graphics memory in both languages — a German
         # spelling of it does not exist outside dictionaries.
         "modell.vram_label",
+        # The macOS term for memory the system cannot page out, and the column
+        # heads that are loan words in German too.
+        "modell.wired_label", "modell.spalte_server", "modell.spalte_framework",
         # Seconds and milliseconds are written the same way in both
         # languages; the entry is a number with a unit, not a sentence.
         "terminal.dauer", "werkzeug.dauer",
@@ -200,13 +237,13 @@ def test_kein_text_steht_unuebersetzt_in_beiden_katalogen():
         # A port is a port in both languages, exactly as it already is in
         # the model server's own form.
         "einbettungsserver.port",
-        # The catalogue chip names the same graphics memory as the local
-        # window, so it carries the same untranslatable label.
-        "katalog.maschine",
         # "Chat" is the German word for chat as much as the English one —
         # one of the three catalogue tab names, and the only one of the
         # three that happens to be spelled the same in both languages.
         "katalog.art_chat",
+        # "Video" is the German word for video as much as the English one —
+        # the tab name of the video models, spelled the same in both.
+        "katalog.art_video",
         # A network port is called a port in German too. "Anschluss" is the
         # dictionary answer and not what anybody says or reads.
         "modell.feld_port",
@@ -277,11 +314,11 @@ def test_kein_text_steht_unuebersetzt_in_beiden_katalogen():
         "einstellungen.codefarben_solarizedlight",
         "einstellungen.codefarben_solarizeddark",
         # The skins carry proper names now — Pearl, Exe, Dark Matter,
-        # Heaven, Moune — kept the same in both languages, like the colour
-        # packs above.
+        # Heaven, Moune, Snow — kept the same in both languages, like the
+        # colour packs above.
         "einstellungen.hell", "einstellungen.dunkel",
         "einstellungen.darkmatter", "einstellungen.heaven",
-        "einstellungen.moune",
+        "einstellungen.moune", "einstellungen.snow",
         # CLI is the name of the panel in both languages, and "Chat" is the
         # same word — the status line names both.
         "cli.titel", "cli.status_chat",
@@ -307,11 +344,6 @@ def test_kein_text_steht_unuebersetzt_in_beiden_katalogen():
         # in every language — a German "Beendigungscode 1" would be a term
         # this house invented for a thing that already has a name.
         "werkzeug.exit",
-        # "Sandboxed" is what an agent held to its shared folders IS, and the
-        # word is the same one in both languages — it travelled into German
-        # whole, the way "Container" and "Backup" did. A translation would
-        # have to invent a second name for a thing that already has one.
-        "berechtigungen.modus_agent_manuell",
         # The MCP sheet's own vocabulary: "URL" is the acronym itself, same
         # category as "kopf.port" above; "Tools" is the heading the approved
         # preview drew in both languages, like "Skill" or "Prompt"; "online"
@@ -334,6 +366,24 @@ def test_kein_text_steht_unuebersetzt_in_beiden_katalogen():
         # are the terms of the field itself and stay as they are.
         "parameter.label.top_p", "parameter.label.top_k", "parameter.label.min_p",
         "parameter.label.typical_p",
+        # The settings row that opens the manual reads "Help" in German as
+        # well, the word the command line and the shipped skill carry too.
+        "menue.hilfe",
+        # The name of the generator's switch for computing both guidance
+        # passes in one batch: "Batched CFG" is its own name in both
+        # languages, as "CFG" is on the other rows of the block.
+        "bild.sw_batched_cfg",
+        # The dash that stands for "none", the name of an option, the word a
+        # request carries, and the word for a transfer: the same word in
+        # both languages, as "Container" and "Backup" are.
+        "bild.adetailer_keins",
+        "bild.sw_sage_attn",
+        "docfolder.origin_cronjob",
+        "mcp.kopfzeile",
+        "updates.download",
+        # The heading of the shortcuts the chat has: "Chat" is the same word
+        # in both languages, as on the rows of the program's other pages.
+        "shortcuts.group_window",
     }
 
     def flach(knoten, praefix=""):
@@ -379,12 +429,12 @@ def test_die_notfallnaht_nennt_den_grund_und_die_anzahl():
     )
     assert (
         t("nachricht.verdichtet_notfall", "en", anzahl=7)
-        == "Emergency compression · 7 messages"
+        == "Emergency compaction · 7 messages"
     )
     # And the wording without a count stays exactly as it was — it is what
     # stands where no count is known.
     assert t("nachricht.verdichtet_notfall_ohne_zahl", "de") == "Notfall-Komprimierung"
-    assert t("nachricht.verdichtet_notfall_ohne_zahl", "en") == "Emergency compression"
+    assert t("nachricht.verdichtet_notfall_ohne_zahl", "en") == "Emergency compaction"
 
 
 def test_unbekannte_sprache_faellt_zurueck():
@@ -517,7 +567,7 @@ def test_das_englische_bleibt_bei_den_servernamen_wie_es_war():
 
 
 def test_schnellwahl_titel_traegt_dasselbe_wort_wie_aktiv_zahl():
-    """The rail heading and the count sentence under it name the same list —
+    """The rail heading and the count pill beside the page title name the same list —
     the order's own instruction was to reuse the word
     ``modell.aktiv_zahl`` already carries, not to invent a second one."""
     for sprache, wort in (("de", "Schnellwahl"), ("en", "quick picker")):
@@ -671,17 +721,17 @@ def test_jedes_eingebaute_werkzeug_hat_einen_satz():
     # sentence that moved.
     bestand = {
         "run_command": "Führt Shell-Befehle auf diesem Rechner aus, um Programme und Skripte zu starten oder Dateien zu verschieben und umzubenennen.",
-        "ask_user": "Fragt dich, wenn eine Entscheidung deine Eingabe erfordert.",
-        "memory_save": "Merkt sich über Gespräche hinweg Informationen über dich oder dein Projekt.",
+        "ask_user": "Fragt nach, wenn eine Entscheidung eine Eingabe erfordert.",
+        "memory_save": "Merkt sich über Gespräche hinweg Informationen über den Nutzer oder das Projekt.",
         "read_file": "Liest den Inhalt einer Textdatei.",
         "write_file": "Schreibt Text in eine Datei und legt sie bei Bedarf an.",
         "edit_file": "Ersetzt eine exakt übereinstimmende Textstelle in einer Datei.",
         "list_dir": "Listet den Inhalt eines Ordners auf.",
         "skill_load": "Lädt eine gespeicherte Anleitung für eine bestimmte Aufgabenart.",
         "skill_save": "Speichert einen Arbeitsablauf, damit er später erneut geladen werden kann.",
-        "cronjob": "Richtet einmalige oder wiederkehrende Erinnerungen ein, die eine Aufgabe zu fester Zeit auslösen.",
+        "cronjob": "Richtet einmalige oder wiederkehrende Cronjobs ein, die zu fester Zeit einen Auftrag starten.",
         "draw_image": "Erzeugt ein Bild mit dem lokalen Bildmodell.",
-        "deliver_file": "Übergibt dir eine fertige Datei: im Chat erscheint sie in der Antwort, aus einer Aufgabe landet sie im Doc-Ordner.",
+        "deliver_file": "Übergibt eine fertige Datei: Im Chat erscheint sie in der Antwort, aus einem Auftrag landet sie im Doc-Ordner.",
         "start_job": "Delegiert Arbeit an einen Agenten, der sie im Hintergrund erledigt und einen Bericht erstellt.",
         "search_files": "Durchsucht die freigegebenen Ordner nach Text und nennt jede Zeile, in der er vorkommt.",
         "create_folder": "Legt einen Ordner an und gibt ihn als Arbeitsordner für diesen Chat frei.",

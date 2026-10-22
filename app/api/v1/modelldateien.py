@@ -467,7 +467,9 @@ async def _add_kits(
         ]
         for teil in kit:
             part_size = sizes[(teil.repo, teil.file)]
-            listed = teil.name in {"vae": vaes, "llm_vision": vision}.get(teil.part, encoders)
+            listed = teil.name in {
+                "vae": vaes, "audio_vae": vaes, "llm_vision": vision,
+            }.get(teil.part, encoders)
             local_name, da, collision = teil.name, listed, False
             fitting = taken.get(familie.name, {}).get(teil.part)
             if fitting is not None:
@@ -487,7 +489,8 @@ async def _add_kits(
                     da = listed
             teile.append(
                 Bausatzteil(
-                    rolle="vae" if teil.part == "vae" else "textleser", feld=teil.part,
+                    rolle="vae" if teil.part in ("vae", "audio_vae") else "textleser",
+                    feld=teil.part,
                     repo=teil.repo, datei=teil.file, name=teil.name, ordner=teil.folder,
                     groesse_gb=None if part_size is None else _gb(part_size), bytes=part_size,
                     local_name=local_name, da=da, collision=collision,

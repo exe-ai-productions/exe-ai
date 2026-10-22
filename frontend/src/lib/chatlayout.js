@@ -12,14 +12,14 @@
    picture tile is not a CSS variable: App.svelte reads it from the state. */
 
 export const CHATLAYOUT = [
-  { id: 'schrift', von: 10, bis: 26, standard: 17, text: 'layoutmodus.schrift' },
-  { id: 'breite', von: 600, bis: 2000, standard: 1400, text: 'layoutmodus.breite' },
+  { id: 'schrift', von: 10, bis: 26, standard: 16, text: 'layoutmodus.schrift' },
+  { id: 'breite', von: 600, bis: 2000, standard: 900, text: 'layoutmodus.breite' },
   { id: 'blase_eigen', von: 15, bis: 100, standard: 80, einheit: '%', text: 'layoutmodus.blase_eigen' },
   { id: 'blase_ki', von: 15, bis: 100, standard: 100, einheit: '%', text: 'layoutmodus.blase_ki' },
   { id: 'anker_eigen', von: 0, bis: 100, standard: 100, einheit: '%', text: 'layoutmodus.anker_eigen' },
   { id: 'anker_ki', von: 0, bis: 100, standard: 0, einheit: '%', text: 'layoutmodus.anker_ki' },
-  { id: 'abstand', von: 0, bis: 120, standard: 40, text: 'layoutmodus.abstand' },
-  { id: 'bildkachel', von: 200, bis: 700, standard: 700, text: 'layoutmodus.bildkachel' },
+  { id: 'abstand', von: 0, bis: 120, standard: 24, text: 'layoutmodus.abstand' },
+  { id: 'bildkachel', von: 200, bis: 700, standard: 512, text: 'layoutmodus.bildkachel' },
 ]
 
 export const VORGABE_CHATLAYOUT = Object.fromEntries(CHATLAYOUT.map((r) => [r.id, r.standard]))

@@ -229,31 +229,35 @@ def test_bild_kopieren_holt_ein_data_bild_ohne_netzzugriff():
     skript = f"""
 const aufrufe = []
 const nativeImage = {{
-  createFromDataURL: (u) => {{ aufrufe.push(['data', u]); return {{ isEmpty: () => false }} }},
-  createFromBuffer: (b) => {{ aufrufe.push(['buffer', b.length]); return {{ isEmpty: () => false }} }},
+  createFromDataURL: (u) => {{ aufrufe.push(['data', u]); return {{ isEmpty: () => false, toPNG: () => Buffer.from('PNGBYTES') }} }},
+  createFromBuffer: (b) => {{ aufrufe.push(['buffer', b.length]); return {{ isEmpty: () => false, toPNG: () => Buffer.from('PNGBYTES') }} }},
 }}
 let geschrieben = null
-const clipboard = {{ write: (w) => {{ geschrieben = w }} }}
+class ClipboardItem {{ constructor(flavours) {{ this.flavours = flavours }} }}
+const clipboard = {{ write: async (w) => {{ geschrieben = w }} }}
 global.fetch = async () => {{ throw new Error('must not fetch a data: address') }}
 {_bildKopieren()}
 bildKopieren('data:image/png;base64,QUFB').then(() => {{
-  console.log(JSON.stringify({{ aufrufe, geschrieben: geschrieben !== null }}))
+  console.log(JSON.stringify({{ aufrufe, geschrieben: geschrieben !== null, flavours: geschrieben.map((item) => Object.keys(item.flavours)) }}))
 }})
 """
     ergebnis = _laufe(skript)
     assert ergebnis["aufrufe"] == [["data", "data:image/png;base64,QUFB"]]
     assert ergebnis["geschrieben"] is True
+    # Only the picture is written: no second flavour carrying the address.
+    assert ergebnis["flavours"] == [["image/png"]]
 
 
 def test_bild_kopieren_holt_eine_http_adresse_per_fetch():
     skript = f"""
 const aufrufe = []
 const nativeImage = {{
-  createFromDataURL: (u) => {{ aufrufe.push(['data', u]); return {{ isEmpty: () => false }} }},
-  createFromBuffer: (b) => {{ aufrufe.push(['buffer', b.toString()]); return {{ isEmpty: () => false }} }},
+  createFromDataURL: (u) => {{ aufrufe.push(['data', u]); return {{ isEmpty: () => false, toPNG: () => Buffer.from('PNGBYTES') }} }},
+  createFromBuffer: (b) => {{ aufrufe.push(['buffer', b.toString()]); return {{ isEmpty: () => false, toPNG: () => Buffer.from('PNGBYTES') }} }},
 }}
 let geschrieben = null
-const clipboard = {{ write: (w) => {{ geschrieben = w }} }}
+class ClipboardItem {{ constructor(flavours) {{ this.flavours = flavours }} }}
+const clipboard = {{ write: async (w) => {{ geschrieben = w }} }}
 let angefragt = null
 global.fetch = async (adresse) => {{
   angefragt = adresse
@@ -277,7 +281,8 @@ const nativeImage = {{
   createFromBuffer: () => ({{ isEmpty: () => true }}),
 }}
 let geschrieben = null
-const clipboard = {{ write: (w) => {{ geschrieben = w }} }}
+class ClipboardItem {{ constructor(flavours) {{ this.flavours = flavours }} }}
+const clipboard = {{ write: async (w) => {{ geschrieben = w }} }}
 global.fetch = async () => ({{ arrayBuffer: async () => Buffer.from('') }})
 {_bildKopieren()}
 bildKopieren('data:image/png;base64,').then(() => {{
@@ -557,7 +562,7 @@ const cases = [
   // A page's own navigation always names the frame that started it.
   ['will-frame-navigate', 'https://example.com/', true, {{ initiator: ownPage }}],
   ['will-frame-navigate', 'file:///etc/hosts', true, {{ initiator: ownPage }}],
-  ['will-frame-navigate', 'http://127.0.0.1:8090/hilfe/seite', true, {{ initiator: ownPage }}],
+  ['will-frame-navigate', 'http://127.0.0.1:8090/help/seite', true, {{ initiator: ownPage }}],
   ['will-frame-navigate', 'https://example.com/', false, {{ initiator: ownPage }}],
   ['will-frame-navigate', 'about:srcdoc', false, {{ initiator: ownPage }}],
   ['will-redirect', 'https://example.com/', true, {{ initiator: ownPage }}],
@@ -621,7 +626,7 @@ process.stdout.write(JSON.stringify(result) + "\\n")
     assert result == {
         "will-frame-navigate main https://example.com/": {"prevented": True, "opened": False},
         "will-frame-navigate main file:///etc/hosts": {"prevented": True, "opened": False},
-        "will-frame-navigate main http://127.0.0.1:8090/hilfe/seite": {"prevented": False, "opened": False},
+        "will-frame-navigate main http://127.0.0.1:8090/help/seite": {"prevented": False, "opened": False},
         "will-frame-navigate sub https://example.com/": {"prevented": True, "opened": False},
         "will-frame-navigate sub about:srcdoc": {"prevented": False, "opened": False},
         "will-redirect main https://example.com/": {"prevented": True, "opened": False},

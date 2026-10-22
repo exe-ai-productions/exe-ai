@@ -34,7 +34,7 @@ FRIST = 10
 WINDOWS = sys.platform == "win32"
 
 
-def beenden(prozess: subprocess.Popen, frist: int = FRIST) -> None:
+def beenden(prozess: subprocess.Popen, frist: float = FRIST) -> None:
     """Ends the process and its children, or returns if it is already gone.
 
     Never raises: a stop that fails must not take the caller with it, because
@@ -102,6 +102,29 @@ def beenden_nach_pid(pid: int) -> bool:
     except (ProcessLookupError, PermissionError, OSError):
         return False
     return True
+
+
+def runs_program(pid: int, name: str) -> bool:
+    """Is the process behind this id the program ``name``?
+
+    Asked before an orphan is ended: ids get recycled, and ending whatever
+    happens to hold one now would hit an innocent program. Windows has no
+    ``ps``; ``tasklist`` names the image behind one process id instead. The
+    platform is read at the call, not once at the import.
+    """
+    if sys.platform == "win32":
+        command = ["tasklist", "/FI", f"PID eq {int(pid)}", "/FO", "CSV", "/NH"]
+    else:
+        command = ["ps", "-p", str(pid), "-o", "comm="]
+    try:
+        antwort = subprocess.run(
+            command,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+            **no_window(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return name in antwort.stdout
 
 
 def _term(pid: int) -> None:

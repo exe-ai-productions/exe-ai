@@ -14,6 +14,7 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from app.anmeldung import needs_login
 from app.api.abhaengigkeiten import hole_sprache
 from app.i18n import t
 from app.login_limit import LimitReached
@@ -35,12 +36,13 @@ class Sitzungsschluessel(BaseModel):
 def anmelden(
     daten: Anmeldung, request: Request, sprache: str = Depends(hole_sprache)
 ) -> Sitzungsschluessel:
-    """The key for the password. A service that demands no password — one
-    on the loopback address, whose page carries the key — refuses as
-    well: there is nothing to sign in to."""
+    """The key for the password. A request that demands no password — one
+    on the loopback address, whose page carries the key — is refused as
+    well: there is nothing to sign in to. One that came through Tailscale
+    always has something to sign in to, once a password is set."""
     state = request.app.state
     passwort = getattr(state, "passwort", None)
-    if not (getattr(state, "anmeldung", False) and passwort):
+    if not (needs_login(request) and passwort):
         # Nothing to sign in to, so nothing to guess and nothing to count.
         raise HTTPException(status_code=401, detail=t("fehler.anmeldung", sprache))
     try:

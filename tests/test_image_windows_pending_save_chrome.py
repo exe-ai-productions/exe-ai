@@ -1,10 +1,11 @@
 """A change made just before a window of the picture server closes is kept.
 
-The three parts that keep their settings after a short wait (memory and
-devices, the prompt preparation, a model's values) cleared that wait when
-they went away, so a value changed and the window closed within the wait was
-lost: the next opening showed the old one. Each now writes what is still
-waiting when it goes.
+The two parts that keep their settings after a short wait (memory and
+devices, the prompt preparation) cleared that wait when they went away, so a
+value changed and the window closed within the wait was lost: the next opening
+showed the old one. Each now writes what is still waiting when it goes. The
+values of a model are not one of them: they are written when the save sign is
+pressed, and closing the block over a change not saved asks first.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ await show('')
 await wait(900)
 report.preparation = sent('bildaufbereitung')
 
-// A model's values: the trigger words typed, the row closed.
+// A model's values: the trigger words typed, the block gone without a save.
 await show('values')
 typeInto(document.querySelector('input[id^="bmw-trigger-"]'), 'lighthouse')
 await wait(50)
@@ -71,9 +72,10 @@ def test_an_instruction_typed_just_before_closing_is_kept(report):
 
 
 @needs_browser
-def test_a_model_value_changed_just_before_closing_is_kept(report):
-    assert report["values"], "nothing was written"
-    assert report["values"][-1] == {"model.safetensors": {"trigger": "lighthouse"}}
+def test_a_model_value_not_saved_is_not_written_when_the_block_goes(report):
+    # Written only with the save sign; the question before closing is the
+    # table's (tests/test_image_server_layout_chrome.py).
+    assert report["values"] == []
 
 
 @needs_browser

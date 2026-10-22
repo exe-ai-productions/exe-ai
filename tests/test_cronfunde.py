@@ -650,7 +650,7 @@ async def test_kette_und_ursprung_an_der_grenze_melden_einmal(repos, gemeldet):
         repos, kette.id, AUFGABE, erfolgreich=False
     )
 
-    assert gemeldet == [(f"{AUFGABE} — stopped after 1 failed runs", False)]
+    assert gemeldet == [(f"{AUFGABE} - stopped after 1 failed run", False)]
     assert gemeldet_zurueck is True
     # Silence is not a skipped booking: both rows are counted and both are
     # switched off, exactly as before.
@@ -698,7 +698,7 @@ async def test_ohne_ursprung_meldet_die_kette_selbst(repos, gemeldet):
 
     await cronablauf.ausgang_verbuchen(repos, kette.id, AUFGABE, erfolgreich=False)
 
-    assert gemeldet == [(f"{AUFGABE} — stopped after 1 failed runs", False)]
+    assert gemeldet == [(f"{AUFGABE} - stopped after 1 failed run", False)]
 
 
 # --- `deliver` · one piece of work, one announcement -------------------------
@@ -963,3 +963,138 @@ async def test_eine_handwahl_des_geladenen_modells_bleibt_dieses_modell(
     await _bis_beendet(repos, auftrag.id)
 
     assert auftrag.endpoint_id == gewaehlt
+
+
+# --- The first entry of the start window means the model the field names ---
+
+
+def _lauf_aus_dem_fenster(client, config, registry, endpoint_id):
+    """One start with the pick the start window sends, and the preview route
+    asked the same question — with the tool rule, as the window asks it for an
+    agent that works through tools."""
+    repos = client.app.state.repositories
+    angezeigt = client.get(
+        "/api/v1/jobs/laufmodell",
+        params={"endpoint_id": endpoint_id, "werkzeuge": True},
+    ).json()
+    auftrag = auftrag_anstossen(
+        config=client.app.state.config, repositories=repos,
+        discovery=client.app.state.discovery,
+        generierungen=client.app.state.generierungen, registry=registry,
+        agent=agenten_laden(*config.agentenverzeichnisse)["recherche"],
+        task=AUFGABE, endpoint_id=endpoint_id,
+        user_id=STANDARD_BENUTZER, sprache="de",
+    )
+    return repos, auftrag, angezeigt
+
+
+async def _fremdes_agentenmodell(client, *, hauptmodell_laeuft: bool, faehig: bool = True):
+    """A model of its own in the field, on an endpoint that is neither of our
+    two servers; the agent server is not there."""
+    await client.app.state.discovery.anmelden(mock_endpunkt("wolke", group="cloud"))
+    provider_setzen(
+        client, MockProvider(mock_endpunkt("wolke"), haeppchen=["Ok."]),
+        endpoint_id="wolke",
+    )
+    werkzeugfaehig(client, "wolke", faehig)
+    if hauptmodell_laeuft:
+        await client.app.state.discovery.anmelden(
+            mock_endpunkt(agentenmodellwahl.HAUPTMODELL)
+        )
+    agentenmodell_setzen(client, "wolke")
+
+
+@pytest.mark.parametrize("hauptmodell_laeuft", [False, True])
+async def test_the_first_entry_runs_on_the_model_of_the_field_when_it_is_a_cloud_model(
+    config, client, hauptmodell_laeuft
+):
+    """The window sends the agent server as its pick, the field names a cloud
+    model and no local server is there (or only the main one): the run books
+    on the cloud model and the preview names the same endpoint, instead of the
+    window saying that no model is reachable."""
+    agent_schreiben(config)
+    registry = werkzeuge_an(client)
+    await _fremdes_agentenmodell(client, hauptmodell_laeuft=hauptmodell_laeuft)
+
+    repos, auftrag, angezeigt = _lauf_aus_dem_fenster(
+        client, config, registry, agentenserver.ENDPUNKT_ID
+    )
+    await _bis_beendet(repos, auftrag.id)
+
+    assert angezeigt["endpoint_id"] == "wolke"
+    assert auftrag.endpoint_id == "wolke"
+
+
+async def test_the_first_entry_keeps_the_tool_rule_of_the_field(config, client):
+    """A cloud model in the field that cannot call tools, an agent that works
+    through tools: the run goes the way a start from a chat goes, to the main
+    model — the pick of the window does not lift the rule."""
+    agent_schreiben(config)
+    registry = werkzeuge_an(client)
+    await _fremdes_agentenmodell(client, hauptmodell_laeuft=True, faehig=False)
+
+    repos, auftrag, angezeigt = _lauf_aus_dem_fenster(
+        client, config, registry, agentenserver.ENDPUNKT_ID
+    )
+    await _bis_beendet(repos, auftrag.id)
+
+    assert auftrag.endpoint_id.startswith(agentenmodellwahl.HAUPTMODELL)
+    assert angezeigt["endpoint_id"] == auftrag.endpoint_id
+
+
+async def test_the_first_entry_with_a_slot_file_in_the_field_still_falls_to_the_main_model(
+    config, client
+):
+    """The field names a file of the agent server and that server is not up:
+    the entry means the agent server, so the main model takes over as before."""
+    agent_schreiben(config)
+    registry = werkzeuge_an(client)
+    provider_setzen(client, MockProvider(mock_endpunkt("test"), haeppchen=["Ok."]))
+    await client.app.state.discovery.anmelden(
+        mock_endpunkt(agentenmodellwahl.HAUPTMODELL)
+    )
+    agentenmodell_setzen(client, "noch-nicht-geladen.gguf", sorte="slot")
+
+    repos, auftrag, angezeigt = _lauf_aus_dem_fenster(
+        client, config, registry, agentenserver.ENDPUNKT_ID
+    )
+    await _bis_beendet(repos, auftrag.id)
+
+    assert auftrag.endpoint_id.startswith(agentenmodellwahl.HAUPTMODELL)
+    assert angezeigt["endpoint_id"] == auftrag.endpoint_id
+
+
+async def test_the_first_entry_with_the_main_model_in_the_field_is_unchanged(config, client):
+    """The field names the main model: nothing of its own, the entry is read
+    as before and lands on the main model when the agent server is not up."""
+    agent_schreiben(config)
+    registry = werkzeuge_an(client)
+    provider_setzen(client, MockProvider(mock_endpunkt("test"), haeppchen=["Ok."]))
+    await client.app.state.discovery.anmelden(
+        mock_endpunkt(agentenmodellwahl.HAUPTMODELL)
+    )
+    agentenmodell_setzen(client, agentenmodellwahl.HAUPTMODELL)
+
+    repos, auftrag, angezeigt = _lauf_aus_dem_fenster(
+        client, config, registry, agentenserver.ENDPUNKT_ID
+    )
+    await _bis_beendet(repos, auftrag.id)
+
+    assert auftrag.endpoint_id.startswith(agentenmodellwahl.HAUPTMODELL)
+    assert angezeigt["endpoint_id"] == auftrag.endpoint_id
+
+
+async def test_the_main_model_entry_ignores_the_field_of_the_agent_model(config, client):
+    """The window's other entry is a pick of the main model and stays one,
+    whatever the field says."""
+    agent_schreiben(config)
+    registry = werkzeuge_an(client)
+    await _fremdes_agentenmodell(client, hauptmodell_laeuft=True)
+
+    repos, auftrag, angezeigt = _lauf_aus_dem_fenster(
+        client, config, registry, agentenmodellwahl.HAUPTMODELL
+    )
+    await _bis_beendet(repos, auftrag.id)
+
+    assert auftrag.endpoint_id.startswith(agentenmodellwahl.HAUPTMODELL)
+    assert angezeigt["endpoint_id"] == auftrag.endpoint_id

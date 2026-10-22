@@ -35,9 +35,9 @@
   let agenten = $state([])
   let agentName = $state('')
   let aufgabe = $state('')
-  /* The server standing in the row: one of the two below, and nothing else.
-     Its value goes out unchanged as the run's `endpoint_id` — which of the
-     two really takes the run is read off the server, not decided here (see
+  /* The entry standing in the row: one of the two below, and nothing else.
+     Its value goes out unchanged as the run's `endpoint_id` — which model
+     really takes the run is read off the server, not decided here (see
      `lauf`). */
   let endpointId = $state(SLOT_ENDPUNKT)
   let ordner = $state([])
@@ -49,6 +49,10 @@
      endpoint the run then never went to, a paid provider among them.
      Filled by the effect below, one answer per entry. */
   let lauf = $state({})
+  /* Whether the agent list has come back — with its answer or with its
+     failure, both end the waiting. Together with the two answers above it
+     says when the window has something true to show (`bereit`). */
+  let agentenGeladen = $state(false)
   /* And the same question for the row's own entry, asked WITHOUT the tool
      rule — the answer the row's server would give if the tools did not
      matter. It is what tells a detour from a fallback (see `umgeleitet`). */
@@ -91,6 +95,8 @@
      "Not answered YET" is not that case — the two answers come over the wire
      while the window is already open, and a window that says "no model" for
      that half second says something untrue. So this waits for both. */
+  const bereit = $derived(agentenGeladen && SERVER.every((id) => id in lauf))
+
   const keinModell = $derived(
     SERVER.every((id) => lauf[id] && lauf[id].endpoint_id !== undefined) &&
       !SERVER.some((id) => lauf[id]?.endpoint_id),
@@ -102,11 +108,13 @@
     aufgabe = ''
     ordner = []
     /* The agent server stands in the row whenever the window opens — a run
-       starts on it, which is what it is there for — and the main
-       model takes over when it is not there: the server's own decision, not
-       this window's. */
+       starts on it, which is what it is there for. The server says what that
+       entry means: the model the field "Model for agents & cronjobs" names
+       when it names one of its own, otherwise the agent server, and the main
+       model when that is not there — its own decision, not this window's. */
     endpointId = SLOT_ENDPUNKT
     lauf = {}
+    agentenGeladen = false
     laufOhne = undefined
     api
       .agenten()
@@ -124,6 +132,9 @@
         }
       })
       .catch(() => melde(t('agenten.nicht_geladen'), 'fehler'))
+      .finally(() => {
+        agentenGeladen = true
+      })
     if (!berechtigungsmodus.geladen) berechtigungsmodusLaden()
   })
 
@@ -146,7 +157,10 @@
      window stands open has to be asked again — without it the row keeps
      saying "no model reachable" for a server that is there. */
   $effect(() => {
-    if (!offen) return
+    /* Not before the agent list is in: whether this agent works through tools
+       is part of the question, and an answer asked without that is one the
+       window would have to swap a moment later. */
+    if (!offen || !agentenGeladen) return
     void zustand.modelle.length
     const braucht = werkzeugeMoeglich
     const reihe = endpointId
@@ -209,12 +223,12 @@
       const daten = {
         agent: agentName,
         task: aufgabe.trim(),
-        /* The server the row stands on, as this run's pick. Both entries are
-           servers this program starts itself, and the server reads a pick of
-           the agent server as the first entry of its own order
-           (`agentenmodellwahl.lauf_kennung`) — so a preselection nobody made
-           can never be what refuses a run: the main model takes over when the
-           agent server is not there. */
+        /* The entry the row stands on, as this run's pick. The server reads a
+           pick of the agent server as the first entry of its own order
+           (`agentenmodellwahl.lauf_kennung`): the model the field names when
+           it names one of its own, else the agent server — so a preselection
+           nobody made can never be what refuses a run: the main model takes
+           over when the agent server is not there. */
         endpoint_id: endpointId,
         folders: ordner.length ? ordner : null,
       }
@@ -234,7 +248,13 @@
 </script>
 
 {#snippet kopf()}
-  {#if keinModell}
+  {#if !bereit}
+    <!-- The agent list and the answers for both entries come over the wire
+         while the window is already open. Until all of them are in, the
+         frame stands as it is and nothing is said that may turn out untrue;
+         then the rows appear once. -->
+    <div class="laedt" aria-busy="true"></div>
+  {:else if keinModell}
     <!-- What is missing, as a row like the others: the field and its state.
          The way to fix it stands in the foot. -->
     <div class="zeile">
@@ -302,8 +322,11 @@
 {/snippet}
 
 {#snippet fussLinks()}
-  <!-- The page that supplies what is missing, first in the left corner. -->
-  {#if keinModell}
+  <!-- The page that supplies what is missing, first in the left corner —
+       once the window knows what is missing. -->
+  {#if !bereit}
+    <!-- Nothing yet. -->
+  {:else if keinModell}
     <button class="button" onclick={modelleOeffnen}>{t('modell.feld_modell')}</button>
   {:else if !agenten.length}
     <button class="button" onclick={agentAnlegen}>{t('agenten.titel')}</button>

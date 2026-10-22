@@ -24,11 +24,11 @@ Whether it travels is TWO switches, ``{"lokal": bool, "cloud": bool}``, and
 that is the whole granularity: on the machine, and off it. Per-provider or
 per-chat would be finer than anyone wants to operate.
 
-The default is on locally and off in the cloud, because a memory in a system
-prompt is sent with EVERY request — on this machine that costs nothing, to a
-provider it means a personal profile living on a foreign server permanently.
-The switch is there for whoever wants it otherwise; the quiet default is the
-careful one.
+The default is on, locally and in the cloud: a model that does not know what
+the user told it before cannot work the way they asked, and one that cannot
+keep what it learns makes them say it again. A memory in a system prompt is
+sent with EVERY request, so to a provider it means a personal profile on a
+foreign server; the two switches are there for whoever does not want that.
 
 Not stored as bare booleans on purpose: the settings route treats a falsy
 value as "nothing set" and lets the scope above take over, so a plain
@@ -45,8 +45,8 @@ log = logging.getLogger(__name__)
 
 SCHLUESSEL = "gedaechtnis"
 
-# On here, off out there — until somebody decides otherwise.
-VORGABE: dict[str, bool] = {"lokal": True, "cloud": False}
+# On here and out there — until somebody switches a side off.
+VORGABE: dict[str, bool] = {"lokal": True, "cloud": True}
 
 # The headings the file is split by. English like everything in a prompt —
 # the entries themselves are written in whatever language the user speaks.
@@ -57,7 +57,9 @@ UEBERSCHRIFT_FAKTEN = "## Facts"
 # entries read as part of the conversation instead of as standing knowledge.
 EINLEITUNG = (
     "Information about this user from previous sessions. The rules always apply; use the "
-    "facts when relevant. Do not repeat this information to the user unless asked."
+    "facts when relevant. Do not repeat this information to the user unless asked. "
+    "Your memory describes the user, not the machine you are running on; check the live system "
+    "before you rely on it."
 )
 
 

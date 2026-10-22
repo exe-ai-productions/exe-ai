@@ -11,14 +11,21 @@
   import Hauszeichen from './Hauszeichen.svelte'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import Bausatzkopf from './Bausatzkopf.svelte'
-  import { t } from '../lib/texte.svelte.js'
+  import OwnerMark from './OwnerMark.svelte'
+  import DownloadRow from './DownloadRow.svelte'
+  import { t, texte } from '../lib/texte.svelte.js'
+  import { formatGb } from '../lib/numberDisplay.js'
   import { LOGOS } from '../lib/logos.js'
   import { FAEHIGKEIT_FARBE, farbton } from '../lib/modellempfehlungen.js'
 
   let {
     name,
     unter = '',
+    /* The logo the caller has chosen (a catalogue card's maker) — or, for a
+       hit or an accessory, `owner`: the owner's house logo, else the round
+       picture on Hugging Face, else the letter. */
     marke = null,
+    owner = '',
     buchstabe = '',
     faehigkeiten = [],
     /* Class and kind of an accessory, each as { text, farbe }. */
@@ -31,6 +38,7 @@
     onZurueck,
     onHolen,
     onAbbrechen,
+    onDequeue,
   } = $props()
 
   const KANN = {
@@ -74,10 +82,8 @@
         <path d="M15 5 8 12l7 7" />
       </svg>
     </button>
-    {#if marke}
-      <div class="logo"><svg viewBox={marke.vb} width="26" height="26" aria-hidden="true">{@html marke.html}</svg></div>
-    {:else if buchstabe}
-      <div class="logo">{buchstabe}</div>
+    {#if marke || owner || buchstabe}
+      <OwnerMark mark={marke} {owner} letter={buchstabe} size={30} />
     {/if}
     <div class="wer">
       <div class="name" title={name}>{name}</div>
@@ -91,12 +97,12 @@
         <span class="zeichen" title={t(KANN[f])} style={FAEHIGKEIT_FARBE[f] ? `color:${FAEHIGKEIT_FARBE[f]}` : undefined}><Hauszeichen zeichen={f} groesse="mittel" /></span>
       {/each}
       {#if maschineGb}
-        <span class="vram">{t('modell.vram_label')}: {maschineGb} GB</span>
+        <span class="vram">{t('modell.vram_label')}: {formatGb(maschineGb, texte.sprache)} GB</span>
       {/if}
       {#if hatSeite}
-        <button class="hf" onclick={seiteOeffnen}>
-          <svg viewBox={huggingFace.vb} width="16" height="16" aria-hidden="true">{@html huggingFace.html}</svg>
-          {t('editor.quelle_hf')}
+        <button class="hf" onclick={seiteOeffnen}
+                title={t('editor.quelle_hf')} aria-label={t('editor.quelle_hf')}>
+          <svg viewBox={huggingFace.vb} width="26" height="26" aria-hidden="true">{@html huggingFace.html}</svg>
         </button>
       {/if}
     </div>
@@ -108,8 +114,9 @@
 
   {#if zeilen}
     <div class="kopf tafelkopf">{t('katalog.dateien')} <span class="zahl">{zeilen.length}</span></div>
+    <div class="files">
     {#each zeilen as z (z.schluessel)}
-      <div class="zeile" class:empfohlen={z.empfohlen}>
+      <div class="zeile" class:empfohlen={z.empfohlen} class:running={z.zustand === 'laedt'}>
         <div class="obere">
           <div class="fwer">
             <div class="fname">{z.name}</div>
@@ -118,21 +125,17 @@
           {#if z.plakette}
             <span class="plakette fplakette" style={`color:${z.plakette.farbe};border:1px solid ${farbton(z.plakette.farbe, 33)};background:${farbton(z.plakette.farbe, 9)}`}>{z.plakette.text}</span>
           {/if}
-          {#if z.gb != null}<span class="fgb">{t('modell.gb', { zahl: z.gb })}{#if z.teile > 1}{' · ' + t('modell.teile', { zahl: z.teile })}{/if}</span>{/if}
-          {#if z.zustand === 'laedt'}
-            <button class="knopf still" onclick={onAbbrechen}>{t('katalog.abbrechen')}</button>
-          {:else if z.zustand === 'bereit'}
-            <span class="imordner">{t('katalog.im_ordner')}</span>
-          {:else}
-            <button class="knopf wichtig" onclick={() => onHolen?.(z)} disabled={laedt}>{t('katalog.herunterladen')}</button>
-          {/if}
+          {#if z.gb != null && z.zustand !== 'laedt'}<span class="fgb">{t('modell.gb', { zahl: formatGb(z.gb, texte.sprache) })}{#if z.teile > 1}{' · ' + t('modell.teile', { zahl: z.teile })}{/if}</span>{/if}
+          <DownloadRow status={z.zustand} percent={z.anteil ?? 0} amounts={z.text ?? ''}
+                       disabled={laedt} onDownload={() => onHolen?.(z)}
+                       onCancel={onAbbrechen} onDequeue={() => onDequeue?.(z)} />
         </div>
         {#if z.bausatz}
           {@const da = z.bausatz.teile.filter((teil) => teil.da).length}
           {@const fehlt = missingGb(z.bausatz)}
           <div class="bausatz">
             <Bausatzkopf open={Boolean(kitOpen[z.schluessel])} there={da} all={z.bausatz.teile.length}
-                         rest={fehlt != null && fehlt > 0 ? t('katalog.bausatz_fehlt_gb', { zahl: fehlt }) : ''}
+                         rest={fehlt != null && fehlt > 0 ? t('katalog.bausatz_fehlt_gb', { zahl: formatGb(fehlt, texte.sprache) }) : ''}
                          onToggle={() => (kitOpen[z.schluessel] = !kitOpen[z.schluessel])} />
             {#if kitOpen[z.schluessel]}
               {#each z.bausatz.teile as teil (teil.rolle + teil.name)}
@@ -143,22 +146,16 @@
                     <div class="fname">{teil.name}</div>
                     <div class="fpasst">{teil.ordner ? `${teil.ordner}/` : t('katalog.bausatz_bildordner')}</div>
                   </div>
-                  {#if teil.groesse_gb != null}<span class="fgb">{t('modell.gb', { zahl: teil.groesse_gb })}</span>{/if}
+                  {#if teil.groesse_gb != null}<span class="fgb">{t('modell.gb', { zahl: formatGb(teil.groesse_gb, texte.sprache) })}</span>{/if}
                   <span class="teilstand">{teil.da ? t('katalog.im_ordner') : t('katalog.bausatz_fehlt')}</span>
                 </div>
               {/each}
             {/if}
           </div>
         {/if}
-        {#if z.zustand === 'laedt'}
-          <div class="laufbalken">
-            <span class="balken"><i style="width:{z.anteil ?? 0}%"></i></span>
-            <span class="prozent">{z.anteil ?? 0} %</span>
-          </div>
-          <div class="laufzahl">{z.text ?? ''}</div>
-        {/if}
       </div>
     {/each}
+    </div>
     {#if !zeilen.length}
       <p class="leer">{t('modell.keine_dateien')}</p>
     {/if}
@@ -181,8 +178,8 @@
     margin-bottom: 14px;
   }
   .zurueck {
-    width: 30px;
-    height: 30px;
+    width: 34px;
+    height: 34px;
     flex: none;
     display: inline-flex;
     align-items: center;
@@ -198,18 +195,6 @@
   .zurueck:hover {
     color: var(--text);
     background: color-mix(in srgb, var(--text) 6%, var(--glass-button));
-  }
-  .logo {
-    width: 44px;
-    height: 44px;
-    flex: none;
-    border-radius: 9px;
-    color: var(--text-still);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font: 700 13px var(--schrift);
-    background: var(--glass-button);
   }
   .wer {
     min-width: 0;
@@ -256,21 +241,22 @@
     color: var(--text-leise);
     white-space: nowrap;
   }
+  /* The Hugging Face mark alone, no tile and no word: one click opens the
+     repository's page. */
   .hf {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
+    width: 32px;
+    height: 32px;
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
     border: none;
-    background: var(--glass-button);
-    box-shadow: inset 0 0 0 1px var(--feldstrich);
-    color: var(--text);
-    font: 500 12.5px var(--schrift);
-    padding: 6px 12px;
     border-radius: 9px;
+    background: none;
     cursor: pointer;
   }
   .hf:hover {
-    background: var(--glass-hover);
+    background: color-mix(in srgb, var(--text) 8%, transparent);
   }
   .satzlang {
     font-size: 13px;
@@ -289,15 +275,20 @@
     color: var(--text-still);
     font-variant-numeric: tabular-nums;
   }
-  .zeile {
+  /* The files stand in one card, a hairline between the rows. */
+  .files {
     border-radius: 9px;
-    padding: 11px 14px;
-    margin-bottom: 4px;
-    /* A card on the page: card glass with its fine line; the recommended
-       row steps up onto the denser button glass. */
     background: var(--glass-card);
     box-shadow: inset 0 0 0 1px var(--glass-card-line);
+    overflow: hidden;
   }
+  .zeile {
+    padding: 14px 16px;
+  }
+  .zeile + .zeile {
+    border-top: 1px solid var(--linie);
+  }
+  /* The recommended row steps up onto the denser button glass. */
   .zeile.empfohlen {
     background: var(--glass-button);
   }
@@ -309,6 +300,10 @@
   .fwer {
     flex: 1;
     min-width: 0;
+  }
+  /* A running row gives the room behind the name to its bar. */
+  .zeile.running .fwer {
+    flex: 0 1 auto;
   }
   .fname {
     font: 500 13px var(--schrift);
@@ -323,11 +318,6 @@
     font: 500 12px var(--schrift);
     color: var(--text-still);
     font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-  .imordner {
-    font-size: 12px;
-    color: var(--text-still);
     white-space: nowrap;
   }
   /* The kit: under the row's line, its head (Bausatzkopf), and one line per
@@ -357,74 +347,9 @@
     color: var(--text-still);
     white-space: nowrap;
   }
-  .laufbalken {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin: 10px 0 4px;
-  }
-  .balken {
-    flex: 1;
-    height: 4px;
-    border-radius: 9px;
-    background: var(--glass-button);
-    overflow: hidden;
-  }
-  .balken i {
-    display: block;
-    height: 100%;
-    background: var(--blau);
-    transition: width 0.3s;
-  }
-  /* The percentage stands at the end of the bar, in the bar's own line. */
-  .prozent {
-    font: 500 12.5px var(--schrift);
-    color: var(--blau);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-  .laufzahl {
-    font: 400 11.5px var(--schrift);
-    color: var(--text-still);
-    font-variant-numeric: tabular-nums;
-  }
   .leer {
     font-size: 12px;
     color: var(--text-still);
     padding: 4px 10px 8px;
-  }
-  .knopf {
-    border: none;
-    background: var(--glass-button);
-    box-shadow: inset 0 0 0 1px var(--feldstrich);
-    color: var(--text);
-    font: 500 12.5px var(--schrift);
-    padding: 7px 14px;
-    border-radius: 9px;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.12s, opacity 0.12s, transform 0.08s;
-  }
-  .knopf:hover {
-    background: var(--glass-hover);
-  }
-  .knopf:active {
-    transform: scale(0.975);
-  }
-  .knopf:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
-  /* The main button is button glass with its fine edge, like the start
-     button; only Send stays filled. */
-  .knopf.wichtig {
-    background: var(--glass-button);
-    color: var(--text);
-    box-shadow: inset 0 0 0 1px var(--glass-button-edge);
-    font-size: 13px;
-    padding: 7px 15px;
-  }
-  .knopf.wichtig:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--text) 6%, var(--glass-button));
   }
 </style>

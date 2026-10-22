@@ -62,4 +62,4 @@ def test_the_twelve_labels_stay_in_both_catalogues_and_in_the_component():
 
 
 def test_the_context_compaction_field_keeps_its_limit():
-    assert "bind:wert={verdichtungSchwelle} min={0} max={85} ganzzahlig" in COMPONENT
+    assert "bind:wert={values.verdichtungSchwelle} min={0} max={85} ganzzahlig" in COMPONENT

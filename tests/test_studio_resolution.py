@@ -20,7 +20,7 @@ CANVAS = (
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 
 AREA_ROW = (
-    '<div class="bereichsname" style="left:{bereich.x}px;top:{bereich.y - 36}px">'
+    '<div class="bereichsname" style="left:{bereich.x}px;top:{bereich.y - 36}px;max-width:{zeilenbreite}px">'
 )
 
 
@@ -44,7 +44,7 @@ def test_the_resolution_row_stands_only_while_a_picture_lies_in_the_area():
 
 def test_the_row_names_the_pictures_own_size_in_whole_pixels():
     row = _picture_row()
-    assert "<span>{natur.w} × {natur.h}</span>" in row
+    assert '<span class="mass">{natur.w} × {natur.h}</span>' in row
     # The area's size is not what it shows.
     assert "{gw}" not in row and "{gh}" not in row
 
@@ -68,9 +68,15 @@ def test_the_row_takes_a_sign_and_a_label_the_house_has():
 
 
 def test_the_row_stands_clear_of_the_bar_of_the_brush():
-    """The bar ends 52 px from the top; the area stands at least TOP_ROOM
-    from it, so the row — 66 above the area — keeps a gap to the bar even
-    when the area is as high as it can be."""
+    """At the top the bar ends 44 px from the surface's top (12 + 32), in a row
+    of its own under the zoom 84 px (52 + 32); the area stands at least
+    TOP_ROOM from the top, 40 px more in the second case, so the row — 66
+    above the area — keeps a gap to the bar even when the area is as high as
+    it can be."""
     area = (FRONTEND / "src/lib/studioArea.js").read_text(encoding="utf-8")
     margin = int(re.search(r"const TOP_ROOM = (\d+)", area).group(1))
-    assert margin - 66 >= 52 + 4
+    second_row = int(re.search(r"const BRUSH_ROW_ROOM = (\d+)", area).group(1))
+    assert margin - 66 >= 44 + 4
+    assert margin + second_row - 66 >= 84 + 4
+    # The 40 px are what the second row stands lower than the one at the top.
+    assert second_row == 52 - 12

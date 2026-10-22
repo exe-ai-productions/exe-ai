@@ -13,6 +13,7 @@ from pathlib import Path
 from app.events import Ereignisse, bus
 from app.providers import MockProvider, mock_endpunkt
 from tests.conftest import provider_setzen
+from tests.fensterquelle import BAR_SOURCE, WINDOW_SOURCE
 
 WURZEL = Path(__file__).resolve().parents[1]
 
@@ -47,7 +48,7 @@ def test_das_fenster_haengt_sich_an_und_nimmt_ein_409_zurueck():
     # its document — that start is its own too.
     assert "zustand.laeuft[chatId] || zustand.sendet[chatId]) return" in leitung
     assert "zustand.wiederanhaengen[chatId] = {" in leitung
-    app = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    app = WINDOW_SOURCE.read_text(encoding="utf-8")
     assert "fehler.status === 409" in app
     # The list is only touched while the refused chat is the one on screen;
     # the words AND the attachments go back to THAT chat's field or draft
@@ -59,7 +60,8 @@ def test_das_fenster_haengt_sich_an_und_nimmt_ein_409_zurueck():
     # What came out of the queue goes back in line (the other tests of the
     # queue pin that); what was typed goes back to the field.
     assert "eingabe?.zurueckgeben(inhalt, zielChat, nachrichtId)" in app
-    assert "if (ausReihe && !gleichWiederAbgewiesen) {" in app
+    assert "if (ausReihe) {" in app
+    assert "gleichWiederAbgewiesen" not in app
     assert "void chatOeffnen(zielChat)" in app
     # The end-of-run reconcile attaches synchronously — it has just fetched
     # the list itself and must claim the chat before the queue wakes.
@@ -69,7 +71,9 @@ def test_das_fenster_haengt_sich_an_und_nimmt_ein_409_zurueck():
     # own, older run; and two runs naming each other must not fetch forever.
     assert "const nachgeholtFuer = new Set()" in app
     assert "if (nachgeholtZuletzt !== wiederanhang.generationId) return" in app
-    # The button on a held bubble asks the same claim the queue asks.
-    assert "if (laufVon(eintrag.chatId) || zustand.sendet[eintrag.chatId]) return" in app
-    leiste = (WURZEL / "frontend/src/teile/Eingabeleiste.svelte").read_text(encoding="utf-8")
-    assert "export function zurueckgeben(inhalt, chat = entwurfChat, messageId = null)" in leiste
+    # The ✕ on a bubble takes the message back into the field; nothing sends
+    # a waiting message by a click any more.
+    assert "eingabe?.takeBack(eintrag)" in app
+    assert "warteschlangeLosschicken" not in app
+    leiste = BAR_SOURCE.read_text(encoding="utf-8")
+    assert "function zurueckgeben(inhalt, chat = entwurfChat, messageId = null)" in leiste

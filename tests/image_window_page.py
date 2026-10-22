@@ -42,11 +42,19 @@ SHELL = """<script>
   import BildGeraete from '../../src/teile/BildGeraete.svelte'
   import Promptaufbereitung from '../../src/teile/Promptaufbereitung.svelte'
   import Bildmodellwerte from '../../src/teile/Bildmodellwerte.svelte'
+  import Serverabschnitt from '../../src/teile/Serverabschnitt.svelte'
   import { scene } from './scene.svelte.js'
+
+  // The generator's further switches stand in the sd.cpp section of the page, the idle time under it.
+  let switchRows = $state.raw(null)
 </script>
 
 <div style="width: 760px; margin: 0 auto;">
-  {#if scene.show === 'devices'}<BildGeraete />{/if}
+  {#if scene.show === 'devices'}
+    <BildGeraete onklappe={(parts) => (switchRows = parts)} />
+    <Serverabschnitt zeichen="server" titel="sd.cpp">{@render switchRows?.schalter()}</Serverabschnitt>
+    {@render switchRows?.erweitert()}
+  {/if}
   {#if scene.show === 'preparation'}<Promptaufbereitung />{/if}
   {#if scene.show === 'values'}<Bildmodellwerte modell="model.safetensors" listen={{}} />{/if}
 </div>
@@ -77,6 +85,7 @@ function checkedDevices(stored, sent) {
   if ('split_mode' in sent) out.split_mode = SPLIT.test(stripped(sent.split_mode)) ? stripped(sent.split_mode) : ''
   if ('backend' in sent) out.backend = stripped(sent.backend)
   if ('zeitgrenze' in sent) out.zeitgrenze = Number.isInteger(sent.zeitgrenze) && sent.zeitgrenze > 0 ? sent.zeitgrenze : null
+  if ('idle_minutes' in sent) out.idle_minutes = Number.isInteger(sent.idle_minutes) && sent.idle_minutes > 0 ? sent.idle_minutes : null
   if ('switches' in sent) {
     const switches = { ...(stored.switches || {}) }
     for (const [key, value] of Object.entries(sent.switches)) {
@@ -241,8 +250,11 @@ async def _read_result(port: int, limit: float) -> str:
     return ""
 
 
-def run_cases(cases: str, *, limit: float = 120.0) -> dict:
-    """Build the page, run ``cases`` in it and return its ``report``."""
+def run_cases(cases: str, *, limit: float = 120.0, window: str = "900,1200") -> dict:
+    """Build the page, run ``cases`` in it and return its ``report``.
+
+    ``window`` is the size of the browser window, width and height; the rows
+    of two columns stand side by side only above 900 px."""
     program = appfenster._programm() or pytest.skip("no Chrome on this machine")
     folder = FRONTEND / "node_modules" / f".harness-image-windows-{uuid4().hex}"
     folder.mkdir(parents=True)
@@ -252,7 +264,7 @@ def run_cases(cases: str, *, limit: float = 120.0) -> dict:
         (folder / "entry.js").write_text(ENTRY_JS, encoding="utf-8")
         (folder / "vite.config.js").write_text(VITE_CONFIG, encoding="utf-8")
         build = subprocess.run(
-            [str(FRONTEND / "node_modules" / ".bin" / "vite"), "build", "--config", "vite.config.js"],
+            [shutil.which("vite", path=str(FRONTEND / "node_modules" / ".bin")), "build", "--config", "vite.config.js"],
             cwd=folder, capture_output=True, text=True, timeout=240,
         )
         assert build.returncode == 0, (build.stdout + build.stderr)[-2000:]
@@ -262,7 +274,7 @@ def run_cases(cases: str, *, limit: float = 120.0) -> dict:
             [
                 program, "--headless=new", "--disable-gpu", "--no-first-run",
                 "--disable-background-networking", "--allow-file-access-from-files",
-                "--window-size=900,1200", f"--remote-debugging-port={port}",
+                f"--window-size={window}", f"--remote-debugging-port={port}",
                 f"--user-data-dir={folder / 'profile'}", (folder / "measure.html").as_uri(),
             ],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,

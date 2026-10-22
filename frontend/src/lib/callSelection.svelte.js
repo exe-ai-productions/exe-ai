@@ -10,6 +10,11 @@
   column, with its button or with Esc, gives the focus back to the line, so
   somebody who walks the answer with the keyboard does not lose their place.
 
+  On the phone page there is no column: the terminal stands as a sheet over
+  the chat (phone/TerminalSheet.svelte), opened by the same click, and its
+  state is `terminalSheet`. Closing the sheet gives the focus back to the
+  line as well.
+
   The agents view needs only the second half: a click on the row of an agent
   asks for its card through `openTranscript` (lib/agentchat.svelte.js) and
   leaves its line here to be found again.
@@ -25,6 +30,14 @@ export const callSelection = $state({
   counter: 0,
 })
 
+/* Whether the terminal stands as a sheet over the chat — the phone page's
+   way of showing what the column shows on the desktop. */
+export const terminalSheet = $state({ open: false })
+
+/* The phone page marks its root while it is mounted (phone/Phone.svelte). */
+const onPhonePage = () =>
+  typeof document !== 'undefined' && document.documentElement.hasAttribute('data-phone')
+
 /* The line that was clicked, outside of the reactive state: it is a node. */
 let trigger = null
 
@@ -38,7 +51,17 @@ export async function openCall(key, node) {
   rememberTrigger(node)
   callSelection.key = key
   callSelection.counter += 1
+  if (onPhonePage()) {
+    terminalSheet.open = true
+    return
+  }
   await moduleShow('terminal')
+}
+
+/** The sheet was closed: the focus goes back to the line it came from. */
+export function closeTerminalSheet() {
+  terminalSheet.open = false
+  restoreFocus()
 }
 
 /** Whether the column was opened from a line of the answer, so that Esc

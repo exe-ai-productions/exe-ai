@@ -32,7 +32,7 @@ console.log(JSON.stringify({
   eigene_seite: {
     loopback: own('http://127.0.0.1:8090/app/'),
     localhost: own('http://localhost:8090/app/'),
-    handbuch: own('http://127.0.0.1:8090/hilfe/start'),
+    handbuch: own('http://127.0.0.1:8090/help/start'),
     anderer_port: own('http://127.0.0.1:8091/app/'),
     https: own('https://127.0.0.1:8090/app/'),
     fremder_wirt: own('http://exe-hq.net:8090/app/'),
@@ -71,7 +71,7 @@ console.log(JSON.stringify({
       sub_foreign: verdict('https://exe-hq.net/', { mainFrame: false }),
       sub_srcdoc: verdict('about:srcdoc', { mainFrame: false }),
       sub_blank: verdict('about:blank', { mainFrame: false }),
-      sub_own: verdict('http://localhost:8090/hilfe/', { mainFrame: false }),
+      sub_own: verdict('http://localhost:8090/help/', { mainFrame: false }),
       sub_pdf_viewer: verdict('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/34b3c741', { mainFrame: false }),
       sub_other_extension: verdict('chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/x', { mainFrame: false }),
       main_pdf_viewer: verdict('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/34b3c741', { mainFrame: true }),
@@ -93,7 +93,7 @@ console.log(JSON.stringify({
       tools_main_dotdot: verdict('devtools://devtools/bundled/../remote/x', { mainFrame: true, tools: true }),
       tools_sub_remote_frontend: verdict('devtools://devtools/remote/serve_rev/@1/inspector.html', { mainFrame: false, tools: true }),
       tools_sub_extension: verdict('chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/panel.html', { mainFrame: false, tools: true }),
-      tools_sub_own: verdict('http://127.0.0.1:8090/hilfe/', { mainFrame: false, tools: true }),
+      tools_sub_own: verdict('http://127.0.0.1:8090/help/', { mainFrame: false, tools: true }),
       tools_sub_blob: verdict('blob:devtools://devtools/0f1e2d3c', { mainFrame: false, tools: true }),
       tools_sub_srcdoc: verdict('about:srcdoc', { mainFrame: false, tools: true }),
       tools_main_blank: verdict('about:blank', { mainFrame: true, tools: true }),
@@ -146,7 +146,7 @@ console.log(JSON.stringify({
       https: verdict('https://exe-hq.net/hilfe'),
       http: verdict('http://exe-hq.net/'),
       own: verdict('http://127.0.0.1:8090/app/'),
-      own_localhost: verdict('http://localhost:8090/hilfe/'),
+      own_localhost: verdict('http://localhost:8090/help/'),
       other_port_on_loopback: verdict('http://127.0.0.1:8091/app/'),
       javascript: verdict('javascript:alert(1)'),
       file: verdict('file:///etc/passwd'),
@@ -165,10 +165,10 @@ console.log(JSON.stringify({
     garbage: rules.addressForLog('not an address'),
   },
   handbuch: {
-    genau: rules.istHandbuch('http://127.0.0.1:8090/hilfe/'),
-    darunter: rules.istHandbuch('http://127.0.0.1:8090/hilfe/tasten'),
+    genau: rules.istHandbuch('http://127.0.0.1:8090/help/'),
+    darunter: rules.istHandbuch('http://127.0.0.1:8090/help/tasten'),
     app: rules.istHandbuch('http://127.0.0.1:8090/app/'),
-    aehnlich: rules.istHandbuch('http://127.0.0.1:8090/hilfebedarf'),
+    aehnlich: rules.istHandbuch('http://127.0.0.1:8090/helpdesk'),
     unfug: rules.istHandbuch('no address at all'),
   },
 }))
@@ -220,7 +220,7 @@ def test_nur_http_und_https_verlassen_das_programm(antwort):
 
 def test_das_handbuch_ist_ein_pfad_und_kein_wortanfang(antwort):
     """The manual gets the one window it is allowed. Everything else of ours
-    is a plain window — `/hilfebedarf` is not the manual."""
+    is a plain window — `/helpdesk` is not the manual."""
     fall = antwort["handbuch"]
     assert fall["genau"] is True
     assert fall["darunter"] is True
@@ -441,14 +441,15 @@ def test_the_shell_asks_the_link_rule_for_a_click_and_hands_the_starter_to_the_n
     assert starter and "byBrowser: true" in starter.group(0)
     # The catcher goes into the session before the window is built.
     assert re.search(
-        r"session\.defaultSession\.setPreloads\(\[path\.join\(__dirname, 'linkclicks\.js'\)\]\)"
+        r"session\.defaultSession\.registerPreloadScript\(\{\s*type: 'frame', id: 'linkclicks',"
+        r"\s*filePath: path\.join\(__dirname, 'linkclicks\.js'\),\s*\}\)"
         r"\s*menueSetzen\(\)\s*fensterBauen\(\)",
         quelle,
     ), "linkclicks.js is not set as a preload before the window is built"
 
 
 def test_the_click_catcher_is_packed_and_its_channel_is_the_one_the_shell_hears():
-    """setPreloads names the file by path, not by `require`, so the test
+    """registerPreloadScript names the file by path, not by `require`, so the test
     above for required modules does not see it."""
     paket = json.loads(PAKET.read_text(encoding="utf-8"))
     assert "linkclicks.js" in paket["build"]["files"]

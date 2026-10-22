@@ -1,5 +1,32 @@
+import { cpSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
+
+/*
+  The data folders of pdf.js (predefined CMaps, the standard fonts, the
+  decoders that come as plain JavaScript where WebAssembly is not allowed,
+  the ICC profiles) are files the library fetches while it draws a PDF
+  (src/lib/pdfDocument.js). They are copied beside the build, with the
+  licence file each folder carries. What only runs scripts inside a PDF
+  (the QuickJS files of the wasm folder) is left out: the program shows a
+  PDF, it does not run it.
+*/
+const PDFJS_DATA = ['cmaps', 'standard_fonts', 'wasm', 'iccs']
+function pdfjsData() {
+  return {
+    name: 'pdfjs-data',
+    apply: 'build',
+    closeBundle() {
+      for (const folder of PDFJS_DATA) {
+        cpSync(
+          new URL(`./node_modules/pdfjs-dist/${folder}`, import.meta.url),
+          new URL(`../static/app/pdfjs/${folder}`, import.meta.url),
+          { recursive: true, filter: (from) => !/quickjs/.test(from) },
+        )
+      }
+    },
+  }
+}
 
 /*
   The build writes straight into ../static/app/, where FastAPI serves it from.
@@ -10,7 +37,7 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
   touching the server.
 */
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [svelte(), pdfjsData()],
   base: '/app/',
   build: {
     outDir: '../static/app',

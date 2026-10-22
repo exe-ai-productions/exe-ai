@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -187,6 +188,29 @@ class Generierung:
     # an answer — thousands for a long one.
     _stop_watcher: "asyncio.Future[bool] | None" = field(default=None, repr=False)
 
+    # --- Signs of life (app/job_watchdog.py) -----------------------------
+    # When this run last showed that it is alive: a piece of its model's
+    # stream, the start or the end of a tool. Held here, in memory, because
+    # it is a fact about THIS process's run — after a restart the service
+    # sweeps what was running anyway. A bare keepalive of a provider is no
+    # sign: it never becomes a piece (``naechstes_stueck``).
+    last_sign: float = field(default_factory=time.monotonic)
+    # How many tools of this run are executing now. A tool's own limit (or
+    # the stop button) rules a tool's time, so the silence of its model while
+    # it works says nothing.
+    tools_running: int = 0
+
+    def sign_of_life(self) -> None:
+        self.last_sign = time.monotonic()
+
+    def tool_begins(self) -> None:
+        self.tools_running += 1
+        self.sign_of_life()
+
+    def tool_ends(self) -> None:
+        self.tools_running = max(0, self.tools_running - 1)
+        self.sign_of_life()
+
     @property
     def soll_abbrechen(self) -> bool:
         return self.signal.is_set()
@@ -243,6 +267,7 @@ class Generierung:
                 ergebnis = naechstes.result()
                 if ergebnis is None:
                     return None, False
+                self.sign_of_life()
                 if abbruch.done():
                     return None, True
                 return ergebnis, False

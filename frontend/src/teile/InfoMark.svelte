@@ -7,6 +7,7 @@
      rows' <label>s, and a label names the first button inside it — a real
      button there would take the name away from the field the label is
      for. */
+  import Hauszeichen from './Hauszeichen.svelte'
   import { t } from '../lib/texte.svelte.js'
 
   let { text } = $props()
@@ -42,8 +43,7 @@
   <span class="mark" class:open role="button" tabindex="0"
         aria-label={t('bild.info')} aria-expanded={open}
         onclick={toggle} onkeydown={keys}>
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-         stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></svg>
+    <Hauszeichen zeichen="info" groesse={14} />
   </span>
   {#if open}
     <!-- A press on the sentence stays with it: inside a label it would
@@ -69,10 +69,6 @@
     color: var(--text-still);
     cursor: pointer;
     border-radius: 99px;
-  }
-  .mark svg {
-    width: 100%;
-    height: 100%;
   }
   .mark:hover,
   .mark.open,

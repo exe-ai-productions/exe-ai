@@ -29,6 +29,7 @@ from app.moduswahl import MODI
 from tests.test_shell_frame_colour import (
     DARK,
     SHELL,
+    SNOW,
     STATE,
     _bridge,
     _file_pieces,
@@ -48,6 +49,7 @@ SCHEME_OF = {
     "hell": "light",
     "heaven": "light",
     "moune": "light",
+    "snow": "light",
     "dunkel": "dark",
     "darkmatter": "dark",
 }
@@ -237,11 +239,13 @@ def _start(platform: str, kept: str | None, colour: str | None = None) -> Any:
     """Build the window; hand back what happened in order and the options."""
     script = f"""
 const path = require('path')
+const topbar = require({json.dumps(str(SHELL.parent / 'topbar.js'))})
 const BREITE = 1280, HOEHE = 820, MIN_BREITE = 720, MIN_HOEHE = 480
 function geometrieLesen() {{ return null }}
 function geometrieSchreiben() {{}}
 function frameColourRead() {{ return {json.dumps(colour)} }}
 function frameSchemeRead() {{ return {json.dumps(kept)} }}
+function sidebarFoldedRead() {{ return false }}
 let dienstFehlgeschlagen = false
 function fehlstartSchreiben() {{}}
 let fenster = null
@@ -254,6 +258,7 @@ const nativeTheme = {{
   source: 'system',
   get themeSource() {{ return this.source }},
   set themeSource(scheme) {{ this.source = scheme; steps.push('theme ' + scheme) }},
+  get shouldUseDarkColors() {{ return this.source === 'dark' }},
 }}
 let options = null
 class BrowserWindow {{
@@ -269,6 +274,14 @@ fensterBauen()
 print(JSON.stringify({{ steps, options }}))
 """
     return _run(script)
+
+
+def _bar(platform: str) -> str:
+    """The log line that names the top bar the window was built with: the
+    options themselves are tested in tests/test_top_bar.py, here only that the
+    start logs them after the ground and before the window."""
+    options = '{"titleBarStyle":"hidden","trafficLightPosition":{"x":18,"y":36}}' if platform == "darwin" else "{}"
+    return f"Window top bar: {options}"
 
 
 @pytest.mark.parametrize("scheme", ["dark", "light"])
@@ -287,18 +300,23 @@ def test_what_was_kept_is_what_the_next_start_sets(tmp_path, scheme):
 
 @pytest.mark.parametrize("scheme", ["dark", "light"])
 def test_on_windows_the_start_sets_the_kept_scheme_before_the_window(scheme):
+    """And before the ground is chosen: with no colour kept, the ground is the
+    one of the look Auto on the scheme just set."""
     out = _start("win32", scheme)
-    assert out["steps"] == [f"theme {scheme}", f"log Window frame: {scheme}", "window"]
+    ground = DARK if scheme == "dark" else SNOW
+    assert out["steps"] == [
+        f"theme {scheme}", f"log Window frame: {scheme}", f"log Window ground: {ground}", f"log {_bar('win32')}", "window",
+    ]
 
 
 @pytest.mark.parametrize("kept", ["system", None])
 def test_on_windows_a_start_without_a_forced_scheme_sets_nothing(kept):
-    assert _start("win32", kept)["steps"] == ["window"]
+    assert _start("win32", kept)["steps"] == [f"log Window ground: {SNOW}", f"log {_bar('win32')}", "window"]
 
 
 @pytest.mark.parametrize("platform", ELSEWHERE)
 def test_elsewhere_the_start_sets_nothing(platform):
-    assert _start(platform, "dark")["steps"] == ["window"]
+    assert _start(platform, "dark")["steps"] == [f"log Window ground: {SNOW}", f"log {_bar(platform)}", "window"]
 
 
 def test_the_start_window_keeps_its_ground_and_takes_no_title_bar_option():
@@ -306,7 +324,7 @@ def test_the_start_window_keeps_its_ground_and_takes_no_title_bar_option():
     and the window is still the system's own — no title bar of its own."""
     out = _start("win32", "dark", colour=DARK)
     assert out["options"]["backgroundColor"] == DARK
-    assert out["steps"][0] == f"log Window ground: {DARK}"
+    assert out["steps"][-3] == f"log Window ground: {DARK}"
     assert not {"titleBarStyle", "titleBarOverlay", "frame"} & set(out["options"])
 
 

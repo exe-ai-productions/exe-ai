@@ -25,7 +25,8 @@ REMOVE = "remove"
 
 # The word that names the kind of model, and the tab of the catalogue it
 # means. Any other first word belongs to the search.
-KINDS = {"embedding": "einbettung", "speech": "sprache"}
+IMAGE = "bild"
+KINDS = {"embedding": "einbettung", "speech": "sprache", "image": IMAGE}
 CHAT = "chat"
 
 # The longest search the service takes.
@@ -53,8 +54,8 @@ _lock = threading.Lock()
 
 
 def run_command(ctx: Context, argument: str) -> None:
-    """``/download``: ``stop`` and ``token`` act at once; ``embedding`` or
-    ``speech`` in front of the words names the kind of model; any other
+    """``/download``: ``stop`` and ``token`` act at once; ``embedding``,
+    ``speech`` or ``image`` in front of the words names the kind of model; any other
     words are the search. Without words the user is asked for them."""
     words = argument.split()
     first = words[0].lower() if words else ""
@@ -200,19 +201,15 @@ def _folder_names(ctx: Context) -> set[str]:
     }
 
 
-def _fetch(
+def _chat_jobs(
     ctx: Context,
     hit: dict[str, Any],
     file: dict[str, Any],
     vision: dict[str, Any] | None,
     art: str,
-) -> None:
-    """Starts the fetch of the file — then of the vision module, where the
-    file is not there yet and the repository has one — and follows it. A
-    file that lies in the folder starts nothing."""
-    if _is_there(file):
-        return
-    global _run
+) -> list[dict[str, Any]]:
+    """The file, then its vision module where the repository has one and the
+    folder lacks it."""
     model = _local(file)
     repo = hit["id"]
     jobs = [
@@ -240,6 +237,105 @@ def _fetch(
                     "unterordner": None,
                 }
             )
+    return jobs
+
+
+def _image_jobs(
+    ctx: Context, repo: str, file: dict[str, Any]
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    """What a picture file needs: the name it is kept under, the jobs to fetch
+    and the parts only to tie. The file is fetched where the folder lacks it;
+    its kit — the VAE and the text encoders, each from its own repository into
+    its own sub-folder — comes with the head of the file, as in the window,
+    each part fetched where it is not there and tied to the model. A part that
+    lies there already is only tied: the service writes the bond."""
+    texts = ctx.texts
+    ctx.screen.set_activity(texts.t("modell.dateien_laden"))
+    try:
+        answer = ctx.client.post(
+            "/models/files/head",
+            json={
+                "repo": repo,
+                "datei": {
+                    "datei": file["datei"],
+                    "groesse_gb": file.get("groesse_gb") or 0,
+                    "bytes": file.get("bytes") or 0,
+                    "teile": file.get("teile") or 1,
+                },
+            },
+        )
+    finally:
+        servers.settle_activity(ctx)
+    row = answer if isinstance(answer, dict) and isinstance(answer.get("datei"), str) else file
+    model = _local(row)
+    jobs: list[dict[str, Any]] = []
+    ties: list[dict[str, Any]] = []
+    if not _is_there(row):
+        jobs.append(
+            {
+                "repo": repo,
+                "datei": row["datei"],
+                "ziel": None if model == _flat(row["datei"]) else model,
+                "gehoert_zu": None,
+                "rolle": None,
+                "art": IMAGE,
+                "unterordner": None,
+            }
+        )
+    kit = row.get("bausatz")
+    parts = kit.get("teile") if isinstance(kit, dict) else None
+    for part in parts if isinstance(parts, list) else []:
+        if not isinstance(part, dict) or part.get("rolle") == "modell":
+            continue
+        if not isinstance(part.get("repo"), str) or not isinstance(part.get("datei"), str):
+            continue
+        job = {
+            "repo": part["repo"],
+            "datei": part["datei"],
+            "ziel": _local(part),
+            "gehoert_zu": model,
+            "rolle": part.get("feld") or None,
+            "art": IMAGE,
+            "unterordner": part.get("ordner") or None,
+        }
+        (ties if _is_there(part) else jobs).append(job)
+    return model, jobs, ties
+
+
+def _tie(ctx: Context, ties: list[dict[str, Any]]) -> None:
+    """Writes the bond of every part that lies in its folder already: the
+    service answers at once. What it refuses is said, and the rest goes on."""
+    for job in ties:
+        try:
+            ctx.client.post("/runner/download", json=job)
+        except ServiceError as error:
+            ctx.renderer.error(error.detail)
+
+
+def _fetch(
+    ctx: Context,
+    hit: dict[str, Any],
+    file: dict[str, Any],
+    vision: dict[str, Any] | None,
+    art: str,
+) -> None:
+    """Starts the fetch of the file — then of what belongs to it: the vision
+    module of a chat model, the kit of a picture model, each where it is not
+    there yet — and follows it. A file that lies in the folder, with nothing
+    missing beside it, starts nothing."""
+    global _run
+    ties: list[dict[str, Any]] = []
+    if art == IMAGE:
+        model, jobs, ties = _image_jobs(ctx, hit["id"], file)
+    elif _is_there(file):
+        return
+    else:
+        model, jobs = _local(file), _chat_jobs(ctx, hit, file, vision, art)
+    # The bonds come first: the service answers a bond at once, and not while
+    # a fetch runs.
+    _tie(ctx, ties)
+    if not jobs:
+        return
     # The first request is made here: what the service refuses stands as its
     # own sentence, raised to the screen.
     ctx.client.post("/runner/download", json=jobs[0])

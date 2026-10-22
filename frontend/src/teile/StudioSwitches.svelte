@@ -4,6 +4,7 @@
      how many there are. A standing search opens the fold, so its rows are
      found like any other. Two rows of a StudioSection card. */
   import ImageSwitchRows from './ImageSwitchRows.svelte'
+  import { hasNoPlace } from '../lib/imageSwitchPlace.js'
   import { imageSwitches } from '../lib/imageSwitches.svelte.js'
   import { t } from '../lib/texte.svelte.js'
 
@@ -11,6 +12,7 @@
 
   let offen = $state(false)
   const reihen = $derived(imageSwitches.list.filter((row) => row.group === group
+    && !hasNoPlace(row, conditions)
     && (row.video == null || row.video === Boolean(conditions.video))))
   const gesetzt = $derived(reihen.filter((row) => {
     const wert = values?.[row.key]

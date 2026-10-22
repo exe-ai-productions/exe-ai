@@ -200,7 +200,9 @@ def test_the_parts_that_were_glass_already_are_not_touched_by_the_rule():
         css = _style(path)
         assert "background: var(--glass-card);" in css, path
         assert "box-shadow: inset 0 0 0 1px var(--glass-card-line);" in css, path
+        # A flat ground is what the rule forbids; a base-coloured ink on a
+        # filled circle (today in the rail's month) is not a ground.
         for token in FLAT:
-            assert token not in css, (path, token)
+            assert not re.search(r"background(?:-color)?:[^;]*" + re.escape(token), css), (path, token)
     # The cron job module draws nothing of its own: it has no style block.
     assert "<style>" not in (FRONTEND / "teile/ModulCronjobs.svelte").read_text(encoding="utf-8")

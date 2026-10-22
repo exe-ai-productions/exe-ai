@@ -4,9 +4,11 @@
 
   The distance to the goal halves every `GLEIT_HALB_MS`, and each frame covers
   the share its time earns, never less than a pixel, so the goal is reached.
-  The chat's view follows the floor with it (App.svelte), and the line and
-  the mark at the end of a running answer follow the growing text with it
-  (`glideHeight`): the same law, not two.
+  The chat's view follows the floor with it when a new line of the chat
+  comes (App.svelte), and the line and the mark at the end of a running
+  answer follow the growing text with it (`glideHeight`): the same law, not
+  two. A reader who stands at the floor while the text grows is held there
+  in the very frame (the `glidegrow` event), not carried by a second spring.
 */
 
 import { reducedMotion } from './softSwitch.js'
@@ -45,6 +47,12 @@ export function glideHeight(node, on) {
   const write = () => {
     node.style.height = shown === null ? '' : `${shown}px`
   }
+  /* Every frame that lets room out says so, up the tree, in that same frame:
+     whoever keeps a reader at the floor can take it there before the frame
+     is drawn. Letting go of the height, and pinning it when the text starts
+     to flow, change nothing on screen and say nothing. */
+  const grown = new Event('glidegrow', { bubbles: true })
+  const announce = () => node.dispatchEvent(grown)
   const release = () => {
     shown = null
     write()
@@ -64,18 +72,22 @@ export function glideHeight(node, on) {
     if (Math.abs(distance) < 0.25) {
       shown = target
       write()
+      if (distance !== 0) announce()
       if (!running) release()
       return
     }
     shown += Math.sign(distance) * glideStep(Math.abs(distance), dt)
     write()
+    announce()
     frame = requestAnimationFrame(tick)
   }
 
   function follow() {
     if (shown === null) return
     if (reducedMotion() || (typeof document !== 'undefined' && document.hidden)) {
+      const before = shown
       settle()
+      if (shown !== before) announce()
       if (!running) release()
       return
     }

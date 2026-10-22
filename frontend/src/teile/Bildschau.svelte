@@ -13,20 +13,25 @@
      panel that owns the file: an overlay has to cover everything, and
      inside the message list it ended up under the sidebar. Plain HTML and
      CSS — it behaves the same on every system. */
-  import { bildschau, closeReader } from '../lib/bildschau.svelte.js'
+  import { bildschau, bildZeigen, closeReader } from '../lib/bildschau.svelte.js'
+  import { bilderVon, nachbar, ohneAbfrage, reiheMit, stelleIn } from '../lib/bildreihe.js'
+  import { gestures } from '../lib/pictureGesturesAction.js'
+  import { openPictureMenu } from '../lib/pictureMenu.svelte.js'
+  import { studio, studioPictures } from '../lib/studio.svelte.js'
   import { isVideo } from '../lib/media.js'
   import { api } from '../lib/api.js'
   import { t } from '../lib/texte.svelte.js'
-  import { melde } from '../lib/zustand.svelte.js'
-  import { hervorheben } from '../lib/einfaerben.js'
-  import { codeKopierKlick, dateiTeile, nummernspalte } from '../lib/markdown.js'
+  import { melde, nachrichtenAnzeige } from '../lib/zustand.svelte.js'
+  import { codeKopierKlick, dateiTeile } from '../lib/markdown.js'
   import {
-    dateiart, dateiFakten, dateiHerunterladen, dateizeichen, saveFromAddress,
+    dateiFakten, dateiHerunterladen, dateizeichen, fileKind, saveFromAddress, svgAddress,
   } from '../lib/dateiarten.js'
   import Dateikarte from './Dateikarte.svelte'
+  import FileContent from './FileContent.svelte'
   import Hauszeichen from './Hauszeichen.svelte'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import PdfFrame from './PdfFrame.svelte'
+  import PictureSheet from '../phone/studio/PictureSheet.svelte'
 
   /* A page's text, fetched once per opened file; an answer that comes back
      after another file was opened is dropped. */
@@ -71,12 +76,15 @@
      prose would say something untrue about it. */
   const MARKDOWN = new Set(['md', 'markdown'])
   const isMarkdown = $derived(MARKDOWN.has(String(bildschau.language ?? '').toLowerCase()))
-  const isSource = $derived(Boolean(dateiart(bildschau.language)) && !isMarkdown)
-  const codeHtml = $derived(
-    text != null && isSource
-      ? '<pre>' + nummernspalte(text) + '<code>' + hervorheben(text, bildschau.language) + '</code></pre>'
-      : '',
+  const info = $derived(fileKind(bildschau.language))
+  /* A drawing is shown as a picture of its text. */
+  const isSvg = $derived(String(bildschau.language ?? '').toLowerCase() === 'svg')
+  /* Code, and the source of a document: colours and a number on every line,
+     through the component the rail shares. Plain text stays text. */
+  const isCode = $derived(
+    info?.kind === 'code' || (info?.kind === 'doc' && !isMarkdown && !isSvg),
   )
+  const isPlainText = $derived(info?.kind === 'text')
 
   const report = $derived(bildschau.kind === 'report' ? bildschau.report : null)
   /* The dot at the end of the head: green for a report, red for a run that
@@ -84,6 +92,37 @@
   const dotColour = $derived(
     report?.state === 'gescheitert' ? 'rot' : report?.state === 'fertig' ? 'gruen' : 'still',
   )
+
+  /* The task in the head of a report stands at most two lines tall; a longer
+     one has a fold under it that opens the whole task with its paragraphs.
+     Every opening of a report starts folded. `taskCut` is what the measure
+     says about the folded text: cut or not. */
+  let taskOpen = $state(false)
+  let taskCut = $state(false)
+  let taskNode = $state(null)
+  $effect(() => {
+    void bildschau.offen
+    void report
+    taskOpen = false
+  })
+  $effect(() => {
+    if (!taskNode) {
+      taskCut = false
+      return undefined
+    }
+    const node = taskNode
+    /* Read so a new report is measured again, also where its folded text
+       happens to be as tall as the last one's. */
+    void report
+    const measure = () => {
+      if (!taskOpen) taskCut = node.scrollHeight > node.clientHeight + 1
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const watcher = new ResizeObserver(measure)
+    watcher.observe(node)
+    return () => watcher.disconnect()
+  })
 
   /* Escape closes the reader and nothing under it: heard first, on the way
      down, and kept from the shortcuts that would close a page too. */
@@ -139,6 +178,64 @@
     node.focus()
   }
 
+  /* The pictures of the pictures folder, read when a picture of that folder
+     is opened: the reader is opened from the folder's tiles too, which carry
+     no row of their own. */
+  let folderNames = $state([])
+  $effect(() => {
+    if (!bildschau.offen || bildschau.kind !== 'picture' || bildschau.folder !== 'images') return
+    let current = true
+    api.bilderListe().then((answer) => { if (current) folderNames = answer.bilder ?? [] }).catch(() => {})
+    return () => { current = false }
+  })
+
+  /* The pictures this one can be swiped to: those of the open chat, those of
+     the studio's gallery or those of the pictures folder. The row of the
+     place it was opened from comes first, so a picture that two places
+     hold is stepped through where the person is. */
+  const row = $derived.by(() => {
+    if (!bildschau.offen || bildschau.kind !== 'picture') return []
+    const chat = (nachrichtenAnzeige() ?? []).flatMap(bilderVon).map((name) => api.bildAdresse(name))
+    const gallery = studioPictures.names.map((name) => api.bildAdresse(name))
+    const folder = folderNames.map((name) => api.bildAdresse(name))
+    const rows = bildschau.folder === 'images' ? [folder, chat, gallery] : studio.offen ? [gallery, chat, folder] : [chat, gallery, folder]
+    return reiheMit(bildschau.adresse, rows)
+  })
+  const place = $derived(stelleIn(row, bildschau.adresse))
+
+  /* What the fingers do with the picture (lib/pictureGestures.js): a swipe
+     to the side steps through the row, a swipe down closes the reader, two
+     fingers zoom, a double tap goes to the picture's own size and back, a
+     long press asks for its menu. Zoomed, one finger moves the picture. A
+     video keeps its own controls and takes none of this. */
+  let view = $state({ zoom: 1, x: 0, y: 0 })
+  let pictureNode = $state(null)
+  /* The zoom belongs to the picture shown and to the reader being open: a new
+     picture, or the reader opened again, starts whole. */
+  $effect(() => {
+    void bildschau.adresse
+    void bildschau.offen
+    view = { zoom: 1, x: 0, y: 0 }
+  })
+  const gestureOptions = $derived({
+    swipe: true,
+    resetKey: bildschau.adresse,
+    natural: () => (pictureNode ? { w: pictureNode.naturalWidth, h: pictureNode.naturalHeight } : null),
+    shown: () => (pictureNode ? { w: pictureNode.clientWidth } : null),
+    onview: (next) => (view = next),
+    onswipe: (step) => {
+      const next = row.length > 1 ? nachbar(row, bildschau.adresse, step) : null
+      if (next) bildZeigen(next, { folder: bildschau.folder })
+    },
+    onswipedown: closeReader,
+    onlong: () => {
+      // The menu is the phone's sheet; only a picture of the pictures folder has one.
+      if (!document.documentElement.hasAttribute('data-phone')) return
+      const path = ohneAbfrage(bildschau.adresse)
+      if (path.includes('/images/')) openPictureMenu(decodeURIComponent(path.split('/').pop()), true)
+    },
+  })
+
   /* A click on the darkened ground — beside the picture or the page —
      closes; a click on what is shown does not. */
   function beside(event) {
@@ -169,12 +266,31 @@
     </div>
 
     {#if bildschau.kind === 'picture'}
-      {#if isVideo(bildschau.adresse)}
-        <!-- A video plays here, with its own controls. -->
-        <!-- svelte-ignore a11y_media_has_caption -->
-        <video class="picture" src={bildschau.adresse} controls autoplay loop playsinline></video>
+      {#if bildschau.mediaKind}
+        <!-- A clip or a sound handed in as a file: the player with its own
+             controls, not starting by itself (the studio's own clips below
+             keep their way). -->
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        <div class="stage" onclick={beside}>
+          <div class="media">
+            <FileContent kind={bildschau.mediaKind} address={bildschau.adresse} name={bildschau.name} />
+          </div>
+        </div>
+      {:else if isVideo(bildschau.adresse)}
+        <!-- A video plays here, with its own controls; a touch that begins on it
+             is its own, the ground around it hears the swipes. -->
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        <div class="stage" onclick={beside} use:gestures={gestureOptions}>
+          <!-- svelte-ignore a11y_media_has_caption -->
+          <video class="picture" src={bildschau.adresse} controls autoplay loop playsinline></video>
+        </div>
       {:else}
-        <img class="picture" src={bildschau.adresse} alt={bildschau.name} />
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        <div class="stage" onclick={beside} use:gestures={gestureOptions}>
+          <img class="picture" src={bildschau.adresse} alt={bildschau.name} bind:this={pictureNode}
+               draggable="false"
+               style:transform={view.zoom > 1.001 ? `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` : null} />
+        </div>
       {/if}
     {:else if report}
       <div class="page">
@@ -183,7 +299,13 @@
             {(report.agent || '?').slice(0, 1).toUpperCase()}
           </span>
           <span class="middle">
-            <span class="task">{report.task}</span>
+            <span class="task" class:folded={!taskOpen} bind:this={taskNode}>{report.task}</span>
+            {#if taskCut || taskOpen}
+              <button class="fold" class:open={taskOpen} aria-expanded={taskOpen}
+                      aria-label={report.task} onclick={() => (taskOpen = !taskOpen)}>
+                <span class="fold-sign"><Hauszeichen zeichen="pfeil_unten" groesse={11} strich={2.6} /></span>
+              </button>
+            {/if}
             <span class="who">
               <span class="agent" style={report.colour ? `color:${report.colour}` : ''}>{report.agent}</span>
               {#if report.time}
@@ -192,7 +314,7 @@
               {/if}
             </span>
           </span>
-          <Leuchtpunkt farbe={dotColour} groesse={9} />
+          <span class="dotbox"><Leuchtpunkt farbe={dotColour} groesse={9} /></span>
         </div>
         {#if report.chain}
           <p class="chain">↳ {report.chain}</p>
@@ -228,8 +350,14 @@
           </div>
         {/if}
       </div>
+    {:else if bildschau.mediaKind}
+      <!-- An Office file the page draws itself from its address: the sheet
+           is its holder, as for a PDF below. -->
+      <div class="page framed">
+        <FileContent kind={bildschau.mediaKind} address={bildschau.adresse} name={bildschau.name} />
+      </div>
     {:else if bildschau.framed}
-      <!-- A file the browser's own viewer draws: its pages, one under the
+      <!-- A file the page draws itself (pdf.js): its pages, one under the
            other, fitted to the width of the sheet (PdfFrame.svelte). -->
       <div class="page framed">
         <PdfFrame address={bildschau.adresse} title={bildschau.name} />
@@ -240,8 +368,12 @@
           <p class="quiet">{t('nachricht.dokument_liest')}</p>
         {:else if failure}
           <p class="failure">{failure}</p>
-        {:else if text != null && isSource}
-          <div class="codeblock">{@html codeHtml}</div>
+        {:else if text != null && isSvg}
+          <FileContent kind="image" address={svgAddress(text)} name={bildschau.name} />
+        {:else if text != null && isCode}
+          <FileContent kind="code" language={info.language} text={text} />
+        {:else if text != null && isPlainText}
+          <FileContent kind="text" text={text} />
         {:else if text != null && isMarkdown}
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
           <div class="body berichttext" onclick={copyCode}>
@@ -272,6 +404,7 @@
 
     <div class="caption">
       <span class="name">{bildschau.name}</span>
+      {#if place.von > 1}<span class="origin">{place.nummer} / {place.von}</span>{/if}
       {#if bildschau.origin}<span class="origin">{bildschau.origin}</span>{/if}
     </div>
   </div>
@@ -318,6 +451,24 @@
   }
   .sign:hover { background: rgba(236, 235, 230, 0.16); }
 
+  /* The ground the picture lies on, where the fingers are heard: all the room
+     the picture and its name leave. */
+  .stage {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  /* A player's width: as the window allows, without the height a picture
+     is bound by. */
+  .media {
+    width: min(760px, 100%);
+  }
   .picture {
     display: block;
     max-width: min(72vh, 100%);
@@ -348,9 +499,8 @@
     scrollbar-width: none;
   }
   .page::-webkit-scrollbar { display: none; }
-  /* A file the browser's viewer draws fills the sheet to its edge: the
-     frame is laid out against the sheet and cut at its rounding
-     (PdfFrame.svelte). */
+  /* A file the page draws itself fills the sheet to its edge: the pages are
+     laid out against the sheet and cut at its rounding (PdfFrame.svelte). */
   .page.framed {
     position: relative;
     padding: 0;
@@ -376,10 +526,6 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
-  .codeblock {
-    margin: 0;
-    border: none;
-  }
   .quiet,
   .failure {
     margin: 0;
@@ -391,8 +537,10 @@
   /* The report's head: the agent's tile, the task, who and when, the dot of
      the ending. */
   .head {
+    --task-size: 13.5px;
+    --task-line: 1.4;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 11px;
     margin-bottom: 12px;
   }
@@ -416,11 +564,45 @@
     flex-direction: column;
     gap: 2px;
   }
+  /* The task keeps its paragraphs and stands at most two lines tall until
+     its fold is opened. */
   .task {
-    font-size: 13.5px;
+    font-size: var(--task-size);
+    line-height: var(--task-line);
     font-weight: 600;
     color: var(--text);
     overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+  .task.folded {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+  }
+  .fold {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 0;
+    border: none;
+    background: none;
+    color: var(--text-still);
+    cursor: pointer;
+  }
+  .fold:hover { color: var(--text); }
+  .fold-sign {
+    display: inline-flex;
+    transition: transform 0.18s;
+  }
+  .fold.open .fold-sign { transform: rotate(180deg); }
+  /* The dot stands beside the first line of the task. */
+  .dotbox {
+    flex: none;
+    display: flex;
+    align-items: center;
+    height: calc(var(--task-size) * var(--task-line));
   }
   .who {
     display: flex;
@@ -430,7 +612,7 @@
   }
   .agent {
     font-weight: 500;
-    color: var(--blau-text);
+    color: var(--text);
   }
   .divider {
     flex: none;
@@ -497,3 +679,5 @@
     color: #b1aea6;
   }
 </style>
+
+<PictureSheet reader={true} />

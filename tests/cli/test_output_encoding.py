@@ -11,6 +11,9 @@ from pathlib import Path
 
 import httpx
 import pytest
+from prompt_toolkit.data_structures import Size
+from prompt_toolkit.output import Output
+from prompt_toolkit.output.vt100 import Vt100_Output
 
 from cli.main import help_text, main
 from cli.texts import Texts
@@ -34,6 +37,16 @@ def narrow_output(monkeypatch: pytest.MonkeyPatch, encoding: str) -> io.BytesIO:
         sys, "stdout", io.TextIOWrapper(raw, encoding=encoding, errors="strict", write_through=True)
     )
     return raw
+
+
+def narrow_terminal(
+    monkeypatch: pytest.MonkeyPatch, encoding: str
+) -> tuple[io.BytesIO, Output]:
+    """The same output, and the screen's terminal on it: what the full
+    screen draws is encoded the way that console encodes, a character it has
+    no byte for standing as a mark."""
+    raw = narrow_output(monkeypatch, encoding)
+    return raw, Vt100_Output(sys.stdout, lambda: Size(rows=30, columns=100), term="xterm-256color")
 
 
 def chat_with(stub: StubService, text: str) -> str:
@@ -67,9 +80,9 @@ def test_a_chat_the_console_cannot_encode_is_shown_with_marks_and_ends_with_zero
     stub: StubService, stub_http: httpx.Client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     chat_id = chat_with(stub, SAID)
-    written = narrow_output(monkeypatch, "ascii")
+    written, output = narrow_terminal(monkeypatch, "ascii")
 
-    run = run_client(stub_http, tmp_path, monkeypatch, leave_at_once(stub), "--chat", chat_id)
+    run = run_client(stub_http, tmp_path, monkeypatch, leave_at_once(stub), "--chat", chat_id, output=output)
 
     assert run.code == 0
     shown = written.getvalue().decode("ascii")
@@ -80,9 +93,9 @@ def test_a_console_of_the_western_code_page_keeps_its_letters_and_marks_the_rest
     stub: StubService, stub_http: httpx.Client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     chat_id = chat_with(stub, SAID)
-    written = narrow_output(monkeypatch, "cp1252")
+    written, output = narrow_terminal(monkeypatch, "cp1252")
 
-    run = run_client(stub_http, tmp_path, monkeypatch, leave_at_once(stub), "--chat", chat_id)
+    run = run_client(stub_http, tmp_path, monkeypatch, leave_at_once(stub), "--chat", chat_id, output=output)
 
     assert run.code == 0
     assert "Schöne Grüße ?" in written.getvalue().decode("cp1252")
@@ -92,9 +105,9 @@ def test_an_output_in_utf_8_writes_every_character_as_it_is(
     stub: StubService, stub_http: httpx.Client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     chat_id = chat_with(stub, SAID)
-    written = narrow_output(monkeypatch, "utf-8")
+    written, output = narrow_terminal(monkeypatch, "utf-8")
 
-    run = run_client(stub_http, tmp_path, monkeypatch, leave_at_once(stub), "--chat", chat_id)
+    run = run_client(stub_http, tmp_path, monkeypatch, leave_at_once(stub), "--chat", chat_id, output=output)
 
     assert run.code == 0
     assert SAID in written.getvalue().decode("utf-8")

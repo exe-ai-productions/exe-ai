@@ -50,6 +50,7 @@ export const eineSeiteOffen = () => false
 export const seitenSchliessen = () => {}
 export const said = []
 export const melde = (text, kind) => said.push([text, kind ?? ''])
+export const meldeText = (key, values, kind) => said.push([key, kind ?? ''])
 export const t = (key) => key
 export const seedlage = { letzter: null }
 export const imageSwitches = { list: [] }
@@ -131,7 +132,7 @@ export const deleteChat = async (id) => {
 DRIVER = """
 import { compileModule } from 'svelte/compiler'
 import { readFileSync, writeFileSync } from 'fs'
-const STAND_INS = ['api.js', 'zustand.svelte.js', 'texte.svelte.js', 'bildseed.svelte.js', 'imageSwitches.svelte.js',
+const STAND_INS = ['api.js', 'zustand.svelte.js', 'meldewesen.svelte.js', 'texte.svelte.js', 'bildseed.svelte.js', 'imageSwitches.svelte.js',
   'imageFamilies.svelte.js', 'studioColumns.svelte.js', 'videoFrames.js']
 const REAL = %(modules)s
 for (const name of REAL) {

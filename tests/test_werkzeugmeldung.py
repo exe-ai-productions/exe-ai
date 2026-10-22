@@ -23,6 +23,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from tests.fensterquelle import WINDOW_SOURCE
 
 WURZEL = Path(__file__).resolve().parents[1]
 FRONTEND = WURZEL / "frontend"
@@ -224,7 +225,7 @@ def test_der_haken_holt_seine_dauer_an_der_einen_stelle():
     names the function too; a test that banned the constant's identifier
     would go red on a comment about it. This one names the call.
     """
-    quelle = (QUELLE / "App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
     assert ": werkzeugFertigDauer()" in quelle, (
         "the tick's clock is decided in the call site again"
     )
@@ -233,7 +234,7 @@ def test_der_haken_holt_seine_dauer_an_der_einen_stelle():
 def test_der_chat_meldet_werkzeuge_durch_eine_einzige_meldung():
     """A rule nobody applies is a rule that does not exist: the answer's
     three tool events all have to go through the one rewriting helper."""
-    quelle = (QUELLE / "App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
     assert "werkzeugSagen(" in quelle, "the rewriting helper is gone"
     # Three events, one helper, no second way in.
     for zeile in ("werkzeug.schreibt", "werkzeug.laeuft", "werkzeug.fertig"):
@@ -308,7 +309,7 @@ def test_der_fehlerfall_liest_die_anzeigedauer_nicht():
     `werkzeugFertigDauer` alone would go red on prose and green on a
     rebuild that put the helper back into the failure's argument.
     """
-    quelle = (QUELLE / "App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
     assert "WERKZEUG_FEHLER_MS : werkzeugFertigDauer()" in quelle, (
         "the error case follows the display duration again"
     )
@@ -332,7 +333,7 @@ def test_der_helfer_reicht_die_dauer_an_beide_wege_weiter():
     still green. Read off the helper's body — the duration has to reach BOTH
     ways it can take, the rewrite and the fresh notice.
     """
-    quelle = (QUELLE / "App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
     treffer = re.search(r"const werkzeugSagen = \(([\s\S]*?)\n    \}\n", quelle)
     assert treffer, "werkzeugSagen no longer reads as expected"
     rumpf = treffer.group(1)
@@ -352,7 +353,7 @@ def test_der_helfer_reicht_die_dauer_an_beide_wege_weiter():
 # answer, with everything around them (notices, questions, scrolling) as
 # stand-ins.
 
-APP = QUELLE / "App.svelte"
+APP = WINDOW_SOURCE
 MESSAGE = QUELLE / "teile" / "Nachricht.svelte"
 
 

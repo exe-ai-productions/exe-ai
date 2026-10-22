@@ -46,6 +46,16 @@ class ServiceUnreachable(Exception):
         self.address = address
 
 
+class InterfaceMissing(ServiceUnreachable):
+    """A service answers at the address, but its interface is not built: the
+    page the client reads the key from is missing, and the service says so in
+    its own sentence. Waiting for it to come up would wait for ever."""
+
+    def __init__(self, address: str, detail: str) -> None:
+        super().__init__(address)
+        self.detail = detail
+
+
 class ServiceError(Exception):
     """The service refused a request; the message is its own sentence."""
 
@@ -65,6 +75,18 @@ def _detail(response: httpx.Response) -> str:
     if isinstance(detail, str) and detail:
         return detail
     return json.dumps(detail if detail is not None else body, ensure_ascii=False)
+
+
+def _missing_interface(response: httpx.Response) -> str | None:
+    """The sentence a service writes when its page is not built — a plain
+    ``{"detail": "<sentence>"}`` with a 404 — or nothing for any other kind
+    of 404."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    return detail if isinstance(detail, str) and detail else None
 
 
 def _cut(response: httpx.Response) -> None:
@@ -155,6 +177,8 @@ class ServiceClient:
             )
         except (httpx.HTTPError, httpx.InvalidURL) as error:
             raise ServiceUnreachable(self.address) from error
+        if response.status_code == 404 and (sentence := _missing_interface(response)):
+            raise InterfaceMissing(self.address, sentence)
         if response.status_code != 200:
             raise ServiceUnreachable(self.address)
         found = _KEY_PATTERN.search(response.text)

@@ -7,12 +7,17 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+from prompt_toolkit.application import create_app_session
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
 
-from cli import commands, mcp_servers
+from cli import commands, mcp_servers, outside
+from cli.main import main
 from cli.interfaces import Asker, Context, Entry
 from cli.texts import Texts
 from tests.cli.conftest import RecordingRenderer, RecordingScreen
@@ -301,6 +306,20 @@ def test_a_server_with_a_key_or_a_command_has_no_browser_sign_in(mcp, stub):
         assert [texts().t("mcp.im_browser_anmelden")] not in mcp.asker.rows()
 
 
+def test_a_server_with_a_key_in_a_header_has_no_browser_sign_in_unless_it_names_one(mcp, stub):
+    """The window writes a key as a header; the service refuses a sign-in for
+    such an entry, so the menu does not offer one — except where the entry
+    says `auth: oauth` itself."""
+    stub.mcp_servers = {
+        "headed": server("headed", headers={"X-Goog-Api-Key": "${HEADED_API_KEY}"}),
+        "both": server("both", headers={"X-Org": "${ORG}"}, auth="oauth"),
+    }
+    mcp.commands.run("/mcp 2")
+    assert [texts().t("mcp.im_browser_anmelden")] not in mcp.asker.rows()
+    mcp.commands.run("/mcp 3")
+    assert [texts().t("mcp.im_browser_anmelden")] in mcp.asker.rows()
+
+
 def test_the_browser_sign_in_of_an_entry_starts_the_flow_for_it(mcp, stub, opened):
     stub.mcp_servers = {"docs": server("docs", laeuft=False, alle_werkzeuge=[])}
     mcp.asker.picks = [1, 1]
@@ -409,3 +428,143 @@ def test_remove_with_a_no_changes_nothing(mcp, stub, monkeypatch):
     mcp.commands.run("/mcp")
     assert actions(stub, "delete") == []
     assert "docs" in stub.mcp_servers
+
+
+# --- With the address behind the word --------------------------------------------------------
+
+
+class Nobody(Asking):
+    """The asker of a command run from outside without a terminal: nobody
+    answers, and asking anything would end the command."""
+
+    def can_ask(self) -> bool:
+        return False
+
+    def ask_text(
+        self, head: str, *, secret: bool = False, default: str | None = None
+    ) -> str | None:
+        raise AssertionError(f"asked {head!r} with nobody there")
+
+
+def test_add_with_an_address_asks_for_no_address_and_enters_the_server(mcp, stub):
+    mcp.asker.typed = ["45"]
+    mcp.commands.run("/mcp add https://docs.example.test/mcp")
+    assert actions(stub, "probe") == [
+        ("https://docs.example.test/mcp", {"url": "https://docs.example.test/mcp"})
+    ]
+    assert actions(stub, "write") == [
+        ("https-docs-example-test-mcp", {"type": "http", "url": "https://docs.example.test/mcp"}),
+        ("https-docs-example-test-mcp", {"timeout": 45.0}),
+    ]
+    assert [question for question, _ in mcp.asker.questions] == [texts().t("mcp.zeitgrenze")]
+    assert mcp.asker.shown == []
+
+
+def test_add_with_nobody_there_enters_the_server_and_asks_nothing(mcp, stub):
+    stub.mcp_probes["https://docs.example.test/mcp"] = {"verlangt": None, "name": "My Docs"}
+    mcp.asker = Nobody()
+    mcp.commands.run("/mcp add https://docs.example.test/mcp")
+    assert actions(stub, "write") == [
+        ("my-docs", {"type": "http", "url": "https://docs.example.test/mcp"})
+    ]
+    assert mcp.renderer.errors == []
+    assert mcp.renderer.notices == [
+        f"my-docs  {texts().t('verbindungen.stand_verbunden')}  {texts().t('mcp.tools_zahl', n=2)}"
+    ]
+
+
+def test_add_with_nobody_there_and_a_key_wanted_says_so_and_enters_nothing(mcp, stub):
+    stub.mcp_probes["https://api.docs.test/mcp"] = {"verlangt": "schluessel"}
+    mcp.asker = Nobody()
+    mcp.commands.run("/mcp add https://api.docs.test/mcp")
+    assert mcp.renderer.errors == [
+        texts().t("mcp.needs_key_outside", url="https://api.docs.test/mcp")
+    ]
+    assert actions(stub, "write") == []
+    assert "exe mcp" in mcp.renderer.errors[0] and "Settings → MCP Servers" in mcp.renderer.errors[0]
+
+
+@pytest.mark.parametrize("wanted", ["anmeldung", "oauth_kennung"])
+def test_add_with_nobody_there_and_a_sign_in_wanted_says_so_and_enters_nothing(
+    mcp, stub, opened, wanted
+):
+    stub.mcp_probes["https://auth.docs.test/mcp"] = {"verlangt": wanted}
+    mcp.asker = Nobody()
+    mcp.commands.run("/mcp add https://auth.docs.test/mcp")
+    assert mcp.renderer.errors == [
+        texts().t("mcp.needs_sign_in_outside", url="https://auth.docs.test/mcp")
+    ]
+    assert actions(stub, "write") == [] and actions(stub, "oauth") == []
+    assert opened == []
+
+
+def test_add_with_somebody_there_asks_the_key_as_the_mask_does(mcp, stub):
+    stub.mcp_probes["https://api.docs.test/mcp"] = {"verlangt": "schluessel"}
+    mcp.asker.typed = ["sk-secret-1", ""]
+    mcp.commands.run("/mcp add https://api.docs.test/mcp")
+    assert (texts().t("mcp.api_key"), True) in mcp.asker.questions
+    assert actions(stub, "write")[0][1]["api_key"] == "sk-secret-1"
+    assert "sk-secret-1" not in " ".join(mcp.renderer.notices + mcp.renderer.errors)
+
+
+def test_add_alone_still_asks_for_the_address(mcp, stub):
+    mcp.asker.typed = [""]
+    mcp.commands.run("/mcp add")
+    assert [question for question, _ in mcp.asker.questions] == [texts().t("mcp.url")]
+    assert stub.mcp_actions == []
+
+
+def test_any_other_word_stays_unknown(mcp, stub):
+    mcp.commands.run("/mcp adds https://docs.example.test/mcp")
+    assert mcp.renderer.errors == [
+        texts().t("cli.unknown_choice", name="adds https://docs.example.test/mcp")
+    ]
+    assert stub.mcp_actions == []
+
+
+# --- From outside ----------------------------------------------------------------------------------
+
+
+def run_outside(
+    stub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *words: str, terminal: bool = False
+) -> int:
+    monkeypatch.setattr(outside, "has_terminal", lambda: terminal)
+    monkeypatch.setattr(mcp_servers, "_FIRST_WAIT", 0.0)
+    monkeypatch.setattr(mcp_servers, "_NEXT_WAIT", 0.0)
+    with create_pipe_input() as pipe:
+        net = threading.Timer(20.0, pipe.close)
+        net.start()
+        try:
+            with create_app_session(input=pipe, output=DummyOutput()):
+                return main(
+                    [*words, "--lang", "en"], http=stub.http(), prefs_path=tmp_path / "cli.json"
+                )
+        finally:
+            net.cancel()
+
+
+def test_exe_mcp_add_with_an_address_and_no_terminal_enters_the_server_and_ends_well(
+    stub, tmp_path, monkeypatch, capsys
+):
+    stub.models = [model("local", "Local Model")]
+    code = run_outside(stub, tmp_path, monkeypatch, "mcp", "add", "https://docs.example.test/mcp")
+    shown = capsys.readouterr()
+    assert code == 0
+    assert actions(stub, "write") == [
+        ("https-docs-example-test-mcp", {"type": "http", "url": "https://docs.example.test/mcp"})
+    ]
+    assert shown.err == ""
+    assert shown.out.strip().startswith("https-docs-example-test-mcp  ")
+
+
+def test_exe_mcp_add_for_a_server_with_a_key_and_no_terminal_ends_with_a_failure_code(
+    stub, tmp_path, monkeypatch, capsys
+):
+    stub.models = [model("local", "Local Model")]
+    stub.mcp_probes["https://api.docs.test/mcp"] = {"verlangt": "schluessel"}
+    code = run_outside(stub, tmp_path, monkeypatch, "mcp", "add", "https://api.docs.test/mcp")
+    assert code == 1
+    assert actions(stub, "write") == []
+    assert capsys.readouterr().err.strip() == texts().t(
+        "mcp.needs_key_outside", url="https://api.docs.test/mcp"
+    )

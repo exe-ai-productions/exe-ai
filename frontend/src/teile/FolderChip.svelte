@@ -18,6 +18,7 @@
   } from '../lib/arbeitsordner.svelte.js'
   import { t } from '../lib/texte.svelte.js'
   import { zustand } from '../lib/zustand.svelte.js'
+  import { displayPath } from '../lib/paths.js'
 
   /* `open` and `onToggle` belong to the bar: it keeps one menu open at a
      time across all of its chips. `narrow` drops the words and keeps the
@@ -30,6 +31,12 @@
   /* The chat's own folder belongs to a chat: on the start page, with no
      chat open, its row stands greyed out instead of making a chat. */
   const noOwnFolder = $derived(!zustand.aktiverChat)
+
+  /* The list grows with its longest name; it ends at the window's right
+     edge, and a name that does not fit ends with dots (`.label`). */
+  function endAtWindowEdge(node) {
+    node.style.maxWidth = `${Math.max(0, window.innerWidth - node.getBoundingClientRect().left - 8)}px`
+  }
 
   function act(action) {
     onToggle(false)
@@ -44,7 +51,7 @@
     class:warn={anyMissing}
     aria-expanded={open}
     aria-label={t('arbeitsordner.titel')}
-    title={folders.length ? folders.join('\n') : t('arbeitsordner.titel')}
+    title={folders.length ? folders.map(displayPath).join('\n') : t('arbeitsordner.titel')}
     onclick={() => onToggle(!open)}
   >
     <Hauszeichen zeichen="ordner" groesse={15} />
@@ -60,24 +67,24 @@
   </button>
 
   {#if open}
-    <div class="menu" role="menu">
+    <div class="menu" role="menu" use:endAtWindowEdge>
       {#each folders as path (path)}
         {#if missing.has(path)}
-          <div class="row missing" title={path}>
+          <div class="row missing" title={displayPath(path)}>
             <Hauszeichen zeichen="ordner" groesse={16} />
             <span class="label">{ordnerName(path)}</span>
             <span class="tail">
-              <button class="small" title={t('arbeitsordner.neu_waehlen_titel', { pfad: path })}
+              <button class="small" title={t('arbeitsordner.neu_waehlen_titel', { pfad: displayPath(path) })}
                       onclick={() => act(() => ersatzBeginnen(path))}>{t('arbeitsordner.neu_waehlen')}</button>
             </span>
           </div>
         {:else}
-          <div class="row" title={path}>
+          <div class="row" title={displayPath(path)}>
             <Hauszeichen zeichen="ordner" groesse={16} />
             <span class="label">{ordnerName(path)}</span>
             <span class="tail">
-              <button class="mini" aria-label={t('arbeitsordner.zeigen', { pfad: path })}
-                      title={t('arbeitsordner.zeigen', { pfad: path })}
+              <button class="mini" aria-label={t('arbeitsordner.zeigen', { pfad: displayPath(path) })}
+                      title={t('arbeitsordner.zeigen', { pfad: displayPath(path) })}
                       onclick={() => act(() => ordnerZeigen(path))}>
                 <Hauszeichen zeichen="auskoppeln" groesse={13} />
               </button>

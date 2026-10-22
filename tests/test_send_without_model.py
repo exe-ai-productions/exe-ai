@@ -8,17 +8,18 @@ no model it says so and keeps the words and the attachments.
 from __future__ import annotations
 
 from pathlib import Path
+from tests.fensterquelle import BAR_SOURCE, WINDOW_SOURCE
 
 ROOT = Path(__file__).resolve().parents[1]
-BAR = ROOT / "frontend" / "src" / "teile" / "Eingabeleiste.svelte"
-APP = ROOT / "frontend" / "src" / "App.svelte"
+BAR = BAR_SOURCE
+APP = WINDOW_SOURCE
 
 
 def _submit() -> str:
     """The bar's own send function, as it stands."""
     source = BAR.read_text(encoding="utf-8")
     start = source.index("  async function absenden() {")
-    return source[start : source.index("\n  export function fokus()", start)]
+    return source[start : source.index("\n  function keep(", start)]
 
 
 def test_without_a_model_the_bar_says_so_and_keeps_the_words():

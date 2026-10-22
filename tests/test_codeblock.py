@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -86,9 +87,108 @@ def test_der_kopierknopf_kopiert_die_zeilen_ohne_nummern_mit_umbruechen():
 const html = rendern({zaun});
 const reihen = [...html.matchAll(/<span class="code-zeile"><span>(.*?)<\\/span><\\/span>/g)].map((m) => m[1]);
 const code = {{ querySelectorAll: () => reihen.map((r) => ({{ textContent: r }})), textContent: 'unused' }};
-const knopf = {{ closest: () => ({{ querySelector: () => code }}) }};
+const knopf = {{ classList: {{ add() {{}}, remove() {{}} }}, closest: () => ({{ querySelector: () => code }}) }};
 let kopiert = null;
 Object.defineProperty(globalThis, 'navigator', {{ configurable: true, value: {{ clipboard: {{ writeText: (x) => {{ kopiert = x; return Promise.resolve(); }} }} }} }});
 codeKopierKlick({{ target: {{ closest: () => knopf }} }}, () => console.log(JSON.stringify(kopiert)));
 """
     assert json.loads(_node(skript)) == "first\n\nthird"
+
+
+# --- the button wears a tick for a second after a copy -----------------------
+
+CSS = Path(__file__).resolve().parent.parent / "frontend/src/stil/codeblock.css"
+
+# A stand-in page: buttons with a class list, a clock that only moves when told,
+# and a clipboard that answers as each script decides.
+STAND_IN = """
+const makeButton = (name) => {
+  const classes = new Set();
+  const code = { querySelectorAll: () => [], textContent: name };
+  return { name, tickTimer: undefined, classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name), contains: (name) => classes.has(name) },
+    closest: () => ({ querySelector: () => code }) };
+};
+const click = (target, done) => codeKopierKlick({ target: { closest: () => target } }, done);
+const clock = [];
+globalThis.setTimeout = (f, ms) => { clock.push({ f, ms, live: true }); return clock.length - 1; };
+globalThis.clearTimeout = (id) => { if (clock[id]) clock[id].live = false; };
+const runOut = () => clock.filter((entry) => entry.live).forEach((entry) => { entry.live = false; entry.f(); });
+const clipboard = (answer) => Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: { writeText: () => answer } } });
+const settle = () => new Promise((r) => setImmediate(r));
+"""
+
+
+def _stand_in(script: str):
+    return json.loads(_node(f"{_modul()}\n{STAND_IN}\n(async () => {{ {script} }})()"))
+
+
+def test_the_button_shows_the_tick_only_after_the_copy_and_then_for_a_second():
+    out = _stand_in("""
+    const b = makeButton('a');
+    clipboard(Promise.resolve());
+    let reported = 0;
+    click(b, () => { reported += 1; });
+    const at_once = b.classList.contains('copied');
+    await settle();
+    const after = b.classList.contains('copied');
+    const deadlines = clock.map((entry) => entry.ms);
+    runOut();
+    console.log(JSON.stringify({ at_once, after, deadlines, reported, back: !b.classList.contains('copied') }));
+    """)
+    assert out == {"at_once": False, "after": True, "deadlines": [1000], "reported": 1, "back": True}
+
+
+def test_a_refused_write_keeps_the_copy_mark_and_reports_nothing():
+    out = _stand_in("""
+    const b = makeButton('a');
+    clipboard(Promise.reject(new Error('denied')));
+    let reported = 0;
+    click(b, () => { reported += 1; });
+    await settle();
+    console.log(JSON.stringify({ tick: b.classList.contains('copied'), reported, deadlines: clock.length }));
+    """)
+    assert out == {"tick": False, "reported": 0, "deadlines": 0}
+
+
+def test_a_second_click_within_the_second_copies_again_and_restarts_it():
+    out = _stand_in("""
+    const b = makeButton('a');
+    clipboard(Promise.resolve());
+    let reported = 0;
+    click(b, () => { reported += 1; });
+    await settle();
+    click(b, () => { reported += 1; });
+    await settle();
+    const alive = clock.filter((entry) => entry.live).length;
+    console.log(JSON.stringify({ reported, alive, set_up: clock.length, tick: b.classList.contains('copied') }));
+    """)
+    # Two copies, two timers set, only the newest alive; the tick still stands.
+    assert out == {"reported": 2, "alive": 1, "set_up": 2, "tick": True}
+
+
+def test_with_two_blocks_only_the_pressed_one_changes():
+    out = _stand_in("""
+    const a = makeButton('a');
+    const b = makeButton('b');
+    clipboard(Promise.resolve());
+    click(a, () => {});
+    await settle();
+    console.log(JSON.stringify({ a: a.classList.contains('copied'), b: b.classList.contains('copied') }));
+    """)
+    assert out == {"a": True, "b": False}
+
+
+def test_the_button_carries_both_signs_and_keeps_its_name():
+    html = _gezeichnet("```\nnpm install\n```")
+    button = html[html.index('<button class="code-kopieren"') : html.index("</button>")]
+    assert button.count("<svg") == 2 and 'class="code-tick"' in button, button
+    assert 'M4 12.5 L9.5 18 L20 6.5' in button  # the house's tick drawing
+    assert 'title="' in button and 'aria-label="' in button and "copied" not in button
+    assert "code-kopieren" not in _gezeichnet("```bash\nnpm ins")
+
+
+def test_the_signs_cross_fade_with_the_block_duration():
+    css = CSS.read_text(encoding="utf-8")
+    assert ".code-kopieren > svg { grid-area: 1 / 1; transition: opacity 0.18s; }" in css
+    assert ".code-kopieren.copied > .code-tick { opacity: 1; }" in css
+    assert ".code-kopieren.copied > svg:first-child { opacity: 0; }" in css

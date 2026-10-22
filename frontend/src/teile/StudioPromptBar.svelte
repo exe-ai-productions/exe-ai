@@ -14,6 +14,7 @@
   import StudioStyles from './StudioStyles.svelte'
   import { api } from '../lib/api.js'
   import { draussen } from '../lib/draussen.js'
+  import { BOTTOM_ROOM } from '../lib/studioArea.js'
   import {
     art, autoKind, auswahl, kindsOf, pictureMissing, stile, stileLaden, stilVon, werte,
   } from '../lib/studio.svelte.js'
@@ -92,7 +93,7 @@
   }
 </script>
 
-<div class="dock">
+<div class="dock" style:--room="{BOTTOM_ROOM}px">
 <div class="modeplace" use:draussen={() => (modeOpen = false)}>
   <button class="mode glas" aria-haspopup="listbox" aria-expanded={modeOpen}
           aria-label="{t('bild.art')}: {modeText}" onclick={() => (modeOpen = !modeOpen)}>
@@ -191,12 +192,17 @@
      level. The bar stands centred while the field has room at its left;
      where it has not, the field keeps its room and the bar gives way: it
      moves over, then narrows. The dock takes no pointer of its own — under
-     its free ends the surface stays the surface. */
+     its free ends the surface stays the surface. The bar never grows past
+     the room the area keeps free under itself (--room) less its distance to
+     the edge (--edge), the mode field when it stands over the bar (--above)
+     and 12 px of air: what does not fit rolls inside the fields. */
   .dock {
+    --edge: 44px;
+    --above: 0px;
     position: absolute;
     left: 80px;
     right: 80px;
-    bottom: 44px;
+    bottom: var(--edge);
     z-index: 3;
     display: grid;
     grid-template-columns: minmax(max-content, 1fr) minmax(0, 640px) 1fr;
@@ -225,17 +231,36 @@
   .mode:hover {
     background: var(--glass-hover);
   }
+  /* On a narrow screen the dock takes the width of the screen: the mode
+     field above, the bar under it, both at the foot. */
+  @media (max-width: 720px) {
+    .dock {
+      left: 8px;
+      right: 8px;
+      --edge: calc(8px + env(safe-area-inset-bottom));
+      --above: 40px;
+      bottom: var(--edge);
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: 8px;
+    }
+    .modeplace {
+      justify-self: start;
+      margin-right: 0;
+    }
+  }
   .leiste {
     min-width: 0;
     pointer-events: auto;
     display: flex;
     flex-direction: column;
     gap: 8px;
+    max-height: calc(var(--room) - var(--edge) - var(--above) - 12px);
     padding: 12px 12px 10px 16px;
     box-shadow: inset 0 0 0 1px var(--glass-card-line), 0 8px 28px rgba(0, 0, 0, 0.12);
   }
   .prompt {
     width: 100%;
+    flex: 0 1 auto;
     min-height: 22px;
     max-height: 160px;
     padding: 0;

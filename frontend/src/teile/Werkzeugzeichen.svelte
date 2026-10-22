@@ -50,8 +50,8 @@
      lib/werkzeugkatalog.js. */
   const zeichen = $derived(zeichenFuer(name, server, eingebaut))
 
-  /* Whether this mark stands for a TOOL, and therefore wears the house
-     colour for one (`--werkzeug`, stil/global.css).
+  /* Whether this mark stands for a TOOL, and therefore wears the text
+     colour where its row would otherwise set it quieter.
 
      `name` is the tool's own name and only a tool has one — the sources
      that draw a mark of their own (the skills row, a schedule, a provider
@@ -358,8 +358,9 @@
     <path class="strich z2" d="M26 25 A6.5 6.5 0 1 1 32 34 V37" stroke-width="4.5" style="--laenge:34" />
   </svg>
 {:else if zeichen === 'ordner'}
-  <!-- list_dir: a folder, drawn as the one shape everybody reads at 15 px —
-       the tab first, then the body it belongs to. -->
+  <!-- list_dir, create_folder: the open folder of the house's folder sign, the
+       same points scaled from its 24 grid onto this 64 one — the back wall
+       with its tab first, then the flap in front. -->
   <svg
     class="zeichen"
     class:laeuft={animiert}
@@ -373,11 +374,11 @@
   >
     <path
       class="strich z1"
-      d="M8 20 V15 H26 L31 22 H56 V49 H8 Z"
+      d="M10 48 V16 H26 L31 22 H48 V30"
       stroke-width="5"
-      style="--laenge:170"
+      style="--laenge:81"
     />
-    <path class="strich z2" d="M8 30 H56" stroke-width="4.5" style="--laenge:48" />
+    <path class="strich z2" d="M10 48 H44 L54 30 H20 Z" stroke-width="4.5" style="--laenge:110" />
   </svg>
 {:else if zeichen !== RUECKFALL}
   <!-- A mark with no drawing above is one of the house's standing signs: the
@@ -407,12 +408,12 @@
     height: var(--wz-groesse, 26px);
     flex: none;
   }
-  /* A tool mark wears the tool colour wherever it is drawn — the chat row,
-     the terminal row, the tools window, a notice. Whoever shows it may
-     still say otherwise: a failed call turns its mark red, and that rule
-     sits with the failure, not here. */
+  /* A tool mark wears the text colour wherever it is drawn — the chat row,
+     the terminal row, the tools window, a notice — even in a row whose own
+     text is set quieter. Whoever shows it may still say otherwise: a failed
+     call turns its mark red, and that rule sits with the failure, not here. */
   .zeichen.werkzeug {
-    color: var(--werkzeug);
+    color: var(--text);
   }
   .serverlogo {
     object-fit: contain;

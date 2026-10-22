@@ -221,5 +221,9 @@ def test_the_windows_read_at_every_opening_and_on_the_line():
     picker = (teile / "Modellwahl.svelte").read_text(encoding="utf-8")
     assert "if (open || !modellwahl.geladen) auswahlLaden()" in picker
     line = (FRONTEND / "src" / "lib" / "ereignisstrom.svelte.js").read_text(encoding="utf-8")
-    assert "model_switches_changed: () => {\n    auswahlLaden()\n  }," in line
+    # The approvals for runs are read beside them, in their own read.
+    assert "model_switches_changed: () => {\n    auswahlLaden()\n    loadRunApprovals()\n  }," in line
+    assert "if (!offen) return\n    auswahlLaden()\n    loadRunApprovals()" in (
+        teile / "ModelleCloud.svelte"
+    ).read_text(encoding="utf-8")
     assert "      modelleLaden()\n      auswahlLaden()" in line

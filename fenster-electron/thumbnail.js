@@ -1,8 +1,9 @@
 /*
-  The doc folder's previews: the system's own picture of a file — a PDF's
-  first page, a text's lines — drawn by `nativeImage.createThumbnailFromPath`
+  The doc folder's previews: the system's own picture of a file — an office
+  document's first page, say — drawn by `nativeImage.createThumbnailFromPath`
   (macOS and Windows). The page cannot draw these itself, and a browser
-  without this shell shows the file sign instead.
+  without this shell shows the file sign instead. A PDF is not asked for
+  here: the page draws its first page itself (pdf.js).
 
   The page does not name a path on this machine. It names the ADDRESS the
   service hands the file out at, and only one on the service this shell

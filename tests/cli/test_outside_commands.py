@@ -245,7 +245,10 @@ def test_the_command_line_without_a_word_still_opens_the_chat(
 ) -> None:
     """Silence probe: no word, the chat — as before."""
     service = Service()
-    assert run(service=service, tmp_path=tmp_path, typed=f"/quit{ENTER}", monkeypatch=monkeypatch) == 0
+    assert run(
+        service=service, tmp_path=tmp_path, typed=f"/quit{ENTER}", terminal=True,
+        monkeypatch=monkeypatch,
+    ) == 0
     assert service.asked("GET", "/models")
 
 

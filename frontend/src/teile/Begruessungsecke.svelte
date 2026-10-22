@@ -1,5 +1,6 @@
 <script>
-  /* The greeting of the empty chat — centred under the wordmark (App.svelte,
+  /* The greeting of the empty chat, one of three sentences behind the name,
+     picked per start — centred under the wordmark (App.svelte,
      `.anlauf .marke`), with the weekday and date quietly below it. It stays
      in the wordmark's box and folds away with it on send, so the group
      shrinks in one motion instead of jumping first; the corner above stays
@@ -11,11 +12,12 @@
      name a separate span however the translation arranges the sentence. */
   import { zustand } from '../lib/zustand.svelte.js'
   import { begruessung, grussSchluessel } from '../lib/begruessung.svelte.js'
+  import { greetingKey } from '../lib/greetingpick.js'
   import { t, texte } from '../lib/texte.svelte.js'
 
   const MARKE = '\u0000'
   const teile = $derived.by(() => {
-    const satz = t(grussSchluessel(), { name: MARKE })
+    const satz = t(grussSchluessel(), { name: MARKE, sentence: t(greetingKey) })
     const [vor, nach] = satz.split(MARKE)
     return { vor, nach: nach ?? '' }
   })

@@ -34,12 +34,27 @@ def test_die_vorgabe_steht_dahinter():
     assert klangwahl.aufgeloest({"pegel": 10}) == {**klangwahl.VORGABE, "pegel": 10}
 
 
-def test_was_gemeldet_wird_steht_nicht_hier():
-    """The three per-occurrence switches sat here while they only governed
-    the sound. They govern the whole notice now and live with it
-    (app/meldewahl.py) — this key must not answer for them a second time."""
+def test_every_occurrence_has_a_sound_switch_of_its_own():
+    """One sound switch per occurrence, all shipped on; the popup of the
+    same occurrence is another key (app/meldewahl.py) and not answered here."""
     assert klangwahl.wahl_pruefen({"fertig": False}) is None
-    assert set(klangwahl.VORGABE) == {"an", "pegel", "nur_hintergrund"}
+    assert klangwahl.wahl_pruefen({"melde_fertig": False}) is None
+    assert set(klangwahl.VORGABE) == {
+        "an", "pegel", "nur_hintergrund",
+        "ton_fertig", "ton_wartet", "ton_fehler", "ton_agent_cronjob",
+    }
+    assert all(klangwahl.VORGABE[name] is True for name in klangwahl.SOUND_FIELDS)
+
+
+def test_a_switched_off_sound_survives_storing():
+    """A bare False must not read as nothing set and let the shipped value
+    switch the sound back on."""
+    gespeichert = klangwahl.wahl_pruefen({"ton_agent_cronjob": False})
+    assert gespeichert == {"ton_agent_cronjob": False}
+    aufgeloest = klangwahl.aufgeloest(gespeichert)
+    assert aufgeloest["ton_agent_cronjob"] is False
+    assert aufgeloest["ton_fertig"] is True
+    assert klangwahl.wahl_pruefen({"ton_fehler": "nein"}) is None
 
 
 def test_nur_im_hintergrund_ist_eine_einstellung():

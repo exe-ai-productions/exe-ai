@@ -232,7 +232,7 @@ def anlegen(ordner: Sequence[str], datenordner: Path | None = None) -> None:
     Called when folders are shared, never during a request: sharing is one
     clear moment, and a hanging network share then delays a PATCH instead of
     the answer itself. No dialogue, no question, no message — the file is
-    simply there afterwards, the way a ``CLAUDE.md`` is.
+    simply there afterwards.
 
     An existing file is not touched, not appended to, not read for a
     decision. It is only recorded that it was already there.

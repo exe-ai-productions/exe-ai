@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app import atomic_file
+from app.arbeitsordnerpruefung import typed_path
 
 if TYPE_CHECKING:
     from app.config import Config
@@ -269,10 +270,22 @@ def _pruefen(config: "Config", name: str, pfad: str | Path) -> Path:
     exists or can be made, writable, and not colliding with another location.
     Raises ``SpeicherortFehler`` with a specific key otherwise — a path the
     program cannot use must be refused where it is set, not discovered as a
-    failed picture later."""
-    ziel = Path(pfad).expanduser()
-    if not str(ziel).strip():
+    failed picture later.
+
+    Absolute is checked after the quotes are taken off and ``~`` is expanded,
+    and before anything is created: a relative path would otherwise be
+    resolved against the working directory of the service and made there, in
+    a place nobody chose and nobody sees."""
+    text = typed_path(str(pfad))
+    if not text.strip():
         raise SpeicherortFehler("speicherorte.leer")
+    try:
+        ziel = Path(text).expanduser()
+    except RuntimeError:
+        # ``~name`` of a user the system does not know: no home to expand to.
+        raise SpeicherortFehler("speicherorte.not_absolute") from None
+    if not ziel.is_absolute():
+        raise SpeicherortFehler("speicherorte.not_absolute")
     ziel = ziel.resolve()
     if ziel.exists() and not ziel.is_dir():
         raise SpeicherortFehler("speicherorte.kein_ordner")

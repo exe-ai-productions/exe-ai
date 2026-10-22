@@ -422,3 +422,42 @@ def test_die_zugriffslage_liest_die_regeln_je_herkunft():
     regeln.innerhalb_der_ordner["chat"] = "fragen"
     regeln.ausserhalb_der_ordner["chat"] = "nein"
     assert zugriffslage("chat", regeln) == ("fragen", "nein")
+
+
+# --- The memory: no mode has a say -------------------------------------------
+
+
+@pytest.mark.parametrize("herkunft", ["chat", "agent"])
+@pytest.mark.parametrize("modus", ["fragen", "nein"])
+def test_the_memory_tool_asks_in_no_mode_and_in_no_run(herkunft, modus):
+    """Saving, changing and deleting an entry ask nothing — in the manual
+    mode, in a job where "ask" would turn into "no", and in the strictest
+    standard alike."""
+    regeln = Regeldatei(standard={"chat": modus, "agent": modus})
+    urteil = berechtigungen.urteil(
+        "memory_save", {"remove": "Tee"}, [], herkunft,
+        agent=_agent(["memory_save"]) if herkunft == "agent" else None, regeln=regeln,
+    )
+    assert urteil.antwort == "ja"
+
+
+def test_silence_another_tool_still_follows_the_mode():
+    regeln = Regeldatei(standard={"chat": "fragen", "agent": "fragen"})
+    assert berechtigungen.urteil(
+        "some_other_tool", {}, [], "chat", regeln=regeln,
+    ).antwort == "fragen"
+
+
+def test_a_rule_the_user_wrote_for_the_memory_tool_still_wins():
+    regeln = Regeldatei(regeln={"memory_save": "nein"})
+    assert berechtigungen.urteil(
+        "memory_save", {"text": "x", "kind": "fact"}, [], "chat", regeln=regeln,
+    ).antwort == "nein"
+
+
+def test_an_agent_can_still_tighten_the_memory_tool_for_itself():
+    urteil = berechtigungen.urteil(
+        "memory_save", {"text": "x", "kind": "fact"}, [], "agent",
+        agent=_agent(["memory_save"], {"memory_save": "nein"}), regeln=Regeldatei(),
+    )
+    assert urteil.antwort == "nein"

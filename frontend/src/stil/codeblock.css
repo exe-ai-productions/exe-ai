@@ -46,6 +46,12 @@
   color: var(--text-still); cursor: pointer;
 }
 .code-kopieren:hover { background: var(--linie); color: var(--text); }
+/* The copy mark and the tick share one cell and cross-fade. */
+.code-kopieren > svg { grid-area: 1 / 1; transition: opacity 0.18s; }
+.code-kopieren > .code-tick { opacity: 0; }
+.code-kopieren.copied { color: var(--text); }
+.code-kopieren.copied > .code-tick { opacity: 1; }
+.code-kopieren.copied > svg:first-child { opacity: 0; }
 /* Long lines break instead of running off into the wall. The right padding
    keeps the text out from under the copy mark. */
 .codeblock.umbricht pre { padding-right: 44px; overflow-x: visible; }
@@ -75,6 +81,7 @@
   scrollbar-color: transparent transparent;
   transition: scrollbar-color 0.18s;
   margin: 0; padding: 13px 15px; overflow-x: auto;
+  font-family: var(--schrift-fest);
   display: flex; gap: 12px; align-items: flex-start;
 }
 .codeblock:hover pre {
@@ -106,7 +113,13 @@
   white-space: pre;
 }
 .codeblock pre code { flex: 1; min-width: 0; }
+/* In the chat the code grows and shrinks with the chat's font, in the same
+   proportion it has at the factory size: 12.8px at 17. Outside the chat (the
+   file card, the reader) it stays at 12.8px. */
+.spur .codeblock code,
+.spur .code-nummern { font-size: calc(var(--chat-schrift, 16px) * 12.8 / 17); }
 .codeblock code {
-  background: none; padding: 0; border-radius: 0; font-size: 12.8px; line-height: 1.6;
+  background: none; padding: 0; border-radius: 0; font-family: var(--schrift-fest);
+  font-size: 12.8px; line-height: 1.6;
   color: var(--code-vordergrund);
 }

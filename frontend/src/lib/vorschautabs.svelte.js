@@ -67,7 +67,7 @@ export function aktiverTab(chatId) {
  * (effect_update_depth_exceeded). A rewrite also lifts a user's "closed":
  * a new version of the file has arrived and deserves to be findable again.
  */
-export function tabOeffnen(chatId, { name, art, inhalt, pfad = '' }, aufdraengen = true) {
+export function tabOeffnen(chatId, { name, art, inhalt, pfad = '', adresse = '', fakten = '' }, aufdraengen = true) {
   if (!chatId || !name) return
   const id = schluessel(name, art)
   if (tabs.zu[chatId]?.[id]) delete tabs.zu[chatId][id]
@@ -75,7 +75,7 @@ export function tabOeffnen(chatId, { name, art, inhalt, pfad = '' }, aufdraengen
   const stelle = liste.findIndex((e) => e.id === id)
   if (stelle < 0 || liste[stelle].inhalt !== inhalt) {
     const neu = [...liste]
-    const eintrag = { id, name, art, inhalt, pfad }
+    const eintrag = { id, name, art, inhalt, pfad, ...(adresse ? { adresse, fakten } : {}) }
     if (stelle >= 0) neu[stelle] = eintrag
     else neu.push(eintrag)
     tabs.proChat[chatId] = neu

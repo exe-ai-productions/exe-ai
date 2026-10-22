@@ -2,116 +2,126 @@
   /* The queued messages, shown where they will land: at the end of the
      history, below the running answer.
 
-     They wear the user's bubble, but quietly — dimmed and outlined
-     instead of filled. That difference is the whole message of the thing:
-     what stands here has been typed but not yet said, and it must not be
-     mistaken for something already in the conversation.
+     A waiting message is the bubble it will become, dimmed: it IS the sent
+     message's own bubble (Nachricht.svelte), drawn from the same shape the
+     send makes of it — text, pictures, documents, the instruction's pill —
+     so the width, the place, the parts and the type are the sent one's by
+     construction. What says that it waits stands under it, in the row where
+     "Copy" will stand once it is sent: the hourglass, the word, and the ✕
+     that takes the message back. That makes the waiting bubble exactly as
+     high as the sent one, so when the message goes nothing moves — only the
+     dimming fills in (the `.from-queue` class in stil/global.css).
 
-     A held queue says so at every bubble it holds, not only at the first —
-     whoever scrolls in from below should not have to look for the reason. */
+     The word says the state and nothing else; the sentence that says what
+     the bubble IS stands as a hint while the pointer is on the word, and on
+     a screen with no pointer a tap on the word opens it. */
+  import Nachricht from './Nachricht.svelte'
   import { t } from '../lib/texte.svelte.js'
   import { zustand } from '../lib/zustand.svelte.js'
-  import { entfernen, fuerChat } from '../lib/warteschlange.svelte.js'
+  import { fuerChat } from '../lib/warteschlange.svelte.js'
+  import { previewOf } from '../lib/picturePreview.js'
 
-  let { losschicken } = $props()
+  let { takeBack } = $props()
 
   const wartende = $derived(fuerChat(zustand.aktiverChat))
 
-  /* Every queued attachment by name — images and documents in one line. */
-  function anhangNamen(eintrag) {
-    return [...(eintrag.bilder || []), ...(eintrag.dokumente || [])]
-      .map((datei) => datei.name)
-      .join(', ')
+  /* The message a waiting entry will become, in the shape the send gives it
+     (lib/chatlauf.svelte.js): one picture or document in the scalar field,
+     more in the list. */
+  function asMessage(eintrag) {
+    const pictures = (eintrag.bilder || []).map(previewOf)
+    const documents = eintrag.dokumente || []
+    return {
+      // The `eigen-` start marks a bubble that is no stored row of the chat
+      // (Nachricht.svelte takes no ✕ for a document on it).
+      id: `eigen-waiting-${eintrag.id}`,
+      role: 'user',
+      content: eintrag.inhalt || '',
+      bild: pictures[0] ?? null,
+      anhaenge: pictures.length > 1 ? pictures : null,
+      dokument: documents.length === 1 ? documents[0] : null,
+      dokumente: documents.length > 1 ? documents : null,
+    }
+  }
+
+  /* The sentence under the word, opened by a tap on a screen with no
+     pointer: the id of the entry whose hint stands, or none. The screen is
+     asked at the tap, so a pointer that comes and goes is read as it is. */
+  let hintOpen = $state(null)
+  function tapMark(eintrag) {
+    if (!matchMedia('(hover: none)').matches) return
+    hintOpen = hintOpen === eintrag.id ? null : eintrag.id
+  }
+  /* A tap anywhere else closes it. */
+  function tapOutside(event) {
+    if (hintOpen != null && !event.target.closest?.('.marke')) hintOpen = null
   }
 </script>
 
+<svelte:window onpointerdown={tapOutside} />
+
 {#each wartende as eintrag (eintrag.id)}
-  <div class="wartet" class:haelt={eintrag.haelt}>
+  {#snippet row()}
     <div class="zeile">
       <svg class="sanduhr" width="13" height="13" viewBox="0 0 24 24" fill="none"
            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
            aria-hidden="true">
         <path d="M6 3h12M6 21h12M8 3v4l4 5 4-5V3M8 21v-4l4-5 4 5v4" />
       </svg>
-      <span class="marke">{eintrag.haelt ? t('warteschlange.haelt') : t('warteschlange.wartet')}</span>
-      {#if eintrag.haelt}
-        <button class="weiter" onclick={() => losschicken(eintrag)}>
-          {t('warteschlange.jetzt_senden')}
-        </button>
-      {/if}
+      <button class="marke" title={t('warteschlange.erklaerung')}
+              aria-expanded={hintOpen === eintrag.id}
+              onclick={() => tapMark(eintrag)}>{t('warteschlange.wartet')}</button>
       <button
         class="weg"
         title={t('warteschlange.entfernen')}
         aria-label={t('warteschlange.entfernen')}
-        onclick={() => entfernen(eintrag.id)}
+        onclick={() => takeBack(eintrag)}
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2.2" stroke-linecap="round">
           <path d="M6 6l12 12M18 6L6 18" />
         </svg>
       </button>
+      {#if hintOpen === eintrag.id}
+        <span class="hint" role="status">{t('warteschlange.erklaerung')}</span>
+      {/if}
     </div>
-    <!-- What the bubble IS, in one sentence. The mark above says the state
-         and nothing else, and an outlined bubble at the end of the history
-         was easy to read as a message that had failed to send.
-
-         Not on a held queue: that one does NOT go out when the answer is
-         through — it waits for the button beside it, and saying otherwise
-         would be the quieter of two lies. -->
-    {#if !eintrag.haelt}
-      <div class="erklaerung">{t('warteschlange.erklaerung')}</div>
-    {/if}
-    {#if eintrag.inhalt}
-      <div class="text">{eintrag.inhalt}</div>
-    {/if}
-    {#if eintrag.bilder?.length || eintrag.dokumente?.length}
-      <div class="anhang">{anhangNamen(eintrag)}</div>
-    {/if}
+  {/snippet}
+  <!-- One block, like the one a sent message stands in: the history spaces
+       its blocks, not the two rows inside one. -->
+  <div>
+    <Nachricht nachricht={asMessage(eintrag)} waiting={true} waitRow={row} />
   </div>
 {/each}
 
 <style>
-  .wartet {
-    align-self: flex-end;
-    max-width: 76%;
-    min-width: 0;
-    border-radius: 9px;
-    padding: 8px 15px 10px;
-    /* The ground and ink of one's own bubble (Nachricht.svelte, `.von-mir`),
-       dimmed, and no frame: it will be that bubble, it is not one yet. The
-       dimming is on the parts, never on the bubble as a whole: an opacity
-       there would take the hourglass down with it, and the hourglass in the
-       corner is what carries the state — yellow while it waits, red while it
-       is held, at full strength. The ground is dimmed by its alpha channel,
-       the word and the text by their own opacity. */
-    background: color-mix(
-      in srgb,
-      var(--blase-eigen, var(--blase-eigen-standard, var(--blase))) 60%,
-      transparent
-    );
-    color: var(--blase-eigen-text, var(--blase-eigen-text-standard, inherit));
-    line-height: 1.55;
-  }
+  /* The row under the sent bubble, where "Copy" stands: right-aligned, 6 px
+     below the bubble, as high as the row of its buttons (the 6 px, then 4 px
+     around a 15 px sign). */
   .zeile {
+    position: relative;
+    align-self: flex-end;
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-bottom: 2px;
+    padding-top: 6px;
+    min-height: 29px;
+    font-size: 12px;
+    line-height: 15px;
+    color: var(--text-still);
   }
   /* The state colour sits on the shape alone, in the shape tokens
-     (global.css): the ground is a colour the user picked, so no text colour
-     is sure to reach 4.5:1 on it, and the word must stay readable. */
+     (global.css), at full strength. */
   .sanduhr {
     flex: none;
     color: var(--gelb);
   }
-  /* The hold is a state of its own — the send did not go through — so it
-     carries the house's failure colour, red, not the waiting queue's
-     yellow. */
-  .wartet.haelt .sanduhr {
-    color: var(--rot);
-  }
   .marke {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: inherit;
     font-size: 0.78rem;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -119,56 +129,39 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    /* The bubble's own ink: the only colour sure to read on a ground the
-       user picked. The state is the hourglass's colour beside it. */
-    color: inherit;
-    opacity: 0.6;
+    cursor: default;
   }
-  /* A statement of fact, so brightness alone — no state colour. It sits
-     above the typed text and below the mark, quieter than both, in the
-     bubble's own ink: a theme grey is not sure to read on a ground the
-     user picked. */
-  .erklaerung {
-    font-size: 0.82rem;
-    opacity: 0.45;
-    margin-bottom: 3px;
-  }
-  .text {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    opacity: 0.6;
-  }
-  .anhang {
-    font-size: 0.82rem;
-    opacity: 0.45;
-    overflow-wrap: anywhere;
-  }
-  .weiter,
   .weg {
-    margin-left: auto;
     background: none;
     border: none;
-    padding: 2px 6px;
+    padding: 4px;
     border-radius: 9px;
     color: inherit;
     cursor: pointer;
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    opacity: 0.6;
   }
-  .weiter {
-    font-size: 0.78rem;
-    letter-spacing: 0.03em;
-    text-transform: uppercase;
-  }
-  /* Only one of the two may claim the free space, or the ✕ would be
-     pushed off the edge whenever the hold notice stands. */
-  .weiter + .weg {
-    margin-left: 0;
-  }
-  .weiter:hover,
   .weg:hover {
-    background: color-mix(in srgb, var(--text) 10%, transparent);
+    background: var(--linie);
     color: var(--text);
+  }
+  /* The sentence a tap on the word opens: it stands under the row and over
+     what follows, so the block keeps its height and nothing moves. */
+  .hint {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 5;
+    max-width: min(280px, 80vw);
+    margin-top: 4px;
+    padding: 8px 10px;
+    border-radius: 9px;
+    background: var(--glass-dropdown);
+    box-shadow: 0 0 0 1px var(--glass-button-edge);
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.45;
+    text-transform: none;
+    letter-spacing: normal;
   }
 </style>

@@ -107,12 +107,12 @@ def test_the_bubble_draws_the_pieces_in_all_three_places():
     assert "{#each adressTeile(inhalt) as teil}" in snippet
     assert 'target="_blank" rel="noopener noreferrer"' in snippet and "href={teil.href}" in snippet
     assert "@html" not in snippet
-    assert '<div class="bildtext">{@render eigenerText(nachricht.content)}</div>' in BUBBLE
+    assert "{#if anhangBilder.length || dokumentKarten.length}{@render eigenerText(nachricht.content)}{:else if skillTeil}" in BUBBLE
     assert "{@render eigenerText(ohneSkill)}" in BUBBLE
     assert "{:else}{@render eigenerText(nachricht.content)}{/if}" in BUBBLE
     assert "{ohneSkill}" not in BUBBLE.replace("eigenerText(ohneSkill)", "")
 
 
 def test_the_own_link_has_the_colour_of_a_link_in_an_answer():
-    assert ".eigenlink { color: var(--blau); text-underline-offset: 3px; }" in BUBBLE
-    assert ".antwort :global(a) { color: var(--blau); text-underline-offset: 3px; }" in BUBBLE
+    assert ".eigenlink { color: var(--text); text-underline-offset: 3px; }" in BUBBLE
+    assert ".antwort :global(a) { color: var(--text); text-underline-offset: 3px; }" in BUBBLE

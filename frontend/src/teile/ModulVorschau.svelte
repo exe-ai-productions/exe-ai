@@ -7,13 +7,17 @@
      filling the rail to its lower edge. One name, one way to save, no
      frame around the page and no row of buttons below it.
 
-     What a file shows depends on its kind (lib/dateiarten.js): HTML and SVG
-     are drawn by the browser in the sandboxed frame, Markdown by the
-     renderer the chat itself uses, CSV as a table, everything else as its
-     source. Whatever has a drawn form can be switched to its source and
-     back. A PDF is the one file that is not text at all: its tab carries
-     the address of the file, and the browser's own viewer draws its pages
-     in a frame — no source to switch to, and saving it saves the file.
+     What a file shows depends on its kind (lib/dateiarten.js): HTML is
+     drawn by the browser in the sandboxed frame, a drawing (SVG) as a picture
+     by an image element, Markdown by the renderer the chat itself uses, CSV
+     as a table, code and text through the one component both views share
+     (FileContent.svelte: colours and a number on every line, or the text as
+     written), everything else of a document as its source. Whatever has a
+     drawn form can be switched to its source and back. A PDF, a picture, a
+     clip and a sound are not text at all: their tab carries the address of
+     the file — the page draws the pages of a PDF with pdf.js (PdfFrame.svelte),
+     the others come through FileContent — no source to switch to, and saving
+     one saves the file.
 
      The frame is sandboxed WITHOUT allow-same-origin, and that pairing is
      the point: the document comes from the model, and with our origin its
@@ -26,12 +30,16 @@
      lib/vorschauschutz.js closes, and it rides in the document itself
      because srcdoc has no response to carry a header. */
   import Dateikarte from './Dateikarte.svelte'
+  import DataTable from './DataTable.svelte'
+  import FileContent from './FileContent.svelte'
   import Hauszeichen from './Hauszeichen.svelte'
   import PdfFrame from './PdfFrame.svelte'
   import {
-    dateiart, dateiFakten, dateiHerunterladen, dateizeichen, saveFromAddress, tabelleLesen,
+    ADDRESS_KINDS, OFFICE_KINDS, dateiart, dateiFakten, dateiHerunterladen, dateizeichen, fileKind, saveFromAddress,
+    svgAddress, tabelleLesen,
   } from '../lib/dateiarten.js'
   import { lebendHtml } from '../lib/lebendhtml.js'
+  import { displayPath } from '../lib/paths.js'
   import { codeKopierKlick, dateiTeile } from '../lib/markdown.js'
   import { t } from '../lib/texte.svelte.js'
   import { mitSchutzregel } from '../lib/vorschauschutz.js'
@@ -45,16 +53,29 @@
   const offen = $derived(aktiverTab(chatId))
 
   const eintrag = $derived(offen ? dateiart(offen.art) : null)
-  /* A file shown from its own address, by the browser's viewer. */
-  const isFramed = $derived(Boolean(offen?.adresse))
+  const info = $derived(offen ? fileKind(offen.art) : null)
+  /* A PDF shown from its own address, drawn by the page. */
+  const isFramed = $derived(Boolean(offen?.adresse) && info?.kind === 'pdf')
+  /* A picture, a clip or a sound shown from its own address. */
+  const fromAddress = $derived(
+    Boolean(offen?.adresse) && ADDRESS_KINDS.includes(info?.kind) && !OFFICE_KINDS.includes(info?.kind),
+  )
+  /* A Word document, a spreadsheet or a presentation, drawn by the page from
+     its own address and held the way a PDF is. */
+  const isOffice = $derived(Boolean(offen?.adresse) && OFFICE_KINDS.includes(info?.kind))
+  /* Code and text that is no document: the text itself, set by the shared
+     component. */
+  const isCodeOrText = $derived(['code', 'text'].includes(info?.kind))
+  /* A drawing is a picture of its text, and its text stays one switch away. */
+  const isSvg = $derived(eintrag?.endung === 'svg')
   /* Markdown is drawn too, but by our own renderer and into the page
      itself; only what the browser has to draw goes into the frame. */
   const isMarkdown = $derived(eintrag?.zeigen === 'gerendert' && eintrag.endung === 'md')
-  const kannZeichnen = $derived(eintrag?.zeigen === 'gerendert' && !isMarkdown)
+  const kannZeichnen = $derived(eintrag?.zeigen === 'gerendert' && !isMarkdown && !isSvg)
   const kannTabelle = $derived(eintrag?.zeigen === 'tabelle')
   /* Whether there are two views to switch between at all: a file that is
      only ever shown as its source has no second one, and so no switch. */
-  const hasTwoViews = $derived(kannZeichnen || kannTabelle || isMarkdown)
+  const hasTwoViews = $derived(kannZeichnen || kannTabelle || isMarkdown || isSvg)
   const zeilen = $derived(
     kannTabelle ? tabelleLesen(offen.inhalt, offen.art === 'tsv' ? '\t' : ',') : [],
   )
@@ -73,11 +94,11 @@
 
   /* The same facts line the file card writes (lib/dateiarten.js) — one
      wording for one fact, wherever it is shown. */
-  const fakten = $derived(!offen ? '' : isFramed ? offen.fakten : dateiFakten(offen))
+  const fakten = $derived(!offen ? '' : offen.adresse ? offen.fakten : dateiFakten(offen))
 
   function herunterladen() {
     if (!offen) return
-    if (isFramed) {
+    if (offen.adresse) {
       /* The file itself, under its own name: saved from its address, the
          browser keeps what the service hands out instead of showing it. */
       saveFromAddress(offen.name, offen.adresse)
@@ -93,7 +114,7 @@
   <div class="reiter">
     {#each liste as tab (tab.id)}
       <div class="reiter-eintrag" class:aktiv={tab.id === offen?.id}>
-        <button class="reiter-name" onclick={() => tabWaehlen(chatId, tab.id)}>{tab.name}</button>
+        <button class="reiter-name" onclick={() => tabWaehlen(chatId, tab.id)}>{displayPath(tab.name)}</button>
         <button
           class="reiter-zu"
           onclick={() => tabSchliessen(chatId, tab.id)}
@@ -116,7 +137,7 @@
            its front where it does not fit, so the file's name stays in
            view, whole under the pointer. The name stands in the tab above;
            a file without a place on disk shows it here as well. -->
-      <span class="adresse-name" title={offen?.pfad || null}><span>{offen?.pfad || offen?.name}</span></span>
+      <span class="adresse-name" title={offen?.pfad ? displayPath(offen.pfad) : null}><span>{displayPath(offen?.pfad || offen?.name)}</span></span>
       <span class="fakten">{fakten}</span>
     </div>
     {#if hasTwoViews}
@@ -143,6 +164,18 @@
       {#if isFramed}
         <div class="seite rahmen viewer">
           <PdfFrame address={offen.adresse} title={offen.name} />
+        </div>
+      {:else if isOffice}
+        <div class="seite rahmen viewer">
+          <FileContent kind={info.kind} address={offen.adresse} name={offen.name} />
+        </div>
+      {:else if fromAddress}
+        <div class="seite file-content">
+          <FileContent kind={info.kind} address={offen.adresse} name={offen.name} />
+        </div>
+      {:else if isSvg && !quelltextZeigen}
+        <div class="seite file-content">
+          <FileContent kind="image" address={svgAddress(offen.inhalt)} name={offen.name} />
         </div>
       {:else if kannZeichnen && !quelltextZeigen}
         <iframe
@@ -176,19 +209,18 @@
         </div>
       {:else if kannTabelle && !quelltextZeigen}
         <div class="seite tabellenfeld">
-          <table>
-            <thead>
-              <tr>{#each zeilen[0] || [] as zelle}<th>{zelle}</th>{/each}</tr>
-            </thead>
-            <tbody>
-              {#each zeilen.slice(1) as reihe}
-                <tr>{#each reihe as zelle}<td>{zelle}</td>{/each}</tr>
-              {/each}
-            </tbody>
-          </table>
+          <DataTable rows={zeilen} />
+        </div>
+      {:else if isCodeOrText}
+        <div class="seite quelle">
+          <FileContent kind={info.kind} language={info.language} text={offen?.inhalt} />
         </div>
       {:else}
-        <pre class="quelle"><code>{offen?.inhalt}</code></pre>
+        <!-- The source of a document: the colours of its grammar and a
+             number on every line, as the reader shows it. -->
+        <div class="seite quelle">
+          <FileContent kind="code" language={isSvg ? 'xml' : (info?.language ?? '')} text={offen?.inhalt} />
+        </div>
       {/if}
     {/key}
   </div>
@@ -357,8 +389,8 @@
   .rahmen {
     background: #fff;
   }
-  /* The page that holds the viewer's frame: the frame is laid out against
-     it and cut at its rounding (PdfFrame.svelte). */
+  /* The page that holds a PDF's pages: they are laid out against it and
+     cut at its rounding (PdfFrame.svelte). */
   .viewer {
     position: relative;
   }
@@ -385,13 +417,13 @@
   .dokument :global(h3) { font-size: 15px; line-height: 23px; }
   .dokument :global(h4),
   .dokument :global(h5) { font-size: 12.5px; line-height: 19px; }
-  .dokument :global(a) { color: var(--blau); }
+  .dokument :global(a) { color: var(--text); }
   .dokument :global(.dateikarte) { margin-bottom: 8px; }
   .tabellenfeld {
     padding: 14px 16px;
   }
   /* The source: not a page but the text itself, in the typewriter face on
-     a glass card. */
+     a glass card — code with its colours and numbers, text as written. */
   .quelle {
     flex: 1;
     min-width: 0;
@@ -407,15 +439,9 @@
     font-size: 11.5px;
     line-height: 18px;
     color: var(--text);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
   }
-  table { border-collapse: collapse; font-size: 12px; }
-  th, td {
-    border: 1px solid var(--linie);
-    padding: 4px 8px;
-    text-align: left;
-    color: var(--text-leise);
+  /* A picture, a clip or a sound on the sheet, with the air a page has. */
+  .file-content {
+    padding: 14px 16px;
   }
-  th { color: var(--text); }
 </style>

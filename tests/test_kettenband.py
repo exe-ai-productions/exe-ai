@@ -317,7 +317,7 @@ async def test_ein_einmaliger_eintrag_meldet_auch_nach_einer_uebergabe(
     provider_setzen(client, MockProvider(mock_endpunkt("test")))
     await lauf_starten(client, config, kette.id)
 
-    assert gemeldet == [(f"{AUFGABE} — Einmal ausgeführt; Ziel nicht erreicht.", False)]
+    assert gemeldet == [(f"{AUFGABE} - Einmal ausgeführt; Ziel nicht erreicht.", False)]
 
 
 async def test_die_fortsetzung_findet_das_ziel_und_meldet_genau_einmal(

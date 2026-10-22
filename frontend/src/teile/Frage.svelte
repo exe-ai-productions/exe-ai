@@ -13,6 +13,7 @@
   import { fade, scale } from 'svelte/transition'
   import { zustand, frageBeantworten } from '../lib/zustand.svelte.js'
   import { t } from '../lib/texte.svelte.js'
+  import Hauszeichen from './Hauszeichen.svelte'
 
   let eingabefeld = $state(null)
   let okKnopf = $state(null)
@@ -64,7 +65,8 @@
       {/if}
       <div class="knoepfe">
         <button class="knopf" onclick={nein}>{t('app.abbrechen')}</button>
-        <button class="knopf wichtig" bind:this={okKnopf} onclick={ja}>
+        <button class="knopf wichtig" class:danger={zustand.frage.danger} bind:this={okKnopf} onclick={ja}>
+          {#if zustand.frage.danger}<Hauszeichen zeichen="trash" groesse={15} />{/if}
           {t(zustand.frage.okSchluessel)}
         </button>
       </div>
@@ -149,5 +151,17 @@
   }
   .wichtig:hover {
     background: color-mix(in srgb, var(--text) 6%, var(--glass-button));
+  }
+  /* A question about deleting: the main button wears the colour of deleting
+     and carries the bin. */
+  .wichtig.danger {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--rot-text);
+    background: color-mix(in srgb, var(--rot) 12%, var(--glass-button));
+  }
+  .wichtig.danger:hover {
+    background: color-mix(in srgb, var(--rot) 18%, var(--glass-button));
   }
 </style>

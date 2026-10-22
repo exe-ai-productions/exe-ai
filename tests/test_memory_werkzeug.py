@@ -1,9 +1,10 @@
 """The memory tool: what it writes, and what it refuses.
 
 The interesting half is what it CANNOT do. A tool that can hand over whole
-file contents can also wipe the memory in one call, and a rule that slips in
-without a yes sits in every later request — that is the difference between a
-memory and a permanent prompt injection.
+file contents can also wipe the memory in one call, so a delete names ONE
+entry by a part of its text and refuses a part that points at several; and
+the memory has one size, so a write that would take it past the line is
+refused, with the entries in the answer.
 """
 
 from __future__ import annotations
@@ -149,21 +150,27 @@ def test_der_neue_eintrag_nimmt_den_platz_des_alten():
 
 def test_ohne_text_wird_nichts_geschrieben(tmp_path):
     pfad = tmp_path / "memory.md"
-    antwort = asyncio.run(memory.ausfuehren({"text": "  ", "kind": "fact"}, pfad))
-    assert "nothing was saved" in antwort
-    assert "No entries stored yet." in antwort
+    with pytest.raises(memory.MemoryVerboten) as fehler:
+        asyncio.run(memory.ausfuehren({"text": "  ", "kind": "fact"}, pfad))
+    assert "nothing was changed" in str(fehler.value)
     assert not pfad.exists()
 
 
-def test_ohne_text_listet_es_die_eintraege(tmp_path):
-    """The model's way to see what it holds, whether or not the memory block
-    travels in its system prompt."""
+def test_an_empty_text_is_an_error_and_not_a_listing(tmp_path):
+    """The way through an empty text used to hand the entries over; the
+    entries stand in the system prompt, so the way is gone and the call fails
+    with a sentence that says what to pass instead."""
     pfad = tmp_path / "memory.md"
     pfad.write_text("## Rules\n- Kurz antworten.\n\n## Facts\n- Wohnt in Leipzig.\n", encoding="utf-8")
     vorher = pfad.read_text(encoding="utf-8")
-    antwort = asyncio.run(memory.ausfuehren({"text": "", "kind": "fact"}, pfad))
-    assert "## Rules\n- Kurz antworten." in antwort
-    assert "## Facts\n- Wohnt in Leipzig." in antwort
+    for argumente in (
+        {"text": "", "kind": "fact"},
+        {"text": "", "kind": "fact", "replaces": "Leipzig"},
+    ):
+        with pytest.raises(memory.MemoryVerboten) as fehler:
+            asyncio.run(memory.ausfuehren(argumente, pfad))
+        assert "Kurz antworten" not in str(fehler.value)
+        assert "'remove'" in str(fehler.value)
     assert pfad.read_text(encoding="utf-8") == vorher
 
 
@@ -196,11 +203,13 @@ def test_ein_ganzes_dokument_wird_abgewiesen(tmp_path):
     assert not pfad.exists()
 
 
-def test_es_gibt_keinen_weg_die_datei_zu_leeren(tmp_path):
-    """No parameter hands over whole content and none deletes. Clearing the
-    memory is the user's move, in the settings window."""
+def test_the_tool_takes_a_text_a_kind_and_two_parts_of_an_entry():
+    """No parameter hands over whole content: a delete names one entry by a
+    part of its text. Clearing the memory in one go is the user's move, in
+    the settings window."""
     felder = set(memory.werkzeug_beschreibung().schema["properties"])
-    assert felder == {"text", "kind", "replaces"}
+    assert felder == {"text", "kind", "replaces", "remove"}
+    assert memory.werkzeug_beschreibung().schema["required"] == []
 
 
 # --- The way through the registry --------------------------------------------
@@ -224,12 +233,13 @@ def test_die_registry_bietet_es_an_und_fuehrt_es_aus(tmp_path):
     )
     assert antwort == "Saved."
     assert "- Heißt Prüfstein." in pfad.read_text(encoding="utf-8")
-    gezeigt = asyncio.run(
+    geloescht = asyncio.run(
         registry.ausfuehren(
-            memory.WERKZEUG_NAME, {"text": "", "kind": "fact"}, gedaechtnis_zeigen=True
+            memory.WERKZEUG_NAME, {"remove": "Prüfstein"}, gedaechtnis_zeigen=True
         )
     )
-    assert "- Heißt Prüfstein." in gezeigt
+    assert geloescht == "Removed."
+    assert "Prüfstein" not in pfad.read_text(encoding="utf-8")
 
 
 def test_where_the_memory_does_not_travel_the_tool_is_neither_offered_nor_run(tmp_path):
@@ -245,7 +255,7 @@ def test_where_the_memory_does_not_travel_the_tool_is_neither_offered_nor_run(tm
     for argumente in (
         {"text": "Mag Tee.", "kind": "fact"},
         {"text": "Wohnt in Dresden.", "kind": "fact", "replaces": "Leipzig"},
-        {"text": "", "kind": "fact"},
+        {"remove": "Leipzig"},
     ):
         with pytest.raises(WerkzeugVerboten) as fehler:
             asyncio.run(registry.ausfuehren(memory.WERKZEUG_NAME, argumente))
@@ -275,6 +285,171 @@ def test_die_registry_haelt_das_gedaechtnis_ebenfalls_frei(tmp_path):
     for argumente in ({"text": "x", "kind": "rule"}, {"text": "x", "kind": "fact"}):
         assert registry.braucht_bestaetigung(memory.WERKZEUG_NAME, argumente) is False
         assert registry.bestaetigungsgrund(memory.WERKZEUG_NAME, argumente) is None
+
+
+# --- Deleting -------------------------------------------------------------------
+
+
+def _file(tmp_path, content: str):
+    pfad = tmp_path / "memory.md"
+    pfad.write_text(content, encoding="utf-8")
+    return pfad
+
+
+def test_a_delete_takes_out_exactly_the_entry_a_part_of_its_text_points_at(tmp_path):
+    pfad = _file(
+        tmp_path, "## Rules\n- Kurz antworten.\n\n## Facts\n- Wohnt in Leipzig.\n- Mag Tee.\n"
+    )
+    antwort = asyncio.run(memory.ausfuehren({"remove": "leipzig"}, pfad))
+    assert antwort == "Removed."
+    assert pfad.read_text(encoding="utf-8") == "## Rules\n- Kurz antworten.\n\n## Facts\n- Mag Tee.\n"
+
+
+def test_a_delete_finds_the_entry_under_either_heading(tmp_path):
+    pfad = _file(tmp_path, "## Rules\n- Kurz antworten.\n\n## Facts\n- Mag Tee.\n")
+    asyncio.run(memory.ausfuehren({"remove": "Kurz"}, pfad))
+    assert pfad.read_text(encoding="utf-8") == "## Facts\n- Mag Tee.\n"
+
+
+def test_a_delete_that_points_at_none_or_at_several_changes_nothing_and_names_the_entries(tmp_path):
+    pfad = _file(tmp_path, "## Facts\n- Wohnt in Leipzig.\n- Mag Tee in Leipzig.\n")
+    vorher = pfad.read_text(encoding="utf-8")
+    for teil, grund in (("Berlin", "No entry contains"), ("Leipzig", "2 entries contain")):
+        with pytest.raises(memory.MemoryVerboten) as fehler:
+            asyncio.run(memory.ausfuehren({"remove": teil}, pfad))
+        assert grund in str(fehler.value)
+        assert "- Wohnt in Leipzig." in str(fehler.value)
+        assert "'remove'" in str(fehler.value)
+        assert pfad.read_text(encoding="utf-8") == vorher
+
+
+def test_a_part_every_entry_contains_cannot_wipe_the_memory(tmp_path):
+    pfad = _file(tmp_path, "## Facts\n- Eins e.\n- Zwei e.\n- Drei e.\n")
+    vorher = pfad.read_text(encoding="utf-8")
+    with pytest.raises(memory.MemoryVerboten):
+        asyncio.run(memory.ausfuehren({"remove": "e"}, pfad))
+    assert pfad.read_text(encoding="utf-8") == vorher
+
+
+def test_a_delete_takes_no_text(tmp_path):
+    pfad = _file(tmp_path, "## Facts\n- Mag Tee.\n")
+    vorher = pfad.read_text(encoding="utf-8")
+    with pytest.raises(memory.MemoryVerboten) as fehler:
+        asyncio.run(memory.ausfuehren({"remove": "Tee", "text": "Mag Kaffee.", "kind": "fact"}, pfad))
+    assert "takes no 'text'" in str(fehler.value)
+    assert pfad.read_text(encoding="utf-8") == vorher
+
+
+def test_a_delete_keeps_what_the_person_wrote_into_the_file(tmp_path):
+    inhalt = "Meine Notiz.\n\n## Facts\n- Mag Tee.\n- Wohnt in Leipzig.\n\n## Mein Abschnitt\nbleibt\n"
+    pfad = _file(tmp_path, inhalt)
+    asyncio.run(memory.ausfuehren({"remove": "Tee"}, pfad))
+    neu = pfad.read_text(encoding="utf-8")
+    assert neu.startswith("Meine Notiz.\n\n## Facts\n- Wohnt in Leipzig.")
+    assert "## Mein Abschnitt\nbleibt" in neu
+    assert "Tee" not in neu
+
+
+def test_silence_a_save_with_text_goes_on_as_before_and_the_blank_remove_is_none(tmp_path):
+    pfad = _file(tmp_path, "## Facts\n- Mag Tee.\n")
+    assert asyncio.run(memory.ausfuehren({"text": "Mag Kaffee.", "kind": "fact", "remove": ""}, pfad)) == "Saved."
+    assert pfad.read_text(encoding="utf-8") == "## Facts\n- Mag Tee.\n- Mag Kaffee.\n"
+
+
+# --- The size of the memory ------------------------------------------------------
+
+
+def _full(tmp_path, *, extra: str = "", room: int = 0):
+    """A memory holding ``MAX_TOTAL`` characters of entries, ``room`` of them
+    left free: seven entries of 500 characters and one that fills the rest, a
+    line break between each of them."""
+    entries = [chr(ord("a") + i) * 500 for i in range(7)]
+    entries.append("z" * (memory.MAX_TOTAL - len("\n".join(entries)) - 1 - room))
+    pfad = _file(tmp_path, extra + "## Facts\n" + "\n".join(f"- {e}" for e in entries) + "\n")
+    return pfad, entries
+
+
+def test_the_memory_holds_exactly_its_size_and_not_one_character_more(tmp_path):
+    # Two characters free: an entry of one character and its line break fit.
+    pfad, entries = _full(tmp_path, room=2)
+    regeln, fakten = memory._zeilen_teilen(pfad.read_text(encoding="utf-8"))
+    assert memory._total_size(regeln, fakten) == memory.MAX_TOTAL - 2
+    assert asyncio.run(memory.ausfuehren({"text": "x", "kind": "fact"}, pfad)) == "Saved."
+    regeln, fakten = memory._zeilen_teilen(pfad.read_text(encoding="utf-8"))
+    assert memory._total_size(regeln, fakten) == memory.MAX_TOTAL
+    # The line is reached; another character is one too many.
+    vorher = pfad.read_text(encoding="utf-8")
+    with pytest.raises(memory.MemoryFull):
+        asyncio.run(memory.ausfuehren({"text": "y", "kind": "fact"}, pfad))
+    assert pfad.read_text(encoding="utf-8") == vorher
+
+
+def test_a_save_past_the_size_is_refused_with_the_entries_and_a_way_out(tmp_path):
+    pfad, entries = _full(tmp_path)
+    vorher = pfad.read_text(encoding="utf-8")
+    with pytest.raises(memory.MemoryVerboten) as fehler:
+        asyncio.run(memory.ausfuehren({"text": "Noch etwas, das nicht mehr hineinpasst.", "kind": "rule"}, pfad))
+    text = str(fehler.value)
+    assert "Nothing was saved" in text
+    assert "'replaces'" in text and "'remove'" in text
+    assert entries[0] in text and entries[-1] in text
+    assert pfad.read_text(encoding="utf-8") == vorher
+
+
+def test_a_replacement_that_grows_the_memory_past_the_size_is_refused(tmp_path):
+    pfad, entries = _full(tmp_path)
+    vorher = pfad.read_text(encoding="utf-8")
+    with pytest.raises(memory.MemoryFull):
+        asyncio.run(memory.ausfuehren(
+            {"text": "q" * 560, "kind": "fact", "replaces": "a" * 20}, pfad
+        ))
+    assert pfad.read_text(encoding="utf-8") == vorher
+
+
+def test_a_replacement_that_shrinks_a_full_memory_goes_through(tmp_path):
+    pfad, entries = _full(tmp_path)
+    antwort = asyncio.run(memory.ausfuehren(
+        {"text": "Kurz.", "kind": "fact", "replaces": "a" * 20}, pfad
+    ))
+    assert antwort == "Replaced."
+    assert "Kurz." in pfad.read_text(encoding="utf-8")
+
+
+def test_a_delete_frees_the_room_a_refused_save_needed(tmp_path):
+    pfad, entries = _full(tmp_path)
+    with pytest.raises(memory.MemoryFull):
+        asyncio.run(memory.ausfuehren({"text": "q" * 400, "kind": "fact"}, pfad))
+    asyncio.run(memory.ausfuehren({"remove": "a" * 20}, pfad))
+    assert asyncio.run(memory.ausfuehren({"text": "q" * 400, "kind": "fact"}, pfad)) == "Saved."
+
+
+def test_a_memory_filled_past_the_line_by_hand_can_still_be_shortened_but_not_grown(tmp_path):
+    pfad = _file(tmp_path, "## Facts\n" + "\n".join(f"- {c * 590}" for c in "abcdefg") + "\n")
+    regeln, fakten = memory._zeilen_teilen(pfad.read_text(encoding="utf-8"))
+    assert memory._total_size(regeln, fakten) > memory.MAX_TOTAL
+    with pytest.raises(memory.MemoryFull):
+        asyncio.run(memory.ausfuehren({"text": "x", "kind": "fact"}, pfad))
+    assert asyncio.run(memory.ausfuehren({"remove": "a" * 20}, pfad)) == "Removed."
+
+
+def test_only_the_entries_count_and_not_the_text_of_the_person_above_the_first_heading(tmp_path):
+    pfad, entries = _full(tmp_path, extra="Eine lange Notiz. " * 200 + "\n\n", room=5)
+    assert asyncio.run(memory.ausfuehren({"text": "x", "kind": "fact"}, pfad)) == "Saved."
+
+
+def test_silence_an_entry_that_is_already_there_is_known_even_in_a_full_memory(tmp_path):
+    pfad, entries = _full(tmp_path)
+    assert asyncio.run(memory.ausfuehren({"text": entries[0], "kind": "fact"}, pfad)) == (
+        "Already known; nothing changed."
+    )
+
+
+def test_the_description_names_the_size_and_the_three_things_the_tool_does():
+    text = memory.werkzeug_beschreibung().beschreibung
+    assert f"{memory.MAX_TOTAL:,}" in text
+    assert "'remove'" in text and "'replaces'" in text
+    assert "Nothing is asked" in text
+    assert "cannot delete" not in text and "lists the entries you have stored" not in text
 
 
 # --- A note above the first heading is the person's own -----------------------

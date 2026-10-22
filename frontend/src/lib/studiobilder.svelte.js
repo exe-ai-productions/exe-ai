@@ -3,7 +3,9 @@
    infos, the faces redone, upscaled. The infos are a card on the surface
    (StudioPictureInfo.svelte); "Use" writes their values into the fields. */
 import { api } from './api.js'
-import { auswahl, emptyArea, familie, listen, pictureMissing, startbildWaehlen, werte } from './studio.svelte.js'
+import {
+  auswahl, emptyArea, familie, listen, modellDa, pictureMissing, startbildWaehlen, upscaleWerte, werte,
+} from './studio.svelte.js'
 import { studioZeichnen } from './studiozeichnen.svelte.js'
 import { t } from './texte.svelte.js'
 import { melde } from './zustand.svelte.js'
@@ -55,10 +57,11 @@ export async function nachbessern(name) {
 /* Enlarging reads no prompt: the new picture keeps the one the program kept
    for this picture, otherwise the bar's, otherwise none — and a picture
    without one is enlarged all the same, without a word of the surface in
-   its place. The model is the one chosen in the row "Upscaler", otherwise
-   the first of the folder. A look-up that fails counts as nothing kept. */
+   its place. The model is the one chosen in the row "Upscaler"; with "-" or
+   a file the folder no longer holds nothing is enlarged and the studio says
+   so. A look-up that fails counts as nothing kept. */
 export async function hochskalieren(name) {
-  const upscaler = listen.upscalers.includes(werte.upscale_model) ? werte.upscale_model : listen.upscalers[0]
+  const upscaler = listen.upscalers.includes(werte.upscale_model) ? werte.upscale_model : ''
   if (!upscaler) {
     melde(t('bild.modus_unvollstaendig'), 'fehler')
     return
@@ -66,7 +69,7 @@ export async function hochskalieren(name) {
   const gefunden = await api.drawnWith(name).catch(() => null)
   const gemerkt = typeof gefunden?.prompt === 'string' ? gefunden.prompt.trim() : ''
   studioZeichnen({ mode: 'upscale', startbild: name, maske: null, upscale_model: upscaler,
-                   prompt: gemerkt || werte.prompt.trim() })
+                   ...upscaleWerte(), prompt: gemerkt || werte.prompt.trim() })
 }
 
 /* "Remove" on the picture in the generation area: the area is emptied, and
@@ -100,7 +103,7 @@ export async function infosZeigen(name) {
    is; the values are meant as given. */
 export function infoUebernehmen() {
   const i = bildInfo.werte ?? {}
-  if (i.modell && listen.modelle.includes(i.modell)) werte.modell = i.modell
+  if (i.modell && modellDa(i.modell)) werte.modell = i.modell
   for (const name of ['prompt', 'negativ', 'breite', 'hoehe', 'schritte', 'cfg', 'guidance', 'sampler', 'scheduler']) {
     if (i[name] !== undefined) werte[name] = i[name]
   }

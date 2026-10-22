@@ -43,6 +43,10 @@ def _plain(tmp_path: Path, module: str, script: str):
 # --- the room the area leaves ------------------------------------------
 
 SURFACES = [(700, 700), (940, 780), (1100, 880)]
+# From this width the bar of the brush stands at the top between the tools and
+# the zoom; below it the area keeps a second row free (`lib/studioArea.js`).
+WIDE_FROM = 880
+SECOND_ROW = 40
 SHAPES = {"1:1": (1024, 1024), "2:3": (1024, 1536), "1024x2048": (1024, 2048), "16:9": (1344, 768)}
 
 
@@ -70,8 +74,9 @@ def test_the_area_keeps_the_rows_room_on_both_sides(tmp_path: Path):
 
 @needs_node
 def test_an_area_that_hangs_on_the_height_keeps_its_size(tmp_path: Path):
-    """Silence probe: where the room on the sides was not what limited the
-    area, the new room changes nothing — same size, same place."""
+    """Silence probe: from the width the bar of the brush fits at the top,
+    where the room on the sides was not what limited the area, the new room
+    changes nothing — same size, same place."""
     kept = _plain(tmp_path, "studioArea.js", f"""
       const old = (fw, fh, gw, gh) => {{
         const s = Math.max(0.01, Math.min((fw - 2 * 70) / gw, (fh - 122 - 274) / gh))
@@ -81,6 +86,7 @@ def test_an_area_that_hangs_on_the_height_keeps_its_size(tmp_path: Path):
       const out = []
       for (const [fw, fh] of {json.dumps(SURFACES)})
         for (const [name, [gw, gh]] of Object.entries({json.dumps(SHAPES)})) {{
+          if (fw < {WIDE_FROM}) continue
           const heightBound = (fh - 396) / gh <= (fw - 204) / gw
           const a = m.fitArea(fw, fh, gw, gh), b = old(fw, fh, gw, gh)
           out.push({{ name, fw, heightBound, same: a.w === b.w && a.h === b.h && a.x === b.x && a.y === b.y }})
@@ -90,6 +96,41 @@ def test_an_area_that_hangs_on_the_height_keeps_its_size(tmp_path: Path):
     bound = [case for case in kept if case["heightBound"]]
     assert bound, "no case hangs on the height"
     assert all(case["same"] for case in bound), bound
+
+
+@needs_node
+def test_below_the_limit_the_area_keeps_the_second_row_free_in_every_shape(tmp_path: Path):
+    """The area stands at least TOP_ROOM + 40 px from the top and 102 px from
+    the sides on a surface narrower than the bar needs, whatever the shape;
+    from the limit on it is the 122 px of before, the limit itself included."""
+    cases = _plain(tmp_path, "studioArea.js", f"""
+      const out = []
+      for (const fw of [435, 700, 775, {WIDE_FROM - 1}, {WIDE_FROM}, {WIDE_FROM + 1}, 935])
+        for (const fh of [640, 860, 1000])
+          for (const [name, [gw, gh]] of Object.entries({json.dumps(SHAPES)})) {{
+            const a = m.fitArea(fw, fh, gw, gh)
+            out.push({{ name, fw, fh, top: a.y, left: a.x, right: fw - a.x - a.w, bottom: fh - a.y - a.h,
+                        room: m.TOP_ROOM, row: m.BRUSH_ROW_ROOM, above: m.brushBarAbove(fw) }})
+          }}
+      console.log(JSON.stringify(out))
+    """)
+    assert cases[0]["room"] == 122 and cases[0]["row"] == SECOND_ROW
+    for case in cases:
+        assert case["above"] is (case["fw"] >= WIDE_FROM), case
+        assert case["top"] >= 122 + (0 if case["above"] else SECOND_ROW) - 1e-6, case
+        assert case["left"] >= 102 - 1e-6 and case["right"] >= 102 - 1e-6, case
+        assert case["bottom"] >= 274 - 1e-6, case
+
+
+def test_the_row_of_pictures_and_the_canvas_share_the_one_limit():
+    """The gallery steps down by what the canvas tells (`surface.brushRow`);
+    neither file keeps a window width of its own for it."""
+    gallery = GALLERY.read_text(encoding="utf-8")
+    canvas = CANVAS.read_text(encoding="utf-8")
+    assert "class:unter={surface.brushRow}" in gallery
+    assert "brushBarAbove(fw)" in canvas
+    assert "@media (max-width: 720px)" not in gallery
+    assert "@media (max-width: 720px)" not in canvas
 
 
 def test_the_canvas_takes_its_room_from_the_one_module():

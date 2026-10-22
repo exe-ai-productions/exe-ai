@@ -4,16 +4,28 @@
      writes the values into the fields (lib/studiobilder.svelte.js). */
   import Hauszeichen from './Hauszeichen.svelte'
   import { bildInfo, infoUebernehmen } from '../lib/studiobilder.svelte.js'
-  import { t } from '../lib/texte.svelte.js'
+  import { t, texte } from '../lib/texte.svelte.js'
 
   const INFO_ZEILEN = [
     ['prompt', 'bild.prompt'], ['negativ', 'bild.negativ'], ['modell', 'bild.modell'],
     ['diffusion_model', 'bild.diffusion_model'], ['vae', 'bild.vae'],
-    ['breite', 'bild.breite'], ['hoehe', 'bild.hoehe'], ['schritte', 'bild.schritte'],
+    ['breite', 'bild.breite'], ['hoehe', 'bild.hoehe'], ['upscaled', 'bild.upscaled'],
+    ['schritte', 'bild.schritte'],
     ['cfg', 'bild.cfg'], ['guidance', 'bild.guidance'], ['seed', 'bild.seed'],
     ['sampler', 'bild.sampler'], ['scheduler', 'bild.scheduler'],
   ]
   const info = $derived(bildInfo.werte)
+
+  /* What a row says. An enlarged picture keeps its drawing values and says
+     the enlarging beside them: "×4 → 4096 × 4096" (the factor is left out
+     where the original could not be read). */
+  const zahl = (n) => new Intl.NumberFormat(texte.sprache).format(n)
+  function wert(name) {
+    const v = info[name]
+    if (name !== 'upscaled') return v
+    const groesse = `${v.breite} × ${v.hoehe}`
+    return v.faktor ? `×${zahl(v.faktor)} → ${groesse}` : groesse
+  }
   // What is known about the picture; nothing where the program kept
   // nothing for it and its file says nothing either.
   const rows = $derived(INFO_ZEILEN.filter(([name]) =>
@@ -33,7 +45,7 @@
     {#each rows as [name, text] (name)}
       <div class="infozeile" class:block={name === 'prompt'}>
         <span class="infoname">{t(text)}</span>
-        <span class="infowert">{info[name]}</span>
+        <span class="infowert">{wert(name)}</span>
       </div>
     {:else}
       <p class="leer">{t('bild.infos_keine')}</p>

@@ -39,11 +39,12 @@ def test_the_three_sentences_of_the_rows_are_gone_and_unread():
 
 
 def test_the_rows_carry_their_numbers_and_the_header_of_the_tools_page_keeps_its_sentence():
-    zeile = SEITE.split("function unterText", 1)[1].split("function ampelFarbe", 1)[0]
-    assert "`${stand.skillsAuto ? stand.skillsAngeboten : 0}/${stand.skills}`" in zeile
+    figures = (WURZEL / "frontend/src/lib/settingsState.svelte.js").read_text(encoding="utf-8")
+    zeile = figures.split("export function rowValue", 1)[1].split("export function rowDot", 1)[0]
+    assert "`${settingsState.skillsAuto ? settingsState.skillsAngeboten : 0}/${settingsState.skills}`" in zeile
     assert "`${serverStand().aktiv}/${serverStand().alle}`" in zeile
     assert "`${anzahlAn()}/${anzahlAlle()}`" in zeile
-    assert "String(dateien.length)" in zeile
+    assert "t('agenten.created_count', { n: settingsState.agents })" in zeile
     # The cronjobs row was already this form; the page head keeps its sentence.
-    assert "`${stand.cronjobsAktiv}/${stand.cronjobs}`" in zeile
+    assert "`${settingsState.cronjobsAktiv}/${settingsState.cronjobs}`" in zeile
     assert _katalog("de")["werkzeuge"]["aktiv_zahl"] == "{zahl} aktiv, aus {quellen} Quellen"

@@ -45,7 +45,7 @@ def _kept(value: str | None) -> str:
 
 
 @needs_node
-@pytest.mark.parametrize("look", ["hell", "dunkel", "darkmatter", "heaven", "moune", "eigen"])
+@pytest.mark.parametrize("look", ["hell", "dunkel", "darkmatter", "heaven", "moune", "snow", "eigen"])
 def test_the_app_begins_with_the_look_the_page_painted(look: str):
     assert _start(_kept(look)) == look
 
@@ -58,13 +58,13 @@ def test_auto_is_kept_so_that_the_device_decides():
 
 
 @needs_node
-def test_without_a_chosen_look_the_app_starts_in_exe():
+def test_without_a_chosen_look_the_app_starts_in_auto():
     """Silence probe: nothing kept, something unknown, or no storage at all
-    is the default, Exe."""
-    assert _start(_kept(None)) == "dunkel"
-    assert _start(_kept("pearl-2000")) == "dunkel"
-    assert _start("{ getItem: () => { throw new Error('blocked') } }") == "dunkel"
-    assert _start("null") == "dunkel"
+    is the default, Auto — the look that follows the device."""
+    assert _start(_kept(None)) == "auto"
+    assert _start(_kept("pearl-2000")) == "auto"
+    assert _start("{ getItem: () => { throw new Error('blocked') } }") == "auto"
+    assert _start("null") == "auto"
 
 
 def test_the_app_state_begins_with_that_look_and_not_with_the_default():

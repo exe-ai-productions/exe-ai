@@ -154,6 +154,9 @@ class OutsideAsker(TerminalAsker):
         super().__init__(ctx)
         self._block: Application[None] | None = None
 
+    def can_ask(self) -> bool:
+        return has_terminal()
+
     def choose(self, entries: Sequence[Entry], head: str = "") -> int | None:
         if not has_terminal():
             raise NeedsTerminal

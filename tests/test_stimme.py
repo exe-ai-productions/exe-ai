@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app import diktatsprachewahl, stimme
+from app import diktatsprachewahl, stimme, system_voice
 
 
 # --- Resolving the program ---------------------------------------------------
@@ -19,7 +19,21 @@ def test_findet_den_binder_neben_dem_server(tmp_path: Path):
     support at all."""
     server = tmp_path / "llama-server"
     server.write_bytes(b"x")
-    neben = tmp_path / "llama-tts"
+    neben = tmp_path / stimme._program_file_name()
+    neben.write_bytes(b"x")
+    assert stimme.programm_finden(server) == neben
+
+
+def test_on_windows_the_voice_program_carries_its_ending(tmp_path, monkeypatch):
+    """llama.cpp's Windows build ships ``llama-tts.exe`` beside
+    ``llama-server.exe``. Looking for the bare name there found nothing, and
+    the voice answered "llama-tts not found" with the program right beside
+    the server."""
+    monkeypatch.setattr(stimme.sys, "platform", "win32")
+    monkeypatch.setattr(stimme.shutil, "which", lambda name: None)
+    server = tmp_path / "llama-server.exe"
+    server.write_bytes(b"x")
+    neben = tmp_path / "llama-tts.exe"
     neben.write_bytes(b"x")
     assert stimme.programm_finden(server) == neben
 
@@ -96,7 +110,11 @@ def test_die_temperatur_kommt_vom_aufrufer_und_nur_sie(tmp_path, monkeypatch):
     monkeypatch.setattr(stimme, "_laufen", falsch)
     stimme.sprechen(
         Path("/bin/llama-tts"), tmp_path / "m.gguf", tmp_path / "mm.gguf",
-        "Text", sprache="de", ordner=tmp_path, sampling={"temperature": 0.35},
+        "Text", sprache="de", ordner=tmp_path,
+        sampling={
+            "temperature": 0.35, "top_k": stimme.TOP_K, "top_p": stimme.TOP_P,
+            "min_p": stimme.MIN_P, "repeat_penalty": stimme.WIEDERHOLUNGSSTRAFE,
+        },
     )
     befehl = gesehen["befehl"]
     assert befehl[befehl.index("--temp") + 1] == "0.35"
@@ -221,7 +239,9 @@ def test_eine_zeitueberschreitung_wird_gemeldet(tmp_path, monkeypatch):
 def test_die_vorgaben_stehen_wie_besprochen():
     vorgabe = diktatsprachewahl.VORGABE
     assert vorgabe["vorlesen"] is True
-    assert vorgabe["stimme"] == ""
+    # The voice of the system a machine starts with (Anna, Microsoft Katja,
+    # none on Linux); a stored empty choice stays empty.
+    assert vorgabe["stimme"] == system_voice.factory_voice()
     assert vorgabe["stimmprobe"] == ""
     assert vorgabe["stimmsprache"] == ""
     assert vorgabe["stimmtemperatur"] == stimme.TEMPERATUR

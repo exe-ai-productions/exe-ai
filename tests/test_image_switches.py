@@ -88,16 +88,49 @@ def test_lists_join_the_window_field_first(runner, tmp_path):
     assert befehl.count("--extra-ad-args") == 1
 
 
+def test_flash_attention_direct_convolution_and_batched_cfg_replace_the_on_off_switches():
+    """Build 975 reads flash attention and direct convolution as ``auto``,
+    ``on``, ``off`` or one value per part, and takes ``--batched-cfg`` on or
+    off; the three on/off switches of the earlier build are gone."""
+    flash = image_switches.get("flash_attn")
+    conv = image_switches.get("conv_direct")
+    batched = image_switches.get("batched_cfg")
+    assert (flash.kind, flash.flag, flash.group, flash.machine) == ("text", "--flash-attn", "memory", True)
+    assert (conv.kind, conv.flag, conv.group, conv.machine) == ("text", "--conv-direct", "memory", True)
+    assert (batched.kind, batched.flag, batched.choices, batched.machine) == (
+        "choice", "--batched-cfg", ("on", "off"), True)
+    for gone in ("fa", "diffusion_conv_direct", "vae_conv_direct"):
+        assert image_switches.get(gone) is None
+        with pytest.raises(ValueError):
+            image_switches.check({gone: True})
+    assert image_switches.check({
+        "flash_attn": "auto,te=off,vae=on", "conv_direct": "auto,vae=off", "batched_cfg": "off",
+    }) == {"flash_attn": "auto,te=off,vae=on", "conv_direct": "auto,vae=off", "batched_cfg": "off"}
+    with pytest.raises(ValueError):
+        image_switches.check({"batched_cfg": "maybe"})
+
+
+def test_the_three_switches_travel_as_one_flag_each_and_an_unset_one_not_at_all():
+    values = {"flash_attn": "off,diffusion=on", "conv_direct": "auto,vae=on", "batched_cfg": "on"}
+    expected = ["--flash-attn", "off,diffusion=on", "--conv-direct", "auto,vae=on", "--batched-cfg", "on"]
+    assert image_switches.cli_parts(values, {}) == expected
+    assert list(image_switches.server_start_parts(values, {})) == expected
+    # Silence: unset, nothing goes out; every other switch is as it was.
+    assert image_switches.cli_parts({}, {}) == []
+    assert image_switches.cli_parts({"flash_attn": "auto"}, {}) == ["--flash-attn", "auto"]
+    assert image_switches.cli_parts({"sage_attn": True}, {}) == ["--sage-attn"]
+
+
 def test_check_refuses_what_a_row_does_not_take():
     for wrong in (
         {"made_up": 1}, {"cache_mode": "fast"}, {"compression_quality": 101},
-        {"timestep_shift": 2.5}, {"fa": "yes"}, {"linear_scale": float("inf")},
+        {"timestep_shift": 2.5}, {"sage_attn": "yes"}, {"linear_scale": float("inf")},
         {"cache_option": "a\nb"}, {"ip_adapter": "../x"}, {"qwen_image_layers": -1},
         {"sample_lms_max_order": float("inf")}, {"sample_guidance_schedule": "1.0x2,0.5x3"},
     ):
         with pytest.raises(ValueError):
             image_switches.check(wrong)
-    assert image_switches.check({"fa": False, "cache_mode": "", "mmap": None}) == {}
+    assert image_switches.check({"sage_attn": False, "cache_mode": "", "mmap": None}) == {}
 
 
 def test_a_switch_without_what_it_needs_is_dropped():

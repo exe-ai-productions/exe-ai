@@ -372,10 +372,28 @@ def test_a_call_is_a_button_that_opens_the_terminal_and_carries_its_word_in_the_
     assert "groesse={6}" in row and " quiet" in row
 
 
-def test_the_dot_on_the_line_is_six_pixels_small_and_the_ring_seven():
+def test_a_call_row_asks_for_the_mark_of_its_server():
+    row = _message_source().split("{#snippet callRow(teil, i)}", 1)[1].split("{/snippet}", 1)[0]
+    assert "serverMark(werkzeug.server)" in row
+    assert "wz-marke" not in _message_source()
+
+
+def test_the_built_in_sources_wear_no_server_logo():
+    """Every source name a built-in tool of the service sends is on the list
+    the call row screens out: a server of one's own called the same never
+    lends its logo to those calls."""
+    logo = (Path(__file__).resolve().parent.parent / "frontend/src/lib/serverlogo.svelte.js").read_text(encoding="utf-8")
+    listed = set(re.findall(r"'([a-z]+)'", logo.split("new Set([", 1)[1].split("])", 1)[0]))
+    found = set()
+    for path in (Path(__file__).resolve().parent.parent / "app").rglob("*.py"):
+        found |= set(re.findall(r'^SERVER_NAME\s*=\s*"([a-z]+)"', path.read_text(encoding="utf-8"), re.M))
+    assert found and found <= listed, found - listed
+
+
+def test_the_dot_on_the_line_and_the_ring_are_both_seven_pixels():
     message = _message_source()
     dot = message.split("{#snippet punkt(farbe, atmet = false)}", 1)[1].split("{/snippet}", 1)[0]
-    assert "groesse={6}" in dot and "quiet" in dot
+    assert "groesse={7}" in dot and "quiet" in dot
     css = message.split("<style>", 1)[1]
     ring = _rule(css, ".ring")
     assert "width: 7px" in ring and "height: 7px" in ring
@@ -424,7 +442,7 @@ def test_head_thinking_calls_and_run_number_stand_in_one_brightness_the_answer_s
     # No brightness of their own: neither the count nor the run number is dimmed again.
     assert "opacity" not in _rule(css, ".aufruf .wz-nummer")
     assert ".head-count { opacity" not in css
-    # The names in the block carry no sand and no weight.
+    # The names in the block carry no extra colour and no weight.
     message = _message_source()
     block = message.split("{#snippet block(eintrag)}", 1)[1].split("{/snippet}", 1)[0]
     row = message.split("{#snippet callRow(teil, i)}", 1)[1].split("{/snippet}", 1)[0]
@@ -436,10 +454,10 @@ def test_head_thinking_calls_and_run_number_stand_in_one_brightness_the_answer_s
     assert "color: var(--text);" in _rule(css, ".antwort") or "var(--text)" in css
 
 
-def test_the_terminal_tab_keeps_the_sand_and_the_weight_of_a_tool_name():
+def test_the_terminal_tab_keeps_the_text_colour_and_the_weight_of_a_tool_name():
     glass = (ROOT / "frontend" / "src" / "stil" / "global.css").read_text(encoding="utf-8")
     rule = re.search(r"\.werkzeugname \{([^}]*)\}", glass)
     assert rule, ".werkzeugname"
-    assert "color: var(--werkzeug)" in rule.group(1) and "font-weight: 600" in rule.group(1)
+    assert "color: var(--text)" in rule.group(1) and "font-weight: 600" in rule.group(1)
     terminal = (COMPONENTS / "ModulTerminal.svelte").read_text(encoding="utf-8")
     assert "werkzeugname" in terminal

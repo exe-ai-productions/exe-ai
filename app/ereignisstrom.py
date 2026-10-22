@@ -45,6 +45,7 @@ import asyncio
 import logging
 from typing import Any, AsyncIterator
 
+from app import shutdown
 from app.events import Ereignisse, bus
 
 log = logging.getLogger(__name__)
@@ -69,6 +70,9 @@ SCHLANGENGRENZE = 200
 # message: the generator stops on it, the response ends, and the browser
 # does the rest.
 _UEBERLAUF = object()
+
+# Put to every watcher when the service begins to end (see ``close_watchers``).
+_ENDE = object()
 
 
 class Ereignisstrom:
@@ -113,6 +117,8 @@ class Ereignisstrom:
         suspended in, and an async generator that lets a ``CancelledError``
         escape is finished for good.
         """
+        if shutdown.begun():
+            return
         schlange: asyncio.Queue = asyncio.Queue()
         self._zuschauer.add(schlange)
         try:
@@ -124,6 +130,8 @@ class Ereignisstrom:
                 except asyncio.TimeoutError:
                     yield None
                     continue
+                if ereignis is _ENDE:
+                    return
                 if ereignis is _UEBERLAUF:
                     # This watcher fell too far behind to be told everything.
                     # Ending here is what gets it back in step: the browser
@@ -132,6 +140,16 @@ class Ereignisstrom:
                 yield ereignis
         finally:
             self._zuschauer.discard(schlange)
+
+    def close_watchers(self) -> None:
+        """The service begins to end: every line ends now, and one that is
+        opened from here on ends at once (see ``zuschauen``).
+
+        A line that never ends keeps the server from shutting down, and a
+        window holds one open all the time. Its reconnect finds nobody and
+        tries again, as it does for any restart."""
+        for schlange in list(self._zuschauer):
+            schlange.put_nowait(_ENDE)
 
     @property
     def zuschauer(self) -> int:

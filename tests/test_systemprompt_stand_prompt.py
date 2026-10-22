@@ -105,7 +105,9 @@ def test_replacing_an_entry_is_asked_for_only_where_the_entries_are_in_sight():
     shown = _flat(grundprompt.bauen(gedaechtnis_schreiben=True, memory_travels=True))
     hidden = _flat(grundprompt.bauen(gedaechtnis_schreiben=True, memory_travels=False))
     assert "replace it instead of adding a second one" in shown
+    assert "delete its entry" in shown
     assert "replace it instead of adding a second one" not in hidden
+    assert "delete its entry" not in hidden
     # The saving itself is asked for in both.
     assert memory.WERKZEUG_NAME in hidden
 
@@ -114,7 +116,7 @@ def test_the_memory_tool_says_when_an_entry_is_in_front_of_the_model():
     shown = memory.werkzeug_beschreibung().beschreibung
     assert "every conversation from now on" not in shown
     assert "in the next conversation, not immediately" in shown
-    assert "lists the entries you have stored" in shown
+    assert "the answer lists the entries" in shown
 
 
 def test_the_offer_lacks_the_memory_tool_on_a_side_the_memory_stays_away_from(tmp_path):
@@ -139,7 +141,7 @@ def test_the_dock_is_named_apart_and_last():
     )
     shared = text.split("The user has shared these working folders with you:\n\n")[1]
     assert shared.split("\n\n")[0] == "- /u/a"
-    assert "The dock folder holds finished files delivered to the user" in text
+    assert "The Doc folder holds finished files delivered to the user" in text
     # Listed after the share, so "the first one" is the user's folder.
     assert text.index("- /u/a") < text.index("- /d/dock")
 
@@ -251,18 +253,18 @@ def test_the_shell_block_names_the_system_it_was_built_on(monkeypatch):
 
 
 def test_the_execution_lines_carry_no_posix_command():
-    text = grundprompt.execution_discipline({"run_command"}, memory_travels=False)
+    text = grundprompt.execution_discipline({"run_command"})
     assert "sha256sum" not in text
 
 
 # --- Smaller corrections -------------------------------------------------------
 
 
-def test_the_execution_lines_speak_of_the_memory_and_ask_for_no_yes():
-    text = grundprompt.execution_discipline(
-        {"read_file", "list_dir", "run_command"}, memory_travels=True
-    )
+def test_the_execution_lines_ask_for_no_yes_and_leave_the_memory_to_its_own_block():
+    text = grundprompt.execution_discipline({"read_file", "list_dir", "run_command"})
     assert "user profile" not in text
+    # What the memory is, is said once, where the memory is (app/gedaechtnis.py).
+    assert "describes the USER" not in text
     assert "confirm scope" not in text
     # The folder listing reports sizes, so it is one of the lookups.
     assert "use read_file, list_dir, or run_command" in text

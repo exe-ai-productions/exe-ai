@@ -421,7 +421,7 @@ def test_the_card_and_the_menu_head_of_a_server_of_ones_own_wear_its_logo():
     source = _source("teile", "Verbindungen.svelte")
 
     # Never for a shipped server's card: it keeps its maker's vector.
-    assert "const eigenLogoVon = (k) => (!k.katalog && k.eintrag?.logo) || null" in source
+    assert "const eigenLogoVon = (k) => (!k.katalog && k.eintrag?.logo) || null" in _source("lib", "mcpCards.js")
     assert source.count("{:else if eigenLogoVon(k)}") == 2
     assert source.count("src={eigenLogoVon(k)}") == 2
 

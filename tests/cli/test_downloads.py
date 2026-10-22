@@ -151,9 +151,14 @@ def test_the_kind_alone_asks_for_the_words_and_keeps_the_kind(tool, stub):
     assert stub.searches == [{"q": "nomic", "art": "einbettung"}]
 
 
+def test_image_in_front_names_the_picture_tab(tool, stub):
+    tool.commands.run("/download image sd 1.5")
+    assert stub.searches == [{"q": "sd 1.5", "art": "bild"}]
+
+
 def test_any_other_first_word_belongs_to_the_search(tool, stub):
-    tool.commands.run("/download image models")
-    assert stub.searches == [{"q": "image models", "art": "chat"}]
+    tool.commands.run("/download video models")
+    assert stub.searches == [{"q": "video models", "art": "chat"}]
 
 
 def test_closing_the_hit_list_asks_for_no_files(tool, stub):
@@ -182,6 +187,136 @@ def test_a_repository_without_a_file_says_so(tool, stub):
     tool.asker.picks = [0]
     tool.commands.run("/download gemma")
     assert tool.renderer.notices == [texts().t("modell.keine_dateien")]
+
+
+# --- A picture model and its kit ---------------------------------------------------------
+
+CHECKPOINT = {"datei": "model.safetensors", "groesse_gb": 6.9, "bytes": 6_900_000_000, "teile": 1,
+              "local_name": "model.safetensors", "da": False, "collision": False}
+VAE = {"rolle": "vae", "feld": "vae", "repo": "acme/vae", "datei": "vae/ae.safetensors", "name": "ae.safetensors",
+       "ordner": "vae", "local_name": "ae.safetensors", "da": False, "collision": False}
+ENCODER = {"rolle": "textleser", "feld": "clip_l", "repo": "acme/clip", "datei": "clip_l.safetensors",
+           "name": "clip_l.safetensors", "ordner": "text_encoders", "local_name": "clip_l.safetensors",
+           "da": False, "collision": False}
+
+
+def with_kit(*parts: dict, **model: object) -> dict:
+    """The head's answer for the checkpoint: the row and the kit it names."""
+    row = {**CHECKPOINT, **model}
+    model_part = {"rolle": "modell", "feld": "", "repo": "acme/alpha-GGUF", "datei": row["datei"],
+                  "name": row["datei"], "ordner": "", "local_name": row["local_name"], "da": row["da"],
+                  "collision": False}
+    return {**row, "bausatz": {"familie": "flux", "label": "Flux", "teile": [model_part, *parts]}}
+
+
+@pytest.fixture
+def picture(tool, stub):
+    stub.repository_listing = {"dateien": [dict(CHECKPOINT)], "mmproj": None}
+    stub.download_steps = [STATE_DONE]
+    tool.asker.picks = [0, 0]
+    return tool
+
+
+def test_a_picture_model_is_searched_and_listed_on_the_picture_tab(picture, stub):
+    picture.commands.run("/download image flux")
+    assert stub.searches == [{"q": "flux", "art": "bild"}]
+    assert stub.file_requests == [{"repo": "acme/alpha-GGUF", "art": "bild"}]
+
+
+def test_the_head_of_the_chosen_file_is_asked_with_the_row_of_the_list(picture, stub):
+    picture.commands.run("/download image flux")
+    assert stub.head_questions == [
+        {"repo": "acme/alpha-GGUF",
+         "datei": {"datei": "model.safetensors", "groesse_gb": 6.9, "bytes": 6_900_000_000, "teile": 1}}
+    ]
+
+
+def test_a_picture_model_without_a_kit_is_fetched_on_the_picture_side(picture, stub):
+    picture.commands.run("/download image flux")
+    assert stub.download_posts == [
+        {"repo": "acme/alpha-GGUF", "datei": "model.safetensors", "ziel": None, "gehoert_zu": None,
+         "rolle": None, "art": "bild", "unterordner": None}
+    ]
+    assert picture.renderer.notices == [texts().t("cli.download_done", file="model.safetensors")]
+
+
+def test_the_kit_comes_with_the_model_each_part_tied_to_it(picture, stub):
+    stub.file_heads["model.safetensors"] = with_kit(VAE, ENCODER)
+    picture.commands.run("/download image flux")
+    assert stub.download_posts == [
+        {"repo": "acme/alpha-GGUF", "datei": "model.safetensors", "ziel": None, "gehoert_zu": None,
+         "rolle": None, "art": "bild", "unterordner": None},
+        {"repo": "acme/vae", "datei": "vae/ae.safetensors", "ziel": "ae.safetensors",
+         "gehoert_zu": "model.safetensors", "rolle": "vae", "art": "bild", "unterordner": "vae"},
+        {"repo": "acme/clip", "datei": "clip_l.safetensors", "ziel": "clip_l.safetensors",
+         "gehoert_zu": "model.safetensors", "rolle": "clip_l", "art": "bild",
+         "unterordner": "text_encoders"},
+    ]
+
+
+def test_a_part_that_lies_in_its_folder_is_only_tied_not_fetched(picture, stub):
+    stub.file_heads["model.safetensors"] = with_kit(VAE, {**ENCODER, "da": True})
+    picture.commands.run("/download image flux")
+    tie = {"repo": "acme/clip", "datei": "clip_l.safetensors", "ziel": "clip_l.safetensors",
+           "gehoert_zu": "model.safetensors", "rolle": "clip_l", "art": "bild",
+           "unterordner": "text_encoders"}
+    assert stub.download_posts[0] == tie
+    assert [post["datei"] for post in stub.download_posts[1:]] == ["model.safetensors", "vae/ae.safetensors"]
+
+
+def test_a_part_whose_name_is_held_by_another_file_is_fetched(picture, stub):
+    stub.file_heads["model.safetensors"] = with_kit({**VAE, "da": True, "collision": True})
+    picture.commands.run("/download image flux")
+    assert [post["datei"] for post in stub.download_posts] == ["model.safetensors", "vae/ae.safetensors"]
+
+
+def test_a_model_that_is_there_fetches_only_the_parts_that_are_missing(picture, stub):
+    stub.file_heads["model.safetensors"] = with_kit(VAE, ENCODER, da=True)
+    picture.commands.run("/download image flux")
+    assert [post["datei"] for post in stub.download_posts] == ["vae/ae.safetensors", "clip_l.safetensors"]
+
+
+def test_a_model_with_all_its_parts_there_starts_no_fetch(picture, stub):
+    stub.file_heads["model.safetensors"] = with_kit({**VAE, "da": True}, da=True)
+    picture.commands.run("/download image flux")
+    # The bond is written, nothing is fetched and nothing is followed.
+    assert [post["rolle"] for post in stub.download_posts] == ["vae"]
+    assert picture.renderer.notices == []
+
+
+def test_a_refused_bond_is_said_and_the_rest_goes_on(picture, stub):
+    stub.file_heads["model.safetensors"] = with_kit({**VAE, "da": True}, da=True)
+    stub.download_refusal = (409, "A download is already running.")
+    picture.commands.run("/download image flux")
+    assert picture.renderer.errors == ["A download is already running."]
+    assert stub.download_posts == []
+
+
+def test_the_head_is_waited_for_under_the_line_above_the_status_line(picture, stub):
+    picture.commands.run("/download image flux")
+    asked = [a for a in picture.screen.activities if a == texts().t("modell.dateien_laden")]
+    # Once for the list of files, once for the head of the chosen one.
+    assert len(asked) == 2
+    assert picture.screen.activities[-1] is None
+
+
+def test_the_name_the_head_gives_is_the_name_the_end_is_said_with(picture, stub):
+    stub.file_heads["model.safetensors"] = with_kit(
+        VAE, local_name="acme-model.safetensors"
+    )
+    picture.commands.run("/download image flux")
+    assert stub.download_posts[0]["ziel"] == "acme-model.safetensors"
+    assert stub.download_posts[1]["gehoert_zu"] == "acme-model.safetensors"
+    assert picture.renderer.notices == [texts().t("cli.download_done", file="acme-model.safetensors")]
+
+
+def test_chat_and_embedding_ask_no_head(tool, stub):
+    stub.download_steps = [STATE_DONE]
+    tool.asker.picks = [0, 0]
+    tool.commands.run("/download gemma")
+    tool.asker.picks = [0, 0]
+    tool.commands.run("/download embedding nomic")
+    assert stub.head_questions == []
 
 
 # --- Fetching ----------------------------------------------------------------------------

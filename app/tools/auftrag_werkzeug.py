@@ -50,12 +50,39 @@ class AuftragVerboten(Exception):
     """This call cannot start a job, and the reason says why."""
 
 
+# What the model is told about a run it sent off, in the tool's description
+# and again in the answer of every start: the report comes by itself, and
+# until then the work is the run's. A model left to guess polls the folder
+# with ``ls`` and ``sleep`` and then does the work itself while the run is
+# still at it.
+_REPORT_COMES = (
+    "Its report comes into this chat by itself, as a message, when the job ends. Until then "
+    "do not look in folders, do not wait with commands and do not do its work yourself."
+)
+_JOB_TOOL = (
+    " The job tool shows where it stands ('list') and ends it ('stop')."
+)
+
+
+def started_text(agent_name: str, job_id: str, *, with_job_tool: bool) -> str:
+    """The answer to a start: the ID to stop it by, and what to leave alone
+    until the report comes."""
+    return (
+        f"Job started: agent '{agent_name}', ID {job_id}. It works in the background and "
+        f"independently. {_REPORT_COMES} You will then be asked to summarize the report "
+        "for the user." + (_JOB_TOOL if with_job_tool else "")
+    )
+
+
 def werkzeug_beschreibung(
-    agenten: dict[str, Any] | None = None, *, helpers: bool = False
+    agenten: dict[str, Any] | None = None, *, helpers: bool = False,
+    with_job_tool: bool = False,
 ) -> MCPWerkzeug:
     """``helpers`` is whether this caller may start a helper
     (app/helper.py) — a chat may, a job may not: a helper is one level
-    below the chat, never below another run."""
+    below the chat, never below another run. ``with_job_tool`` is whether
+    the caller is also offered the tool that lists and stops runs
+    (app/tools/job_werkzeug.py) — the description names it only then."""
     if helpers:
         who = (
             "Leave out agent to start a helper: it needs no agent set up, "
@@ -70,9 +97,12 @@ def werkzeug_beschreibung(
     return MCPWerkzeug(
         name=WERKZEUG_NAME,
         beschreibung=(
-            "Starts an independent background job that reports back when finished. Use it "
+            "Starts an independent background job. Use it "
             "when the user wants to delegate research, lengthy file operations, or other work "
-            "that should continue independently of the chat.\n"
+            "that should continue independently of the chat. "
+            + _REPORT_COMES
+            + (_JOB_TOOL if with_job_tool else "")
+            + "\n"
             + who
             + "The job starts at once with the task as you write it.\n"
             "Write the task so it stands ALONE. The agent never saw this "

@@ -398,7 +398,7 @@ def test_beyond_the_loopback_address_the_page_carries_no_key_and_asks_to_sign_in
     config, tmp_path
 ):
     app = app_erstellen(_beyond(config, tmp_path))
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         seite = client.get("/app/").text
         assert "window.__SITZUNGSSCHLUESSEL__=null;" in seite
         assert "window.__ANMELDUNG__=true;" in seite
@@ -414,7 +414,7 @@ def test_beyond_the_loopback_address_the_page_carries_no_key_and_asks_to_sign_in
 
 def test_the_password_buys_the_key_and_a_wrong_one_is_refused(config, tmp_path):
     app = app_erstellen(_beyond(config, tmp_path))
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         wrong = client.post("/api/v1/login", json={"password": "open-sesam"})
         assert wrong.status_code == 401
         assert wrong.json()["detail"] == t("fehler.anmeldung", "de")
@@ -431,7 +431,7 @@ def test_the_password_buys_the_key_and_a_wrong_one_is_refused(config, tmp_path):
 
 def test_the_refusal_of_a_wrong_password_speaks_the_requests_language(config, tmp_path):
     app = app_erstellen(_beyond(config, tmp_path))
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         wrong = client.post(
             "/api/v1/login", json={"password": "nope"}, headers={"X-Ui-Language": "en"}
         )
@@ -454,3 +454,81 @@ def test_the_sign_in_route_is_the_only_api_route_without_a_key_besides_the_oauth
     from app.sitzungsschluessel import AUSGENOMMEN
 
     assert AUSGENOMMEN == {"/api/v1/tools/oauth/callback", "/api/v1/login"}
+
+
+# --- The page goes only to a request that names this machine ----------------
+
+PAGES = ("/app/", "/app/index.html")
+
+
+def _key_in(page_text: str, client) -> bool:
+    return client.app.state.sitzungsschluessel in page_text
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_a_foreign_host_gets_no_page_and_no_key(client, path):
+    """A site whose name was pointed at this machine asks under its own name."""
+    answer = client.get(path, headers={"Host": "evil.example"})
+    assert answer.status_code == 400
+    assert answer.text == "Invalid host header"
+    assert not _key_in(answer.text, client)
+
+
+@pytest.mark.parametrize("host", [
+    "evil.example:8090", "127.0.0.1.evil.example", "localhost.evil.example:8090",
+    "evil.example/127.0.0.1", "::ffff:8.8.8.8", "10.0.0.5:8090", "",
+])
+def test_a_host_that_only_looks_like_this_machine_gets_no_page(client, host):
+    answer = client.get("/app/", headers={"Host": host})
+    assert answer.status_code == 400
+    assert not _key_in(answer.text, client)
+
+
+@pytest.mark.parametrize("host", [
+    "127.0.0.1:8090", "127.0.0.1", "localhost:8090", "localhost", "LOCALHOST:8090",
+    "[::1]:8090", "[::1]", "127.0.0.2:80",
+])
+@pytest.mark.parametrize("path", PAGES)
+def test_silence_a_host_of_this_machine_gets_the_page_with_the_key(client, host, path):
+    answer = client.get(path, headers={"Host": host})
+    assert answer.status_code == 200
+    assert f"window.__SITZUNGSSCHLUESSEL__={json.dumps(client.app.state.sitzungsschluessel)}" in answer.text
+
+
+def test_silence_a_request_through_tailscale_gets_the_page_without_the_key(client):
+    """Where a sign-in stands guard the page is not held back, and it carries no key."""
+    answer = client.get(
+        "/app/", headers={"Host": "mac.tailnet-name.ts.net", "X-Forwarded-For": "100.100.0.2"}
+    )
+    assert answer.status_code == 200
+    assert "window.__SITZUNGSSCHLUESSEL__=null" in answer.text
+    assert not _key_in(answer.text, client)
+
+
+def test_silence_a_service_beyond_this_machine_gets_the_page_without_the_key(config, tmp_path):
+    app = app_erstellen(_beyond(config, tmp_path))
+    with TestClient(app, base_url="http://192.168.1.5:8090") as lan:
+        answer = lan.get("/app/")
+        assert answer.status_code == 200
+        assert "window.__SITZUNGSSCHLUESSEL__=null" in answer.text
+        assert app.state.sitzungsschluessel not in answer.text
+
+
+def test_silence_the_other_routes_do_not_ask_for_the_host(client):
+    """Only the page is held back: the health check answers every host, and the
+    API still lets the key in whatever host the request names."""
+    assert client.get("/health", headers={"Host": "evil.example"}).status_code == 200
+    assert client.get("/api/v1/chats", headers={"Host": "evil.example"}).status_code == 200
+
+
+@pytest.mark.parametrize("header, expected", [
+    ("127.0.0.1", True), ("127.0.0.1:8090", True), ("localhost", True), ("[::1]:8090", True),
+    ("[::1]", True), ("evil.example", False), ("", False), ("   ", False), ("[", False),
+    ("[::1", False), ("[evil]:80", False), ("[::1]evil", False), ("[::1]:80x", False),
+    ("127.0.0.1:evil", False), ("localhost:", True),
+    ("192.168.1.5:8090", False), ("localhost.evil.example", False),
+])
+def test_the_host_check_reads_the_header_as_written(header, expected):
+    from app import anmeldung
+
+    assert anmeldung.host_is_loopback(header) is expected

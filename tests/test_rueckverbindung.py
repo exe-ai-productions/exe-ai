@@ -136,11 +136,11 @@ async def test_ein_dauerhaft_toter_anbieter_wird_genau_einmal_gemeldet(
     # ending with nothing behind it and rightly announces its own — that is
     # what ``melde_wenn_faellig`` says it does, and it is not what this test
     # is about.
-    await _until(lambda: any("fehlgeschlagenen Durchläufen gestoppt" in t for t, _ in gemeldet))
+    await _until(lambda: any("fehlgeschlagenen Läufen gestoppt" in t for t, _ in gemeldet))
     # The limit's sentence, and behind it why the chain's last run failed:
     # the origin speaks, and the reason is the run's.
-    assert [t for t, _ in gemeldet if "fehlgeschlagenen Durchläufen gestoppt" in t] == [
-        f"{AUFGABE} — nach 2 fehlgeschlagenen Durchläufen gestoppt — Modell antwortet nicht mehr"
+    assert [t for t, _ in gemeldet if "fehlgeschlagenen Läufen gestoppt" in t] == [
+        f"{AUFGABE} - nach 2 fehlgeschlagenen Läufen gestoppt - Modell antwortet nicht mehr"
     ]
 
 
@@ -160,7 +160,7 @@ async def test_der_ursprung_meldet_nicht_noch_einmal(
 
     def grenzsaetze():
         # As above: the chain's own ending is not what "once" is about here.
-        return [t for t, _ in gemeldet if "fehlgeschlagenen Durchläufen gestoppt" in t]
+        return [t for t, _ in gemeldet if t.startswith(f"{AUFGABE} - nach ") and "gestoppt" in t]
 
     await lauf_starten(client, config, ursprung.id)
     await lauf_starten(client, config, kette_von_neuester(repos, ursprung.id))
@@ -266,7 +266,7 @@ async def test_ein_eintrag_ohne_kette_zaehlt_wie_zuvor(config, client, gemeldet,
 
     assert angehalten is True
     assert repos.cronjobs.holen(eintrag.id).aktiv is False
-    assert gemeldet == [(f"{AUFGABE} — stopped after 1 failed runs", False)]
+    assert gemeldet == [(f"{AUFGABE} - stopped after 1 failed run", False)]
 
 
 async def test_ein_verschwundener_ursprung_haelt_die_buchung_nicht_auf(

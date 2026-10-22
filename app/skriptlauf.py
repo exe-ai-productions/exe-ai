@@ -40,7 +40,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from app import i18n, speicherorte
+from app import child_environment, i18n, speicherorte
 from app.no_console import no_window
 from app.tools import shell
 
@@ -120,7 +120,7 @@ def _kein_pfad(name: str) -> str:
 # What Windows starts, told by the extension: it has no execute bit, and
 # ``os.access(X_OK)`` is true there for every file that exists — so a .txt
 # counted as startable and a .sh started into "not a valid Win32 application".
-# These five and nothing else, a shell script never (the owner's decision).
+# These five and nothing else, a shell script never.
 WINDOWS_STARTABLE = (".exe", ".bat", ".cmd", ".ps1", ".py")
 
 
@@ -340,6 +340,8 @@ async def starten(
         prozess = await asyncio.create_subprocess_exec(
             *command_line(pfad),
             cwd=str(wurzel),
+            # The keys of the providers stay with the service.
+            env=child_environment.without_secrets(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             # Its own process group, so the time limit below can take the

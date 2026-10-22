@@ -1,6 +1,6 @@
 <script>
   /* The agent's colour: one round swatch filled with it, the colour's code
-     beside it and a small "remove". A click on the swatch opens the
+     beside it and a small bin that takes the colour away. A click on the swatch opens the
      system's own picker (`input[type=color]`, laid invisibly over the
      swatch); its own frame is not shown, it reads as a grey box in a box.
      Without a colour the swatch is an empty dashed ring.
@@ -20,6 +20,7 @@
      lib/agentenfarbe.svelte.js). */
   import { tonGewahrt } from '../lib/agentenfarbe.svelte.js'
   import { t } from '../lib/texte.svelte.js'
+  import Hauszeichen from './Hauszeichen.svelte'
 
   let { farbe = $bindable('') } = $props()
 
@@ -46,8 +47,9 @@
     </span>
     {#if farbe}
       <span class="code">{farbe}</span>
-      <button class="weg" onclick={() => (farbe = '')}>
-        {t('agenten.farbe_entfernen')}
+      <button class="weg" onclick={() => (farbe = '')}
+              aria-label={t('agenten.farbe_entfernen')} title={t('agenten.farbe_entfernen')}>
+        <Hauszeichen zeichen="trash" groesse={15} />
       </button>
     {/if}
   </div>
@@ -101,12 +103,14 @@
     color: var(--text-leise);
   }
   .weg {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border: none;
     background: none;
-    padding: 2px 6px;
+    width: 28px;
+    height: 28px;
     border-radius: 9px;
-    font: inherit;
-    font-size: 12px;
     color: var(--text-still);
     cursor: pointer;
   }

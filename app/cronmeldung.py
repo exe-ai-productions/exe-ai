@@ -10,6 +10,16 @@ Windows folder dialog in app/ordner_dialog.py). Which sound plays depends on
 how the run ended — a scheduled job fires while nobody is watching, and a
 failure needs to sound different from success to be noticed at all.
 
+Each way answers to the switches the settings page shows, the same ones the
+window asks: the sound plays only while the main switch is on, the volume is
+above zero and the sound switch of the occurrence is on (a run that ended
+well is the occurrence ``agent_cronjob``, one that failed is ``fehler``;
+app/klangwahl.py); the notification is shown only while the popup switch of
+that occurrence is on (app/meldewahl.py). The switch that stops every card from being drawn
+(``popups_aus``) belongs to the window alone, where the cards are drawn. macOS
+plays at the volume; the Windows player has none, so there the sound is on or
+off.
+
 Missing notification tool (macOS ``osascript``, Windows PowerShell): nothing
 happens, same as an entry on 'log'. Missing sound tool alone: the
 notification still shows — a fired schedule should not go silent just
@@ -23,8 +33,9 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
-from app import i18n, paketierung
+from app import i18n, klangwahl, meldewahl, paketierung
 from app.config import get_config
 from app.no_console import no_window
 
@@ -34,8 +45,41 @@ log = logging.getLogger(__name__)
 # `app.meldetitel` and speaks under its own name instead — see app/config.py.
 TITEL = "Exe AI"
 ZEITGRENZE_SEKUNDEN = 15
-_KLANG_ERFOLG = "static/klaenge/cron-fertig.wav"
+_KLANG_ERFOLG = "static/klaenge/agent-cronjob.wav"
 _KLANG_FEHLER = "static/klaenge/fehler.wav"
+# The sound switch and the popup switch of what a run that ended well is as an
+# occurrence (``agent_cronjob``) and of one that failed (``fehler``).
+_SWITCHES_ENDED_WELL = ("ton_agent_cronjob", "melde_agent_cronjob")
+_SWITCHES_FAILED = ("ton_fehler", "melde_fehler")
+
+# Where the stored switches are read. Set once when the service starts; a
+# service without it (a test, a tool run by hand) reads the shipped values.
+_repositories: Any = None
+
+
+def connect_settings(repositories: Any) -> None:
+    """Tells this module where the settings are kept, so that the sound and
+    the notification follow the switches the person has set."""
+    global _repositories
+    _repositories = repositories
+
+
+def _switches() -> tuple[dict[str, Any], dict[str, Any]]:
+    """The sound switches and the notice switches, with the shipped values
+    behind whatever is stored. Read per notification: a schedule fires long
+    after the page was last open. A store that cannot be read gives the
+    shipped values — a fired schedule is not to go silent over it."""
+    if _repositories is None:
+        return klangwahl.VORGABE, meldewahl.VORGABE
+    try:
+        einstellungen = _repositories.einstellungen
+        return (
+            klangwahl.aufgeloest(einstellungen.zusammengefuehrt(klangwahl.SCHLUESSEL, vorgabe={})),
+            meldewahl.aufgeloest(einstellungen.zusammengefuehrt(meldewahl.SCHLUESSEL, vorgabe={})),
+        )
+    except Exception:  # noqa: BLE001 - a notification must not need the settings
+        log.warning("Notification switches cannot be read, the shipped ones are used", exc_info=True)
+        return klangwahl.VORGABE, meldewahl.VORGABE
 
 
 def verfuegbar() -> bool:
@@ -69,8 +113,9 @@ def _klang_pfad(erfolgreich: bool) -> Path:
     return paketierung.aufloesen(_KLANG_ERFOLG if erfolgreich else _KLANG_FEHLER)
 
 
-def _klang_befehl_macos(pfad: Path) -> list[str]:
-    return ["afplay", str(pfad)]
+def _klang_befehl_macos(pfad: Path, pegel: int = 100) -> list[str]:
+    """``afplay`` takes its volume as a factor, 1 being the file's own level."""
+    return ["afplay", "-v", f"{pegel / 100:g}", str(pfad)]
 
 
 def _klang_befehl_windows(pfad: Path) -> list[str]:
@@ -148,7 +193,7 @@ def mit_grund(aufgabentext: str, grund: str | None, sprache: str | None = None) 
         return aufgabentext
     schluessel = f"jobs.grund.{grund}"
     satz = i18n.t(schluessel, sprache)
-    return f"{aufgabentext} — {grund if satz == schluessel else satz}"
+    return f"{aufgabentext} - {grund if satz == schluessel else satz}"
 
 
 def melden(aufgabentext: str, *, erfolgreich: bool, sprache: str | None = None) -> None:
@@ -168,14 +213,23 @@ def melden(aufgabentext: str, *, erfolgreich: bool, sprache: str | None = None) 
         if erfolgreich
         else i18n.t("cronjobs.fehlgeschlagen", sprache, aufgabe=aufgabentext)
     )
+    sounds, notices = _switches()
+    sound_switch, popup_switch = _SWITCHES_ENDED_WELL if erfolgreich else _SWITCHES_FAILED
+    pegel = int(sounds["pegel"])
+    with_sound = bool(sounds["an"]) and pegel > 0 and bool(sounds[sound_switch])
+    with_popup = bool(notices[popup_switch])
     klangpfad = _klang_pfad(erfolgreich)
+    befehle: list[list[str]] = []
     if sys.platform == "darwin":
-        befehle = []
-        if shutil.which("afplay"):
-            befehle.append(_klang_befehl_macos(klangpfad))
-        befehle.append(_mitteilung_befehl_macos(mitteilungstext))
+        if with_sound and shutil.which("afplay"):
+            befehle.append(_klang_befehl_macos(klangpfad, pegel))
+        if with_popup:
+            befehle.append(_mitteilung_befehl_macos(mitteilungstext))
     else:
-        befehle = [_klang_befehl_windows(klangpfad), _mitteilung_befehl_windows(mitteilungstext)]
+        if with_sound:
+            befehle.append(_klang_befehl_windows(klangpfad))
+        if with_popup:
+            befehle.append(_mitteilung_befehl_windows(mitteilungstext))
     for befehl in befehle:
         try:
             ergebnis = subprocess.run(befehl, capture_output=True, timeout=ZEITGRENZE_SEKUNDEN, **no_window())

@@ -15,20 +15,34 @@
      the default model: chosen once, it draws in every chat that names no
      model of its own, for the drawing tool outside a chat and at this
      tile's start (app/bildstandardmodell.py); nothing chooses it by
-     itself. The model card lists the folder and its files under it; the
-     check for a newer build of the generator sits with the generator, in
-     the sd.cpp card. */
+     itself. The model card holds the picker with its door to the
+     catalogue, and the folder; its files stand in a folding row of their
+     own, under the conversion to GGUF; the check for a newer build of the
+     generator sits with the generator, in the sd.cpp card.
+
+     The page stands in the order it is drawn in: a row of two columns on
+     top — the model card with the prompt preparation under it on the left,
+     memory and devices on the right — then the values of one picture model
+     with a choice of the folder's models at their head (the default model to
+     begin with), the conversion to GGUF, the folding list of the model
+     files, the generator, and the log at the foot. */
   import { api } from '../lib/api.js'
+  import { pollWithoutOverlap } from '../lib/pollWithoutOverlap.js'
   import { t } from '../lib/texte.svelte.js'
-  import { melde } from '../lib/zustand.svelte.js'
+  import { frage, katalogOeffnen, melde } from '../lib/zustand.svelte.js'
   import Servertafel from './Servertafel.svelte'
+  import Serverreihe from './Serverreihe.svelte'
+  import { serverHead } from '../lib/serverHead.svelte.js'
   import Serverabschnitt from './Serverabschnitt.svelte'
+  import BuildRows from './BuildRows.svelte'
   import UpToDateMark from './UpToDateMark.svelte'
-  import Startknopf from './Startknopf.svelte'
+  import UpdateButton from './UpdateButton.svelte'
   import ImageServerFiles from './ImageServerFiles.svelte'
+  import ImageConvert from './ImageConvert.svelte'
+  import Bildmodellwerte from './Bildmodellwerte.svelte'
+  import { imageFiles, loadImageFiles } from '../lib/imageModelFiles.svelte.js'
+  import { familyMark, loadImageFamilies } from '../lib/imageFamilies.svelte.js'
   import BildGeraete from './BildGeraete.svelte'
-  import Auswahlfeld from './Auswahlfeld.svelte'
-  import InfoMark from './InfoMark.svelte'
   import Serverlogkopf from './Serverlogkopf.svelte'
   import Promptaufbereitung from './Promptaufbereitung.svelte'
   import {
@@ -37,37 +51,92 @@
     setzeProtokollZeilen,
   } from '../lib/protokollfenster.svelte.js'
 
-  let stand = $state(null)
+  /* What this page hands up to the page head (ModelleLokal.svelte), which draws
+     it: the start button, the short line beside the name and the port. */
+  let { head = $bindable(null) } = $props()
 
-  /* The colours of the server itself: off is quiet, up is green, drawing
-     or still loading is blue, a server that was started and is gone is
-     red. */
-  const SERVER_COLOURS = { aus: 'still', bereit: 'gruen', zeichnet: 'blau', fehler: 'rot' }
+  let stand = $state(null)
+  // The generator's further switches and the idle time, handed up by BildGeraete.svelte.
+  let geraeteTeile = $state.raw(null)
+
   /* The running server, as `/bild/turbo` reports it: aus, bereit, zeichnet
      or fehler. */
   let server = $state(null)
+  /* What each read of this page last failed with. A failure that lasts is
+     said once and not at every poll, and two reads failing with the same
+     sentence say it once between them; a read that gets through clears its
+     own, so the same failure returning later is news again. The answer
+     before a failed read stays on the page. */
+  const readFailures = { server: null, stand: null }
+  function readFailed(source, fehler) {
+    const known = Object.values(readFailures).includes(fehler.message)
+    readFailures[source] = fehler.message
+    if (!known) melde(fehler.message, 'fehler')
+  }
   let switching = $state(false)
   async function loadServer() {
     try {
       server = await api.turboStand()
-    } catch {
-      server = null
+      readFailures.server = null
+    } catch (fehler) {
+      readFailed('server', fehler)
     }
   }
   loadServer()
   const serverRunning = $derived(server?.zustand === 'bereit' || server?.zustand === 'zeichnet')
-  /* The pill's word follows its colour: a server that was started and is
-     gone is red and says "error", not "inactive". */
-  const serverText = $derived(
-    server?.zustand === 'fehler'
-      ? t('status.fehler')
-      : serverRunning
-        ? t('status.aktiv')
-        : t('status.inaktiv'),
-  )
   // The default model, as the service reads it: empty while none is
   // chosen or its file left the folder.
   const startModel = $derived(stand?.standardmodell ?? '')
+  /* The family each model's values last read (GET /bild/vorgaben): newer
+     than the panel's answer where the reading of the family was just switched
+     for the model. A new answer of the panel is the newest word again. */
+  let read = $state({})
+  $effect(() => {
+    if (stand) read = {}
+  })
+  const families = $derived({ ...stand?.families, ...read })
+  loadImageFamilies()
+
+  /* The model whose values stand at the top: the one picked in the choice,
+     else the default model, else the folder's first. */
+  let viewed = $state('')
+  const shown = $derived.by(() => {
+    const names = imageFiles.list.map((file) => file.name)
+    return [viewed, startModel].find((name) => name && names.includes(name)) ?? names[0] ?? ''
+  })
+  /* Once a model stands at the top it stays there: choosing another default
+     model in the card must not swap the values (and drop changes not saved)
+     under the hands of whoever is editing them. */
+  $effect(() => {
+    if (!viewed && shown) viewed = shown
+  })
+  const fileChoices = $derived(imageFiles.list.map((file) => {
+    const mark = familyMark(families[file.name])
+    return {
+      wert: file.name,
+      text: file.name,
+      ...(mark ? { logo: mark } : { letter: file.name.slice(0, 1).toUpperCase() }),
+    }
+  }))
+  /* The open values block, asked whether it holds changes not saved:
+     switching the model asks before it throws them away. One question at a
+     time. */
+  let values = $state(null)
+  let asking = false
+  async function modellWechseln(name) {
+    if (asking || name === shown) return
+    if (values?.hasUnsaved()) {
+      asking = true
+      let yes = false
+      try {
+        yes = await frage(t('agenten.verwerfen_frage'))
+      } finally {
+        asking = false
+      }
+      if (!yes) return
+    }
+    viewed = name
+  }
   async function standardWaehlen(name) {
     try {
       await api.einstellungSetzen('global', 'bild_standardmodell', name)
@@ -97,12 +166,10 @@
   /* The server loads its model after the start answered, and a picture
      turns it blue; asked again while the tile is on screen. */
   $effect(() => {
-    const timer = setInterval(loadServer, 3000)
-    return () => clearInterval(timer)
+    return pollWithoutOverlap(loadServer, 3000)
   })
-  /* The window's one deed, handed to the sd.cpp group's head line — the
-     button stands in the line of the group, flush with the card
-     below it, not up in the head card. */
+  /* The server's one deed. The page head (ModelleLokal.svelte) draws its
+     button; the page keeps what the button says and does. */
   const tat = $derived({
     text: serverRunning ? t('modell.server_anhalten') : t('modell.server_starten'),
     // The head button knows two looks, like every server's: running or not.
@@ -112,6 +179,10 @@
       || (!serverRunning && !server?.programm_da),
     onTat: toggleServer,
   })
+
+  serverHead('bild', (value) => (head = value), () => ({
+    tat, line: '', port: serverRunning ? server.port : null,
+  }))
 
 
   /* The generator program, on a machine that does not have it yet. A fresh
@@ -133,6 +204,14 @@
   // the download route working must not read as "the picker still
   // stands" -- that would hide the one working way to install.
   const pickerSteht = $derived(Boolean(varianten?.varianten.length) && !variantenFehler)
+  /* The rows drawn: the list to fetch from, or where none can be fetched
+     the greyed builds this machine cannot run. */
+  const listedBuilds = $derived(
+    variantenFehler || !varianten
+      ? []
+      : varianten.varianten.length ? varianten.varianten : (varianten.unavailable ?? []),
+  )
+  const listLocked = $derived(!pickerSteht && !variantenFehler && listedBuilds.length > 0)
 
   /* Which GPU-backend variants this machine could offer, and which one is
      actually on disk — the running/installed backend used to be invisible
@@ -155,8 +234,9 @@
       // after the first one already made `programm_da` true, and that
       // download's own progress needs the same poll to ever move.
       if (!stand.programm_da || programmLaedt) programmStand = await api.bildProgrammStand()
-    } catch {
-      stand = null
+      readFailures.stand = null
+    } catch (fehler) {
+      readFailed('stand', fehler)
     }
     try {
       varianten = await api.bildProgrammVarianten()
@@ -166,6 +246,12 @@
     }
   }
   laden()
+
+  // Each new answer of the panel reads the list of the model files again.
+  $effect(() => {
+    void stand
+    loadImageFiles()
+  })
 
   /* Whether a newer release of the generator exists — asked only when the
      button is pressed, never on opening and never inside the poll below: a
@@ -206,8 +292,7 @@
      that download starts with `programmFehlt` already false. */
   $effect(() => {
     if (!programmFehlt && !programmLaedt) return
-    const takt = setInterval(laden, 2000)
-    return () => clearInterval(takt)
+    return pollWithoutOverlap(laden, 2000)
   })
 
   /* Once a fetch actually FINISHES the last answer is cleared — it spoke
@@ -283,8 +368,7 @@
 
   $effect(() => {
     if (!protokollAuf && !protokollOffen()) return
-    const takt = setInterval(protokollLaden, 2000)
-    return () => clearInterval(takt)
+    return pollWithoutOverlap(protokollLaden, 2000)
   })
 
   async function protokollZeigen() {
@@ -297,86 +381,68 @@
     oeffneProtokoll(t('modell.protokoll_titel'))
   }
 
-  function groesseText(bytes) {
-    return `${Math.round(bytes / (1024 * 1024))} MB`
-  }
 
 
 </script>
 
 <!-- The house's server shape (Servertafel.svelte) with the picture
-     server's additions: the model card holds the default model and lists
-     the files with their family, size and "···"; memory and devices have
-     their own section, and so has the generator, with its version, its
-     builds and the one check for a newer one. -->
+     server's additions: the model card holds the default model with its
+     door to the catalogue, and the folder; the values of one model stand
+     right under it; the files stand in a folding row of their own with their
+     family, size and state, and the conversion to GGUF has its own block;
+     memory and devices have their own section, and so has the generator, with its version, its builds and the one check for
+     a newer one. -->
 <Servertafel
-  titel={t('bildserver.titel')}
   zeichen="bild"
-  standfarbe={SERVER_COLOURS[server?.zustand] ?? 'still'}
-  standtext={serverText}
-  modelle={stand?.modelle ?? []}
+  modelle={(stand?.modelle ?? []).map((name) => ({ wert: name, text: name }))}
+  gewaehlt={startModel}
+  modellGeaendert={standardWaehlen}
   modellBeschriftung={t('bildserver.modell')}
+  modellInfo={t('bildserver.info_standardmodell')}
   leerText={stand ? t('bildserver.kein_modell_lang') : ''}
-  auswahl={false}
+  katalogTat={() => katalogOeffnen('bild')}
   speicherort="image_models"
   onOrtGeaendert={laden}
 >
-  {#snippet belowModel()}<ImageServerFiles reload={stand} familien={stand?.families ?? {}} />{/snippet}
-  {#snippet ersteZeile()}
-    <!-- The model card's first row: the one check for a newer generator.
-         Up to date — the release was read and is not ahead: the house tick in
-         a circle and the word beside it. Newer: the offer in the version row
-         of the sd.cpp section. -->
-    <button class="feldknopf" disabled={pruefend || programmLaedt || !stand?.programm_da}
-            onclick={aktualisierungLaden}>
-      {t('bildserver.nach_updates_suchen')}
-    </button>
-    {#if aktualisierung?.aktuell && stand?.programm_da}
-      <UpToDateMark />
+  {#snippet inhalt(modelCard)}
+    <Serverreihe>
+      {#snippet links()}
+        {@render modelCard()}
+        <Promptaufbereitung />
+      {/snippet}
+      {#snippet rechts()}
+        <div class="stretch"><BildGeraete onklappe={(teile) => (geraeteTeile = teile)} /></div>
+      {/snippet}
+    </Serverreihe>
+    {#if shown}
+      <!-- Each model gets a block of its own, so nothing of one model's
+           fields stays in another's. -->
+      {#key shown}
+        <Bildmodellwerte bind:this={values} modell={shown} listen={stand} modelle={fileChoices}
+                         onwechsel={modellWechseln}
+                         onfamily={(name, family) => (read[name] = family)} />
+      {/key}
     {/if}
-  {/snippet}
-  {#snippet zweiteZeile()}
-    <!-- The default model: every chat that names no model of its own, the
-         drawing tool outside a chat and this tile's start draw with it. -->
-    <span class="name mitmarke">{t('bildserver.standardmodell')}<InfoMark text={t('bildserver.info_standardmodell')} /></span>
-    <div class="wahl">
-      <Auswahlfeld wert={startModel} beschriftung={t('bildserver.standardmodell')}
-                   eintraege={(stand?.modelle ?? []).map((name) => ({ wert: name, text: name }))}
-                   gesperrt={!(stand?.modelle ?? []).length}
-                   gewaehlt={standardWaehlen} />
-    </div>
-  {/snippet}
-  {#snippet mitte()}
+    <ImageConvert onconverted={laden} />
+    <ImageServerFiles familien={families} />
     <!-- The program itself: its name (the program's own, not a word to
          translate), the version of the build on disk, its builds where there
          are several, and the one button that switches the server. -->
-    <BildGeraete />
     <Serverabschnitt zeichen="server" titel="sd.cpp">
-      {#snippet rechts()}
-        <Startknopf text={tat.text} punkt={tat.punkt} gesperrt={tat.gesperrt} onTat={tat.onTat} />
-      {/snippet}
       {#if stand?.programm_da}
-        <!-- The build tag when there is one; a dash when the program was
-             unpacked into the folder by hand (app/sddownload.py) and no tag
-             lies on disk. The update offer only ever appears for a
-             tag-named build, and only after the check found one; the way
-             back to the tested build stands there while another one runs. -->
+        <!-- The build tag at the end when there is one; a dash when the
+             program was unpacked into the folder by hand (app/sddownload.py)
+             and no tag lies on disk. The sign asks for a newer build and,
+             once the check found one, fetches it; the way back to the
+             tested build stands below while another one runs. -->
         <div class="zeile">
-          <span class="name">{t('bildserver.version_zeile', { bau: stand.bau ?? '—' })}</span>
-          {#if stand.restorable || aktualisierung?.verfuegbar}
-            <span class="buttons">
-              {#if stand.restorable}
-                <button class="feldknopf" disabled={programmLaedt} onclick={restoreProgram}>
-                  {t('bildserver.restore_tested_build')}
-                </button>
-              {/if}
-              {#if aktualisierung?.verfuegbar}
-                <button class="feldknopf" disabled={programmLaedt} onclick={programmAktualisieren}>
-                  {t('bildserver.generator_aktualisieren')}
-                </button>
-              {/if}
-            </span>
+          <span class="name">{t('bildserver.version_label')}</span>
+          {#if aktualisierung?.aktuell}
+            <UpToDateMark />
           {/if}
+          <UpdateButton found={Boolean(aktualisierung?.verfuegbar)} locked={pruefend || programmLaedt}
+                        oncheck={aktualisierungLaden} onupdate={programmAktualisieren} />
+          <span class="versionsmarke">{stand.bau ?? '-'}</span>
         </div>
       {/if}
       <!-- `varianten` carries three answers — still loading, the fetch
@@ -386,30 +452,24 @@
         <div class="zeile"><span class="name v_fehler">{t('bildserver.varianten_fehler')}</span></div>
       {:else if varianten === null}
         <div class="zeile"><span class="name">{t('bildserver.lade_varianten')}</span></div>
-      {:else if varianten.varianten.length}
-        <!-- win32 only: several GPU backends on offer (app/sddownload.py) —
-             the list covers both "nothing installed yet" and "one is
-             installed, fetch another". -->
-        {#each varianten.varianten as v (v.variante)}
-          <div class="zeile">
-            <span class="name">{v.variante}</span>
-            {#if v.variante === varianten.installiert}
-              <span class="v_still">{t('bildserver.variante_installiert')}</span>
-            {:else}
-              <button class="feldknopf" disabled={programmLaedt}
-                      onclick={() => programmHolen(v.variante)}>
-                {t('bildserver.variante_holen', { groesse: groesseText(v.groesse) })}
-              </button>
-            {/if}
-          </div>
-        {/each}
-        {#if programmLaedt}
-          <div class="zeile">
-            <span class="balken"><i style="width:{Math.round(programmStand.anteil * 100)}%"></i></span>
-            <span class="v_still">{Math.round(programmStand.anteil * 100)} %</span>
-          </div>
-        {/if}
       {/if}
+      <!-- win32 only: several GPU backends on offer (app/sddownload.py) —
+           the list covers both "nothing installed yet" and "one is
+           installed, fetch another". Where this machine cannot run them (a
+           Mac) the same four stand greyed, and the way back to the tested
+           build stands under a fold, while another one runs. -->
+      <BuildRows builds={listedBuilds} installed={varianten?.installiert} locked={listLocked}
+                 busy={programmLaedt} restorable={Boolean(stand?.programm_da && stand.restorable)}
+                 onDownload={programmHolen} onRestore={restoreProgram}>
+        {#snippet status()}
+          {#if pickerSteht && programmLaedt}
+            <div class="zeile">
+              <span class="balken"><i style="width:{Math.round(programmStand.anteil * 100)}%"></i></span>
+              <span class="v_still">{Math.round(programmStand.anteil * 100)} %</span>
+            </div>
+          {/if}
+        {/snippet}
+      </BuildRows>
       <!-- The missing generator, as one row: the download button, or the
            bar while it comes down. Kept out of the way while the
            win32 picker stands, or the two would write to the same download
@@ -431,15 +491,19 @@
           {/if}
         </div>
       {/if}
+      <!-- The generator's further switches apply to the whole server: their
+           fold is the last row of this section (BildGeraete.svelte keeps
+           their values and saves them). -->
+      {@render geraeteTeile?.schalter()}
     </Serverabschnitt>
-    <Promptaufbereitung />
+    {@render geraeteTeile?.erweitert()}
   {/snippet}
   {#snippet unten()}
     <div class="log">
       <Serverlogkopf offen={protokollAuf} onumschalten={protokollZeigen}
                      onauskoppeln={protokollAuskoppeln} />
       {#if protokollAuf}
-        <pre class="protokoll">{protokoll.join('\n') || '—'}</pre>
+        <pre class="protokoll">{protokoll.join('\n') || '-'}</pre>
       {/if}
     </div>
   {/snippet}
@@ -458,6 +522,18 @@
     overflow: auto;
     white-space: pre-wrap;
   }
+  /* The devices card stands beside the model card and the preparation: it is
+     as tall as that column, and its rows share out the extra height the way
+     `gewicht` does for the cards of the other pages. */
+  .stretch {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .stretch > :global(.abschnitt) {
+    flex: 1 1 auto;
+  }
   /* The rows and the buttons are Serverabschnitt.svelte's; here only the
      generator's own marks. */
   .v_still {
@@ -467,8 +543,13 @@
     color: var(--text-still);
     white-space: nowrap;
   }
-  .v_fehler {
-    color: var(--rot);
+  /* Inside a card the card's rule for names (`.karte .name`, Serverabschnitt)
+     is as specific as the row and the class here; which of the two wins would
+     then depend on the order the two styles are written in. The card in
+     front makes this one stronger, so the failure sentence of the variants
+     row is red as well, whatever the order. */
+  :global(.karte) .zeile .v_fehler {
+    color: var(--rot-text);
   }
   .balken {
     flex: 1;
@@ -483,17 +564,5 @@
     height: 100%;
     background: var(--blau);
     transition: width 0.3s;
-  }
-  /* The mark right after the name, as on the rest of this page, and its
-     sentence on a line of its own below the name when it is open. */
-  .mitmarke {
-    display: inline-flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    white-space: normal;
-  }
-  .mitmarke :global(.mark) {
-    margin-left: 0;
   }
 </style>

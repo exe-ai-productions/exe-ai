@@ -26,7 +26,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, NoReturn, Protocol
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -45,16 +45,19 @@ from app.bildmetadaten import metadaten_entfernen
 from app.bildschutz import putzen_an
 from app.bildturbo import Bildturbo, BildturboFehler, start_deadline, start_parts
 from app.bildrunner import (
-    Auftrag, BildFehler, Bildrunner, LoRA, UPSCALER_ORDNER, VAE_ORDNER,
-    controlnet_pfad, controlnets, embeddings, loras, lora_pfad, modelle,
+    Auftrag, BildFehler, Bildrunner, LoRA, UPSCALE_REPEATS_START, UPSCALE_TILE_START,
+    UPSCALER_ORDNER, VAE_ORDNER,
+    controlnet_pfad, controlnets, embeddings, is_image_model, loras, lora_pfad, modelle,
     modell_pfad, pulid_embedding_pfad, pulid_embeddings, pulid_pfad, pulids,
     vision_part_path, sehteile, textversteher, textversteher_pfad, tokenizer_pfad, tokenizers,
-    imatrix_path, taesd_path, taesd_files, upscaler_path, upscalers, vaes, vae_pfad, video_parts,
+    imatrix_path, taesd_path, taesd_files, upscaler_path, upscaler_scales, vae_choice_path, vae_choices, vaes,
+    vae_pfad, video_parts,
     yolos, yolo_pfad,
 )
 from app import bildwahlen
 from app.bildwahlen import MAX_KANTE, MIN_KANTE, MIN_SCHRITTE, RASTER
 from app import bildlauf, bildspeicher, draw_input, image_start_values, paste_back, systemspeicher
+from app import attachment_sizes, upscaled_info, upscaler_scale
 from pathlib import Path
 
 from app.config import Config
@@ -294,6 +297,10 @@ class BildWunsch(BaseModel):
     # model ``upscale_model`` (a file of the upscaler folder, by name).
     mode: Literal["", "adetailer", "upscale"] = ""
     upscale_model: str | None = None
+    # How often the upscaler runs over the picture and the size of its tiles
+    # (sd.cpp's ``--upscale-repeats`` 1 to 4 and ``--upscale-tile-size``).
+    upscale_repeats: int = Field(default=UPSCALE_REPEATS_START, ge=1, le=4)
+    upscale_tile_size: int = Field(default=UPSCALE_TILE_START, ge=1)
     # A video instead of a still picture: its frame count and rate (None
     # leaves the family's start value to the window, sd-cli's own here),
     # the last frame for a video drawn between two pictures, and the frames
@@ -312,6 +319,7 @@ class BildWunsch(BaseModel):
     audio_vae: str | None = None
     audio_encoder: str | None = None
     embeddings_connectors: str | None = None
+    clip_vision: str | None = None
 
     @model_validator(mode="after")
     def _lauf_stimmig(self) -> "BildWunsch":
@@ -370,6 +378,10 @@ class BildmodellAntwort(BaseModel):
     families: dict[str, str] = Field(default_factory=dict)
     # Each model file's size in bytes, for the list that names it.
     sizes: dict[str, int] = Field(default_factory=dict)
+    # For each model that cannot be drawn for want of a kit part, the name of
+    # the first part it misses (``missing_kit_part``); a complete model is not
+    # in it. The studio's model choice offers complete models only.
+    missing_parts: dict[str, str] = Field(default_factory=dict)
     loras: list[str] = Field(default_factory=list)
     vaes: list[str] = Field(default_factory=list)
     yolos: list[str] = Field(default_factory=list)
@@ -377,6 +389,9 @@ class BildmodellAntwort(BaseModel):
     controlnets: list[str] = Field(default_factory=list)
     # The tiny autoencoders the "tae" live preview decodes with.
     taesd_files: list[str] = Field(default_factory=list)
+    # The kind of each tiny autoencoder file (``bildbausatz.tae_kind``), empty
+    # where its name carries none: which families it decodes for.
+    tae_kinds: dict[str, str] = Field(default_factory=dict)
     embeddings: list[str] = Field(default_factory=list)
     textversteher: list[str] = Field(default_factory=list)
     # The vision parts (mmproj files) of the text encoder folder: what the
@@ -388,6 +403,8 @@ class BildmodellAntwort(BaseModel):
     # Model-backed highres upscalers, offered beside sd-cli's built-in
     # names (which travel separately, as `hires_upscaler_feste`).
     upscalers: list[str] = Field(default_factory=list)
+    # The factor each of them enlarges by, read from its weights.
+    upscaler_scales: dict[str, int] = Field(default_factory=dict)
     hires_upscaler_feste: list[str] = Field(default_factory=list)
     sampler: list[str] = Field(default_factory=list)
     scheduler: list[str] = Field(default_factory=list)
@@ -500,24 +517,29 @@ def bildmodelle(
     # Asked once for the whole folder: a model whose family is not to be
     # read is listed without one.
     unread = bildmodellwerte.without_family_detection(repositories)
+    tae_files = taesd_files(_bildordner(config))
+    scales = upscaler_scales(_bildordner(config))
     return BildmodellAntwort(
         modelle=gefunden,
         families={
             name: "" if name in unread else _family_of(config, name) for name in gefunden
         },
         sizes=_sizes_of(config, gefunden),
+        missing_parts=_missing_parts_of(config, repositories, gefunden),
         loras=loras(_bildordner(config)),
         vaes=vaes(_bildordner(config)),
         yolos=yolos(_bildordner(config)),
         pulids=pulids(_bildordner(config)),
         controlnets=controlnets(_bildordner(config)),
-        taesd_files=taesd_files(_bildordner(config)),
+        taesd_files=tae_files,
+        tae_kinds={name: bildbausatz.tae_kind(name) for name in tae_files},
         embeddings=embeddings(_bildordner(config)),
         textversteher=textversteher(_bildordner(config)),
         sehteile=sehteile(_bildordner(config)),
         tokenizers=tokenizers(_bildordner(config)),
         pulid_embeddings=pulid_embeddings(_bildordner(config)),
-        upscalers=upscalers(_bildordner(config)),
+        upscalers=list(scales),
+        upscaler_scales=scales,
         hires_upscaler_feste=list(bildwahlen.HIRES_UPSCALER_FESTE),
         sampler=list(bildwahlen.SAMPLER),
         scheduler=list(bildwahlen.SCHEDULER),
@@ -558,15 +580,34 @@ class TurboAntwort(BaseModel):
     # catalogue key of the label of the control that picture needs sd-cli
     # for. Empty whenever the server is not paused for a picture.
     paused_for: str | None = None
+    # The port the server listens on, running or not — the one a start takes.
+    port: int | None = None
+    # The default model a start would load (the one chosen for the studio),
+    # while its file is in the folder; None where none is chosen. `modell`
+    # stays what runs.
+    selected_model: str | None = None
 
 
-def _turbo_stand(turbo: Bildturbo, runner: Bildrunner) -> TurboAntwort:
+def _turbo_stand(
+    turbo: Bildturbo, runner: Bildrunner, selected_model: str | None = None
+) -> TurboAntwort:
     return TurboAntwort(
         zustand=turbo.zustand(), modell=turbo.modell,
         programm_da=turbo.programm is not None,
         picture_running=runner.laeuft(),
         paused_for=turbo.paused_for(),
+        port=turbo.port,
+        selected_model=selected_model,
     )
+
+
+def _selected_picture_model(config: Config, repositories: Repositories) -> str | None:
+    """The chosen default picture model while its file is in the folder.
+
+    This answer is polled, so only the one chosen entry is looked at — the
+    whole folder is not read for it."""
+    name = bildstandardmodell.stored_choice(repositories)
+    return name if name and is_image_model(_bildordner(config), name) else None
 
 
 def _hold_picture_lock(request: Request, sprache: str):
@@ -582,8 +623,13 @@ def _hold_picture_lock(request: Request, sprache: str):
 
 
 @router.get("/bild/turbo", response_model=TurboAntwort, summary="Image-Turbo — status")
-def turbo_stand(request: Request) -> TurboAntwort:
-    return _turbo_stand(_turbo(request), _runner(request))
+def turbo_stand(
+    request: Request, config: Config = Depends(hole_config),
+    repositories: Repositories = Depends(hole_repositories),
+) -> TurboAntwort:
+    return _turbo_stand(
+        _turbo(request), _runner(request), _selected_picture_model(config, repositories)
+    )
 
 
 class TurboReasonQuery(BaseModel):
@@ -594,6 +640,11 @@ class TurboReasonQuery(BaseModel):
 
     modell: str
     live_preview: str = Field(default="", max_length=10)
+    # The preview's rhythm, its noisy variant and whether a tiny
+    # autoencoder is chosen for it — each only beside a preview.
+    preview_interval: int | None = None
+    preview_noisy: bool = False
+    preview_taesd: bool = False
     pulid_weights: str | None = None
     pulid_id_embedding: str | None = None
     sigmas: str = Field(default="", max_length=500)
@@ -633,8 +684,11 @@ class _StudioValues:
     skip_layers: str
     switches: dict
     ref_video_frames: tuple
-    imatrix: Path | None
     lora_apply_mode: str
+    preview_interval: int | None = None
+    preview_noisy: bool = False
+    preview_tae_only: bool = False
+    video: bool = False
     mode: str = ""
 
 
@@ -690,12 +744,21 @@ def turbo_reason(
     except ValueError:
         # A value the table refuses fails the draw itself, with its words.
         switches = {}
-    try:
-        imatrix = _imatrix(request, model_file) if model_file is not None else None
-    except BildFehler:
-        imatrix = None
+    live_preview = bildwahlen.live_preview_pruefen(query.live_preview)
+    # A tiny autoencoder chosen for the preview paints it alone unless the
+    # VAE of the model's kit is one already (as the draw reads it).
+    preview_tae_only = bool(
+        live_preview == "tae" and query.preview_taesd and model_file is not None
+        and not _kit_vae_is_tae(
+            config, repositories, query.modell, model_file, query.familie
+        )
+    )
     values = _StudioValues(
-        live_preview=bildwahlen.live_preview_pruefen(query.live_preview),
+        live_preview=live_preview,
+        preview_interval=query.preview_interval if live_preview else None,
+        preview_noisy=query.preview_noisy and bool(live_preview),
+        preview_tae_only=preview_tae_only,
+        video=query.video,
         pulid_weights=query.pulid_weights,
         pulid_id_embedding=query.pulid_id_embedding,
         sigmas=query.sigmas.strip(),
@@ -703,7 +766,6 @@ def turbo_reason(
         skip_layers=query.skip_layers.strip(),
         switches=switches,
         ref_video_frames=("-",) if query.ref_video and query.video else (),
-        imatrix=imatrix,
         lora_apply_mode=bildwahlen.lora_apply_mode_pruefen(query.lora_apply_mode),
     )
     reason = _cli_only_reason(values, query.lora or pm_active)
@@ -717,7 +779,7 @@ class TurboStart(BaseModel):
 # Where each part of a model's kit is kept, by the name the draw route takes
 # it under: the list of its folder and how a name there becomes a path.
 _KIT_PART_FOLDERS = {
-    "vae": (vaes, vae_pfad),
+    "vae": (vae_choices, vae_choice_path),
     "t5xxl": (textversteher, textversteher_pfad),
     "clip_l": (textversteher, textversteher_pfad),
     "clip_g": (textversteher, textversteher_pfad),
@@ -729,23 +791,30 @@ _KIT_PART_FOLDERS = {
     "audio_vae": (vaes, vae_pfad),
     "audio_encoder": (textversteher, textversteher_pfad),
     "embeddings_connectors": (textversteher, textversteher_pfad),
+    "clip_vision": (textversteher, textversteher_pfad),
 }
 # The video kits' parts, which the picture server takes as one bundle.
 _VIDEO_PART_FIELDS = (
     "high_noise_diffusion_model", "audio_vae", "audio_encoder", "embeddings_connectors",
+    "clip_vision",
 )
 
 
-def kit_fields(family: image_families.Family | None, *, free: bool = False) -> tuple[str, ...]:
+def kit_fields(
+    family: image_families.Family | None, *, free: bool = False, model: str | None = None,
+) -> tuple[str, ...]:
     """The parts a model is drawn with besides itself: the VAE of every
     model, and for a kit's own diffusion model the text encoders and the
-    further parts its family reads. ``free`` — the model's family is not
-    read — is every part there is, since no family says which belong."""
+    further parts its family reads — of those the model itself takes, when
+    its file name is given (``image_families.parts_taken``). ``free`` — the
+    model's family is not read — is every part there is, since no family
+    says which belong."""
     if free:
         return tuple(_KIT_PART_FOLDERS)
     if family is None or not family.kit:
         return ("vae",)
-    return ("vae", *family.encoders, *family.parts)
+    further = family.parts if model is None else image_families.parts_taken(family, model)
+    return ("vae", *family.encoders, *further)
 
 
 def _model_kit(
@@ -773,7 +842,8 @@ def _model_kit(
         family is not None and family.kit and bildinhalt.standalone_diffusion_model(path)
     )
     # A checkpoint of a kit family that brings no text encoder of its own
-    # takes the encoders of its family, and nothing else of the kit.
+    # takes the encoders and the further parts of its family, and not its
+    # VAE.
     bare = bool(
         family is not None and family.kit and not standalone
         and bildinhalt.checkpoint_without_text_encoders(path)
@@ -785,20 +855,26 @@ def _model_kit(
             kit["diffusion_model"] = chosen
     elif standalone and family is not None:
         kit["diffusion_model"] = model
-        kit.update(kit_bond.matching_parts(folder, family))
+        kit.update(kit_bond.matching_parts(folder, family, model))
     elif bare and family is not None:
         kit.update({
-            field: name for field, name in kit_bond.matching_parts(folder, family).items()
-            if field in family.encoders
+            field: name for field, name in kit_bond.matching_parts(folder, family, model).items()
+            if field in (*family.encoders, *image_families.parts_taken(family, model))
         })
     # Each folder is listed once, however many parts it holds.
     listed: dict = {}
-    fields = ("vae", *family.encoders) if bare and family is not None else kit_fields(
-        family if standalone else None, free=free
+    fields = (
+        ("vae", *family.encoders, *image_families.parts_taken(family, model))
+        if bare and family is not None
+        else kit_fields(family if standalone else None, free=free, model=model)
     )
     for field in fields:
         name = own.get(field)
         if not name:
+            continue
+        # A tiny autoencoder that does not decode this family's latent space
+        # stays remembered but is not drawn with: the VAE then counts as unchosen.
+        if bildbausatz.is_tae_choice(name) and not bildbausatz.tae_fits(name, family):
             continue
         listing = _KIT_PART_FOLDERS[field][0]
         if listing not in listed:
@@ -818,6 +894,28 @@ def _kit_has_high_noise(
     exactly when the draw does. The family is the one the window states, or
     else the one the model's header names — as in the draw route — and a
     model whose family is not read has exactly the parts given to it."""
+    return "high_noise_diffusion_model" in _kit_as_drawn(
+        config, repositories, model, path, family_word
+    )
+
+
+def _kit_vae_is_tae(
+    config: Config, repositories: Repositories, model: str, path: Path,
+    family_word: str | None,
+) -> bool:
+    """Is the VAE of this model's kit, read as a draw reads it, a tiny
+    autoencoder? Then it paints the "tae" preview itself."""
+    kit = _kit_as_drawn(config, repositories, model, path, family_word)
+    return bildbausatz.is_tae_choice(kit.get("vae"))
+
+
+def _kit_as_drawn(
+    config: Config, repositories: Repositories, model: str, path: Path,
+    family_word: str | None,
+) -> dict:
+    """The kit of this model as a draw reads it: with the family the window
+    states, or else the one the model's header names, and a model whose
+    family is not read has exactly the parts given to it."""
     free = not bildmodellwerte.family_detection(repositories, model)
     if family_word:
         family_name = family_word
@@ -825,8 +923,7 @@ def _kit_has_high_noise(
         family_name = ""
     else:
         family_name = bildinhalt.family(path) or ""
-    kit = _model_kit(config, repositories, model, path, image_families.get(family_name))
-    return "high_noise_diffusion_model" in kit
+    return _model_kit(config, repositories, model, path, image_families.get(family_name))
 
 
 def _start_family(repositories: Repositories, path: Path, model: str) -> str:
@@ -853,6 +950,8 @@ def _kit_for_start(
         field: _begleiter(_KIT_PART_FOLDERS[field][1], config, name, sprache)
         for field, name in names.items() if field != "diffusion_model"
     }
+    # A tiny autoencoder in the VAE's place starts the server with ``--taesd``.
+    tae = {"vae_tae": True} if parts.get("vae") and bildbausatz.is_tae_choice(names.get("vae")) else {}
     if free:
         # No family is read: the model with exactly the parts given to it,
         # and the diffusion model chosen for it where one was. None is
@@ -862,25 +961,89 @@ def _kit_for_start(
         return {
             "familie": bildbausatz.FREE,
             **({"diffusion_model": chosen} if chosen is not None else {}),
-            **parts, **({"video_parts": bundle} if bundle else {}),
+            **parts, **tae, **({"video_parts": bundle} if bundle else {}),
         }
+    # A kit family's own diffusion model, or a checkpoint without text
+    # encoders of its own, is refused here, naming the part that is missing.
+    missing = _missing_part(family_name, names, path, model)
+    if missing is not None:
+        _refuse_part(family_name, missing, sprache)
     if "diffusion_model" not in names or family is None:
         # A checkpoint without text encoders of its own starts with the
-        # encoders of its family beside it; any other with its VAE alone.
+        # encoders and the further parts of its family beside it; any other
+        # with its VAE alone.
         encoders = {
             field: parts[field] for field in (family.encoders if family is not None else ())
             if parts.get(field)
         }
+        bare = family is not None and family.kit and bildinhalt.checkpoint_without_text_encoders(path)
+        bundle = (
+            {field: parts[field] for field in _VIDEO_PART_FIELDS if parts.get(field)}
+            if bare else {}
+        )
         return {
             **({"familie": family_name, **encoders} if encoders else {}),
-            **({"vae": parts["vae"]} if parts.get("vae") else {}),
+            **({"vae": parts["vae"], **tae} if parts.get("vae") else {}),
+            **({"video_parts": bundle} if bundle else {}),
         }
-    _kit_complete(family_name, dict(parts), sprache)
     bundle = {field: parts.pop(field) for field in _VIDEO_PART_FIELDS if parts.get(field)}
     return {
         "familie": family_name, "diffusion_model": path, "model_args": family.model_args,
-        **parts, **({"video_parts": bundle} if bundle else {}),
+        **parts, **tae, **({"video_parts": bundle} if bundle else {}),
     }
+
+
+def _missing_part(
+    family_name: str, names: dict[str, str], path: Path, model: str,
+) -> str | None:
+    """The first part a model cannot be started or drawn without, as its kit
+    (``_model_kit``) stands: for a kit family's own diffusion model the part
+    its docs name (``bildbausatz.fehlendes_teil``), for a checkpoint without
+    text encoders of its own the encoder its family cannot do without
+    (``bildbausatz.fehlender_textversteher``), nothing for any other model.
+    The one rule behind both the start's refusal and the model list's
+    ``missing_parts``."""
+    family = image_families.get(family_name)
+    if family is None or not family.kit:
+        return None
+    parts: dict[str, object | None] = {
+        field: name for field, name in names.items() if field != "diffusion_model"
+    }
+    if "diffusion_model" in names:
+        return bildbausatz.fehlendes_teil(family_name, parts, model)
+    if bildinhalt.checkpoint_without_text_encoders(path):
+        return bildbausatz.fehlender_textversteher(family_name, parts)
+    return None
+
+
+def missing_kit_part(
+    config: Config, repositories: Repositories, model: str, path: Path,
+) -> str | None:
+    """The name, as the user reads it, of the first kit part a model misses,
+    or None when it can be started and drawn as it stands. A model whose
+    family is not read has exactly the parts given to it and misses none."""
+    if not bildmodellwerte.family_detection(repositories, model):
+        return None
+    family_name = _start_family(repositories, path, model)
+    names = _model_kit(config, repositories, model, path, image_families.get(family_name))
+    missing = _missing_part(family_name, names, path, model)
+    return None if missing is None else bildbausatz.teil_name(family_name, missing)
+
+
+def _missing_parts_of(
+    config: Config, repositories: Repositories, names: list[str],
+) -> dict[str, str]:
+    """``missing_kit_part`` for every model of the folder that misses one."""
+    out: dict[str, str] = {}
+    for name in names:
+        try:
+            path = modell_pfad(_bildordner(config), name)
+        except BildFehler:
+            continue
+        missing = missing_kit_part(config, repositories, name, path)
+        if missing is not None:
+            out[name] = missing
+    return out
 
 
 @router.post("/bild/turbo/start", response_model=TurboAntwort, summary="Switch Image-Turbo on")
@@ -960,18 +1123,22 @@ def turbo_starten(
         ) from fehler
     finally:
         runner.freigeben()
-    return _turbo_stand(turbo, runner)
+    return _turbo_stand(turbo, runner, _selected_picture_model(config, repositories))
 
 
 @router.post("/bild/turbo/stop", response_model=TurboAntwort, summary="Switch Image-Turbo off")
-def turbo_stoppen(request: Request, sprache: str = Depends(hole_sprache)) -> TurboAntwort:
+def turbo_stoppen(
+    request: Request, sprache: str = Depends(hole_sprache),
+    config: Config = Depends(hole_config),
+    repositories: Repositories = Depends(hole_repositories),
+) -> TurboAntwort:
     turbo = _turbo(request)
     runner = _hold_picture_lock(request, sprache)
     try:
         turbo.stoppen()
     finally:
         runner.freigeben()
-    return _turbo_stand(turbo, runner)
+    return _turbo_stand(turbo, runner, _selected_picture_model(config, repositories))
 
 
 class BildVorgabenAntwort(BaseModel):
@@ -996,6 +1163,9 @@ class BildVorgabenAntwort(BaseModel):
     vae_format: str = ""
     rng: str = ""
     switches: dict[str, bool | int | float | str] = Field(default_factory=dict)
+    # The noise schedule the model is drawn with, as a list of numbers;
+    # empty leaves it to the sampler.
+    sigmas: str = ""
     # What belongs to the model itself (app/bildmodellwerte.py): its VAE,
     # CLIP skip and prediction type — empty or None is "Auto" — its trigger
     # words and a note.
@@ -1020,6 +1190,16 @@ class BildVorgabenAntwort(BaseModel):
     # The model is a kit's diffusion model on its own (no text encoder or
     # VAE inside), drawn with --diffusion-model rather than -m.
     standalone: bool = False
+    # The model is a checkpoint of a kit family that brings no text encoder of
+    # its own: it is drawn with ``-m`` and takes the encoders and further
+    # parts of its family beside it.
+    bare: bool = False
+    # The further parts the docs name for this standalone model (``Family.parts``
+    # it cannot be started without), by the draw route's field name.
+    needed_parts: list[str] = Field(default_factory=list)
+    # The further parts of the family (``Family.parts``) this model takes: the
+    # page and the studio show a part at the models that take it only.
+    parts_taken: list[str] = Field(default_factory=list)
     # The model's kit by the draw route's field name (vae, t5xxl, clip_l,
     # llm, …): the parts given to the model in the picture server over the
     # ones the folder offers for its family — what every picture of the
@@ -1059,33 +1239,64 @@ def image_switch_table(config: Config = Depends(hole_config)) -> dict:
     }
 
 
-def _kit_complete(family_name: str, parts: dict[str, object | None], sprache: str) -> None:
+def _kit_complete(
+    family_name: str, parts: dict[str, object | None], sprache: str, model: str | None = None,
+) -> None:
     """Refuse a kit that misses a part its family needs, naming the part.
     Asked before sd.cpp starts — on the server's start by hand as on a
-    drawing — so it never starts on half a kit."""
-    missing = bildbausatz.fehlendes_teil(family_name, parts)
+    drawing — so it never starts on half a kit. ``model`` is the standalone
+    diffusion model: with it the further parts the docs name for it count."""
+    missing = bildbausatz.fehlendes_teil(family_name, parts, model)
     if missing is not None:
-        raise HTTPException(
-            status.HTTP_412_PRECONDITION_FAILED,
-            t("bild.teil_fehlt", sprache, teil=bildbausatz.teil_name(family_name, missing)),
-        )
+        _refuse_part(family_name, missing, sprache)
+
+
+def _encoders_complete(
+    family_name: str, parts: dict[str, object | None], sprache: str,
+) -> None:
+    """Refuse a checkpoint without text encoders of its own whose family
+    cannot do without one (``needs_text_encoder``) and whose encoder is not at
+    hand, naming it: sd.cpp would start on it and stop at the first weight it
+    misses. Any other family goes on with the encoders it is given."""
+    missing = bildbausatz.fehlender_textversteher(family_name, parts)
+    if missing is not None:
+        _refuse_part(family_name, missing, sprache)
+
+
+def _refuse_part(family_name: str, part: str, sprache: str) -> NoReturn:
+    """The refusal a model that misses a kit part gets, naming the part."""
+    raise HTTPException(
+        status.HTTP_412_PRECONDITION_FAILED,
+        t("bild.teil_fehlt", sprache, teil=bildbausatz.teil_name(family_name, part)),
+    )
 
 
 @router.get("/bild/vorgaben", response_model=BildVorgabenAntwort, summary="Default values for each "
                                                                           "model")
 def bild_vorgaben(
     modell: str | None = None,
+    chosen_family: str = "",
     config: Config = Depends(hole_config),
     repositories: Repositories = Depends(hole_repositories),
+    sprache: str = Depends(hole_sprache),
 ) -> BildVorgabenAntwort:
     """The values the picture window opens on for a given model: its
     family, read from the model's own header, that family's start values
-    from the one table, the values the user set for this model in the
-    picture server (app/bildmodellwerte.py) laid over them, and the
-    companion files that fit it. A model whose family cannot be read starts
-    where sd-cli starts, and the window asks for the family."""
+    from the one table (the model's variant, told by its file name, over
+    them), the values the user set for this model in the picture server
+    (app/bildmodellwerte.py) laid over those, and the companion files that
+    fit it. A model whose family cannot be read starts where sd-cli starts,
+    and the window asks for the family.
+
+    ``chosen_family`` is a family the window was told by hand: it decides
+    the start values and nothing else — the family field of the answer, the
+    kit and its parts stay what the header says. Empty is "automatic"."""
+    if chosen_family and not image_families.known(chosen_family):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, t("bild.familie_ungueltig", sprache))
     family_name = ""
     standalone = False
+    bare = False
+    needed: list[str] = []
     parts: dict[str, str] = {}
     detection = bildmodellwerte.family_detection(repositories, modell) if modell else True
     chosen_diffusion_model = ""
@@ -1102,20 +1313,32 @@ def bild_vorgaben(
             # header does not name is still one, and the window fills it
             # in once the family is said by hand.
             standalone = bildinhalt.standalone_diffusion_model(path)
+            if family is not None and family.kit:
+                bare = not standalone and bildinhalt.checkpoint_without_text_encoders(path)
+                if standalone:
+                    needed = list(image_families.needed_parts(family, modell))
             kit = _model_kit(config, repositories, modell, path, family)
             parts = {field: name for field, name in kit.items() if field != "diffusion_model"}
             if not detection:
                 chosen_diffusion_model = kit.get("diffusion_model", "")
             log.info("Picture model %s: family %s", modell, family_name or "not recognised")
-    start = image_families.start_values(family_name, modell)
+    # The values come from the family said by hand, else from the header's.
+    values_family = chosen_family or family_name
+    start = image_families.start_values(values_family, modell)
     werte: dict = {
         "breite": start.width, "hoehe": start.height, "schritte": start.steps,
         "cfg": start.cfg, "guidance": start.guidance,
         "sampler": start.sampler, "scheduler": start.scheduler,
-        "flow_shift": start.flow_shift,
+        "flow_shift": start.flow_shift, "sigmas": start.sigmas,
     }
     eigene = bildmodellwerte.eigene(repositories, modell) if modell else {}
-    werte.update(eigene)
+    start_family = image_families.get(values_family)
+    # A model that draws at one frame rate has no rate of its own.
+    if start_family is not None and start_family.fixed_fps:
+        eigene.pop("fps", None)
+    # Frames and rate are answered under their own fields below.
+    own_video = {name: eigene[name] for name in ("video_frames", "fps") if name in eigene}
+    werte.update({name: wert for name, wert in eigene.items() if name not in own_video})
     # Told only while it is read, and only a file that is still there.
     werte[bildmodellwerte.DIFFUSION_MODEL] = chosen_diffusion_model
     quellen = dict(start.sources)
@@ -1123,10 +1346,13 @@ def bild_vorgaben(
         quellen[name] = "model"
     return BildVorgabenAntwort(
         **werte,
-        video_frames=start.frames, fps=start.fps,
+        video_frames=own_video.get("video_frames", start.frames),
+        fps=None if start_family is not None and start_family.fixed_fps
+        else own_video.get("fps", start.fps),
         vae_format=start.vae_format, rng=start.rng, switches=dict(start.switches),
-        model_args=family.model_args if (family := image_families.get(family_name)) else "",
-        family=family_name, standalone=standalone, parts=parts,
+        model_args=start_family.model_args if start_family is not None else "",
+        family=family_name, standalone=standalone, bare=bare, needed_parts=needed, parts=parts,
+        parts_taken=list(image_families.parts_taken(start_family, modell)) if modell else [],
         family_detection=detection,
         sources=quellen, eigene=sorted(eigene),
     )
@@ -1194,6 +1420,9 @@ class GeneratorVariante(BaseModel):
 class GeneratorVariantenAntwort(BaseModel):
     varianten: list[GeneratorVariante]
     installiert: str | None
+    # Builds this machine cannot run, listed so that they are seen (a Mac
+    # names the four of Windows); nothing can be fetched from this list.
+    unavailable: list[GeneratorVariante] = []
 
 
 class GeneratorHolenAnfrage(BaseModel):
@@ -1248,6 +1477,10 @@ def generator_varianten(
         installiert=sddownload.installierte_variante(
             config.datenverzeichnis, variante=picture_program_choice.picked(repositories)
         ),
+        unavailable=[
+            GeneratorVariante(variante=variante, groesse=groesse)
+            for variante, groesse in sddownload.unavailable_variants()
+        ],
     )
 
 
@@ -1406,6 +1639,7 @@ def generator_holen(
         if (
             fehler.grund == "schon_da"
             and wechsel
+            and variante is not None
             and sddownload.variante_installiert(config.datenverzeichnis, variante)
         ):
             # The variant switched to is on disk already, in the number that
@@ -1482,16 +1716,25 @@ def drawn_with_route(name: str, request: Request) -> dict:
     above answers in. Kept by the program, so they are there whether or not
     the file still carries its own. An empty answer: nothing is kept for
     that name — a picture drawn elsewhere, one from before, or none."""
-    return request.app.state.repositories.messages.drawn_with(name)
+    return _kept_values(request.app.state.repositories, name)
+
+
+def _kept_values(repositories, name: str) -> dict:
+    """What the draw kept for the picture of this name: at its message in a
+    chat, else at the studio's list of its own pictures. Empty when neither
+    knows the name."""
+    return repositories.messages.drawn_with(name) or studio_pictures.drawn_with(repositories, name)
 
 
 @router.get("/bild/preview", summary="Live preview of the image being generated")
 def live_preview_picture(request: Request, language: str = Depends(hole_sprache)) -> Response:
-    """The picture as far as it is drawn, while sd-cli draws it with a
-    live preview. Fetched with the session key in its header, like any
-    other call. Read at once into memory: sd-cli rewrites the file in
-    place and the run deletes it at its end, so a file handed on by path
-    could be gone or half written by the time it is sent."""
+    """The picture as far as it is drawn, while it is drawn with a live
+    preview, by sd-cli or by the picture server. Fetched with the session
+    key in its header, like any other call. Read at once into memory:
+    sd-cli rewrites the file in place and the run deletes it at its end,
+    so a file handed on by path could be gone or half written by the time
+    it is sent. A draw on the picture server has its newest preview in
+    memory (``Bildturbo.preview``); it is asked when sd-cli has none."""
     path = _runner(request).preview()
     data = None
     if path is not None:
@@ -1499,6 +1742,8 @@ def live_preview_picture(request: Request, language: str = Depends(hole_sprache)
             data = path.read_bytes()
         except OSError:
             data = None
+    elif (from_server := _turbo(request).preview()) is not None:
+        data = from_server
     # A PNG ends with its IEND chunk; one caught half written has none yet,
     # and the window keeps the preview it has until the next one is whole.
     if not data or not data.rstrip(b"\x00").endswith(b"IEND\xaeB`\x82"):
@@ -1635,7 +1880,7 @@ async def bild_erzeugen(
     hires_upscaler = wunsch.hires_upscaler.strip()
     upscaler_ordner = _upscaler_ordner(config)
     if hires_upscaler and hires_upscaler not in bildwahlen.HIRES_UPSCALER_FESTE:
-        in_folder = upscalers(_bildordner(config))
+        in_folder = upscaler_scales(_bildordner(config))
         if hires_upscaler not in in_folder:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, t("bild.begleiter_unbekannt", sprache)
@@ -1705,6 +1950,19 @@ async def bild_erzeugen(
             image_families.get(family_name),
         )
         wunsch = wunsch.model_copy(update=kit)
+    # A checkpoint of a kit family that brings no text encoder of its own and
+    # cannot do without one is refused, naming the encoder, when none is at
+    # hand: sd.cpp would start on it and stop at the first weight it misses.
+    family_of_wish = image_families.get(family_name)
+    if (
+        wunsch.mode != "upscale" and not free and wunsch.diffusion_model is None
+        and family_of_wish is not None and family_of_wish.kit
+    ):
+        given = {field: getattr(wunsch, field, None) for field in family_of_wish.encoders}
+        if bildbausatz.fehlender_textversteher(family_name, given) is not None and (
+            await asyncio.to_thread(bildinhalt.checkpoint_without_text_encoders, pfad)
+        ):
+            _encoders_complete(family_name, given, sprache)
     try:
         if free:
             # No family decides about the parts; only a family word nobody
@@ -1726,6 +1984,7 @@ async def bild_erzeugen(
                 high_noise_diffusion_model=wunsch.high_noise_diffusion_model,
                 audio_vae=wunsch.audio_vae, audio_encoder=wunsch.audio_encoder,
                 embeddings_connectors=wunsch.embeddings_connectors,
+                clip_vision=wunsch.clip_vision,
             )
     except ValueError as fehler:
         raise HTTPException(
@@ -1749,14 +2008,19 @@ async def bild_erzeugen(
     bausatz_connectors = _begleiter(
         textversteher_pfad, config, wunsch.embeddings_connectors, sprache
     )
-    vae = _begleiter(vae_pfad, config, wunsch.vae, sprache)
+    bausatz_clip_vision = _begleiter(textversteher_pfad, config, wunsch.clip_vision, sprache)
+    vae = _begleiter(vae_choice_path, config, wunsch.vae, sprache)
     # A kit missing a part never reaches sd.cpp: the answer names the part.
     # A free kit has no family that could miss one.
     if bausatz_diffusion_model is not None and not free:
         _kit_complete(family_name, {
             "t5xxl": bausatz_t5xxl, "clip_l": bausatz_clip_l, "clip_g": bausatz_clip_g,
-            "llm": bausatz_llm, "vae": vae,
-        }, sprache)
+            "llm": bausatz_llm, "llm_vision": bausatz_llm_vision, "tokenizer": bausatz_tokenizer,
+            "vae": vae, "audio_vae": bausatz_audio_vae,
+            "audio_encoder": bausatz_audio_encoder, "embeddings_connectors": bausatz_connectors,
+            # Given by the model's part or, as before, by the switch of that name.
+            "clip_vision": bausatz_clip_vision or wunsch.switches.get("clip_vision"),
+        }, sprache, wunsch.diffusion_model)
     # A video model draws in video mode only, a single frame included
     # (sd.cpp docs/wan.md:3); any other model when the wish asks for one.
     family_entry = image_families.get(family_name)
@@ -1808,8 +2072,13 @@ async def bild_erzeugen(
     # The memory block's switches are the machine's, stored once for every
     # chat; the picture's own come with the request.
     geraete = bildgeraete.lesen(repositories)
+    switch_values = {**bildgeraete.ohne_speicherschalter(wunsch.switches), **geraete.switches}
+    # sd.cpp is given one CLIP Vision: the model's own part, where it has one;
+    # the switch of the same name serves the models without that part.
+    if bausatz_clip_vision is not None:
+        switch_values.pop("clip_vision", None)
     switches, switch_paths = _switches(
-        config, {**bildgeraete.ohne_speicherschalter(wunsch.switches), **geraete.switches}, sprache,
+        config, switch_values, sprache,
         on={
             "ad_model": bool(wunsch.ad_modell),
             "photomaker": bool(pm_klasse),
@@ -1871,6 +2140,7 @@ async def bild_erzeugen(
         # The quality companions, each resolved against its own folder.
         clip_skip=_clip_skip(family_name, wunsch.clip_skip),
         vae=vae,
+        vae_is_tae=bildbausatz.is_tae_choice(wunsch.vae),
         ad_modell=_begleiter(yolo_pfad, config, wunsch.ad_modell, sprache),
         ad_prompt=wunsch.ad_prompt,
         ad_loras=_loras(config, wunsch.ad_loras, sprache),
@@ -1925,10 +2195,11 @@ async def bild_erzeugen(
         uncond_diffusion_model=bausatz_uncond,
         high_noise_diffusion_model=bausatz_high_noise,
         audio_vae=bausatz_audio_vae, audio_encoder=bausatz_audio_encoder,
-        embeddings_connectors=bausatz_connectors,
+        embeddings_connectors=bausatz_connectors, clip_vision=bausatz_clip_vision,
         video=video,
         video_frames=wunsch.video_frames if video else None,
-        fps=wunsch.fps if video else None,
+        fps=None if family_entry is not None and family_entry.fixed_fps
+        else wunsch.fps if video else None,
         end_image=end_bild,
         control_frames=steuerbilder,
         ref_video_frames=ref_video_frames,
@@ -1957,7 +2228,9 @@ async def bild_erzeugen(
             _begleiter(upscaler_path, config, wunsch.upscale_model, sprache)
             if wunsch.mode == "upscale" else None
         ),
-        imatrix=_imatrix(request, bausatz_diffusion_model or pfad),
+        upscale_repeats=wunsch.upscale_repeats,
+        upscale_tile_size=wunsch.upscale_tile_size,
+        imatrix=_imatrix(geraete, bausatz_diffusion_model or pfad),
     )
     # A video wish on a model that draws none: a picture family without a
     # video task, or a checkpoint without the motion module that makes it
@@ -1995,6 +2268,7 @@ async def bild_erzeugen(
     upscale_on_server = (
         auftrag.mode == "upscale" and auftrag.upscale_model is not None
         and turbo.upscaler_folder == str(auftrag.upscale_model.parent)
+        and _upscale_fits_the_server(auftrag)
     )
     ueber_turbo = auftrag.mode != "upscale" and _draws_on_server(turbo, auftrag, lora_aktiv)
     fingerprint = (
@@ -2036,7 +2310,13 @@ async def bild_erzeugen(
         elif make_room:
             pause_control: str | None = None
             if auftrag.mode == "upscale":
-                pause_control = "bild.nur_hochskalieren"
+                # The server could draw it but the result is beyond what
+                # it returns: the rows that make it so are named.
+                too_large = (
+                    auftrag.upscale_model is not None
+                    and turbo.upscaler_folder == str(auftrag.upscale_model.parent)
+                )
+                pause_control = "bild.upscale_repeats" if too_large else "bild.nur_hochskalieren"
             elif (reason := _cli_only_reason(auftrag, lora_aktiv)) is not None:
                 pause_control = reason.control
             await asyncio.to_thread(
@@ -2131,16 +2411,21 @@ async def bild_erzeugen(
     # not in the answer, not at the chat's row, not among the values kept
     # for the picture. Repairing faces alone does draw, and keeps its seed.
     seed = None if auftrag.mode == "upscale" else auftrag.seed
+    kept = _drawn_with(
+        wunsch, auftrag, seed,
+        original=(
+            _kept_values(request.app.state.repositories, wunsch.startbild)
+            if auftrag.mode == "upscale" and wunsch.startbild else None
+        ),
+        upscaled=(
+            await asyncio.to_thread(upscaled_info.of, startbild, ziel)
+            if auftrag.mode == "upscale" else None
+        ),
+    )
     try:
         frage_id, antwort_id = _ins_gespraech(
             request, wunsch, name, sprache, seed,
-            drawn_with=_drawn_with(
-                wunsch, auftrag, seed,
-                original=(
-                    request.app.state.repositories.messages.drawn_with(wunsch.startbild)
-                    if auftrag.mode == "upscale" and wunsch.startbild else None
-                ),
-            ),
+            drawn_with=kept,
             frage_erstellen=wunsch.frage_erstellen,
             lauf_kennung=wunsch.lauf_kennung,
             nr=wunsch.nr, von=wunsch.von,
@@ -2159,6 +2444,7 @@ async def bild_erzeugen(
         raise HTTPException(code, t("bild.abgebrochen", sprache)) from gone
     if wunsch.studio:
         studio_pictures.add(request.app.state.repositories, name)
+        studio_pictures.keep_drawn_with(request.app.state.repositories, name, kept)
     return BildAntwort(
         bild=name, seed=seed, frage_id=frage_id, antwort_id=antwort_id,
     )
@@ -2231,6 +2517,14 @@ class _CliValues(Protocol):
     @property
     def live_preview(self) -> str: ...
     @property
+    def preview_interval(self) -> int | None: ...
+    @property
+    def preview_noisy(self) -> bool: ...
+    @property
+    def preview_tae_only(self) -> bool: ...
+    @property
+    def video(self) -> bool: ...
+    @property
     def pulid_weights(self) -> object | None: ...
     @property
     def pulid_id_embedding(self) -> object | None: ...
@@ -2247,8 +2541,6 @@ class _CliValues(Protocol):
     @property
     def mode(self) -> str: ...
     @property
-    def imatrix(self) -> object | None: ...
-    @property
     def lora_apply_mode(self) -> str: ...
 
 
@@ -2256,10 +2548,13 @@ def _cli_only_reason(auftrag: _CliValues, lora_aktiv: bool) -> _CliReason | None
     """What in this picture only sd-cli can draw, or None.
 
     The server's own interface carries every per-picture value this window
-    sends except three: it returns one finished picture per job, so there
-    is no live preview while it draws, PuLID has no field in its body (its
-    weights are a start value of sd-cli's alone), and neither has a
-    reference video, whose frames this program hands over as a folder
+    sends except a few. Its live preview has the kind and the rhythm of a
+    picture, but not the noisy variant, not a rhythm below 1 (sd-cli reads
+    it as "after step N", the server as 1), not a tiny autoencoder for the
+    preview alone (only sd-cli adds one beside the VAE) and not a video (the
+    preview fields belong to the picture route). PuLID has no field in its
+    body (its weights are a start value of sd-cli's alone), and neither has
+    a reference video, whose frames this program hands over as a folder
     (``--ref-video``). A list sd-cli would
     read but that is no list of numbers goes to sd-cli too, so its own
     usage message explains it instead of a value dropped here.
@@ -2271,7 +2566,14 @@ def _cli_only_reason(auftrag: _CliValues, lora_aktiv: bool) -> _CliReason | None
     one short-lived process; on the server it ends the SERVER. The chosen
     mode still travels, unchanged, to the painter that draws it."""
     if auftrag.live_preview:
-        return _CliReason("live preview", "bild.live_preview")
+        if auftrag.video:
+            return _CliReason("a live preview of a video", "bild.live_preview")
+        if auftrag.preview_noisy:
+            return _CliReason("noisy live preview", "bild.preview_noisy")
+        if auftrag.preview_interval is not None and auftrag.preview_interval < 1:
+            return _CliReason("live preview rhythm below 1", "bild.preview_interval")
+        if auftrag.preview_tae_only:
+            return _CliReason("a tiny autoencoder for the preview alone", "bild.taesd")
     if auftrag.pulid_weights is not None and auftrag.pulid_id_embedding is not None:
         return _CliReason("PuLID", "bild.pulid")
     if auftrag.sigmas and _number_list(auftrag.sigmas, float) is None:
@@ -2285,8 +2587,6 @@ def _cli_only_reason(auftrag: _CliValues, lora_aktiv: bool) -> _CliReason | None
         return _CliReason("a reference video", "bild.referenzvideo")
     if auftrag.mode == "adetailer":
         return _CliReason("ADetailer applied to a finished image", "bild.nur_adetailer")
-    if auftrag.imatrix is not None:
-        return _CliReason("importance matrix collection", "bildserver.wichtigkeitsmatrix")
     if lora_aktiv and auftrag.lora_apply_mode != "at_runtime":
         return _CliReason(
             f"LoRA apply mode {auftrag.lora_apply_mode} would cause the server to abort",
@@ -2298,8 +2598,9 @@ def _cli_only_reason(auftrag: _CliValues, lora_aktiv: bool) -> _CliReason | None
 def _draws_on_server(turbo: Bildturbo, auftrag: Auftrag, lora_aktiv: bool) -> bool:
     """Does the running picture server draw this picture? Nothing is
     greyed out and nothing is said: a picture the server cannot draw goes
-    to sd-cli, and only the log names the reason."""
-    if not turbo.laeuft():
+    to sd-cli, and only the log names the reason. A server its idle time
+    ended counts as the server: the picture starts it again."""
+    if not turbo.laeuft() and not turbo.im_leerlauf_beendet():
         return False
     reason = _cli_only_reason(auftrag, lora_aktiv)
     if reason:
@@ -2424,6 +2725,13 @@ def _turbo_auftrag(auftrag: Auftrag) -> dict:
     }
     if auftrag.negativ:
         body["negative_prompt"] = auftrag.negativ
+    # The live preview: its kind and, when one was chosen, its rhythm. Left
+    # out, the server draws none (and reads the rhythm as 1 when it is not
+    # named, which is the rhythm sd-cli takes too).
+    if auftrag.live_preview:
+        body["preview"] = auftrag.live_preview
+        if auftrag.preview_interval is not None:
+            body["preview_interval"] = auftrag.preview_interval
     if auftrag.clip_skip >= 1:
         body["clip_skip"] = auftrag.clip_skip
     stapel = _turbo_loras(auftrag)
@@ -2538,6 +2846,7 @@ def _chat(request: Request, chat_id: str):
 
 def _drawn_with(
     wunsch: BildWunsch, auftrag: Auftrag, seed: int | None, original: dict | None = None,
+    upscaled: dict | None = None,
 ) -> dict:
     """What a picture is kept with: the prompt and its negative as they were
     asked for, the model, and the values the painter drew with — under the
@@ -2549,11 +2858,16 @@ def _drawn_with(
     the program kept it for the original), and with the prompt the request
     carries where the original has none. An original with no kept values
     leaves the new picture with that prompt alone — never with the values
-    the route would have drawn with."""
+    the route would have drawn with. The enlarging itself is kept beside them
+    (``upscaled``: the factor and the new size, app/upscaled_info.py), and what
+    an earlier enlarging of the original said is not carried on."""
     if auftrag.mode == "upscale":
         kept = dict(original or {})
+        kept.pop("upscaled", None)
         if not kept.get("prompt") and wunsch.prompt:
             kept["prompt"] = wunsch.prompt
+        if upscaled:
+            kept["upscaled"] = upscaled
         return kept
     values: dict = {
         "prompt": wunsch.prompt, "negativ": wunsch.negativ, "modell": wunsch.modell,
@@ -2705,12 +3019,10 @@ def _begleiter(aufloeser, config: Config, name: str | None, sprache: str) -> Pat
         ) from fehler
 
 
-def _imatrix(request: Request, model: Path) -> Path | None:
-    """Where this picture adds to an importance matrix, while one is being
-    collected for the model file it draws with."""
-    if model.name in _runner(request).imatrix_models:
-        return imatrix_path(model)
-    return None
+def _imatrix(geraete: bildgeraete.Geraete, model: Path) -> Path | None:
+    """Where this picture adds to an importance matrix: beside the model
+    file it draws with, while the machine's switch for it is on."""
+    return imatrix_path(model) if geraete.imatrix else None
 
 
 def _clip_skip(family_name: str, value: int) -> int:
@@ -2870,7 +3182,7 @@ def _draw_on_server(
             log.info("Image server restarts on another model or other start values")
             turbo.starten(
                 pfad,
-                vae=auftrag.vae, ad_modell=auftrag.ad_modell,
+                vae=auftrag.vae, vae_tae=auftrag.vae_is_tae, ad_modell=auftrag.ad_modell,
                 ad_prompt=auftrag.ad_prompt,
                 ad_negativ=auftrag.ad_negativ,
                 ad_confidence=auftrag.ad_confidence,
@@ -2908,7 +3220,7 @@ def _draw_on_server(
             deadline = start_deadline(*start_parts(auftrag, video_parts(auftrag)))
             if not turbo.bereit_abwarten(deadline, stopped=runner.stop_asked):
                 runner.end_if_stopped()
-                raise BildturboFehler("bild.turbo_ladefehler")
+                raise BildturboFehler(turbo.ladefehler_grund())
         runner.end_if_stopped()
         daten = turbo.zeichnen(
             _turbo_video_body(auftrag) if auftrag.video else _turbo_auftrag(auftrag),
@@ -2924,6 +3236,32 @@ def _draw_on_server(
         runner.freigeben()
 
 
+# The most the picture server's upscale route returns, in pixels on a side.
+UPSCALE_SERVER_MAX_SIDE = 8192
+
+
+def _upscale_fits_the_server(job: Auftrag) -> bool:
+    """Is the enlarged picture no wider and no higher than the picture
+    server returns? The size is the start picture's side times the model's
+    factor to the power of the repeats; a size or a factor that is not known
+    leaves the server to try, as before. A larger result goes to sd-cli,
+    and the log names the reason like any picture that does."""
+    if job.upscale_model is None or job.startbild is None:
+        return True
+    factor = upscaler_scale.scale(job.upscale_model)
+    size = attachment_sizes.of_file(job.startbild)
+    if factor is None or size is None:
+        return True
+    side = max(size["width"], size["height"]) * factor ** job.upscale_repeats
+    if side <= UPSCALE_SERVER_MAX_SIDE:
+        return True
+    log.info(
+        "Enlarging over sd-cli while the image server runs: %d pixels on a side "
+        "are beyond the %d the server returns", side, UPSCALE_SERVER_MAX_SIDE,
+    )
+    return False
+
+
 def _upscale_on_server(runner: Bildrunner, turbo: Bildturbo, job: Auftrag, target: Path) -> None:
     """Enlarge the start picture over the server's upscale route, under the
     one-picture lock like every other picture, in the format the target's
@@ -2936,6 +3274,8 @@ def _upscale_on_server(runner: Bildrunner, turbo: Bildturbo, job: Auftrag, targe
             _alsb64(job.startbild), job.upscale_model.stem,
             {".jpg": "jpeg", ".webp": "webp"}.get(target.suffix, "png"),
             zeitgrenze=job.zeitgrenze,
+            repeats=job.upscale_repeats if job.upscale_repeats != UPSCALE_REPEATS_START else None,
+            tile_size=job.upscale_tile_size if job.upscale_tile_size != UPSCALE_TILE_START else None,
         )
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)

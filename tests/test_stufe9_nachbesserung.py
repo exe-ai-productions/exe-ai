@@ -392,7 +392,7 @@ async def test_meldung_zeigt_die_fehlerzeile_statt_des_exitcodes(
     # The ending's reason rides behind it, the same as in the row in the
     # reports list.
     assert gemeldet == [
-        ("kaputt.py — rsync: connection refused — Skript mit Fehler beendet", False)
+        ("kaputt.py - rsync: connection refused - Skript mit Fehler beendet", False)
     ]
 
 
@@ -411,7 +411,7 @@ async def test_lange_ausgabe_meldet_nicht_die_kuerzungsmarke(
 
     await feuern(client, MORGEN.replace(hour=8, minute=1))
 
-    assert gemeldet == [("viel.py — fertig: 12 Dateien", True)]
+    assert gemeldet == [("viel.py - fertig: 12 Dateien", True)]
 
 
 # --- A script that cannot be started at all -------------------------
@@ -437,7 +437,7 @@ async def test_nicht_startbares_skript_ist_sichtbar_und_meldet_sich(
     assert cronablauf.skript_nicht_startbar(eintrag.id) is None
     # That first run worked, and on 'announce' it says so — this test is
     # about the OUTAGE that follows, so its own notification is set aside.
-    assert gemeldet == [("sicherung.py — (completed without output)", True)]
+    assert gemeldet == [("sicherung.py - (completed without output)", True)]
     gemeldet.clear()
 
     (skriptordner / "sicherung.py").unlink()

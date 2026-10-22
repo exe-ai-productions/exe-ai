@@ -21,6 +21,7 @@
 <script>
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import { api } from '../lib/api.js'
+  import { pollWithoutOverlap } from '../lib/pollWithoutOverlap.js'
   import { familyOf } from '../lib/imageFamilies.svelte.js'
   import { listen, studioSichtbar } from '../lib/studio.svelte.js'
   import { painterQuery } from '../lib/studiozeichnen.svelte.js'
@@ -51,10 +52,10 @@
       }
     }
     fragen()
-    const takt = setInterval(fragen, TAKT_MS)
+    const stop = pollWithoutOverlap(fragen, TAKT_MS)
     return () => {
       aus = true
-      clearInterval(takt)
+      stop()
     }
   })
 

@@ -238,7 +238,7 @@ def test_the_page_and_the_overview_show_the_keys_in_the_words_of_the_system():
     takes its rows from the list by system and writes no key itself."""
     lib = MODULE.parent
     page = (lib.parent / "teile" / "Shortcuts.svelte").read_text(encoding="utf-8")
-    overview = (lib.parent / "teile" / "SystemPrompt.svelte").read_text(encoding="utf-8")
+    overview = (lib / "settingsState.svelte.js").read_text(encoding="utf-8")
     names = (lib / "keyNames.js").read_text(encoding="utf-8")
     assert "const names = $derived(keyNames())" in page
     assert "shortcutList(system, names)" in page

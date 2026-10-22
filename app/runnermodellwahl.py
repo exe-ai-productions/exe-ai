@@ -116,6 +116,13 @@ VORGABE: dict[str, Any] = {
     # addition switch preloading off underneath every installation that has
     # it today, which is not a default but a regression.
     "vorladen": True,
+    # Whether a run that the program places itself — a schedule, an agent
+    # started with no model chosen — may land on this server. Off takes it
+    # out of the order the run walks (app/agentenmodellwahl.py
+    # ``lauf_kennung``); a run somebody pointed at this server by hand, or
+    # through the field that names it, still goes there. Shipped ON: this
+    # server has always been the one such runs land on first.
+    "use_for_runs": True,
 }
 
 
@@ -155,6 +162,8 @@ def wahl_pruefen(wert: Any) -> dict[str, Any]:
         sauber["modell"] = _name(wert["modell"])
     if "vorladen" in wert:
         sauber["vorladen"] = bool(wert["vorladen"])
+    if "use_for_runs" in wert:
+        sauber["use_for_runs"] = bool(wert["use_for_runs"])
     # ``None`` survives as ``None`` here, for the same reason the port number
     # is not repeated in this key (see the module header): "nobody has chosen"
     # and "today's default" are different answers, and storing the second for
@@ -243,6 +252,21 @@ def modell(repositories) -> str | None:
     return str(wahl(repositories).get("modell") or "").strip() or None
 
 
+def selected_file(repositories, names: list[str]) -> str | None:
+    """The file a start of this server would load, by the window's own rule.
+
+    The stored choice while its file is in the folder; a stored empty string
+    is a chosen "no model" and gives None; where nobody has chosen yet, or the
+    chosen file is gone, the first file in the folder — which is what the
+    window pre-picks. None for an empty folder."""
+    stored = wahl(repositories).get("modell")
+    if stored == "":
+        return None
+    if isinstance(stored, str) and stored in names:
+        return stored
+    return names[0] if names else None
+
+
 def vorladen_erlaubt(repositories) -> bool:
     """Whether the program may start this server by itself before a due time.
 
@@ -255,6 +279,15 @@ def vorladen_erlaubt(repositories) -> bool:
     entry waits visibly and runs the moment a model is there.
     """
     return bool(wahl(repositories).get("vorladen", VORGABE["vorladen"]))
+
+
+def use_for_runs(repositories) -> bool:
+    """Whether a run the program places itself may land on this server.
+
+    Read on every question and never remembered, like ``vorladen_erlaubt``:
+    the moment the switch moves is the moment the next run's order changes.
+    """
+    return bool(wahl(repositories).get("use_for_runs", VORGABE["use_for_runs"]))
 
 
 def modulwahl(repositories, datei: str) -> dict[str, str | None]:
@@ -359,6 +392,7 @@ __all__ = [
     "modell",
     "modell_merken",
     "modulwahl",
+    "use_for_runs",
     "startwerte",
     "vorgaben",
     "vorladen_erlaubt",

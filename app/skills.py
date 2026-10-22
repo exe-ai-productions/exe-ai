@@ -61,7 +61,7 @@ BEKANNTE_FELDER = {"description", "auto"}
 # warning can say where that belongs instead of just calling it unknown.
 AGENTENFELDER = {
     "model", "tools", "folders", "max_rounds", "max_minutes", "max_tokens",
-    "reasoning_budget", "schedule",
+    "reasoning_budget", "reasoning_effort", "schedule",
 }
 
 # The name is typed after a slash and read back from a list. Spaces, capitals

@@ -26,7 +26,7 @@ from app.bildrunner import Bildrunner
 from app.config import Config
 from app.providers import MockProvider, mock_endpunkt
 from app.providers.base import Werkzeugaufruf
-from app import image_families
+from app import bildwahlen, image_families
 from app.tools import bild_werkzeug
 from app.tools.registry import WerkzeugRegistry, WerkzeugVerboten
 from tests.conftest import Bilddienst, provider_setzen
@@ -656,6 +656,61 @@ def test_the_sentences_and_fields_of_draw_image_stand_word_for_word(tmp_path, mo
         "No image model is installed. The user can add one under Images or from the "
         "catalogue."
     )
+
+
+# --- A name the program does not know is refused, not swapped -------------------
+
+
+def _draw_with(tmp_path, monkeypatch, arguments: dict, **dienst_arguments):
+    """One call of the drawing tool with the values the model named; answers
+    the service stand-in and what the tool said."""
+    model = "model.safetensors"
+    dienst = Bilddienst(
+        modelle=[model], familien={model: "sdxl"},
+        vorgaben={"family": "sdxl", "standalone": False, "parts": {}}, **dienst_arguments,
+    )
+    monkeypatch.setattr(bild_werkzeug.httpx, "AsyncClient", lambda timeout, headers: dienst)
+    text = asyncio.run(
+        bild_werkzeug.ausfuehren({"prompt": "a cat", **arguments}, "http://x", tmp_path, "testschluessel")
+    )
+    return dienst, text
+
+
+def test_an_unknown_scheduler_is_refused_with_the_valid_names_and_nothing_is_drawn(tmp_path, monkeypatch):
+    dienst, text = _draw_with(tmp_path, monkeypatch, {"scheduler": "auto"})
+    assert dienst.gezeichnet == []
+    assert "these values were invalid: scheduler." in text
+    assert "Supported schedulers: " + ", ".join(bildwahlen.SCHEDULER) + "." in text
+    assert "Supported samplers" not in text
+
+
+def test_an_unknown_sampler_is_refused_with_the_valid_names_and_nothing_is_drawn(tmp_path, monkeypatch):
+    dienst, text = _draw_with(tmp_path, monkeypatch, {"sampler": "dpm++2m_karras"})
+    assert dienst.gezeichnet == []
+    assert "these values were invalid: sampler." in text
+    assert "Supported samplers: " + ", ".join(bildwahlen.SAMPLER) + "." in text
+    assert "Supported schedulers" not in text
+
+
+def test_both_unknown_names_are_listed_together_and_a_number_gets_no_list(tmp_path, monkeypatch):
+    _dienst, both = _draw_with(tmp_path, monkeypatch, {"sampler": "x", "scheduler": "y"})
+    assert "invalid: sampler, scheduler." in both
+    assert "Supported samplers: " in both and "Supported schedulers: " in both
+    # Silence probe: a word where a number belongs is refused as before, without a list.
+    _dienst, number = _draw_with(tmp_path, monkeypatch, {"steps": "many"})
+    assert number == (
+        "The image was not generated because these values were invalid: steps. "
+        "Provide numbers and a supported sampler or scheduler, or omit them to use the "
+        "image model's start values."
+    )
+
+
+def test_known_names_travel_as_they_are_and_without_the_fields_the_start_values_stand(tmp_path, monkeypatch):
+    dienst, text = _draw_with(tmp_path, monkeypatch, {"sampler": "euler", "scheduler": "discrete"})
+    assert "not generated" not in text
+    assert (dienst.gezeichnet[-1]["sampler"], dienst.gezeichnet[-1]["scheduler"]) == ("euler", "discrete")
+    plain, _text = _draw_with(tmp_path, monkeypatch, {})
+    assert plain.gezeichnet, "without the fields the picture is drawn with the model's start values"
 
 
 def test_the_description_names_the_input_picture_and_the_path_it_answers_with():

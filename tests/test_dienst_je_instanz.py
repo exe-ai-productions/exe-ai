@@ -29,6 +29,7 @@ from pathlib import Path
 import subprocess
 import sys
 
+import psutil
 import pytest
 from fastapi.testclient import TestClient
 
@@ -270,7 +271,12 @@ def test_die_eigene_notiz_liegt_nur_solange_der_dienst_laeuft(config):
     with TestClient(app_erstellen(config)):
         assert _instanznotiz(config).exists()
         notiert = json.loads(_instanznotiz(config).read_text(encoding="utf-8"))
-        assert notiert == {"pid": os.getpid(), "port": config.app.port}
+        # With the moment this very process began, as the system reads it —
+        # what the client proves the process by when it asks it to end.
+        assert notiert == {
+            "pid": os.getpid(), "port": config.app.port,
+            "began": psutil.Process(os.getpid()).create_time(),
+        }
     assert not _instanznotiz(config).exists()
 
 

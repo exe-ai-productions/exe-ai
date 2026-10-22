@@ -151,3 +151,67 @@ def test_silence_with_an_address_the_search_goes_there(monkeypatch):
     monkeypatch.setattr(searxng_server.httpx, "AsyncClient", Client)
     text = asyncio.run(searxng_server.websuche("anything"))
     assert seen == ["https://suche.example.org/search"] and "https://a.example" in text
+
+
+# --- Every engine down is not an empty result ------------------------------
+
+
+def _ask_with(monkeypatch, answer: dict):
+    class Reply:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return answer
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, **k):
+            return Reply()
+
+    monkeypatch.setattr(searxng_server, "SEARXNG_URL", "https://suche.example.org")
+    monkeypatch.setattr(searxng_server.httpx, "AsyncClient", Client)
+    return asyncio.run(searxng_server.websuche("newest release"))
+
+
+def test_a_search_with_every_engine_down_says_so(monkeypatch):
+    text = _ask_with(monkeypatch, {
+        "results": [],
+        "unresponsive_engines": [["google", "Suspended: too many requests"], ["duckduckgo", "timeout"]],
+    })
+    assert not text.startswith("No results for")
+    assert "google (Suspended: too many requests)" in text and "duckduckgo (timeout)" in text
+    assert "not an empty result" in text and "unavailable" in text
+
+
+def test_the_web_search_says_searching_again_will_not_help_right_now(monkeypatch):
+    text = _ask_with(monkeypatch, {"results": [], "unresponsive_engines": [["google", "timeout"]]})
+    assert "will not help right now" in text
+    assert "will not help now" not in text
+
+
+def test_silence_no_hits_and_no_engine_down_stays_no_results(monkeypatch):
+    assert _ask_with(monkeypatch, {"results": [], "unresponsive_engines": []}) == "No results for: newest release"
+    assert _ask_with(monkeypatch, {"results": []}) == "No results for: newest release"
+
+
+def test_silence_hits_with_an_engine_down_keep_the_list_as_it_was(monkeypatch):
+    text = _ask_with(monkeypatch, {
+        "results": [{"title": "A", "url": "https://a.example", "content": "x"}],
+        "unresponsive_engines": [["google", "timeout"]],
+    })
+    assert text.startswith("Results for") and "https://a.example" in text
+    assert "google" not in text and "unavailable" not in text
+
+
+def test_an_engine_without_a_reason_stands_by_its_name(monkeypatch):
+    text = _ask_with(monkeypatch, {"results": [], "unresponsive_engines": [["brave"]]})
+    assert "answered: brave." in text

@@ -1,12 +1,10 @@
-"""The knob of a switched-on switch in the light looks.
+"""The switch is white and grey in every look.
 
-On the blue track the knob wore the ground of the look; in Pearl and Moune
-that ground is nearly as light as the track's blue is dark in the middle, and
-the knob measured under 3 : 1 against it. The knob is white in Pearl, Moune
-and Heaven; the dark looks keep the ground.
-
-The contrast is calculated from `global.css` itself: each look is its base
-block plus the blocks that name it, read in the order the file has them.
+Switched on, the track is the ink of the look and the knob its ground; off,
+the track is the ink at a sixth of its strength and the knob the quiet ink.
+No blue and no red. The contrast of the knob against its track is calculated
+from `global.css` itself: each look is its base block plus the blocks that
+name it, read in the order the file has them.
 """
 
 from __future__ import annotations
@@ -48,52 +46,38 @@ def _contrast(first: str, second: str) -> float:
     return (high + 0.05) / (low + 0.05)
 
 
-def _knob(look: dict[str, str]) -> str:
-    """What `var(--knauf-an, var(--bg))` resolves to in this look."""
-    value = look.get("--knauf-an", "initial")
-    return look["--bg"] if value == "initial" else value
-
-
-# The auto-dark block sits inside a media query; it is the dark look's base
-# when the system is dark, and the later blocks name their own look over it.
-AUTO_DARK = _declarations(":root:not([data-modus='hell'], [data-eigen='hell'])", CSS.split("@media (prefers-color-scheme: dark) {", 1)[1])
-
-
-def test_the_knob_is_white_against_the_blue_track_in_pearl_moune_and_heaven():
+def _looks() -> dict[str, dict[str, str]]:
     base = _declarations(":root")
-    pearl = {**base}
-    heaven = {**base, **_declarations(":root[data-modus='heaven']")}
-    moune = {**base, **_declarations(":root[data-modus='moune']")}
-    was = {"pearl": 2.99, "moune": 2.76, "heaven": 4.57}
-    for name, look, wanted in (("pearl", pearl, 4.3), ("moune", moune, 3.5), ("heaven", heaven, 5.3)):
-        assert _knob(look) == "#ffffff", name
-        assert round(_contrast(_knob(look), look["--blau"]), 1) == wanted, name
-        # What it was: the ground of the look, under 3 : 1 in two of them.
-        assert round(_contrast(look["--bg"], look["--blau"]), 2) == was[name], name
+    return {
+        "pearl": base,
+        "heaven": {**base, **_declarations(":root[data-modus='heaven']")},
+        "moune": {**base, **_declarations(":root[data-modus='moune']")},
+        "exe": {**base, **_declarations(":root[data-eigen='dunkel'],\n:root[data-modus='dunkel']")},
+        "dark matter": {**base, **_declarations(":root[data-modus='darkmatter']")},
+    }
 
 
-def test_the_light_looks_keep_the_knob_white_where_the_system_is_dark():
-    """The auto-dark block comes before Heaven and Moune; their own value has
-    to stand against it, or the knob would fall back to the ground there."""
-    base = {**_declarations(":root"), **AUTO_DARK}
-    assert _knob(base) != "#ffffff"
-    for modus in ("heaven", "moune"):
-        look = {**base, **_declarations(f":root[data-modus='{modus}']")}
-        assert _knob(look) == "#ffffff", modus
+def test_a_switched_on_knob_stands_out_of_its_track_in_every_look():
+    # On: the track is the ink, the knob the ground.
+    for name, look in _looks().items():
+        assert _contrast(look["--bg"], look["--text"]) >= 4.5, name
 
 
-def test_silence_exe_and_dark_matter_keep_the_ground_as_the_knob():
-    base = _declarations(":root")
-    exe = {**base, **_declarations(":root[data-eigen='dunkel'],\n:root[data-modus='dunkel']")}
-    dark_matter = {**base, **_declarations(":root[data-modus='darkmatter']")}
-    for name, look in (("exe", exe), ("dark matter", dark_matter)):
-        assert _knob(look) == look["--bg"], name
-    assert round(_contrast(_knob(exe), exe["--blau"]), 2) == 5.56
-    assert round(_contrast(_knob(dark_matter), dark_matter["--blau"]), 2) == 9.8
+def test_a_switched_off_knob_stands_out_of_the_ground_in_every_look():
+    # Off: the track is a sixth of the ink on the ground, the knob the quiet ink.
+    for name, look in _looks().items():
+        assert _contrast(look["--text-leise"], look["--bg"]) >= 3, name
 
 
-def test_the_switch_reads_the_token_with_the_ground_as_the_fallback():
-    assert "background: var(--knauf-an, var(--bg));" in SWITCH
-    # The track, the knob off and the red of taking away are as they were.
-    assert "background: var(--blau);" in SWITCH and "background: var(--rot);" in SWITCH
-    assert "background: var(--text-still);" in SWITCH
+def test_the_switch_is_drawn_in_the_ink_of_the_look_and_never_in_blue_or_red():
+    assert "background: color-mix(in srgb, var(--text) 16%, transparent);" in SWITCH
+    assert "background: var(--text-leise);" in SWITCH
+    # On: the ink as the track, the ground as the knob.
+    assert ".schalter[aria-checked='true'] {\n    background: var(--text);" in SWITCH
+    assert "background: var(--bg);" in SWITCH
+    for forbidden in ("var(--blau)", "var(--rot)", "knauf-an"):
+        assert forbidden not in SWITCH, forbidden
+
+
+def test_no_look_carries_the_old_knob_token_any_more():
+    assert "--knauf-an" not in CSS

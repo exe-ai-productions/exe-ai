@@ -12,16 +12,18 @@
   page and runs in node as it is.
 */
 
-/* One formatter per language and digit count: a panel draws a dozen fields. */
+/* One formatter per language and digit range: a panel draws a dozen fields.
+   A field has at least one digit and as many as its step; a size has exactly
+   as many as it is given (`minimum` = `digits`). */
 const formatters = new Map()
 
-function formatterFor(language, digits) {
-  const key = `${language}|${digits}`
+function formatterFor(language, digits, minimum = 1) {
+  const key = `${language}|${minimum}|${digits}`
   let formatter = formatters.get(key)
   if (!formatter) {
     formatter = new Intl.NumberFormat(language === 'de' ? 'de-DE' : 'en-US', {
-      minimumFractionDigits: 1,
-      maximumFractionDigits: Math.max(1, digits),
+      minimumFractionDigits: minimum,
+      maximumFractionDigits: Math.max(minimum, digits),
       useGrouping: false,
     })
     formatters.set(key, formatter)
@@ -50,4 +52,16 @@ export function parseNumber(text) {
   const cleaned = String(text ?? '').trim().replace(',', '.')
   if (!cleaned) return null
   return Number(cleaned)
+}
+
+/* A size in GB as the catalogue and the download page write it: under 1 GB
+   exactly two fractional digits ("0,01"), from 1 GB exactly one ("14,8",
+   "7,0"), the decimal sign of the language. Not a number: a hyphen. */
+export function formatGb(value, language) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  /* Decided on the rounded value: 0.996 is written "1,0", not "1,00", and a
+     hair under zero is a plain zero. */
+  const rounded = Math.round(value * 100) / 100
+  const digits = Math.abs(rounded) < 1 ? 2 : 1
+  return formatterFor(language, digits, digits).format(rounded === 0 ? 0 : value)
 }

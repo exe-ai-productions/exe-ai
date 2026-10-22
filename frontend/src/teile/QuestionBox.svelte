@@ -25,6 +25,8 @@
   import { keepOwnDraft, ownDraft, questionKey } from '../lib/questionbox.svelte.js'
   import { eineSeiteOffen } from '../lib/zustand.svelte.js'
   import { studioSichtbar } from '../lib/studio.svelte.js'
+  import { markPath, reasonLine } from '../lib/markpath.js'
+  import { mainArgument } from '../lib/werkzeughistorie.js'
 
   /* `answerTool(allowed, always, words)` and `answerAsk(text)` are the two
      ways an answer leaves — an agent's question answers the way the model's
@@ -142,20 +144,31 @@
       : [],
   )
   /* What the decision rests on, always in view: the command for a shell
-     call, otherwise the first argument, which says what the tool touches. */
+     call, with its dollar sign and its colours; for any other call the
+     argument it is about (a path, a query, an address), plainly — a file's
+     body or a path is not a command and must not look like one. */
   const command = $derived(
-    kind === 'tool' ? String(question.argumente?.command ?? argumentPairs[0]?.[1] ?? '') : '',
+    kind === 'tool' && typeof question.argumente?.command === 'string'
+      ? question.argumente.command
+      : '',
   )
   const commandColoured = $derived(command ? hervorheben(command, 'bash') : '')
-  /* The reason names a path, and a path is read letter by letter — so it
-     stands in monospace inside the sentence. */
-  const reasonText = $derived.by(() => {
-    const sentence = maskieren(question.grund || '')
-    const value = question.grundWert || ''
-    if (!value) return sentence
-    // A function, not a string: a `$` in the path must stay a dollar sign.
-    return sentence.replace(maskieren(value), () => `<span class="path">${maskieren(value)}</span>`)
-  })
+  const headline = $derived(
+    command || (kind === 'tool' ? mainArgument(question.argumente) || (argumentPairs[0]?.[1] ?? '') : ''),
+  )
+  /* The line the decision rests on, with the place the reason points at
+     marked where it stands in it. A path is read letter by letter, so the
+     marker lies over the path inside the line and the colours under it stay. */
+  const shown = $derived(
+    markPath(
+      command ? commandColoured : maskieren(headline),
+      command || headline,
+      kind === 'tool' && question.grund ? question.grundWert || '' : '',
+    ),
+  )
+  /* The reason as a sentence; where the line does not carry the place as it
+     stands, the place follows the sentence after a colon. */
+  const warning = $derived(reasonLine(question.grund, question.grundWert || '', shown.count))
 
   function sendOwn() {
     const words = own.trim()
@@ -281,18 +294,20 @@
     {#if pill}<div class="pill">{pill}</div>{/if}
     <h2 class="title">{kind === 'tool' ? t('werkzeug.permission_question') : question.frage}</h2>
 
-    {#if kind === 'tool' && (command || question.grund)}
+    {#if kind === 'tool' && (headline || question.grund)}
       <div class="details">
         <!-- The command is never folded away. With more arguments than the
              one it shows, a click on it unfolds the rest. -->
-        {#if command && argumentPairs.length > 1}
+        {#if headline && argumentPairs.length > 1}
           <button class="command" class:open={argumentsOpen} aria-expanded={argumentsOpen}
                   onclick={() => (argumentsOpen = !argumentsOpen)} use:rollfade>
-            <span class="quiet">$</span> {@html commandColoured}
+            {#if command}<span class="quiet">$</span>{' '}{/if}{@html shown.html}
             <span class="unfold"><Hauszeichen zeichen="pfeil_unten" groesse={11} strich={2.6} /></span>
           </button>
-        {:else if command}
-          <div class="command" use:rollfade><span class="quiet">$</span> {@html commandColoured}</div>
+        {:else if headline}
+          <div class="command" use:rollfade>
+            {#if command}<span class="quiet">$</span>{' '}{/if}{@html shown.html}
+          </div>
         {/if}
         {#if argumentsOpen}
           <dl class="arguments" use:rollfade>
@@ -310,7 +325,7 @@
               <path d="M32 28 V38" stroke-width="4.5" />
               <path d="M32 44.5 V45" />
             </svg>
-            <span>{@html reasonText}</span>
+            <span>{warning}</span>
           </p>
         {/if}
       </div>
@@ -393,7 +408,7 @@
   @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(0.97); } }
 
   /* The mark of a question: a round glass badge, the question mark drawn
-     as a line in the pill's colour. */
+     as a line in the text's colour. */
   .badge {
     display: grid;
     place-items: center;
@@ -403,7 +418,7 @@
     border-radius: 50%;
     background: var(--glass-button);
     box-shadow: inset 0 0 0 1px var(--glass-button-edge);
-    color: var(--blau);
+    color: var(--text);
   }
   .badge svg { width: 30px; height: 30px; }
 
@@ -413,17 +428,16 @@
     color: var(--text-leise);
   }
   .asker b { font-weight: 600; color: var(--text); }
-  /* A tool's name wears the tool colour wherever it stands. */
-  .asker b.werkzeugname { color: var(--werkzeug); }
 
-  /* Coloured the quiet way: the colour on a ground that holds 12 % of it. */
+  /* In the text's colour on a ground that holds 12 % of it: a question is
+     not a state, so it takes no status colour. */
   .pill {
     width: fit-content;
     margin: 0 auto 12px;
     padding: 4px 12px;
     border-radius: 9px;
-    background: color-mix(in srgb, var(--blau) 12%, var(--bg));
-    color: var(--blau);
+    background: color-mix(in srgb, var(--text) 12%, var(--bg));
+    color: var(--text);
     font-size: 11.5px;
     font-weight: 600;
     letter-spacing: 0.04em;
@@ -483,22 +497,30 @@
   }
   dt { color: var(--text-still); font: 11.5px var(--schrift-fest); white-space: nowrap; }
   dd { margin: 0; min-width: 0; color: var(--text); font: 12px var(--schrift-fest); white-space: pre-wrap; overflow-wrap: anywhere; }
-  /* Reaching beyond what was shared: the waiting colour, on a quiet
-     surface and never as a line of full yellow text. */
+  /* The place the reason points at, inside the command: a soft marker in the
+     waiting colour over the whole value, one surface per line. The text and
+     the colours of the highlighting stay under it. */
+  .command :global(mark.outside) {
+    padding: 1px 0;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--gelb) 22%, transparent);
+    color: inherit;
+  }
+  /* Reaching beyond what was shared: one line under the command, no box and
+     no ground, in the command's own face and the quiet colour, indented to
+     stand under the dollar sign; the sign in front of it is the waiting
+     colour, centred on the first line of the text. */
   .reason {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 7px;
     margin: 0;
-    padding: 6px 9px;
-    border-radius: 9px;
-    background: color-mix(in srgb, var(--gelb) 12%, var(--bg-erhoben));
-    font-size: 12px;
-    color: var(--text);
+    padding: 0 10px;
+    font: 12px/18px var(--schrift-fest);
+    color: var(--text-still);
   }
-  .reason svg { flex: none; color: var(--gelb); }
+  .reason svg { flex: none; margin-top: 2.5px; color: var(--gelb); }
   .reason span { min-width: 0; overflow-wrap: anywhere; }
-  .reason :global(.path) { font: 11.5px var(--schrift-fest); }
 
   /* Each answer is a card of its own, as wide as the window. */
   .answers { display: flex; flex-direction: column; gap: 10px; }

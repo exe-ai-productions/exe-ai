@@ -50,6 +50,46 @@ def test_a_value_is_written_with_the_digits_of_its_step(wert, schritt, sprache, 
 
 
 @needs_node
+@pytest.mark.parametrize(
+    ("wert", "sprache", "erwartet"),
+    [
+        (0.01, "de", "0,01"),
+        (0.5, "de", "0,50"),
+        (0.64, "de", "0,64"),
+        (14.8, "de", "14,8"),
+        (7, "de", "7,0"),
+        (1, "de", "1,0"),
+        (60.84, "de", "60,8"),
+        (0.01, "en", "0.01"),
+        (14.8, "en", "14.8"),
+        (7, "en", "7.0"),
+        (1234.5, "de", "1234,5"),
+        (0.994, "de", "0,99"),
+        (0.996, "de", "1,0"),
+        (0.996, "en", "1.0"),
+        (-0.001, "en", "0.00"),
+    ],
+)
+def test_a_size_in_gb_has_two_digits_under_one_gb_and_one_from_one_gb(wert, sprache, erwartet):
+    assert _run(f"formatGb({wert}, {json.dumps(sprache)})") == erwartet
+
+
+@needs_node
+def test_a_size_that_is_no_number_is_a_hyphen():
+    assert _run(
+        '[formatGb(null, "de"), formatGb(undefined, "de"), formatGb(NaN, "en"), formatGb("x", "de"),'
+        ' formatGb("", "de"), formatGb(true, "de"), formatGb([], "de"), formatGb(Infinity, "en")]'
+    ) == ["-"] * 8
+
+
+@needs_node
+def test_a_speed_in_mb_per_second_takes_the_sign_of_the_language():
+    assert _run('[formatNumber(48.2, 1, "de"), formatNumber(48.2, 1, "en"), formatNumber(7, 1, "de")]') == [
+        "48,2", "48.2", "7,0",
+    ]
+
+
+@needs_node
 def test_the_digits_of_a_step_are_read_from_the_way_it_is_written():
     assert _run("[fractionDigits(1), fractionDigits(0.5), fractionDigits(0.05), fractionDigits(1e-7)]") == [
         0, 1, 2, 7,

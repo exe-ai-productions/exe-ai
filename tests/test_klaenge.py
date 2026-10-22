@@ -1,4 +1,4 @@
-"""The three shipped sounds.
+"""The four shipped sounds.
 
 Nothing here judges how they sound. What it checks is that they are there,
 that they are readable audio, and that they are short — a notification that
@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 KLANG_VERZEICHNIS = Path(__file__).resolve().parent.parent / "static" / "klaenge"
-NAMEN = ("fertig", "wartet", "fehler")
+NAMEN = ("fertig", "wartet", "fehler", "agent-cronjob")
 
 # Long enough to be a sound, short enough not to become one you wait out.
 MAX_SEKUNDEN = 2.0
@@ -38,5 +38,24 @@ def test_die_herkunft_steht_dabei():
     be removed later."""
     herkunft = KLANG_VERZEICHNIS / "HERKUNFT.md"
     assert herkunft.exists()
-    text = herkunft.read_text(encoding="utf-8")
-    assert "CC0" in text
+    text = " ".join(herkunft.read_text(encoding="utf-8").split())
+    # Made by the program's own script: no recording, no outside library.
+    assert "script of our own" in text
+    assert "licence of a third party" in text
+
+
+def test_the_old_sound_is_gone():
+    """`cron-fertig.wav` is the agent / cronjob sound under its new name; a
+    file nobody plays is a file shipped for nothing."""
+    assert not (KLANG_VERZEICHNIS / "cron-fertig.wav").exists()
+    assert sorted(p.name for p in KLANG_VERZEICHNIS.glob("*.wav")) == sorted(
+        f"{name}.wav" for name in NAMEN
+    )
+
+
+def test_no_outside_source_in_the_notices():
+    """The sounds are the program's own, so the notices of third parties
+    name no sound library."""
+    hinweise = (KLANG_VERZEICHNIS.parent.parent / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+    assert "Versilian" not in hinweise
+    assert "Notification sounds" not in hinweise

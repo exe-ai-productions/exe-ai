@@ -5,22 +5,20 @@ terminal and without a service, on a pipe and a stand-in transport."""
 from __future__ import annotations
 
 import json
-import re
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
-from prompt_toolkit.application import create_app_session, get_app_session
+from prompt_toolkit.application import create_app_session
 from prompt_toolkit.data_structures import Size
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput, Output
-from prompt_toolkit.utils import get_cwidth
 from rich.table import Table
 from rich.text import Text
 
@@ -28,8 +26,6 @@ from prompt_toolkit.layout.screen import WritePosition
 
 from cli import chat, commands, dialogs, events, glyphs, prefs, themes
 from cli.app import (
-    COMPLETION_ROWS,
-    EMPTY_WINDOW,
     MAX_INPUT_LINES,
     STATUS_LINES,
     CliApp,
@@ -42,7 +38,13 @@ from cli.render import build_renderer, clock, split_blocks
 from cli.status import build_status
 from cli.texts import Texts
 from stub_service import eventually, foreground, noted
-from tests.cli.program import Run, a_session_without_the_console, local_clock, run_client
+from tests.cli.program import (
+    Run,
+    a_session_without_the_console,
+    in_the_shared_session,
+    local_clock,
+    run_client,
+)
 from tests.cli.stub_service import StubService
 from test_shell import SLEEP_RUNS, STARTS_A_SLEEP
 from test_stream import shown_text, typed_line, where
@@ -127,60 +129,19 @@ class Service:
 
 
 class Terminal(DummyOutput):
-    """An output that knows where its cursor stands, the way a terminal
-    does: every line written moves it down, to the last row at most — below
-    that the terminal scrolls — the screen's own cursor moves move it too,
-    and what empties the window puts it on the first row. What is written
-    is dropped, except the runs of empty lines that push the block down:
-    those are kept, each by its length. How many rows the content went up
-    by, because a line was written below the last row, is counted. The
-    window can change its height while the client runs."""
+    """An output of a window of a size: the screen draws on it and the
+    window's size is what it reads. The window can change its height while
+    the client runs."""
 
     def __init__(self, columns: int = 80, rows: int = 40) -> None:
         self.columns, self.rows = columns, rows
-        self.row = 0
-        self.pushes: list[int] = []
-        # How many rows the window's content was moved down by, each time.
-        self.shifts: list[int] = []
-        self.scrolled = 0
 
     def get_size(self) -> Size:
         return Size(rows=self.rows, columns=self.columns)
 
-    def get_rows_below_cursor_position(self) -> int:
-        return self.rows - self.row
-
-    def write(self, data: str) -> None:
-        self.write_raw(data)
-
-    def write_raw(self, data: str) -> None:
-        if data and not data.strip("\n"):
-            self.pushes.append(len(data))
-        for run in re.findall(r"\x1b\[H((?:\x1bM)+)", data):
-            self.shifts.append(len(run) // 2)
-        for row in re.findall(r"\x1b\[(\d+);1H", data):
-            self.row = min(self.rows - 1, int(row) - 1)
-        _, emptied, data = data.rpartition(EMPTY_WINDOW)
-        if emptied:
-            self.row = 0
-        moved = self.row + data.count("\n")
-        self.scrolled += max(0, moved - (self.rows - 1))
-        self.row = min(self.rows - 1, moved)
-
-    def cursor_up(self, amount: int) -> None:
-        self.row = max(0, self.row - amount)
-
-    def cursor_down(self, amount: int) -> None:
-        self.row = min(self.rows - 1, self.row + amount)
-
-    def cursor_goto(self, row: int = 0, column: int = 0) -> None:
-        self.row = row
-
     def resize(self, rows: int) -> None:
-        """The window gets ``rows`` rows; a cursor below the new bottom
-        stands on the last row, the content above it having scrolled."""
+        """The window gets ``rows`` rows."""
         self.rows = rows
-        self.row = min(self.row, rows - 1)
 
 
 def run(
@@ -197,7 +158,7 @@ def run(
         safety_net = threading.Timer(SAFETY_NET_SECONDS, pipe.close)
         safety_net.start()
         try:
-            with create_app_session(input=pipe, output=output or DummyOutput()):
+            with in_the_shared_session(pipe, output or DummyOutput()):
                 return main(
                     ["--url", "http://service.test", "--lang", "en", *arguments],
                     http=httpx.Client(transport=httpx.MockTransport(service)),
@@ -525,7 +486,7 @@ def rows_of(app: CliApp, typed: str) -> tuple[int, int, int]:
     a terminal whose cursor stands at the top hands it. Read off the
     block's own division of the rows, the way the screen draws it."""
     app._input.buffer.text = typed
-    block = app._app.layout.container
+    block = app._fixed
     sizes = block._divide_heights(WritePosition(0, 0, 80, 40))
     assert sizes is not None
     children = block._all_children
@@ -714,17 +675,12 @@ def running(tmp_path: Path, terminal: Terminal) -> Iterator[CliApp]:
         def run_the_screen() -> None:
             # A thread that made no session of its own stands in the shared
             # one; it is lent the pipe and the terminal for this run.
-            shared = get_app_session()
-            former = shared._input, shared._output
-            shared._input, shared._output = pipe, terminal
-            try:
+            with in_the_shared_session(pipe, terminal):
                 app = built(tmp_path)
                 app._app.terminal_size_polling_interval = SIZE_POLL_SECONDS
                 screens.append(app)
                 ready.set()
                 app.run()
-            finally:
-                shared._input, shared._output = former
 
         if hasattr(terminal, "bind_input"):
             terminal.bind_input(pipe)
@@ -745,719 +701,36 @@ def running(tmp_path: Path, terminal: Terminal) -> Iterator[CliApp]:
             assert not thread.is_alive()
 
 
-def settled() -> None:
-    """Long enough for the screen to have looked at its window more than
-    once, so it has seen a change of it and drawn again."""
-    time.sleep(SIZE_POLL_SECONDS * 10)
+def drawn(app: CliApp) -> bool:
+    """Whether the screen has drawn everything that was written into the
+    history: the rows of every line are worked out at a drawing."""
+    return len(app._history._first_row) == len(app._history._lines)
 
 
-def test_the_block_is_pushed_to_the_last_rows_at_start_when_the_window_grows_and_after_a_clear(
-    tmp_path,
-):
-    terminal = Terminal(rows=40)
-    with running(tmp_path, terminal) as app:
-        # The terminal hands the block every row below the cursor, which
-        # stands at the top: as many empty lines go above it as leave it
-        # the last rows alone.
-        eventually(lambda: terminal.pushes == [40 - BLOCK_ROWS])
-        assert terminal.pushes == [33]
-        # Ten rows more at the bottom: ten more empty lines.
-        settled()
-        terminal.resize(50)
-        eventually(lambda: terminal.pushes == [33, 10])
-        # Ten rows fewer: the terminal cut them, nothing is pushed.
-        settled()
-        terminal.resize(30)
-        settled()
-        assert terminal.pushes == [33, 10]
-        # The screen emptied: the block would stand at the top of it, and
-        # is pushed to the last rows again.
-        app.clear()
-        eventually(lambda: terminal.pushes == [33, 10, 30 - BLOCK_ROWS])
-        settled()
-        assert terminal.pushes == [33, 10, 23]
+def history_loaded(app: CliApp) -> bool:
+    """Whether the input field has taken its history up, which it does at a
+    drawing: a key that comes before would find nothing to go back to."""
+    task = app._input.buffer._load_history_task
+    return task is not None and task.done()
 
 
-def typed_into(app: CliApp, text: str) -> None:
-    """Puts ``text`` into the input field the way typing does, on the
-    screen's own thread, and waits until the field has it."""
-    app._on_screen_thread(lambda: app._input.buffer.insert_text(text))
-    eventually(lambda: app._input.text.endswith(text))
-
-
-def the_list_is_open(app: CliApp) -> bool:
-    state = app._input.buffer.complete_state
-    return state is not None and bool(state.completions)
-
-
-def emptied(app: CliApp) -> None:
-    """The input field emptied, and the screen asked to draw it again — a
-    key would have done the second on its own."""
-    app._on_screen_thread(lambda: (app._input.buffer.reset(), app.invalidate()))
-
-
-def test_a_list_that_opens_below_the_field_takes_the_empty_rows_and_nothing_scrolls(tmp_path):
-    """At the start the head stands at the top and the empty rows above the
-    block are all there is below it. The list takes them, and the head
-    does not move; when the list is gone, the block is on the last rows
-    again and the rows are empty again — once and once more."""
-    terminal = Terminal(rows=40)
-    with running(tmp_path, terminal) as app:
-        eventually(lambda: terminal.pushes == [40 - BLOCK_ROWS])
-        settled()
-        assert terminal.scrolled == 0
-        pushes = [40 - BLOCK_ROWS]
-        for _ in range(2):
-            typed_into(app, "/")
-            eventually(lambda: the_list_is_open(app))
-            settled()
-            assert terminal.scrolled == 0
-            emptied(app)
-            pushes.append(COMPLETION_ROWS)
-            eventually(lambda: terminal.pushes == pushes)
-            settled()
-            assert terminal.scrolled == 0
-            assert terminal.pushes == pushes
-
-
-def test_a_list_of_another_length_takes_only_the_rows_it_needs_and_gives_them_back(tmp_path):
-    """The list is as long as the commands that match what is typed: twelve
-    rows for a slash, three for a slash and a letter. What it does not need
-    any more is empty again, and the next list starts from there."""
-    terminal = Terminal(rows=40)
-    free = 40 - BLOCK_ROWS
-    with running(tmp_path, terminal) as app:
-        eventually(lambda: terminal.pushes == [free])
-        typed_into(app, "/")
-        eventually(lambda: the_list_is_open(app))
-        # Read off what the screen knows to be empty above the block, not
-        # off the pushes that led there: the drawing of a letter may land
-        # between the key and the new list, and the list is then given
-        # back whole before the shorter one takes its rows — one push
-        # more, the same rows empty.
-        eventually(lambda: app._free_rows._count == free - COMPLETION_ROWS)
-        typed_into(app, "t")
-        eventually(lambda: app._free_rows._count == free - 3)
-        assert len(app._input.buffer.complete_state.completions) == 3
-        emptied(app)
-        eventually(lambda: app._free_rows._count == free)
-        typed_into(app, "/")
-        eventually(lambda: the_list_is_open(app))
-        eventually(lambda: app._free_rows._count == free - COMPLETION_ROWS)
-        settled()
-        assert terminal.scrolled == 0
-        assert terminal.pushes[0] == free
-
-
-def test_each_printed_line_pushes_the_head_up_by_one_row_and_the_block_stays_down(tmp_path):
-    terminal = Terminal(rows=40)
-    with running(tmp_path, terminal) as app:
-        eventually(lambda: terminal.pushes == [40 - BLOCK_ROWS])
-        settled()
-        app.print_above(Text("first"))
-        eventually(lambda: terminal.scrolled == 1)
-        settled()
-        assert terminal.scrolled == 1
-        for number in range(9):
-            app.print_above(Text(f"line {number}"))
-        eventually(lambda: terminal.scrolled == 10)
-        settled()
-        assert terminal.scrolled == 10
-        # The block was on the last rows all the time: nothing was pushed.
-        assert terminal.pushes == [40 - BLOCK_ROWS]
-
-
-def test_a_list_that_opens_right_below_printed_lines_scrolls_and_does_not_write_over_them(tmp_path):
-    """Nothing is known to be empty above the block once a line stands
-    there: the list takes no row of it, and the terminal scrolls as it
-    always did."""
-    terminal = Terminal(rows=40)
-    with running(tmp_path, terminal) as app:
-        eventually(lambda: terminal.pushes == [40 - BLOCK_ROWS])
-        settled()
-        app.print_above(Text("printed"))
-        eventually(lambda: terminal.scrolled == 1)
-        settled()
-        typed_into(app, "/")
-        eventually(lambda: the_list_is_open(app))
-        settled()
-        assert terminal.scrolled == 1 + COMPLETION_ROWS
-
-
-def test_a_list_that_opens_after_the_window_changed_its_height_takes_no_rows_on_trust(tmp_path):
-    """A new height may have cut or moved what stands above the block:
-    nothing is known to be empty there any more, and the list scrolls."""
-    terminal = Terminal(rows=40)
-    with running(tmp_path, terminal) as app:
-        eventually(lambda: terminal.pushes == [40 - BLOCK_ROWS])
-        settled()
-        terminal.resize(30)
-        settled()
-        typed_into(app, "/")
-        eventually(lambda: the_list_is_open(app))
-        settled()
-        assert terminal.scrolled > 0
-
-
-class AnswersOnCue(Terminal):
-    """A terminal that says where its cursor stands only when told to: the
-    question is kept with the row the cursor stood on when it was asked, and
-    the answer goes into the client's input in the order of the questions —
-    as late as the test wants."""
-
-    def __init__(self, columns: int = 80, rows: int = 40) -> None:
-        super().__init__(columns, rows)
-        self.asked: list[int] = []
-        self.answered = 0
-        self._pipe: Any = None
-
-    def bind_input(self, pipe: Any) -> None:
-        self._pipe = pipe
-
-    @property
-    def responds_to_cpr(self) -> bool:
-        return True
-
-    def get_rows_below_cursor_position(self) -> int:
-        raise NotImplementedError
-
-    def ask_for_cpr(self) -> None:
-        self.asked.append(self.row)
-
-    def answer(self, count: int = 1) -> None:
-        """The oldest ``count`` questions that wait are answered, all in one
-        piece of input — the answers that come late come together."""
-        text = ""
-        for _ in range(count):
-            row = self.asked[self.answered]
-            self.answered += 1
-            text += f"\x1b[{row + 1};1R"
-        self._pipe.send_text(text)
-
-    def answer_all(self) -> None:
-        """Everything asked so far, and what is asked in answer to that."""
-        for _ in range(20):
-            if self.answered >= len(self.asked):
-                return
-            self.answer(len(self.asked) - self.answered)
-            settled()
-
-
-def test_a_second_clear_before_the_push_was_measured_pushes_again(tmp_path):
-    """The terminal says where its cursor stands late. A second clear comes
-    before a drawing has measured the push of the first: the block stands at
-    the top again, and nothing but a push brings it to the last rows."""
-    terminal = AnswersOnCue(rows=40)
-    free = 40 - BLOCK_ROWS
-    with running(tmp_path, terminal) as app:
-        eventually(lambda: terminal.asked)
-        terminal.answer_all()
-        eventually(lambda: terminal.pushes == [free])
-        terminal.answer_all()
-        settled()
-        assert terminal.pushes == [free]
-
-        app.clear()
-        eventually(lambda: len(terminal.asked) > terminal.answered)
-        terminal.answer(len(terminal.asked) - terminal.answered)
-        eventually(lambda: terminal.pushes == [free, free])
-        # The push is not measured yet — nothing has answered since — when
-        # the window is emptied again.
-        app.clear()
-        # Two questions wait: the one of the first push and the one of the
-        # second clear. They are answered together, and only then is the
-        # block measured again — at the top, where the first push had put
-        # it before it moved.
-        eventually(lambda: len(terminal.asked) - terminal.answered >= 2)
-        terminal.answer_all()
-        eventually(lambda: terminal.pushes == [free, free, free])
-        settled()
-        assert terminal.pushes == [free, free, free]
-
-
-def rows_between_the_history_and_the_block(app: CliApp, terminal: WindowTerminal) -> int:
-    """How many rows right above the block hold nothing: the history ends
-    that many rows above it."""
-    count = 0
-    for line in reversed(above_the_block(app, terminal)):
-        if "".join(line).strip():
-            break
-        count += 1
-    return count
-
-
-def test_a_list_closed_over_a_full_window_leaves_no_blank_rows_above_the_block(tmp_path):
-    """The history fills the window, so the list scrolls it up when it
-    opens. Closed, the block is one row high again: the history moves down
-    into the rows the list left, and no empty row is written between it and
-    the block."""
-    terminal = with_a_history(WindowTerminal(WIDE_COLUMNS, rows=30), 60)
-    with running(tmp_path, terminal) as app:
-        settled()
-        history = right_above_the_block(app, terminal)
-        assert history
-        assert rows_between_the_history_and_the_block(app, terminal) == 0
-        for _ in range(2):
-            typed_into(app, "/")
-            eventually(lambda: the_list_is_open(app))
-            settled()
-            emptied(app)
-            eventually(lambda: not the_list_is_open(app))
-            settled()
-            assert right_above_the_block(app, terminal) == history
-            assert rows_between_the_history_and_the_block(app, terminal) == 0
-            # The block is on the last row of the window all the time.
-            assert terminal.y == len(terminal.lines) - 1 - (STATUS_LINES + 1)
-
-
-def test_a_command_list_below_one_printed_line_leaves_no_blank_rows_either(tmp_path):
-    """The running chat: a line stands above the block, nothing is known to
-    be empty there, the list scrolls the line and the rows over it up."""
-    terminal = with_a_history(WindowTerminal(WIDE_COLUMNS, rows=30), 60)
-    with running(tmp_path, terminal) as app:
-        settled()
-        app.print_above(Text("the last printed line"))
-        eventually(lambda: "thelastprintedline" in right_above_the_block(app, terminal))
-        settled()
-        history = right_above_the_block(app, terminal)
-        typed_into(app, "/")
-        eventually(lambda: the_list_is_open(app))
-        settled()
-        emptied(app)
-        eventually(lambda: not the_list_is_open(app))
-        settled()
-        assert right_above_the_block(app, terminal) == history
-        assert rows_between_the_history_and_the_block(app, terminal) == 0
-
-
-def test_silence_probe_a_list_closed_in_a_window_with_room_still_pushes_the_block_down(tmp_path):
-    """Nothing scrolled for the list here: the empty rows it took are given
-    back as empty rows between the head and the block, as before."""
-    terminal = Terminal(rows=40)
-    with running(tmp_path, terminal) as app:
-        eventually(lambda: terminal.pushes == [40 - BLOCK_ROWS])
-        settled()
-        typed_into(app, "/")
-        eventually(lambda: the_list_is_open(app))
-        settled()
-        emptied(app)
-        eventually(lambda: terminal.pushes == [40 - BLOCK_ROWS, COMPLETION_ROWS])
-        settled()
-        assert terminal.shifts == []
-        assert terminal.scrolled == 0
-
-
-def test_a_list_that_opens_in_a_cleared_window_takes_the_rows_the_block_was_pushed_by(tmp_path):
-    """A line stands above the block, so nothing is known to be empty; the
-    window is cleared and the block pushed to the last rows again, and
-    those rows are empty and known to be."""
-    terminal = Terminal(rows=40)
-    with running(tmp_path, terminal) as app:
-        eventually(lambda: terminal.pushes == [40 - BLOCK_ROWS])
-        settled()
-        app.print_above(Text("printed"))
-        eventually(lambda: terminal.scrolled == 1)
-        settled()
-        app.clear()
-        eventually(lambda: terminal.pushes == [40 - BLOCK_ROWS, 40 - BLOCK_ROWS])
-        settled()
-        typed_into(app, "/")
-        eventually(lambda: the_list_is_open(app))
-        settled()
-        assert terminal.scrolled == 1
-
-
-def test_an_output_whose_cursor_the_lines_do_not_move_is_pushed_once(tmp_path):
-    """A stand-in that always reports the same rows below the cursor would
-    otherwise have the block pushed without end."""
-    pushes: list[int] = []
-
-    class Unmoved(DummyOutput):
-        def write_raw(self, data: str) -> None:
-            if data and not data.strip("\n"):
-                pushes.append(len(data))
-
-        def write(self, data: str) -> None:
-            self.write_raw(data)
-
-    with create_pipe_input() as pipe:
-        pipe.send_text("/quit" + ENTER)
-        with create_app_session(input=pipe, output=Unmoved()):
-            app = built(tmp_path)
-            app.run()
-    assert pushes == [40 - BLOCK_ROWS]
-
-
-# --- A window that gets narrower ------------------------------------------------
-
-# What reaches a terminal, piece by piece: a sequence that tells it what to
-# do, or one sign.
-WRITTEN = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1bM|.", re.DOTALL)
-
-# The width the block is drawn in first, and the widths the window is drawn
-# down to: by one column, by a third — every row of the block takes two
-# rows then — and to less than half, where every row takes three.
-WIDE_COLUMNS = 106
-DRAWN_DOWN_COLUMNS = [105, 69, 40]
-
-# How many signs of what stands right above the block are compared: several
-# rows of the history, and more than any row of the block holds.
-LAST_OF_THE_HISTORY = 300
-
-
-class WindowTerminal(DummyOutput):
-    """An output that keeps what is written to it in rows and breaks them
-    anew when it is drawn narrower, the way the terminal in the window of
-    Exe AI does: the client is told the new width first, and the terminal
-    breaks its rows once the client has taken its block off — at the first
-    erase after it, which is what the window waits for. It goes through its
-    rows from the last to the first; a row longer than the new width goes
-    on in rows added below it — the cursor's own row like every other, as
-    the window tells its terminal.
-    What becomes of the cursor depends on the history the terminal keeps
-    above its window, ``kept`` rows at the most with the window's:
-
-    - none yet: the cursor moves down with every row added, and for each
-      the last row is dropped, until the cursor stands on the last row;
-    - some, and room for more: the window moves down with every row added,
-      and the cursor with it;
-    - as much as it keeps: the cursor stays on its row of the window, and
-      as many rows leave at the top as were added.
-
-    A sign two cells wide never stands half in one row and half in the
-    next: where it meets the last cell, it goes to the next row whole. A
-    window drawn wider leaves the rows as they are: only rows the terminal
-    broke itself would be joined again."""
-
-    def __init__(self, columns: int, rows: int = 30, kept: int = 5000) -> None:
-        self.columns, self.rows, self.kept = columns, rows, kept
-        # The width the client was told, and the width the terminal still
-        # breaks its rows to until the client has taken its block off.
-        self.told = columns
-        self._breaks_to: int | None = None
-        self.lines: list[list[str]] = [[] for _ in range(rows)]
-        # The cursor: its column, and its row counted from the first row
-        # kept.
-        self.x = self.y = 0
-        self.wraps = True
-
-    @property
-    def top(self) -> int:
-        """The first row of the window."""
-        return len(self.lines) - self.rows
-
-    def get_size(self) -> Size:
-        return Size(rows=self.rows, columns=self.told)
-
-    def get_rows_below_cursor_position(self) -> int:
-        return self.rows - (self.y - self.top)
-
-    def write(self, data: str) -> None:
-        self.write_raw(data)
-
-    def write_raw(self, data: str) -> None:
-        for written in WRITTEN.findall(data):
-            if written == "\x1b[2J":
-                self.erase_screen()
-            elif written == "\x1b[H":
-                self.x, self.y = 0, self.top
-            elif written == "\n":
-                # The history's line ends come through a terminal that
-                # goes to the first column with them.
-                self.x = 0
-                self._next_row()
-            elif written == "\r":
-                self.x = 0
-            elif written == "\x1bM":
-                # Reverse index: up a row, and at the top of the window the
-                # content moves down by one.
-                if self.y == self.top:
-                    self._scroll_down(1)
-                else:
-                    self.y -= 1
-            elif re.fullmatch(r"\x1b\[\d+;\d+H", written):
-                row, column = (int(part) for part in written[2:-1].split(";"))
-                self.cursor_goto(row, column)
-            elif written >= " ":
-                self._put(written)
-
-    def _scroll_down(self, amount: int) -> None:
-        """What the window shows moves down by ``amount`` rows, empty rows
-        come in at the top and the rows at the bottom leave; the history
-        above the window and the cursor stay where they are."""
-        window = self.lines[self.top :]
-        self.lines[self.top :] = [[] for _ in range(amount)] + window[: len(window) - amount]
-
-    def _put(self, sign: str) -> None:
-        # A wide sign holds its cell and, with nothing in it, the next.
-        cells = [sign, ""][: get_cwidth(sign)]
-        if not cells:
+def resized_and_seen(terminal: Terminal, rows: int, seen: Callable[[], Any]) -> None:
+    """Gives the window ``rows`` rows and waits until the screen shows it.
+    The screen notices a new size only against an older one it has read: a
+    change that comes before its first reading is the size it starts from.
+    So, until the screen shows the size, the window is moved to another one
+    and back."""
+    deadline = time.monotonic() + SAFETY_NET_SECONDS
+    while True:
+        terminal.resize(rows)
+        try:
+            eventually(seen, timeout=0.5)
             return
-        if self.x + len(cells) > self.columns:
-            if self.wraps:
-                self.x = 0
-                self._next_row()
-            else:
-                self.x = self.columns - len(cells)
-        line = self.lines[self.y]
-        line.extend(" " * (self.x - len(line)))
-        line[self.x : self.x + len(cells)] = cells
-        self.x += len(cells)
-
-    def _next_row(self) -> None:
-        if self.y < len(self.lines) - 1:
-            self.y += 1
-            return
-        self.lines.append([])
-        if len(self.lines) > self.kept:
-            del self.lines[0]
-        else:
-            self.y += 1
-
-    def enable_autowrap(self) -> None:
-        self.wraps = True
-
-    def disable_autowrap(self) -> None:
-        self.wraps = False
-
-    def cursor_up(self, amount: int) -> None:
-        self.y = max(self.top, self.y - amount)
-
-    def cursor_down(self, amount: int) -> None:
-        self.y = min(len(self.lines) - 1, self.y + amount)
-
-    def cursor_forward(self, amount: int) -> None:
-        self.x = min(self.columns - 1, self.x + amount)
-
-    def cursor_backward(self, amount: int) -> None:
-        self.x = max(0, self.x - amount)
-
-    def cursor_goto(self, row: int = 0, column: int = 0) -> None:
-        self.x, self.y = max(0, column - 1), self.top + max(0, row - 1)
-
-    def erase_end_of_line(self) -> None:
-        del self.lines[self.y][self.x :]
-
-    def erase_down(self) -> None:
-        self.erase_end_of_line()
-        for line in self.lines[self.y + 1 :]:
-            line.clear()
-        if self._breaks_to is not None:
-            # The block is off: now the rows that are left are broken anew.
-            columns, self._breaks_to = self._breaks_to, None
-            self._break_anew(columns)
-            self.columns = columns
-            self.x = min(self.x, columns - 1)
-
-    def erase_screen(self) -> None:
-        for line in self.lines[self.top :]:
-            line.clear()
-
-    def set_width(self, columns: int) -> None:
-        """The window is drawn at another width. The client is told at
-        once. A wider window breaks nothing; a narrower one breaks the
-        rows when the client has erased its block."""
-        self.told = columns
-        if columns < self.columns:
-            self._breaks_to = columns
-            return
-        self._breaks_to = None
-        self.columns = columns
-        self.x = min(self.x, columns - 1)
-
-    def _break_anew(self, columns: int) -> None:
-        lines, rows = self.lines, self.rows
-        # The rows as they stand: the terminal still goes through the ones
-        # it has dropped at the end.
-        standing = list(lines)
-        # The first row of the window, and the cursor's row in it.
-        top, row = self.top, self.y - self.top
-        added: list[tuple[int, list[list[str]]]] = []
-        count = 0
-        for index in range(len(standing) - 1, -1, -1):
-            line = standing[index]
-            pieces = []
-            while len(line) > columns:
-                # The second half of a wide sign begins no row.
-                cut = columns - 1 if line[columns] == "" else columns
-                pieces.append(line[:cut])
-                del line[:cut]
-            if not pieces:
-                continue
-            pieces.append(line[:])
-            more = len(pieces) - 1
-            line[:] = pieces[0]
-            added.append((index + 1 + count, pieces[1:]))
-            count += more
-            filled = row if top == 0 and row != len(lines) - 1 else len(lines)
-            for _ in range(more - max(0, filled - self.kept + more)):
-                if top == 0 and row < rows - 1:
-                    row += 1
-                    lines.pop()
-                elif top == 0 or top < min(self.kept, len(lines) + count) - rows:
-                    top += 1
-        # The rows that are left and the added ones, set in their places
-        # from the last row up; what no longer fits leaves at the top.
-        anew: list[list[str]] = [[] for _ in range(min(self.kept, len(lines) + count))]
-        left, placed = len(lines) - 1, 0
-        index = len(anew) - 1
-        while index >= 0:
-            if added and added[0][0] > left + placed:
-                pieces = added.pop(0)[1]
-                for piece in reversed(pieces):
-                    if index >= 0:
-                        anew[index] = piece
-                    index -= 1
-                placed += len(pieces)
-            else:
-                anew[index] = lines[left]
-                left -= 1
-                index -= 1
-        for line in anew:
-            del line[columns:]
-        lines[:] = anew
-        self.y = top + row
-
-
-def with_a_history(terminal: WindowTerminal, lines: int) -> WindowTerminal:
-    """``terminal`` with ``lines`` lines written into it before the client
-    starts — every other one longer than the width the window is drawn
-    down to, so the terminal breaks it too."""
-    for number in range(lines):
-        terminal.write_raw(f"line {number} of the history " + "h" * (number % 2 * 70) + "\n")
-    return terminal
-
-
-def above_the_block(app: CliApp, terminal: WindowTerminal) -> list[list[str]]:
-    """The rows of ``terminal`` above the block of the running screen."""
-    screen = app._app.renderer.last_rendered_screen
-    if screen is None:
-        return []
-    return terminal.lines[: len(terminal.lines) - screen.height]
-
-
-def right_above_the_block(app: CliApp, terminal: WindowTerminal) -> str:
-    """The last signs that stand in ``terminal`` above the block of the
-    running screen, the blanks left out: the end of the history where
-    nothing else stands there. However the terminal has broken the rows,
-    the signs are the same."""
-    signs = "".join("".join(line).replace(" ", "") for line in above_the_block(app, terminal))
-    return signs[-LAST_OF_THE_HISTORY:]
-
-
-def blank_rows_written_above_the_block(app: CliApp, terminal: WindowTerminal) -> int:
-    """How many rows above the block were written and hold nothing but
-    blanks. The history has none: its empty rows were never written to. A
-    row of the block has — the hint line above the field is one — and
-    left standing it is such a row."""
-    return sum(1 for line in above_the_block(app, terminal) if line and not "".join(line).strip())
-
-
-def drawn_in(app: CliApp) -> int:
-    """The columns the running screen drew itself in the last time."""
-    size = app._app.renderer._last_size
-    return size.columns if size is not None else 0
-
-
-# The history the terminal keeps above its window when the window is drawn
-# narrower: the lines written before the client starts, and the rows the
-# terminal keeps at the most.
-NONE_YET = (3, 5000)
-ROOM_FOR_MORE = (50, 5000)
-AS_MUCH_AS_IT_KEEPS = (50, 40)
-
-
-THE_HISTORY_KEPT = pytest.mark.parametrize(
-    ("lines", "kept"),
-    [NONE_YET, ROOM_FOR_MORE, AS_MUCH_AS_IT_KEEPS],
-    ids=["no history kept yet", "room for more history", "as much history as it keeps"],
-)
-
-# Two rows of text in the field at the wide width.
-TWO_ROWS_OF_TEXT = 150
-
-# What stands in the field when the window is drawn narrower: how many
-# signs, and how many of them the cursor stands back from the end.
-IN_THE_FIELD = {
-    "an empty field": (0, 0),
-    "one row of text": (40, 0),
-    "two rows of text": (TWO_ROWS_OF_TEXT, 0),
-    "three rows of text": (TWO_ROWS_OF_TEXT + WIDE_COLUMNS, 0),
-    "the cursor a row above the last": (TWO_ROWS_OF_TEXT, 110),
-}
-
-
-@THE_HISTORY_KEPT
-@pytest.mark.parametrize(
-    ("columns", "signs", "back"),
-    [
-        # Two rows of text at every width, everything else at one of them.
-        pytest.param(columns, *IN_THE_FIELD[field], id=f"{field}, down to {columns} columns")
-        for field in IN_THE_FIELD
-        for columns in DRAWN_DOWN_COLUMNS
-        if field == "two rows of text" or columns == DRAWN_DOWN_COLUMNS[1]
-    ],
-)
-def test_a_window_drawn_narrower_keeps_nothing_of_the_block_it_showed(
-    tmp_path, lines, kept, columns, signs, back
-):
-    """The client is told the new width first and takes its block off; the
-    terminal breaks the rows that are left once that is done. The block is
-    drawn anew below the history, which is the same as before, with no row
-    left over between the two."""
-    terminal = with_a_history(WindowTerminal(WIDE_COLUMNS, kept=kept), lines)
-    with running(tmp_path, terminal) as app:
-        put_in_field(app, "x" * signs, signs - back)
-        settled()
-        history = right_above_the_block(app, terminal)
-        assert history
-        assert blank_rows_written_above_the_block(app, terminal) == 0
-        terminal.set_width(columns)
-        eventually(lambda: right_above_the_block(app, terminal) == history)
-        settled()
-        assert drawn_in(app) == columns
-        assert right_above_the_block(app, terminal) == history
-        assert blank_rows_written_above_the_block(app, terminal) == 0
-
-
-@THE_HISTORY_KEPT
-def test_silence_probe_a_window_drawn_wider_keeps_nothing_of_its_block_either(
-    tmp_path, lines, kept
-):
-    """No row is longer than a wider window: the terminal breaks nothing."""
-    terminal = with_a_history(WindowTerminal(69, kept=kept), lines)
-    with running(tmp_path, terminal) as app:
-        put_in_field(app, "x" * 100)
-        settled()
-        history = right_above_the_block(app, terminal)
-        assert history
-        terminal.set_width(WIDE_COLUMNS)
-        eventually(lambda: drawn_in(app) == WIDE_COLUMNS)
-        settled()
-        assert right_above_the_block(app, terminal) == history
-        assert blank_rows_written_above_the_block(app, terminal) == 0
-
-
-def test_a_wide_sign_at_the_new_last_cell_goes_to_the_next_row_and_nothing_is_left_behind(
-    tmp_path,
-):
-    """The first row of the field holds fifty-two wide signs behind the
-    mark, a hundred and six cells. Drawn down to fifty-three columns, the
-    sign that would stand half in the last cell goes to the next row, and
-    the same happens there: the row takes three rows, where its length
-    alone says two. The client has taken its block off before the terminal
-    breaks anything, so no row of it is left."""
-    lines, kept = ROOM_FOR_MORE
-    terminal = with_a_history(WindowTerminal(WIDE_COLUMNS, kept=kept), lines)
-    with running(tmp_path, terminal) as app:
-        put_in_field(app, WIDE_IN_EVERY_FONT * 60)
-        settled()
-        history = right_above_the_block(app, terminal)
-        terminal.set_width(53)
-        eventually(lambda: right_above_the_block(app, terminal) == history)
-        settled()
-        assert right_above_the_block(app, terminal) == history
-        assert blank_rows_written_above_the_block(app, terminal) == 0
+        except AssertionError:
+            if time.monotonic() >= deadline:
+                raise
+            terminal.resize(rows + 1)
+            time.sleep(SIZE_POLL_SECONDS * 3)
 
 
 # --- The width of the history ---------------------------------------------------
@@ -1484,10 +757,10 @@ def test_the_history_is_set_as_wide_as_the_window(tmp_path):
             assert max(len(line) for line in lines) <= columns
 
 
-def test_a_list_is_written_to_the_history_without_the_blanks_that_fill_up_its_rows(tmp_path, capsys):
+def test_a_list_is_written_to_the_history_without_the_blanks_that_fill_up_its_rows(tmp_path):
     """A list is set in columns, so every row of it is filled up with blanks
-    to the same width. Drawn narrower, the terminal breaks each of them and
-    sets the blanks that are left in a row of their own — more empty rows
+    to the same width. Drawn narrower, the field breaks each of them and
+    sets the blanks that are left in a row of its own — more empty rows
     with every step. Nothing is lost by leaving them out: they show nothing."""
     table = Table(box=None, show_header=False, padding=(0, 2))
     table.add_column()
@@ -1497,7 +770,7 @@ def test_a_list_is_written_to_the_history_without_the_blanks_that_fill_up_its_ro
     with create_pipe_input() as pipe, create_app_session(input=pipe, output=Terminal(columns=100)):
         app = built(tmp_path)
         app.print_above(table)
-    written = capsys.readouterr().out
+    written = app.history_text()
     lines = [line for line in written.splitlines() if line.strip()]
     assert len(lines) == 2
     assert all(line == line.rstrip(" ") for line in lines)

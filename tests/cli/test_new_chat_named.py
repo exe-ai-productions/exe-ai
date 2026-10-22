@@ -17,11 +17,12 @@ from cli import chat
 from cli.interfaces import Asker, Context
 from tests.cli.program import ENTER, Gated, Run, run_client
 from tests.cli.stub_service import StubService, eventually
+from tests.fensterquelle import WINDOW_SOURCE
 
 TOOLS_ASKED = "GET /api/v1/tools"
 PLACEHOLDER = "New chat"
 
-WINDOW = Path(__file__).resolve().parents[2] / "frontend" / "src" / "App.svelte"
+WINDOW = WINDOW_SOURCE
 WINDOW_RULE = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "chatName.js"
 STUDIO = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "studiozeichnen.svelte.js"
 
@@ -245,7 +246,7 @@ def test_the_window_holds_the_rule_once_and_the_studio_opens_no_chat() -> None:
     names none."""
     window = WINDOW.read_text(encoding="utf-8")
     studio = STUDIO.read_text(encoding="utf-8")
-    assert "import { chatNameFrom } from './lib/chatName.js'" in window
+    assert "import { chatNameFrom } from './chatName.js'" in window
     assert "chatNameFrom(fuerTitel)" in window
     assert "function chatNameFrom" not in window and "CHAT_NAME_LIMIT" not in window
     assert "chatName" not in studio and "openNewChat" not in studio

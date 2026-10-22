@@ -16,6 +16,7 @@
   import { melde, zustand } from '../lib/zustand.svelte.js'
   import { familyOf } from '../lib/imageFamilies.svelte.js'
   import Serverabschnitt from './Serverabschnitt.svelte'
+  import Hauszeichen from './Hauszeichen.svelte'
   import Auswahlfeld from './Auswahlfeld.svelte'
   import WachsendesFeld from './WachsendesFeld.svelte'
 
@@ -129,7 +130,7 @@
   }
 </script>
 
-<Serverabschnitt titel={t('bildserver.aufbereitung')}>
+<Serverabschnitt zeichen="besen" titel={t('bildserver.aufbereitung')}>
   <div class="zeile">
     <label class="name" for="bs-verbesserer">{t('bildserver.verbessert_von')}</label>
     <div class="wahl">
@@ -155,10 +156,13 @@
     </div>
   </div>
   <div class="zeile stapel">
-    <label class="name" for="bs-anweisung">{t('bildserver.anweisung')}</label>
+    <div class="obenzeile">
+      <label class="name" for="bs-anweisung">{t('bildserver.anweisung')}</label>
+      <button class="rowsign" onclick={() => (text = stand?.ab_werk[familie] ?? text)}
+              title={t('sprachserver.zuruecksetzen')} aria-label={t('sprachserver.zuruecksetzen')}>
+        <Hauszeichen zeichen="refresh" groesse={14} />
+      </button>
+    </div>
     <WachsendesFeld knapp zeilen={3} bind:wert={text} beschriftung={t('bildserver.anweisung')} />
-    <button class="stillknopf" onclick={() => (text = stand?.ab_werk[familie] ?? text)}>
-      {t('sprachserver.zuruecksetzen')}
-    </button>
   </div>
 </Serverabschnitt>

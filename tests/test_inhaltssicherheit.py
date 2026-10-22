@@ -24,7 +24,7 @@ from app.inhaltssicherheit import KOPFZEILE
 # Every HTML page the service serves on its own origin. The interface comes
 # from a route, the rest from the static mount, and the double slash is a
 # third way to the same file that used to slip past the route.
-SEITEN = ("/app/", "/app/index.html", "/app//index.html", "/", "/hilfe/")
+SEITEN = ("/app/", "/app/index.html", "/app//index.html", "/", "/help/")
 
 
 def test_die_regel_ist_scharf_und_nicht_nur_meldend():
@@ -68,6 +68,24 @@ def test_was_die_regel_braucht_steht_drin(client):
     assert "script-src" in regel and "blob:" in regel
     # A picture just attached is shown from a blob URL.
     assert "img-src 'self' data: blob:" in regel
+
+
+def test_the_page_rule_lets_the_preview_frame_run_eval_and_webassembly(client):
+    """The frame inherits this rule and the stricter of the two wins, so a
+    document could run neither while the page lacked them."""
+    rule = client.get("/app/").headers["content-security-policy"]
+    script = next(part for part in rule.split(";") if "script-src" in part)
+    assert "'unsafe-eval'" in script
+    assert "'wasm-unsafe-eval'" in script
+    assert "worker-src 'self' blob:" in rule
+
+
+def test_silence_the_page_rule_keeps_the_way_out_shut_beside_eval(client):
+    rule = client.get("/app/").headers["content-security-policy"]
+    assert "connect-src 'self'" in rule
+    assert "default-src 'self'" in rule
+    assert "form-action 'self'" in rule
+    assert "object-src 'none'" in rule
 
 
 def test_was_keine_seite_ist_bleibt_ohne(client):

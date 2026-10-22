@@ -9,6 +9,16 @@
 
 const RUNDE = { an: 'fragt', fragt: 'aus', aus: 'an' }
 
+// The catalogue key of the word that stands beside a tool in each state: the
+// same words the terminal client uses — active, asks, inactive.
+const STATE_WORDS = { an: 'status.aktiv', fragt: 'werkzeuge.fragt', aus: 'status.inaktiv' }
+
+/** The key of the word beside a tool in that state; a state this module does
+    not know reads as "on", the way `naechsterZustand` takes it. */
+export function stateWordKey(zustand) {
+  return STATE_WORDS[zustand] ?? STATE_WORDS.an
+}
+
 /** Clicking a tool cycles it: on → asks first → off → on. */
 export function naechsterZustand(zustand) {
   return RUNDE[zustand] ?? 'an'
@@ -81,6 +91,50 @@ export function grundfelder(quelle, eintrag, { mitSchluessel = false, adresse = 
   }
   if (quelle.vorauswahl) felder.allowed_tools = quelle.vorauswahl
   return felder
+}
+
+/** What a typed key writes into the entry: the header it goes in, holding
+    the variable of the .env — never the key. `Authorization` carries it as
+    `Bearer …`, any other header as it is (a server that wants
+    `X-Goog-Api-Key` rejects a Bearer). The two other ways the entry may have
+    had are cleared: the old `api_key_env` would send a second key, and
+    `auth: oauth` would put a stored sign-in before the header. Headers the
+    entry has that carry no key of their own (`existing`, name → value) stay;
+    those that carried a key are replaced by this one. */
+export function headerFields(variable, headerName, existing = {}) {
+  const name = String(headerName ?? '').trim() || 'Authorization'
+  const value = name.toLowerCase() === 'authorization'
+    ? `Bearer \${${variable}}`
+    : `\${${variable}}`
+  const headers = {}
+  for (const [other, otherValue] of Object.entries(existing)) {
+    if (!String(otherValue).includes('${')) headers[other] = otherValue
+  }
+  for (const other of Object.keys(headers)) {
+    if (other.toLowerCase() === name.toLowerCase()) delete headers[other]
+  }
+  headers[name] = value
+  return { headers, api_key_env: null, auth: null }
+}
+
+/** The variable a header of an entry reads for its key (`${NAME}`), or
+    `undefined` where none does. */
+export function keyVariableOf(headers) {
+  for (const value of Object.values(headers ?? {})) {
+    const name = /\$\{([^}]+)\}/.exec(String(value))?.[1]
+    if (name) return name
+  }
+  return undefined
+}
+
+/** The headers of an entry without the ones that carry a key — what stays
+    when the entry signs in through the browser instead — or `null` where
+    nothing is left (which takes the field out of the entry). */
+export function headersWithoutKey(headers) {
+  const kept = Object.fromEntries(
+    Object.entries(headers ?? {}).filter(([, value]) => !String(value).includes('${')),
+  )
+  return Object.keys(kept).length ? kept : null
 }
 
 /** The server refuses a variable name that starts with a digit, so a

@@ -57,6 +57,10 @@ class StartValues:
     # Further switches the docs start the family with, by their key in
     # app/image_switches.py. Each has its place in ``sources`` under its key.
     switches: dict[str, Any] = field(default_factory=dict)
+    # The noise schedule (``--sigmas``) of a model that is drawn with its own,
+    # as the list of numbers both programs take; empty leaves the schedule to
+    # the sampler.
+    sigmas: str = ""
 
 
 @dataclass(frozen=True)
@@ -83,7 +87,9 @@ class KitPart:
     """Where one part of a family's kit comes from.
 
     ``part`` is the field the part fills: a text encoder (``llm``,
-    ``t5xxl``, ``clip_l``, ``clip_g``) or the ``vae``. ``repo`` and ``file``
+    ``t5xxl``, ``clip_l``, ``clip_g``), the ``vae``, or one of the family's
+    further parts (``audio_vae``, ``audio_encoder``, ``clip_vision``,
+    ``embeddings_connectors``). ``repo`` and ``file``
     are the Hugging Face repository and the file's path inside it, as the
     family's sd.cpp doc names them; ``source`` is the doc's place, so a
     reader can check it. ``when`` is a regular expression on a model's
@@ -97,11 +103,15 @@ class KitPart:
     file: str
     source: str
     when: str = ""
+    # True for a part only some models of the family take and that the others
+    # do without: a model it does not match keeps its kit (``kit_of_family``)
+    # instead of losing it for want of this part.
+    optional: bool = False
 
     @property
     def folder(self) -> str:
         """The sub-folder of the picture folder the part lies in."""
-        return "vae" if self.part == "vae" else "text_encoders"
+        return "vae" if self.part in ("vae", "audio_vae") else "text_encoders"
 
     @property
     def name(self) -> str:
@@ -143,6 +153,12 @@ class Family:
     # ``llm_vision`` (the vision half of a VLM encoder, for editing),
     # ``tokenizer`` (a tokenizer.json), ``uncond_diffusion_model``.
     parts: tuple[str, ...] = ()
+    # A further part only some models of the family take, by the regular
+    # expression on the model's lower-case file name that a model has to match
+    # (the same kind of rule as ``KitPart.when``): (part, expression) pairs.
+    # A part named here only is taken by the models it matches; any other is
+    # taken by every model of the family (``parts_taken``).
+    part_rules: tuple[tuple[str, str], ...] = ()
     # ``--model-args`` the docs start this family with; empty sends none.
     model_args: str = ""
     # True when an edit takes several reference images at once: the
@@ -165,6 +181,10 @@ class Family:
     # A video model: sd.cpp draws it in video mode only, a single frame
     # included (docs/wan.md:3, "Wan models require -M vid_gen").
     video: bool = False
+    # True when the model draws at one frame rate only: sd.cpp sets any other
+    # to it with a warning (docs/wan.md, Wan 2.2 S2V draws with 16 frames per
+    # second). No window offers the rate then and none is sent.
+    fixed_fps: bool = False
     # True when sd.cpp computes a ControlNet for this family: the guide
     # images reach the model only where it is a UNet (SD 1.x, SD 2.x, SDXL
     # and their variants; ``sd_version_is_unet`` in src/stable-diffusion.cpp).
@@ -188,6 +208,11 @@ class Family:
     # carries one of these pairs; a family without any leaves the field to
     # the user.
     llms: tuple[tuple[str, int], ...] = ()
+    # True when sd.cpp cannot load a checkpoint without its text encoder at
+    # all, so a start without one is refused. Every other family goes on
+    # without an encoder it is not given: sd.cpp warns and fills its values
+    # with zeros (SD3 without T5, Flux without CLIP-L), and the picture is drawn.
+    needs_text_encoder: bool = False
     # Where each part of this family's kit is fetched from: one entry per
     # text encoder in ``encoders`` and the VAE, and several for a field whose
     # file depends on the model (``KitPart.when``). Empty for a family whose
@@ -200,6 +225,12 @@ class Family:
     # A file name is tried against them in this order, and the first one
     # whose pattern matches is the model's.
     variants: tuple[Variant, ...] = ()
+    # The kinds of tiny autoencoder (``bildbausatz.tae_kind`` names a file's)
+    # that decode this family's latent space. A file of another kind is not
+    # offered with a model of this family and is not taken when it was
+    # remembered: it decodes into noise or aborts the draw. Empty where no
+    # tiny autoencoder is known to fit.
+    tae: tuple[str, ...] = ()
 
 
 def _cli(**given: str) -> dict[str, str]:
@@ -330,6 +361,23 @@ _WAN_UMT5 = _part("t5xxl", "city96/umt5-xxl-encoder-gguf", "umt5-xxl-encoder-Q8_
                   "docs/wan.md, Download weights (umt5_xxl, gguf)")
 _WAN21_VAE = _part("vae", *_WAN21_VAE_FILE, "docs/wan.md, Download weights (Wan2.1 VAE)")
 _WAN_KIT = (_WAN_UMT5, _WAN21_VAE)
+# The image encoder of Wan 2.1's I2V and FLF2V models (docs/wan.md, "Download
+# clip_vison_h"); every other Wan model draws without one. Wan 2.2 has none.
+# The second, high-noise model is Wan 2.2 A14B's alone (docs/wan.md, "Wan2.2
+# T2V A14B").
+_WAN22_NAME = r"(?<![a-z])wan[-_ ]?2[._]?2"
+_WAN21_CLIP_VISION = KitPart(
+    part="clip_vision", repo="Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+    file="split_files/clip_vision/clip_vision_h.safetensors",
+    source="sd.cpp docs/wan.md, Download weights (clip_vision_h)",
+    when=r"^(?!.*wan[-_ ]?2[._]?2).*(?<![a-z])(?:i2v|flf2v)", optional=True,
+)
+# The speech encoder of Wan 2.2 S2V (docs/wan.md, "Download wav2vec2").
+_WAN22_S2V_AUDIO_ENCODER = _part(
+    "audio_encoder", "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+    "split_files/audio_encoders/wav2vec2_large_english_fp16.safetensors",
+    "docs/wan.md, Download weights (wav2vec2)",
+)
 
 
 # Q8_0 is the quantisation docs/qwen_image.md runs the encoder with (:17); the
@@ -357,6 +405,7 @@ FAMILIES: tuple[Family, ...] = (
     # ---- One file ----
     Family(
         name="sd15", label="SD 1.5", kit=False, encoders=(), vae_channels=None,
+        tae=("taesd",),
         control_net=True,
         # A video with AnimateDiff's motion module beside the checkpoint
         # (docs/animatediff.md), from text or from a first frame.
@@ -374,6 +423,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="sd2", label="SD 2.x", kit=False, encoders=(), vae_channels=None,
+        tae=("taesd",),
         control_net=True,
         tasks=("txt2img", "img2img"), on_server=True,
         start=_start(_CLI, cfg=7.5, sampler="dpm++2m",
@@ -387,6 +437,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="sdxl", label="SDXL", kit=False, encoders=(), vae_channels=None,
+        tae=("taesdxl",),
         control_net=True,
         tasks=("txt2img", "img2img"), on_server=True,
         start=_start("sd.cpp docs/sd.md:14 (-W 1024 -H 1024)",
@@ -421,6 +472,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="sd15_pix2pix", label="instruct-pix2pix", kit=False, encoders=(),
+        tae=("taesd",),
         control_net=True,
         vae_channels=None, tasks=("edit",), on_server=True,
         start=_start(_CLI, cfg=7.5,
@@ -434,6 +486,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="sdxl_pix2pix", label="CosXL Edit", kit=False, encoders=(),
+        tae=("taesdxl",),
         control_net=True,
         vae_channels=None, tasks=("edit",), on_server=True,
         start=_start("sd.cpp docs/sd.md:14 (-W 1024 -H 1024)",
@@ -463,6 +516,7 @@ FAMILIES: tuple[Family, ...] = (
     # ---- A kit of parts ----
     Family(
         name="sd3", label="SD3, SD3.5", kit=True, encoders=("clip_l", "clip_g", "t5xxl"),
+        tae=("taesd3",),
         # Its own VAE: 16 channels like Flux's, but not interchangeable.
         vae_channels=None, tasks=("txt2img",), on_server=True,
         start=_start("sd.cpp docs/sd3.md:17 (-H 1024 -W 1024 --cfg-scale 4.5 --sampling-method euler)",
@@ -492,6 +546,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="flux", label="Flux", kit=True, encoders=("t5xxl", "clip_l"), vae_channels=16,
+        tae=("taef1",),
         tasks=("txt2img", "img2img", "edit"), on_server=True,
         start=StartValues(
             width=1024, height=1024, steps=20, cfg=1.0, guidance=3.5,
@@ -517,6 +572,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="chroma", label="Chroma", kit=True, encoders=("t5xxl",), vae_channels=16,
+        tae=("taef1",),
         tasks=("txt2img",), on_server=True,
         start=_start("sd.cpp docs/chroma.md:27 (--sampling-method euler)",
                      width=1024, height=1024, cfg=3.0, sampler="euler", named=("sampler",),
@@ -556,6 +612,7 @@ FAMILIES: tuple[Family, ...] = (
         # llama architecture at a width of 5120 (docs/flux2.md; measured on
         # Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf).
         name="flux2", label="Flux.2", kit=True, encoders=("llm",), vae_channels=32,
+        tae=("taef2",),
         llms=(("llama", 5120),),
         tasks=("txt2img", "img2img", "edit"), on_server=True,
         start=StartValues(
@@ -588,6 +645,7 @@ FAMILIES: tuple[Family, ...] = (
         # (docs/flux2.md), 2560 and 4096 wide (measured on the Qwen3 4B and
         # 8B GGUFs).
         name="flux2_klein", label="Flux.2 klein", kit=True, encoders=("llm",), vae_channels=32,
+        tae=("taef2",),
         llms=(("qwen3", 2560), ("qwen3", 4096)),
         tasks=("txt2img", "img2img", "edit"), on_server=True,
         start=_start("sd.cpp docs/flux2.md:45 (--cfg-scale 1.0 --steps 4)",
@@ -614,8 +672,85 @@ FAMILIES: tuple[Family, ...] = (
         ),
     ),
     Family(
+        # Flux.2's own VAE and Qwen3-VL 4B (docs/flux3.md), whose GGUF names
+        # the qwen3vl architecture at a width of 2560 (measured on
+        # Qwen3-VL-4B-Instruct-Q4_K_M.gguf).
+        name="flux3_klein", label="FLUX.3 Klein", kit=True, encoders=("llm",), vae_channels=32,
+        tae=("taef2",),
+        llms=(("qwen3vl", 2560),),
+        tasks=("txt2img", "edit"), on_server=True,
+        start=_start("sd.cpp docs/flux3.md:27 (--cfg-scale 1.0 --steps 16 --sampling-method euler)",
+                     width=1024, height=1024, steps=16, cfg=1.0, sampler="euler",
+                     named=("steps", "cfg", "sampler"), dit=True,
+                     others={
+                         "width height": (
+                             "github.com/Comfy-Org/workflow_templates "
+                             "templates/image_flux3_klein_t2i.json"
+                         ),
+                     }),
+        # An edit takes up to ten reference images (docs/flux3.md:38).
+        many_references=True,
+        file_patterns=(r"(?<![a-z])flux[-_.]?3(?!\d)",),
+        # The model that is not distilled.
+        variants=(
+            _variant("base", "sd.cpp docs/flux3.md:43 (flux-3-image-klein-base: 20 steps, CFG 3.5)",
+                     steps=20, cfg=3.5),
+        ),
+        kit_parts=(
+            _qwen3_vl_4b("docs/flux3.md"),
+            _flux2_vae("docs/flux3.md, Download weights"),
+        ),
+    ),
+    Family(
+        # Flux.2's own VAE and Qwen3.5 9B, whose GGUF names the qwen35
+        # architecture at a width of 4096 (measured on
+        # Qwen3.5-9B-Q4_K_M.gguf); its vocabulary is not the embedded Qwen
+        # one, so the tokenizer file goes with it (docs/moss_image.md:16).
+        name="moss_image", label="MOSS-Image", kit=True, encoders=("llm",), vae_channels=32,
+        tae=("taef2",),
+        llms=(("qwen35", 4096),),
+        tasks=("txt2img",), on_server=True,
+        start=_start("sd.cpp docs/moss_image.md:23 (--cfg-scale 3.0 -H 1024 -W 1024)",
+                     width=1024, height=1024, steps=50, cfg=3.0, sampler="euler",
+                     named=("width", "height", "cfg"), dit=True,
+                     others={
+                         "steps sampler": (
+                             "huggingface.co/OpenMOSS-Team/MOSS-Image-Base (model card: "
+                             "50 steps, flow-matching Euler)"
+                         ),
+                     }),
+        parts=("tokenizer",),
+        file_patterns=(r"(?<![a-z])moss[-_]?image",),
+        kit_parts=(
+            _part("llm", "unsloth/Qwen3.5-9B-GGUF", "Qwen3.5-9B-Q4_K_M.gguf",
+                  "docs/moss_image.md, Download weights (gguf)"),
+            _part("tokenizer", "OpenMOSS-Team/MOSS-Image-Base", "tokenizer/tokenizer.json",
+                  "docs/moss_image.md, Download weights"),
+            _flux2_vae("docs/moss_image.md, Download weights"),
+        ),
+    ),
+    Family(
+        # Draws in pixel space: no VAE (docs/iris.md:3). Qwen3-VL 4B reads
+        # the text.
+        name="iris", label="Iris-3B", kit=True, encoders=("llm",), vae_channels=None,
+        llms=(("qwen3vl", 2560),),
+        tasks=("txt2img",), on_server=True,
+        start=_start("sd.cpp docs/iris.md:16 (--cfg-scale 3 -H 1024 -W 1024)",
+                     width=1024, height=1024, steps=100, cfg=3.0, sampler="euler",
+                     named=("width", "height", "cfg"), dit=True,
+                     others={
+                         "steps sampler": (
+                             "huggingface.co/speridlabs/iris-3b (model card: "
+                             "100 steps, deterministic flow-Euler)"
+                         ),
+                     }),
+        file_patterns=(r"(?<![a-z])iris[-_.]?3b",),
+        kit_parts=(_qwen3_vl_4b("docs/iris.md"),),
+    ),
+    Family(
         # Qwen3 4B (docs/z_image.md), 2560 wide (measured on a Qwen3 4B GGUF).
         name="zimage", label="Z-Image", kit=True, encoders=("llm",), vae_channels=16,
+        tae=("taef1",),
         llms=(("qwen3", 2560),),
         tasks=("txt2img", "img2img"), on_server=True,
         start=_start("sd.cpp docs/z_image.md:24 (-H 1024 --steps 8 --cfg-scale 1.0)",
@@ -639,6 +774,7 @@ FAMILIES: tuple[Family, ...] = (
         # architecture at a width of 3584 (measured on
         # Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf).
         name="qwen_image", label="Qwen-Image", kit=True, encoders=("llm",), vae_channels=None,
+        tae=("taew2_1",),
         llms=(("qwen2vl", 3584),),
         tasks=("txt2img", "edit"), on_server=True,
         start=_start("sd.cpp docs/qwen_image.md:17 (--sampling-method euler --flow-shift 3)",
@@ -665,6 +801,7 @@ FAMILIES: tuple[Family, ...] = (
         # architecture at a width of 4096 (measured on
         # Qwen3VL-8B-Instruct-Q8_0.gguf; the 4B of Krea 2 is 2560 wide).
         name="qwen_image_2_1", label="Qwen-Image 2.1", kit=True, encoders=("llm",),
+        tae=("taeqi2_1",),
         llms=(("qwen3vl", 4096),),
         # sd-cli draws from a start picture and through a mask with it
         # (measured: the layout of the start picture stays, and the part
@@ -697,13 +834,15 @@ FAMILIES: tuple[Family, ...] = (
                   "docs/qwen_image_edit.md, --llm_vision takes the mmproj file"),
         ),
         variants=(
-            _variant("turbo", "model card of Qwen-Image-2.1-Turbo on huggingface.co/Qwen "
-                     "(8 denoising steps, CFG 1); the sd.cpp docs name none",
-                     steps=8, cfg=1.0),
+            _variant("turbo", "sd.cpp docs/qwen_image_2.1.md, Turbo (--sigmas qwen-image-2.1-turbo "
+                     "--steps 8 --cfg-scale 1.0 --sampling-method euler); the preset's nine numbers",
+                     steps=8, cfg=1.0, sampler="euler",
+                     sigmas="1.0,0.978453,0.95418,0.926626,0.89508,0.845148,0.704534,0.414568,0.0"),
         ),
     ),
     Family(
         name="qwen_image_layered", label="Qwen Image Layered", kit=True, encoders=("llm",),
+        tae=("taew2_1",),
         vae_channels=None, tasks=("edit",), on_server=True,
         start=_start(_CLI, width=640, height=640, cfg=4.0, dit=True,
                      others={
@@ -720,6 +859,7 @@ FAMILIES: tuple[Family, ...] = (
         # architecture at a width of 2560 (measured on
         # Qwen3-VL-4B-Instruct-Q4_K_M.gguf).
         name="krea2", label="Krea 2", kit=True, encoders=("llm",), vae_channels=None,
+        tae=("taew2_1",),
         llms=(("qwen3vl", 2560),),
         # sd-cli draws from a start picture and through a mask with it, as
         # it does from text and from references.
@@ -744,6 +884,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="lens", label="Lens", kit=True, encoders=("llm",), vae_channels=None,
+        tae=("taef2",),
         tasks=("txt2img",), on_server=True,
         start=_start("sd.cpp docs/lens.md (lens_turbo: 4 steps, CFG 1)",
                      width=1440, height=1440, steps=4, cfg=1.0, named=("steps", "cfg"), dit=True,
@@ -797,6 +938,7 @@ FAMILIES: tuple[Family, ...] = (
         # name known here tells the base model (50 steps, :5) apart. Where
         # its parts are fetched from is not entered: no kit parts.
         name="llada_image", label="LLaDA-Image", kit=True, encoders=("llm",), vae_channels=32,
+        tae=("taef2",),
         tasks=("txt2img", "edit"), on_server=True,
         start=_start("sd.cpp docs/llada_image.md:100-103 (1024 x 1024, 4 steps, CFG 1.0)",
                      width=1024, height=1024, steps=4, cfg=1.0,
@@ -817,6 +959,10 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="longcat", label="LongCat Image", kit=True, encoders=("llm",), vae_channels=16,
+        tae=("taef1",),
+        # Qwen2.5-VL 7B, the encoder the docs run it with: the pair its GGUF
+        # header names, as Qwen-Image's.
+        llms=(("qwen2vl", 3584),),
         tasks=("txt2img", "edit"), on_server=True, parts=("llm_vision",),
         start=_start("sd.cpp docs/longcat_image.md:27 (--sampling-method euler --flow-shift 3)",
                      width=1024, height=1024, steps=8, cfg=1.0, sampler="euler", flow_shift=3.0,
@@ -845,6 +991,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="ovis", label="Ovis-Image", kit=True, encoders=("llm",), vae_channels=16,
+        tae=("taef1",),
         tasks=("txt2img",), on_server=True,
         start=_start("sd.cpp docs/ovis_image.md:16 (--cfg-scale 5.0)",
                      width=1024, height=1024, cfg=5.0, named=("cfg",), dit=True,
@@ -860,6 +1007,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="ernie", label="ERNIE-Image", kit=True, encoders=("llm",), vae_channels=None,
+        tae=("taef2",),
         tasks=("txt2img",), on_server=True,
         start=_start("sd.cpp docs/ernie_image.md (ernie-image-turbo: 8 steps, CFG 1)",
                      width=1024, height=1024, steps=8, cfg=1.0, flow_shift=4.0,
@@ -884,6 +1032,7 @@ FAMILIES: tuple[Family, ...] = (
         # docs/sefi_image.md:3,11,35): 32 channels, which the kit cannot
         # start without.
         name="sefi", label="SeFi-Image", kit=True, encoders=("llm",), vae_channels=32,
+        tae=("taef2",),
         tasks=("txt2img",), on_server=True,
         start=_start("sd.cpp docs/sefi_image.md:41 (-W 1024 -H 1024)",
                      width=1024, height=1024, steps=4, cfg=1.0, named=("width", "height"), dit=True,
@@ -893,6 +1042,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="anima", label="Anima", kit=True, encoders=("llm",), vae_channels=None,
+        tae=("taew2_1",),
         tasks=("txt2img", "edit"), on_server=True,
         start=_start(_CLI, width=1024, height=1024, steps=8, cfg=1.0, sampler="er_sde", dit=True,
                      others={
@@ -915,6 +1065,10 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="boogu", label="Boogu Image", kit=True, encoders=("llm",), vae_channels=16,
+        # Qwen3-VL 8B, the encoder the docs run it with: the pair its GGUF
+        # header names, as Qwen-Image 2.1's.
+        llms=(("qwen3vl", 4096),),
+        tae=("taef1",),
         tasks=("txt2img", "edit"), on_server=True,
         start=_start(_CLI, width=1024, height=1024, steps=4, cfg=1.0, dit=True,
                      others={
@@ -935,6 +1089,9 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="mage_flow", label="Mage-Flow", kit=True, encoders=("llm",), vae_channels=None,
+        # Qwen3-VL 4B, the encoder the docs run it with: the pair its GGUF
+        # header names, as Krea 2's.
+        llms=(("qwen3vl", 2560),),
         tasks=("txt2img", "edit"), on_server=True,
         start=_start("sd.cpp docs/mage_flow.md:27,42 (--sampling-method euler)",
                      width=1024, height=1024, steps=4, cfg=1.0, sampler="euler", flow_shift=6.0,
@@ -953,6 +1110,10 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="ideogram4", label="Ideogram 4", kit=True, encoders=("llm",), vae_channels=None,
+        # Qwen3-VL 8B, the encoder the docs run it with: the pair its GGUF
+        # header names, as Qwen-Image 2.1's.
+        llms=(("qwen3vl", 4096),),
+        tae=("taef2",),
         tasks=("txt2img",), on_server=True,
         start=_start("sd.cpp docs/ideogram4.md:52 (-H 1024 -W 1024)",
                      width=1024, height=1024, named=("width", "height"), dit=True),
@@ -969,6 +1130,7 @@ FAMILIES: tuple[Family, ...] = (
         # the kit cannot start without one, and no header tells which style a
         # 4-channel file is (``_SHARED_VAES``).
         name="pixart", label="PixArt Sigma", kit=True, encoders=("t5xxl",), vae_channels=4,
+        tae=("taesd", "taesdxl",),
         tasks=("txt2img",), on_server=True,
         start=_start("sd.cpp docs/pixart.md:25 (--cfg-scale 4.5 -W 1024 -H 1024 --steps 20)",
                      width=1024, height=1024, cfg=4.5, sampler="dpm++2m",
@@ -987,6 +1149,7 @@ FAMILIES: tuple[Family, ...] = (
     # A14B models draw with a second, high-noise model beside them.
     Family(
         name="wan", label="Wan 2.1, Wan 2.2 A14B", kit=True, encoders=("t5xxl",),
+        tae=("taew2_1",),
         vae_channels=16, tasks=("t2v", "i2v", "flf2v", "v2v"), on_server=True,
         start=_start("sd.cpp docs/wan.md:67 (-W 832 -H 480 --sampling-method euler)",
                      width=832, height=480, cfg=5.0, sampler="euler", flow_shift=5.0, frames=81,
@@ -1001,7 +1164,13 @@ FAMILIES: tuple[Family, ...] = (
                          "flow_shift frames": "github.com/Wan-Video/Wan2.1 generate.py (by its authors)",
                          "fps": "github.com/Wan-Video/Wan2.1 wan/configs/shared_config.py",
                      }),
-        parts=("high_noise_diffusion_model",), video=True, t5_kind="umt5", video_vae=True,
+        parts=("high_noise_diffusion_model", "clip_vision"), video=True, t5_kind="umt5",
+        video_vae=True,
+        # The image encoder is the I2V and FLF2V models' (the name rule of its
+        # kit part), the second model Wan 2.2 A14B's.
+        part_rules=(
+            ("high_noise_diffusion_model", _WAN22_NAME), ("clip_vision", _WAN21_CLIP_VISION.when),
+        ),
         # Every Wan 2.1 model, and of Wan 2.2 those the three families below
         # do not take.
         file_patterns=(r"(?<![a-z])wan[-_ ]?2[._]?1",
@@ -1013,10 +1182,11 @@ FAMILIES: tuple[Family, ...] = (
             _variant("lightx2v", "sd.cpp docs/wan.md (lightx2v: 4 steps, CFG 1)",
                      steps=4, cfg=1.0, switches={}),
         ),
-        kit_parts=_WAN_KIT,
+        kit_parts=(*_WAN_KIT, _WAN21_CLIP_VISION),
     ),
     Family(
         name="wan22_i2v", label="Wan 2.2 I2V A14B", kit=True, encoders=("t5xxl",),
+        tae=("taew2_1",),
         vae_channels=16, tasks=("i2v", "flf2v"), on_server=True,
         start=_start("sd.cpp docs/wan.md:101 (-W 832 -H 480 --cfg-scale 3.5 --sampling-method euler "
                      "--steps 10)",
@@ -1035,6 +1205,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="wan22_ti2v", label="Wan 2.2 TI2V 5B", kit=True, encoders=("t5xxl",),
+        tae=("taew2_2",),
         # Its own VAE, wan2.2_vae (docs/wan.md "for Wan2.2 TI2V 5B only"),
         # with 48 latent channels.
         vae_channels=48, tasks=("t2v", "i2v"), on_server=True,
@@ -1064,6 +1235,7 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="wan22_s2v", label="Wan 2.2 S2V 14B", kit=True, encoders=("t5xxl",),
+        tae=("taew2_1",),
         # A talking portrait (-i) driven by a sound track (--audio).
         vae_channels=16, tasks=("i2v",), on_server=True,
         start=_start("sd.cpp docs/wan.md:114 (--flow-shift 3.0 --sampling-method euler --steps 20 "
@@ -1081,12 +1253,18 @@ FAMILIES: tuple[Family, ...] = (
                              "github.com/Wan-Video/Wan2.2 wan/configs/shared_config.py"
                          ),
                      }),
-        parts=("audio_encoder",), video=True, t5_kind="umt5", video_vae=True,
+        parts=("audio_encoder",), video=True, fixed_fps=True, t5_kind="umt5", video_vae=True,
         file_patterns=(r"(?<![a-z])wan[-_ ]?2[._]?2.*s2v",),
-        kit_parts=_WAN_KIT,
+        kit_parts=(*_WAN_KIT, _WAN22_S2V_AUDIO_ENCODER),
     ),
     Family(
         name="ltx", label="LTX-2", kit=True, encoders=("llm",), vae_channels=None,
+        # Gemma 3 12B, measured in its GGUF header: architecture ``gemma3``,
+        # token embedding 3840 wide.
+        llms=(("gemma3", 3840),),
+        # Measured: without its Gemma, sd.cpp stops at the first weight of the
+        # text encoder it misses.
+        needs_text_encoder=True,
         tasks=("t2v", "i2v", "flf2v"), on_server=True,
         start=_start("sd.cpp docs/ltx2.md:58 (-W 1280 -H 720 --sampling-method euler --fps 24)",
                      width=1280, height=720, cfg=3.0, sampler="euler", scheduler="ltx2",
@@ -1119,6 +1297,11 @@ FAMILIES: tuple[Family, ...] = (
                   "docs/ltx2.md, LTX-2.3, Download weights", r"ltx[-_ ]?2[._]3"),
             _part("vae", "unsloth/LTX-2.3-GGUF", "vae/ltx-2.3-22b-dev_video_vae.safetensors",
                   "docs/ltx2.md, LTX-2.3, Download weights", r"ltx[-_ ]?2[._]3"),
+            _part("audio_vae", "unsloth/LTX-2.3-GGUF", "vae/ltx-2.3-22b-dev_audio_vae.safetensors",
+                  "docs/ltx2.md, LTX-2.3, Download weights", r"ltx[-_ ]?2[._]3"),
+            _part("embeddings_connectors", "unsloth/LTX-2.3-GGUF",
+                  "text_encoders/ltx-2.3-22b-dev_embeddings_connectors.safetensors",
+                  "docs/ltx2.md, LTX-2.3, Download weights", r"ltx[-_ ]?2[._]3"),
         ),
     ),
     Family(
@@ -1150,11 +1333,16 @@ FAMILIES: tuple[Family, ...] = (
                   "docs/minimax_h3.md, Download weights (gguf; the file the doc runs, :41)"),
             _part("vae", "Comfy-Org/MiniMax-H3", "vae/minimax_h3_video_vae_fp16.safetensors",
                   "docs/minimax_h3.md, Download weights"),
+            _part("audio_vae", "Comfy-Org/MiniMax-H3", "vae/minimax_h3_audio_vae_fp32.safetensors",
+                  "docs/minimax_h3.md, Download weights"),
         ),
     ),
     Family(
         name="hunyuan_video", label="HunyuanVideo 1.5", kit=True, encoders=("llm", "t5xxl"),
         vae_channels=None, tasks=("t2v",), on_server=True,
+        # Qwen2.5-VL 7B, the encoder the docs run it with: the pair its GGUF
+        # header names, as Qwen-Image's.
+        llms=(("qwen2vl", 3584),),
         start=_start("sd.cpp docs/hunyuan_video.md:21 (-W 1280 -H 720 --cfg-scale 6.0 "
                      "--sampling-method euler)",
                      width=1280, height=720, cfg=6.0, sampler="euler", flow_shift=9.0, frames=121,
@@ -1181,6 +1369,10 @@ FAMILIES: tuple[Family, ...] = (
     ),
     Family(
         name="lingbot_video", label="LingBot-Video", kit=True, encoders=("llm",),
+        # Qwen3-VL 4B, the encoder the docs run it with: the pair its GGUF
+        # header names, as Krea 2's.
+        llms=(("qwen3vl", 2560),),
+        tae=("taew2_1",),
         # It decodes with Wan 2.1's VAE (docs/lingbot_video.md:3) and takes
         # a first frame with -i (:21).
         vae_channels=16, tasks=("t2v", "i2v"), on_server=True,
@@ -1312,9 +1504,36 @@ def kit_of_family(family: Family | None, file_name: str) -> tuple[KitPart, ...]:
     for part in family.kit_parts:
         if part.part not in chosen and (not part.when or re.search(part.when, base)):
             chosen[part.part] = part
-    if len(chosen) < len({part.part for part in family.kit_parts}):
+    if not {part.part for part in family.kit_parts if not part.optional} <= chosen.keys():
         return ()
     return tuple(chosen.values())
+
+
+def parts_taken(family: Family | None, file_name: str) -> tuple[str, ...]:
+    """The further parts of the family (``Family.parts``) that a model of this
+    file name takes: every one, except those the family restricts by the name
+    (``Family.part_rules``). One
+    rule for the picture-server page, the studio and the start: a part a model
+    does not take is neither shown at it nor sent with it."""
+    if family is None:
+        return ()
+    base = file_name.rsplit("/", 1)[-1].lower()
+    rules = dict(family.part_rules)
+    return tuple(
+        part for part in family.parts if not rules.get(part) or re.search(rules[part], base)
+    )
+
+
+def needed_parts(family: Family | None, file_name: str) -> tuple[str, ...]:
+    """The further parts of the family (``Family.parts``) that the docs name
+    for a standalone diffusion model of this name: the ones its kit fetches
+    (``kit_of_family``). A model the docs name no kit for, and a part that
+    cannot be fetched as it is (the second, high-noise model), needs none."""
+    if family is None:
+        return ()
+    return tuple(
+        part.part for part in kit_of_family(family, file_name) if part.part in family.parts
+    )
 
 
 def known(name: str | None) -> bool:
@@ -1363,7 +1582,9 @@ def as_json() -> list[dict]:
             "edit_needs_lora": family.edit_needs_lora,
             "clip_layers": family.clip_layers,
             "video": family.video,
+            "fixed_fps": family.fixed_fps,
             "control_net": family.control_net,
+            "tae": list(family.tae),
             "start": {
                 "width": family.start.width,
                 "height": family.start.height,
@@ -1378,6 +1599,7 @@ def as_json() -> list[dict]:
                 "vae_format": family.start.vae_format,
                 "rng": family.start.rng,
                 "switches": dict(family.start.switches),
+                "sigmas": family.start.sigmas,
                 "sources": dict(family.start.sources),
             },
         }

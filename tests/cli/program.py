@@ -36,6 +36,7 @@ from prompt_toolkit.output.vt100 import Vt100_Output
 from rich.style import Style
 
 from cli import events, themes
+from cli.history_view import History
 from cli.interfaces import Context
 from cli.main import main
 from tests.cli.stub_service import StubService, eventually
@@ -71,6 +72,16 @@ FULL_COLOURS = {"TERM": "xterm-256color", "COLORTERM": "truecolor", **A_TERMINAL
 # How a colour of 24 bits begins where a terminal is sent it.
 FULL = "38;2;"
 
+# What a program of its own runs first when its terminal is to be the
+# controlling one of its session, as the terminal of a window is: the
+# session is made by the start, the terminal is taken here, and the client
+# takes the place of this code.
+TAKE_THE_TERMINAL = (
+    "import fcntl, os, sys, termios; "
+    "fcntl.ioctl(0, termios.TIOCSCTTY, 0); "
+    "os.execv(sys.argv[1], sys.argv[1:])"
+)
+
 posix_only = pytest.mark.skipif(
     sys.platform == "win32", reason="the terminal of the test is a POSIX one"
 )
@@ -101,6 +112,49 @@ class Gated(StubService):
 
 
 # --- In this process ---------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def in_the_shared_session(pipe: Any, output: Output) -> Iterator[None]:
+    """Runs a client in the session every thread shares, as a client at a
+    terminal does — not in one of its own, which only the thread that made
+    it would see. What the client writes into the history reaches the output
+    from a thread of the output's own; only where that thread finds the
+    running screen is the block taken off for a piece, the piece written
+    and the block drawn again below it, measured anew. The shared session
+    is lent the input and the output for this run."""
+    shared = get_app_session()
+    former = shared._input, shared._output
+    shared._input, shared._output = pipe, output
+    try:
+        yield
+    finally:
+        shared._input, shared._output = former
+
+
+# What stands in the tape of the history where the field was emptied.
+EMPTIED = "\x1b[2J"
+
+
+def taped_history(monkeypatch: pytest.MonkeyPatch) -> io.StringIO:
+    """A tape of what is written into the field of the history, in the order
+    it is written: every piece as the console wrote it, and the sign of an
+    emptying where the field was emptied. The tape fills as the client
+    works; the patch ends with the test."""
+    tape = io.StringIO()
+    add, empty = History.add, History.clear
+
+    def added(self: History, piece: str) -> None:
+        tape.write(piece)
+        add(self, piece)
+
+    def emptied(self: History) -> None:
+        tape.write(EMPTIED)
+        empty(self)
+
+    monkeypatch.setattr(History, "add", added)
+    monkeypatch.setattr(History, "clear", emptied)
+    return tape
 
 
 def local_clock(stamp: str) -> str:
@@ -215,7 +269,7 @@ def run_client(
         typing = threading.Thread(target=driver, daemon=True)
         typing.start()
         try:
-            with create_app_session(input=pipe, output=output or DummyOutput()):
+            with in_the_shared_session(pipe, output or DummyOutput()):
                 run.code = main(
                     ["--url", address, "--lang", "en", *arguments],
                     http=http,
@@ -267,9 +321,19 @@ def on_a_port(stub: StubService) -> Iterator[str]:
 
 class Program:
     """The client as a program of its own, in a terminal of its own: what
-    it showed there, a way to type into it, and how it ended."""
+    it showed there, a way to type into it, and how it ended. With
+    ``controlling`` the terminal is the controlling one of a session of the
+    program's own, as in a window: closing the other side then sends it the
+    request to hang up as well."""
 
-    def __init__(self, address: str, home: Path, *arguments: str, **environment: str) -> None:
+    def __init__(
+        self,
+        address: str,
+        home: Path,
+        *arguments: str,
+        controlling: bool = False,
+        **environment: str,
+    ) -> None:
         import pty
 
         self._terminal, theirs = pty.openpty()
@@ -285,8 +349,10 @@ class Program:
             **environment,
         }
         env.pop("NO_COLOR", None)
+        command = [sys.executable, "-m", "cli", "--url", address, "--lang", "en", *arguments]
         self._process = subprocess.Popen(
-            [sys.executable, "-m", "cli", "--url", address, "--lang", "en", *arguments],
+            [sys.executable, "-c", TAKE_THE_TERMINAL, *command] if controlling else command,
+            start_new_session=controlling,
             stdin=theirs,
             stdout=theirs,
             stderr=subprocess.PIPE,
@@ -321,9 +387,17 @@ class Program:
             if time.monotonic() >= until or self._process.poll() is not None:
                 # A test that fails here leaves no program behind: one that
                 # still ran would go on to the end of the whole test run.
+                errors = self._errors_of_an_ended_program()
                 self._end()
-                raise AssertionError(f"never happened: {check!r}\n{self.shown()[-2000:]}")
+                raise AssertionError(f"never happened: {check!r}\n{self.shown()[-2000:]}{errors}")
             self._read(0.02)
+
+    def _errors_of_an_ended_program(self) -> str:
+        """What a program that has ended wrote to its error output — the
+        reason, where it ended before it could show anything."""
+        if self._process.poll() is None or self._process.stderr is None:
+            return ""
+        return "\n" + self._process.stderr.read().decode("utf-8", "replace")[-2000:]
 
     def wait_until_it_listens(self) -> None:
         """Reads on until the client has drawn its block for the first time:

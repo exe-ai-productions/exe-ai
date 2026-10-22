@@ -14,6 +14,7 @@ here is the same file the interface imports, not a copy of its logic.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import textwrap
@@ -94,29 +95,50 @@ def test_die_schlange_gibt_der_reihe_nach_heraus():
     assert bericht["fremd_bleibt"] == ["fremd"]
 
 
-def test_ein_lauf_der_scheitert_haelt_die_schlange_an():
-    """The hold is what keeps the next message out of a broken state."""
+def test_the_line_never_holds():
+    """A failed run holds nothing: its messages stay due and go on like
+    after a clean end. The hold itself does not exist any more."""
     bericht = _laufen(
         """
         w.einreihen('a', { inhalt: 'eins' })
         w.einreihen('a', { inhalt: 'zwei' })
-        w.einreihen('b', { inhalt: 'fremd' })
-        const vorher = w.haelt('a')
-        w.anhalten('a')
         return {
-          vorher,
-          nachher: w.haelt('a'),
-          alle_markiert: w.fuerChat('a').every((e) => e.haelt),
-          fremder_chat: w.haelt('b'),
-          geloest: (w.loesen('a'), w.haelt('a')),
+          hold_exists: [typeof w.anhalten, typeof w.loesen, typeof w.haelt],
+          field: w.fuerChat('a').some((e) => 'haelt' in e),
+          due: w.awaitingInterrupt('a').map((e) => e.inhalt),
+          first: w.ausreihen('a').inhalt,
         }
         """
     )
-    assert bericht["vorher"] is False
-    assert bericht["nachher"] is True
-    assert bericht["alle_markiert"] is True
-    assert bericht["fremder_chat"] is False
-    assert bericht["geloest"] is False
+    assert bericht["hold_exists"] == ["undefined", "undefined", "undefined"]
+    assert bericht["field"] is False
+    assert bericht["due"] == ["eins", "zwei"]
+    assert bericht["first"] == "eins"
+
+
+def test_a_stop_by_hand_gives_back_all_entries_of_the_chat_in_written_order():
+    """Everything waiting in the chat leaves the line at once, in the order it
+    was written; another chat keeps its own. Without the give-back the entries
+    stay in line and go out after the stop."""
+    bericht = _laufen(
+        """
+        w.einreihen('a', { inhalt: 'eins' })
+        w.einreihen('b', { inhalt: 'fremd' })
+        w.einreihen('a', { inhalt: 'zwei' })
+        w.einreihen('a', { inhalt: 'drei' })
+        const given_back = w.takeAllOut('a')
+        return {
+          given_back: given_back.map((e) => e.inhalt),
+          a_empty: w.fuerChat('a').length,
+          other_stays: w.fuerChat('b').map((e) => e.inhalt),
+          again: w.takeAllOut('a').length,
+        }
+        """
+    )
+    assert bericht["given_back"] == ["eins", "zwei", "drei"]
+    assert bericht["a_empty"] == 0
+    assert bericht["other_stays"] == ["fremd"]
+    assert bericht["again"] == 0
 
 
 def test_das_kreuz_nimmt_genau_einen_eintrag_heraus():
@@ -143,3 +165,91 @@ def test_ein_geloeschter_chat_nimmt_seine_schlange_mit():
     )
     assert bericht["a"] == 0
     assert bericht["b"] == 1
+
+
+def test_ein_stopp_gilt_nur_fuer_was_schon_wartet():
+    """A stop is made once for the messages standing in line; what comes
+    later needs a stop of its own."""
+    bericht = _laufen(
+        """
+        w.einreihen('a', { inhalt: 'eins' })
+        w.einreihen('a', { inhalt: 'zwei' })
+        const vorher = w.awaitingInterrupt('a').length
+        w.markInterrupted('a')
+        const danach = w.awaitingInterrupt('a').length
+        w.einreihen('a', { inhalt: 'drei' })
+        const spaeter = w.awaitingInterrupt('a').map((e) => e.inhalt)
+        return { vorher, danach, spaeter }
+        """
+    )
+    assert bericht["vorher"] == 2
+    assert bericht["danach"] == 0
+    assert bericht["spaeter"] == ["drei"]
+
+
+def test_ein_ausgebliebener_stopp_macht_die_nachrichten_wieder_faellig():
+    bericht = _laufen(
+        """
+        w.einreihen('a', { inhalt: 'eins' })
+        w.markInterrupted('a')
+        w.unmarkInterrupted('a')
+        return { faellig: w.awaitingInterrupt('a').length }
+        """
+    )
+    assert bericht["faellig"] == 1
+
+
+def _words(js: str) -> object:
+    """Run `js` against the plain module that merges given-back words."""
+    treiber = FRONTEND / "zurueckworte.pruefung.mjs"
+    treiber.write_text(
+        "import { wordsInFront } from './src/lib/giveBackWords.js'\n"
+        "console.log('---BERICHT---' + JSON.stringify(await (async () => {\n"
+        + textwrap.indent(textwrap.dedent(js), "  ")
+        + "\n})()))\n",
+        encoding="utf-8",
+    )
+    try:
+        lauf = subprocess.run(
+            ["node", treiber.name], cwd=FRONTEND, capture_output=True, text=True, timeout=60
+        )
+    finally:
+        treiber.unlink(missing_ok=True)
+    assert lauf.returncode == 0, (lauf.stdout + lauf.stderr)[-2000:]
+    return json.loads(lauf.stdout.split("---BERICHT---", 1)[1].strip())
+
+
+def test_given_back_words_stand_in_written_order_before_the_typed_ones():
+    bericht = _words(
+        """
+        const e = (inhalt) => ({ inhalt })
+        return {
+          vor_getipptem: wordsInFront([e('eins'), e('zwei')], 'danach getippt'),
+          ohne_getipptes: wordsInFront([e('eins'), e('zwei')], ''),
+          leere_nachricht: wordsInFront([e('eins'), e(''), e(undefined), e('zwei')], '  '),
+          nur_getipptes: wordsInFront([e('')], 'getippt'),
+        }
+        """
+    )
+    assert bericht["vor_getipptem"] == "eins\nzwei\ndanach getippt"
+    assert bericht["ohne_getipptes"] == "eins\nzwei"
+    assert bericht["leere_nachricht"] == "eins\nzwei"
+    assert bericht["nur_getipptes"] == "getippt"
+
+
+def test_nur_ein_stopp_von_hand_gibt_zurueck_ein_fehler_haelt_nichts():
+    """The run hands the waiting messages back for a stop by hand and for
+    nothing else; a failure and a stop made for a message leave the line be."""
+    lauf = (FRONTEND / "src" / "lib" / "chatlauf.svelte.js").read_text(encoding="utf-8")
+    assert "anhalten" not in lauf and "haelt(" not in lauf
+    assert "else if (fertigerChat && abgebrochen && (!stopForMessage || stopByHand)) giveBackQueued(fertigerChat)" in lauf
+    treffer = [m.start() for m in re.finditer(r"giveBackQueued\(", lauf)]
+    assert len(treffer) == 3  # the definition and the two stops by hand
+    # the stop of a window with no run of its own, waiting on another claim
+    assert "      giveBackQueued(chatId)\n      void api.abbrechen(null, chatId)" in lauf
+    app = (FRONTEND / "src" / "App.svelte").read_text(encoding="utf-8")
+    assert "haelt(" not in app
+    # the stop button, the key and the phone's arrow are stops by hand
+    assert "abbrechen={abbrechenVonHand}" in app and "abbrechenVonHand()" in app
+    phone = (FRONTEND / "src" / "phone" / "InputBar.svelte").read_text(encoding="utf-8")
+    assert "chatRun.abbrechenVonHand()" in phone

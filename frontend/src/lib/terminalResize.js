@@ -18,6 +18,14 @@
   breaks nothing of the block: the drawing follows at once, as it always did.
 */
 
+/* The size a fit proposes, or nothing where it proposes none: it gives none
+   while the drawing has no cell size to count with. */
+export function usableSize(size) {
+  return size && Number.isFinite(size.cols) && Number.isFinite(size.rows) && size.cols > 0 && size.rows > 0
+    ? size
+    : null
+}
+
 /**
  * @param {object} parts
  * @param {object} parts.xterm        the drawing: `cols`, `rows`, `resize`, `buffer`, `scrollToBottom`
@@ -70,8 +78,8 @@ export function followTheBox({ xterm, fit, tell, screenIsUp, atOnce }) {
   function follow() {
     // Once the drawing has caught up, the box as it stands then is looked at.
     if (waiting) return
-    const size = fit.proposeDimensions()
-    if (!size || Number.isNaN(size.cols) || Number.isNaN(size.rows)) return
+    const size = usableSize(fit.proposeDimensions())
+    if (!size) return
     if (size.cols === xterm.cols && size.rows === xterm.rows) return
     if (!atOnce && size.cols < xterm.cols && screenIsUp()) {
       waiting = size

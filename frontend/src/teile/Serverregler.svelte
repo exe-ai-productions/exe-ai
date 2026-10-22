@@ -29,7 +29,10 @@
      server passes `rs`, which is what its fields were called before this
      component existed. */
   import { untrack } from 'svelte'
-  import { t } from '../lib/texte.svelte.js'
+  import { api } from '../lib/api.js'
+  import { t, texte } from '../lib/texte.svelte.js'
+  import { formatGb } from '../lib/numberDisplay.js'
+  import { IDLE_MINUTEN_MAX } from '../lib/feineinstellungen.js'
   import Auswahlfeld from './Auswahlfeld.svelte'
   import Hauszeichen from './Hauszeichen.svelte'
   import Schalter from './Schalter.svelte'
@@ -49,8 +52,9 @@
     kennung = 'rs',
     /* Which half of the sheet: 'module' (the two plug-in rows), 'speicher'
        (context, layers, threads, MoE), 'fein' (the advanced drawer with
-       preload, parallel requests and port) — or 'alles' for the whole
-       sheet in one column. */
+       preload, parallel requests and port), 'leerlauf' (the advanced drawer
+       with the idle time alone, for the servers that have nothing else to
+       set there) — or 'alles' for the whole sheet in one column. */
     teil = 'alles',
     /* A running server is not edited, it is stopped first — the same rule
        both pages follow, so it arrives as one flag rather than being decided
@@ -88,6 +92,10 @@
 
     kontext = $bindable(8192),
     kontextstufen = [],
+    /* The window's bounds as the field takes them: a server whose window has
+       narrower bounds than the engine's names them. */
+    kontextMin = 512,
+    kontextMax = 1048576,
     /* `null` is "Auto": no count is sent and the engine places the layers. */
     schichten = $bindable(null),
     maxSchichten = 99,
@@ -95,32 +103,70 @@
     maxFaeden = 8,
 
     vorladen = $bindable(null),
+    /* Whether a run the program places itself may land on this server — the
+       approval, `null` on a server that has no runs (hides the row like
+       `vorladen`). It is no start value, so it is not locked while the
+       server runs, and it is written the moment it is switched
+       (`onuseforruns`) instead of with the numbers. */
+    useForRuns = null,
+    onuseforruns = null,
 
-    fein = $bindable({ kv_cache: 'f16', moe_auf_cpu: false, festnageln: false }),
+    /* The two levers only the embedding server has: how the vectors of a
+       text are pooled, and the batch size a text may have. `null` leaves the
+       row out, like `vorladen` above. The pooling choice names its entries
+       ("" is the model's own kind); the batch stands between its floor and
+       the window. */
+    pooling = $bindable(null),
+    poolingauswahl = [],
+    batch = $bindable(null),
+    batchMin = 2048,
+    /* The cache rows (the 8-bit cache and the shared cache) are for a server
+       that holds a conversation; the embedding server has none. */
+    kvZeilen = true,
+
+    fein = $bindable({ kv_cache: 'f16', flash_attention: 'auto', moe_auf_cpu: false, festnageln: false }),
     /* Experts on the CPU as one number: above
        zero names a count, empty means off. */
     moeSchichten = $bindable(null),
     parallel = $bindable(null),
     maxParallel = 64,
 
-    port = $bindable(8080),
+    /* Minutes without a request after which the server frees its model;
+       empty is never. `undefined` leaves the row out (a page that has no such
+       field), `null` is the empty field. */
+    idle = $bindable(undefined),
 
-    /* What stands at the right end of the head line of the group this
-       instance draws — a panel sets its Start/Stop button there, the same
-       place in every window: in the line of the group, flush with the
-       card below, never up in the window's head card. Which group carries
-       it is the panel's answer: the model server and the slot put it in
-       "module", the small servers in "netzwerk". */
-    kopfrechts = null,
+    port = $bindable(8080),
 
     /* What the start is expected to cost, and what the machine has. Both
        come from above because only the page knows which model list the
-       estimate was drawn from. Absent, the line simply does not appear. */
+       estimate was drawn from. Absent, the row simply does not appear. The
+       machine's whole memory is only what the plan is measured against where
+       the system names no limit of its own for wired memory. */
     schaetzung = null,
     maschineGb = null,
   } = $props()
 
   const kurzK = (n) => (n ? Math.round(n / 1024) + 'k' : '')
+
+  /* The cache's stages and flash attention's answers. A cache below 16 bit
+     needs flash attention, so "off" stands in the list but cannot be taken
+     while the cache is smaller — and a cache made smaller takes "off" back
+     to Auto, so the pair that is shown can run. */
+  const kvChoices = $derived([
+    { wert: 'f16', text: t('modell.kv_f16') },
+    { wert: 'q8_0', text: t('modell.kv_q8') },
+    { wert: 'q5_0', text: t('modell.kv_q5') },
+    { wert: 'q4_0', text: t('modell.kv_q4') },
+  ])
+  const flashChoices = $derived([
+    { wert: 'auto', text: t('modell.flash_auto') },
+    { wert: 'on', text: t('modell.flash_an') },
+    { wert: 'off', text: t('modell.flash_inaktiv'), gesperrt: fein.kv_cache !== 'f16' },
+  ])
+  function kvChosen(neu) {
+    if (neu !== 'f16' && fein.flash_attention === 'off') fein.flash_attention = 'auto'
+  }
 
   /* Open on start: every lever of the server stands in view, and the head
      still folds the drawer away for whoever does not need it. */
@@ -182,20 +228,38 @@
       : null,
   )
 
+  /* The plan is measured against the limit the system applies to wired
+     memory, the one the bar in the page head uses: the limit it reports, else
+     its whole memory, else what the page knows of the machine. Read once, and
+     only where a plan is shown. */
+  let blick = $state(null)
+  let blickGefragt = false
+  $effect(() => {
+    if (!schaetzung || blickGefragt) return
+    blickGefragt = true
+    api.speicherBlick().then((antwort) => (blick = antwort)).catch(() => {})
+  })
+  const grenzeGb = $derived(blick?.wired_limit_gb ?? blick?.gesamt_gb ?? maschineGb)
+
   // How many rows the storage card holds (Serverabschnitt.svelte, `gewicht`).
-  const zeigtSchaetzung = $derived(Boolean(schaetzung && maschineGb))
+  const zeigtSchaetzung = $derived(Boolean(schaetzung && grenzeGb))
+  // The rows of the advanced card, for the share each column gets.
+  const feinZeilen = $derived(
+    3 + (kvZeilen ? 3 : 0) + (vorladen !== null ? 1 : 0) + (useForRuns !== null ? 1 : 0)
+      + (pooling !== null ? 1 : 0) + (batch !== null ? 1 : 0)
+      + (idle !== undefined ? 1 : 0),
+  )
   const speicherZeilen = $derived(
     (kontextzeile ? 1 : 0) + 2 + (moe ? 1 : 0) + (zeigtSchaetzung ? 1 : 0),
   )
-  /* The planned share of the machine's memory, for the bar under the
-     storage rows: 0 to 100. */
+  /* The planned share of that limit, for the bar in the last row: 0 to 100. */
   const belegt = $derived(
-    zeigtSchaetzung ? Math.min(100, Math.max(0, (schaetzung.gesamt / maschineGb) * 100)) : 0,
+    zeigtSchaetzung ? Math.min(100, Math.max(0, (schaetzung.gesamt / grenzeGb) * 100)) : 0,
   )
 </script>
 
 {#if (teil === 'module' || teil === 'alles') && module}
-  <Serverabschnitt zeichen="werkzeug" titel={t('modell.gruppe_module')} rechts={kopfrechts} gewicht={2}>
+  <Serverabschnitt zeichen="werkzeug" titel={t('modell.gruppe_module')} gewicht={2}>
     <!-- The modules in one card: one choice made twice over — which small
          model helps the big one. -->
     <div class="zeile">
@@ -230,7 +294,7 @@
 {/if}
 
 {#if teil === 'speicher' || teil === 'alles'}
-  <Serverabschnitt zeichen="server" titel={t('modell.gruppe_speicher')} gewicht={speicherZeilen}>
+  <Serverabschnitt zeichen="chip_bolt" titel={t('modell.gruppe_speicher')} gewicht={speicherZeilen}>
     <!-- The numbers that decide what a run costs: name and field, the
          track under them. -->
     {#if kontextzeile}
@@ -241,7 +305,7 @@
             <span class="jeanfrage">{parallel} × {kurzK(jeAnfrage)}</span>
           {/if}
           <div class="zahlplatz">
-            <Zahlenfeld bind:wert={kontext} {gesperrt} min={512} max={1048576} schritt={1024} />
+            <Zahlenfeld bind:wert={kontext} {gesperrt} min={kontextMin} max={kontextMax} schritt={1024} />
           </div>
         </div>
         <!-- Dragged for the steps everybody needs, typed for the one case that
@@ -322,18 +386,19 @@
       </div>
     {/if}
     {#if zeigtSchaetzung}
-      <!-- What the start is planned to take of this machine: a bar and the
-           two numbers. -->
-      <div class="zeile duenn">
+      <!-- What the start of this server's own model is planned to take of the
+           wired memory: the name, a bar and the two numbers. -->
+      <div class="zeile wired">
+        <span class="wiredname">{t('modell.wired_label')}</span>
         <span class="balken" aria-hidden="true"><i style:width="{belegt}%"></i></span>
-        <span class="schaetz">{t('modell.schaetz_zeile', { plan: schaetzung.gesamt.toFixed(1), gesamt: maschineGb })}</span>
+        <span class="schaetz">{t('modell.wired_von', { wired: formatGb(schaetzung.gesamt, texte.sprache), total: formatGb(grenzeGb, texte.sprache) })}</span>
       </div>
     {/if}
   </Serverabschnitt>
 {/if}
 
 {#if teil === 'netzwerk' || teil === 'alles'}
-  <Serverabschnitt zeichen="netzwerk" titel={t('modell.gruppe_netz')} rechts={kopfrechts} gewicht={1}>
+  <Serverabschnitt zeichen="netzwerk" titel={t('modell.gruppe_netz')} gewicht={1}>
     <div class="zeile">
       <label class="zahlname" for="{kennung}-port">{t('modell.feld_port')}</label>
       <div class="zahlplatz">
@@ -343,18 +408,44 @@
   </Serverabschnitt>
 {/if}
 
-<!-- Shut by default, and that is the whole point: somebody who does not know
-     what a KV cache is never has to find out. -->
+<!-- Open on start (see `erweitertOffen`); the head folds it away. -->
 {#if (teil === 'fein' || teil === 'alles') && erweitert}
   <Serverabschnitt klappbar bind:offen={erweitertOffen} titel={t('modell.gruppe_erweitert')}
-                   gewicht={vorladen !== null ? 6 : 5}>
+                   gewicht={feinZeilen}>
+    {#if pooling !== null}
+      <div class="zeile niedrig">
+        <label class="name" for="{kennung}-pooling">{t('modell.feld_pooling')}</label>
+        <div class="wahl schmal">
+          <Auswahlfeld id="{kennung}-pooling" bind:wert={pooling} eintraege={poolingauswahl}
+                       {gesperrt} beschriftung={t('modell.feld_pooling')} />
+        </div>
+      </div>
+    {/if}
+    {#if batch !== null}
+      <div class="zeile niedrig">
+        <label class="zahlname" for="{kennung}-batch">{t('modell.feld_batch')}</label>
+        <div class="zahlplatz">
+          <Zahlenfeld id="{kennung}-batch" bind:wert={batch} {gesperrt}
+                      min={batchMin} max={Math.max(batchMin, kontext)} schritt={1024} ganzzahlig />
+        </div>
+      </div>
+    {/if}
+    {#if kvZeilen}
     <div class="zeile niedrig">
-      <!-- What the switch turns the cache INTO, after the name. -->
-      <span class="name">{t('modell.feld_kv')} · {t('modell.feld_kv_wert')}</span>
-      <Schalter an={fein.kv_cache === 'q8_0'} {gesperrt}
-                beschriftung={t('modell.feld_kv')}
-                onschalten={() => (fein.kv_cache = fein.kv_cache === 'q8_0' ? 'f16' : 'q8_0')} />
+      <label class="name" for="{kennung}-kv">{t('modell.feld_kv')}</label>
+      <div class="wahl">
+        <Auswahlfeld id="{kennung}-kv" bind:wert={fein.kv_cache} eintraege={kvChoices}
+                     {gesperrt} beschriftung={t('modell.feld_kv')} gewaehlt={kvChosen} />
+      </div>
     </div>
+    <div class="zeile niedrig">
+      <label class="name" for="{kennung}-flash">{t('modell.feld_flash')}</label>
+      <div class="wahl">
+        <Auswahlfeld id="{kennung}-flash" bind:wert={fein.flash_attention} eintraege={flashChoices}
+                     {gesperrt} beschriftung={t('modell.feld_flash')} />
+      </div>
+    </div>
+    {/if}
     <div class="zeile niedrig">
       <span class="name">{t('modell.feld_mlock')}</span>
       <Schalter an={fein.festnageln} {gesperrt}
@@ -369,6 +460,14 @@
                   onschalten={(neu) => (vorladen = neu)} />
       </div>
     {/if}
+    {#if useForRuns !== null}
+      <div class="zeile niedrig">
+        <span class="name">{t('modell.fuer_agenten')}</span>
+        <Schalter an={useForRuns}
+                  beschriftung={t('modell.fuer_agenten')}
+                  onschalten={(neu) => onuseforruns?.(neu)} />
+      </div>
+    {/if}
     <div class="zeile niedrig">
       <label class="zahlname" for="{kennung}-parallel">{t('modell.feld_parallel')}</label>
       <div class="zahlplatz">
@@ -377,6 +476,7 @@
                     nullwort={t('parameter.auto')} />
       </div>
     </div>
+    {#if kvZeilen}
     <div class="zeile niedrig">
       <!-- Shared by default; with the slot count on Auto the engine turns it
            on itself, so the switch stands on and cannot be moved. -->
@@ -385,10 +485,33 @@
                 beschriftung={t('modell.feld_kv_unified')}
                 onschalten={() => (fein.kv_unified = fein.kv_unified === false)} />
     </div>
+    {/if}
+    {#if idle !== undefined}
+      <div class="zeile niedrig">
+        <label class="zahlname" for="{kennung}-idle">{t('modell.feld_idle_ttl')}</label>
+        <div class="zahlplatz">
+          <Zahlenfeld id="{kennung}-idle" bind:wert={idle} {gesperrt}
+                      min={0} max={IDLE_MINUTEN_MAX} ganzzahlig nullwort="-" />
+        </div>
+      </div>
+    {/if}
     <div class="zeile niedrig">
       <label class="zahlname" for="{kennung}-port">{t('modell.feld_port')}</label>
       <div class="zahlplatz">
         <Zahlenfeld id="{kennung}-port" bind:wert={port} {gesperrt} min={1024} max={65535} />
+      </div>
+    </div>
+  </Serverabschnitt>
+{/if}
+
+<!-- The servers with nothing else to set under "Advanced": the idle time alone. -->
+{#if teil === 'leerlauf' && erweitert}
+  <Serverabschnitt klappbar bind:offen={erweitertOffen} titel={t('modell.gruppe_erweitert')} gewicht={1}>
+    <div class="zeile niedrig">
+      <label class="zahlname" for="{kennung}-idle">{t('modell.feld_idle_ttl')}</label>
+      <div class="zahlplatz">
+        <Zahlenfeld id="{kennung}-idle" bind:wert={idle} {gesperrt}
+                    min={0} max={IDLE_MINUTEN_MAX} ganzzahlig nullwort="-" />
       </div>
     </div>
   </Serverabschnitt>
@@ -408,20 +531,33 @@
      capability, one colour, in every appearance. */
   .blitzfarbe { color: var(--blau); }
   .augenfarbe { color: var(--violett); }
-  /* The storage plan (a thin row, Serverabschnitt.svelte): a bar on the
-     field ground and the numbers. */
+  /* The wired-memory row (an ordinary row of the card, Serverabschnitt.svelte):
+     its name, a bar on a track of the strong line colour and the numbers. */
+  div.zeile.wired {
+    gap: 14px;
+  }
+  .wiredname {
+    flex: none;
+    font: 600 13px/18px var(--schrift);
+    color: var(--text);
+    white-space: nowrap;
+  }
   .balken {
     flex: 1;
     min-width: 0;
     height: 6px;
     border-radius: 3px;
-    background: var(--bg-hoch);
+    background: var(--linie-stark);
     overflow: hidden;
   }
   .balken i {
     display: block;
     height: 100%;
     background: var(--gruen);
+  }
+  /* The pooling picker is 160 wide as drawn; the row's own rule is 232. */
+  .wahl.schmal {
+    width: 160px;
   }
   .jeanfrage {
     flex: none;
@@ -432,9 +568,9 @@
   }
   .schaetz {
     flex: none;
-    font-size: 12px;
-    line-height: 16px;
-    color: var(--text-still);
+    font-size: 13px;
+    line-height: 18px;
+    color: var(--text-leise);
     white-space: nowrap;
   }
 </style>

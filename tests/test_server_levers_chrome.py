@@ -63,7 +63,7 @@ SCENE_JS = """export const scene = $state({
   moe: null,
   parallel: null,
   kontext: 16384,
-  fein: { kv_cache: 'f16', moe_auf_cpu: false, festnageln: false, kv_unified: true },
+  fein: { kv_cache: 'f16', flash_attention: 'auto', moe_auf_cpu: false, festnageln: false, kv_unified: true },
 })
 """
 
@@ -274,7 +274,7 @@ def report() -> dict:
         (folder / "entry.js").write_text(ENTRY_JS, encoding="utf-8")
         (folder / "vite.config.js").write_text(VITE_CONFIG, encoding="utf-8")
         build = subprocess.run(
-            [str(FRONTEND / "node_modules" / ".bin" / "vite"), "build", "--config", "vite.config.js"],
+            [shutil.which("vite", path=str(FRONTEND / "node_modules" / ".bin")), "build", "--config", "vite.config.js"],
             cwd=folder, capture_output=True, text=True, timeout=300,
         )
         assert build.returncode == 0, (build.stdout + build.stderr)[-2500:]

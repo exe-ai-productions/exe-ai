@@ -297,22 +297,12 @@ def test_exe_setup_model_from_outside_shows_the_model_step_only(
     assert capsys.readouterr().out == ""
 
 
-def test_the_start_without_a_terminal_and_without_a_model_says_how_and_ends_with_two(
+def test_the_start_with_a_model_asks_nothing_about_a_setup(
     stub, tmp_path, monkeypatch, capsys
 ):
-    stub.models = []
-    code = run_program(stub, tmp_path, monkeypatch)
-    assert code == 2
-    assert capsys.readouterr().err.strip() == texts().t("cli.setup_hint")
-    assert stub.provider_requests == []
-
-
-def test_the_start_with_a_model_asks_nothing_and_needs_no_terminal(
-    stub, tmp_path, monkeypatch, capsys
-):
-    code = run_program(stub, tmp_path, monkeypatch, typed="/quit\r")
+    code = run_program(stub, tmp_path, monkeypatch, terminal=True, typed="/quit\r")
     assert code == 0
-    assert texts().t("cli.setup_hint") not in capsys.readouterr().err
+    assert "exe setup" not in capsys.readouterr().err
 
 
 # --- The value that stands, from outside ------------------------------------------------

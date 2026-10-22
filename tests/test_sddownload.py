@@ -122,7 +122,19 @@ def test_waehlbare_varianten_nur_auf_win32(monkeypatch):
     varianten = sddownload.waehlbare_varianten()
     assert {v for v, _ in varianten} == set(sddownload._PAKETE_WIN32)
     for variante, groesse in varianten:
-        assert groesse == sddownload._PAKETE_WIN32[variante][1]
+        # CUDA brings its runtime down with it; the others only their package.
+        runtime = sddownload._CUDART[1] if variante == "cuda12" else 0
+        assert groesse == sddownload._PAKETE_WIN32[variante][1] + runtime
+
+
+def test_the_greyed_builds_of_a_mac_name_the_same_sizes(monkeypatch):
+    monkeypatch.setattr(sddownload.sys, "platform", "win32")
+    windows = sddownload.waehlbare_varianten()
+    monkeypatch.setattr(sddownload.sys, "platform", "darwin")
+    assert sddownload.unavailable_variants() == windows
+    sizes = dict(windows)
+    assert sizes["cuda12"] == sddownload._PAKETE_WIN32["cuda12"][1] + sddownload._CUDART[1]
+    assert sizes["cpu"] == sddownload._PAKETE_WIN32["cpu"][1]
 
 
 # --- Which one is installed -------------------------------------------------
@@ -298,46 +310,46 @@ def test_installierter_bau_ohne_ordner_ist_nichts(tmp_path):
 
 def test_bau_nummer_liest_die_zahl_aus_dem_tag():
     assert sddownload._bau_nummer("master-989-c678dfe") == 989
-    assert sddownload._bau_nummer(sddownload.BAU) == 948
+    assert sddownload._bau_nummer(sddownload.BAU) == 975
 
 
-def test_the_pinned_build_is_948_in_tag_address_folder_and_packages():
+def test_the_pinned_build_is_975_in_tag_address_folder_and_packages():
     """What a fresh installation fetches: the build's tag, the address its
     packages come from, the folder it lands in, and every package under the
     name the release itself lists it by."""
-    tag = "master-948-228c707"
+    tag = "master-975-95b3090"
     assert BAU == tag
     assert sddownload._BASIS == (
         f"https://github.com/leejet/stable-diffusion.cpp/releases/download/{tag}"
     )
     assert sddownload._bauordner_name_von(BAU, sddownload.VORGABE_VARIANTE) == tag
     assert sddownload._bauordner_name_von(BAU, "cuda12") == f"{tag}-cuda12"
-    assert sddownload._PAKET_DARWIN == "sd-master-228c707-bin-Darwin-macOS-26.6.2-arm64.zip"
+    assert sddownload._PAKET_DARWIN == "sd-master-95b3090-bin-Darwin-macOS-26.6.2-arm64.zip"
     assert {variant: name for variant, (name, _) in sddownload._PAKETE_WIN32.items()} == {
-        "cpu": "sd-master-228c707-bin-win-cpu-x64.zip",
-        "cuda12": "sd-master-228c707-bin-win-cuda12-x64.zip",
-        "vulkan": "sd-master-228c707-bin-win-vulkan-x64.zip",
-        "rocm": "sd-master-228c707-bin-win-rocm-7.14.0-x64.zip",
+        "cpu": "sd-master-95b3090-bin-win-cpu-x64.zip",
+        "cuda12": "sd-master-95b3090-bin-win-cuda12-x64.zip",
+        "vulkan": "sd-master-95b3090-bin-win-vulkan-x64.zip",
+        "rocm": "sd-master-95b3090-bin-win-rocm-10.1.0-x64.zip",
     }
     assert sddownload._CUDART[0] == "cudart-sd-bin-win-cu12-x64.zip"
     # The sizes are the release's own byte counts: the cuda12 bar is laid
     # out from them, and a rounded total would be passed before the end.
     assert {variant: size for variant, (_, size) in sddownload._PAKETE_WIN32.items()} == {
-        "cpu": 17_517_910, "cuda12": 337_979_057, "vulkan": 30_098_372, "rocm": 251_568_217,
+        "cpu": 17_706_677, "cuda12": 343_630_973, "vulkan": 29_371_165, "rocm": 263_997_742,
     }
     assert sddownload._CUDART[1] == 563_452_046
     pinned = sddownload.pinned_build()
-    assert (pinned.bau, pinned.nummer) == (tag, 948)
+    assert (pinned.bau, pinned.nummer) == (tag, 975)
 
 
 def test_the_pinned_build_installed_is_up_to_date_when_it_is_the_newest(monkeypatch):
     """Silence probe: the update question is what it was. With the pinned
     build as the project's newest release there is nothing newer for an
     installation that has it — and an older installation is still told."""
-    newest = _veroeffentlichung_daten("master-948-228c707", "228c707")
+    newest = _veroeffentlichung_daten("master-975-95b3090", "95b3090")
     monkeypatch.setattr(sddownload.httpx, "get", lambda *a, **k: _FalscheAntwort(newest))
     release = sddownload.neueste_veroeffentlichung()
-    assert release is not None and (release.bau, release.nummer) == (BAU, 948)
+    assert release is not None and (release.bau, release.nummer) == (BAU, 975)
     assert not sddownload.ist_voraus(release, BAU)
     assert sddownload.neuere_fassung(BAU) is None
     assert sddownload.ist_voraus(release, "master-820-de298c2")
@@ -960,8 +972,9 @@ def test_a_fork_tag_is_read_as_a_build(monkeypatch):
     assert v is not None and (v.bau, v.nummer) == ("exe1-951-1a2b3c4", 951)
     assert v.darwin == ("sd-exe1-1a2b3c4-bin-Darwin-macOS-26.6.2-arm64.zip", 34310861)
     assert set(v.varianten) == {"cpu", "cuda12", "vulkan", "rocm"}
-    # Newer than the upstream build this program pinned before.
-    assert v.nummer > sddownload._bau_nummer(sddownload.BAU)
+    # Newer than the upstream build 948 this program pinned before its
+    # current pin (the fork's counts are read against the builds on a disk).
+    assert v.nummer > 948
 
 
 def test_a_hand_placed_program_still_comes_first(tmp_path):

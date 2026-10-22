@@ -193,7 +193,7 @@
     align-self: stretch;
     margin: 8px 0 0;
     font-size: 12.5px;
-    color: var(--rot);
+    color: var(--rot-text);
   }
 
   @media (prefers-reduced-motion: reduce) {

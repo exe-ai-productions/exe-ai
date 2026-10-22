@@ -46,6 +46,7 @@ def test_ein_anbieter_erscheint_ohne_neustart(client, eigener_ordner):
         "id": "eigene",
         "api_key_env": "EIGENE_API_KEY",
         "erreichbar": False,
+        "hinweis": None,
     }
 
     # The candidate is there while the window is still open.

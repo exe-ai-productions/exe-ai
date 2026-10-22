@@ -56,11 +56,12 @@ export async function anredeSpeichern(name, an) {
   await anredeSchreiben()
 }
 
-/** The greeting key for this hour — morning, day or evening. */
-export function grussSchluessel(frage = false) {
+/** The greeting key for this hour — morning, day or evening. The line holds
+    the name and the sentence that follows it (lib/greetingpick.js). */
+export function grussSchluessel() {
   const stunde = new Date().getHours()
   const teil = stunde >= 5 && stunde < 11 ? 'morgen' : stunde >= 11 && stunde < 18 ? 'tag' : 'abend'
-  return frage ? `gruss.frage_${teil}` : `gruss.${teil}`
+  return `gruss.frage_${teil}`
 }
 
 /* The first start is a one-time act per installation: once the window was

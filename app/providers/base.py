@@ -8,6 +8,7 @@ addition, not a rework.
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Literal
@@ -387,11 +388,82 @@ def require_stream_end(end_reason: str | None, provider_name: str) -> None:
         raise provider_error("fehler.anbieter_ende_fehlt", name=provider_name)
 
 
+# The longest sentence of a refusal that is kept: what a provider writes in
+# an error is short; a page of markup in its place is not a sentence.
+REFUSAL_SENTENCE_LIMIT = 400
+
+
+def refusal_of(response: httpx.Response, *keys: str) -> tuple[str, str] | None:
+    """What a provider says about refusing a request: the kind of the error
+    and its sentence, read from the body of the answer. None when the body
+    holds no sentence.
+
+    The providers word their errors alike: an object ``error`` with ``message``
+    and ``type`` (or ``code``, or ``status``), alone or as the one element of
+    a list; a plain string under ``error``; or ``detail`` / ``message`` at the
+    top. A ``keys`` value that the sentence repeats is replaced by "…", so the
+    sentence can go to the log and the window as it stands.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    if isinstance(body, list) and len(body) == 1:
+        body = body[0]
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    kind = ""
+    if isinstance(error, dict):
+        sentence = error.get("message")
+        kind = str(error.get("type") or error.get("status") or error.get("code") or "")
+    elif isinstance(error, str):
+        sentence = error
+    else:
+        sentence = body.get("detail") or body.get("message")
+    if not isinstance(sentence, str) or not sentence.strip():
+        return None
+    sentence = sentence.strip()
+    for key in keys:
+        if key:
+            sentence = sentence.replace(key, "…")
+    return kind, sentence[:REFUSAL_SENTENCE_LIMIT]
+
+
 class Provider(ABC):
     """What every provider must be able to do."""
 
+    # Why the last reachability check said no, in the words the server gave
+    # (a provider that is told one fills it); None for silence or an answer
+    # without a reason.
+    letzter_grund: str | None = None
+    # The refusal the log last carried a line for (status, kind, sentence):
+    # the check repeats every few seconds, and the same answer is told once.
+    _gemeldete_ablehnung: tuple[int, str, str] | None = None
+
     def __init__(self, endpunkt: EndpointConfig) -> None:
         self.endpunkt = endpunkt
+
+    def ablehnung_melden(self, log: logging.Logger, status: int, grund: tuple[str, str] | None) -> None:
+        """Writes the line about a refused check — the status and, where the
+        body gave one, its kind and sentence. The same refusal as the one
+        before is not written again until an answer in between was none."""
+        stand = (status, *(grund or ("", "")))
+        if stand == self._gemeldete_ablehnung:
+            return
+        self._gemeldete_ablehnung = stand
+        if grund is None:
+            log.warning("%s refused the check with %d and gave no reason", self.name, status)
+        else:
+            kind, sentence = grund
+            log.warning(
+                "%s refused the check with %d%s: %s",
+                self.name, status, f" {kind}" if kind else "", sentence,
+            )
+
+    def ablehnung_vorbei(self) -> None:
+        """The check was not refused: the next refusal is told again."""
+        self._gemeldete_ablehnung = None
 
     @property
     def id(self) -> str:

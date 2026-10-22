@@ -32,6 +32,7 @@ WURZEL = Path(__file__).resolve().parent.parent
 # name and a test parameter of that name read to the linter as one name
 # defined twice.
 from tests.test_auftraege_api import mcp_client as _mcp_client
+from tests.fensterquelle import WINDOW_SOURCE
 
 mcp_client = _mcp_client
 
@@ -596,7 +597,7 @@ def test_das_ende_sagt_ob_gefaltet_wurde(client):
         "the done event no longer says whether a fold happened"
     )
 
-    fenster = (WURZEL / "frontend/src/App.svelte").read_text()
+    fenster = WINDOW_SOURCE.read_text()
     assert "verdichtetZu = ereignis.verdichtet" in fenster, (
         "the window does not read the notice"
     )
@@ -616,7 +617,7 @@ def test_das_fenster_sagt_komprimiere_solange_gefaltet_wird():
     assert "platzhalter.taetigkeit = 'verdichtung'" in ohr, (
         "the event does not put the word on the placeholder"
     )
-    fenster = (WURZEL / "frontend/src/App.svelte").read_text()
+    fenster = WINDOW_SOURCE.read_text()
     # The chat's ONE waiting mark (App.svelte, `wartemarke`) draws the word now.
     assert "zeile.taetigkeit === 'verdichtung'" in fenster
     # Twice: the mark of the chat's one waiting answer, and the mark a

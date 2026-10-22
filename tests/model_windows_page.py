@@ -50,9 +50,14 @@ SCENE_JS = "export const scene = $state({ show: null })\n"
 ENTRY_JS = """import { mount } from 'svelte'
 import Shell from './Shell.svelte'
 import { scene } from './scene.svelte.js'
+import { texte } from '../../src/lib/texte.svelte.js'
+import katalog from '../../../app/locales/de.json'
 import '../../src/stil/global.css'
 
 window.scene = scene
+// The texts stay unloaded unless a case asks for them (``texte.katalog = germanTexts``).
+window.texte = texte
+window.germanTexts = katalog
 mount(Shell, { target: document.getElementById('root') })
 """
 
@@ -68,14 +73,18 @@ API_STUB = r"""const stub = (window.__stub = {
   calls: [],
   running: { chat: false, agent: false },
   runFein: null,
+  noModels: false,
+  noProgram: false,
+  extraFiles: [],
 })
 const copy = (value) => JSON.parse(JSON.stringify(value))
 const program = { programm: '/bin/llama-server', version: 'b1', updatable: false, restorable: false }
 const files = [{ name: 'a.gguf', groesse_gb: 2 }, { name: 'b.gguf', groesse_gb: 3 }]
 const auskunft = (which) => ({
   ...program,
+  programm: stub.noProgram ? null : program.programm,
   ordner: '/m',
-  modelle: files,
+  modelle: stub.noModels ? [] : [...files, ...stub.extraFiles],
   mmproj: ['a-mmproj-f16.gguf'],
   projector_size_gb: { 'a-mmproj-f16.gguf': 0.6 },
   mtp: [],
@@ -231,9 +240,10 @@ async def _read_result(port: int, limit: float = 240.0) -> str:
     return ""
 
 
-def run_cases(cases_js: str) -> dict:
+def run_cases(cases_js: str, window_size: str = "1200,1400") -> dict:
     """Builds the two windows, runs ``cases_js`` in a page that has ``scene``
-    and ``window.__stub``, and returns what it wrote to ``#ergebnis``."""
+    and ``window.__stub``, and returns what it wrote to ``#ergebnis``. The
+    browser window is ``window_size`` pixels (width, height)."""
     program = appfenster._programm() or pytest.skip("no Chrome on this machine")
     folder = FRONTEND / "node_modules" / f".harness-modelwindows-{uuid4().hex}"
     folder.mkdir(parents=True)
@@ -244,7 +254,7 @@ def run_cases(cases_js: str) -> dict:
         (folder / "entry.js").write_text(ENTRY_JS, encoding="utf-8")
         (folder / "vite.config.js").write_text(VITE_CONFIG, encoding="utf-8")
         build = subprocess.run(
-            [str(FRONTEND / "node_modules" / ".bin" / "vite"), "build", "--config", "vite.config.js"],
+            [shutil.which("vite", path=str(FRONTEND / "node_modules" / ".bin")), "build", "--config", "vite.config.js"],
             cwd=folder, capture_output=True, text=True, timeout=300,
         )
         assert build.returncode == 0, (build.stdout + build.stderr)[-2500:]
@@ -255,7 +265,7 @@ def run_cases(cases_js: str) -> dict:
             [
                 program, "--headless=new", "--disable-gpu", "--no-first-run",
                 "--disable-background-networking", "--allow-file-access-from-files",
-                "--window-size=1200,1400", f"--remote-debugging-port={port}",
+                f"--window-size={window_size}", f"--remote-debugging-port={port}",
                 f"--user-data-dir={folder / 'profile'}", page.as_uri(),
             ],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,

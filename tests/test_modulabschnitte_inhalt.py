@@ -66,7 +66,7 @@ def test_die_spalte_scrollt_als_ganzes_und_hat_keine_naehte():
     assert "hoehen" not in quelle, "the sections carry heights of their own again"
 
 
-# --- The schedules view: two columns, one part that folds --------------------
+# --- The schedules view: one column, one part that folds --------------------
 
 
 def test_ein_klappbarer_abschnitt_zeigt_seinen_inhalt_nur_geoeffnet():
@@ -75,21 +75,29 @@ def test_ein_klappbarer_abschnitt_zeigt_seinen_inhalt_nur_geoeffnet():
     assert "aria-expanded={a.klapp.offen}" in quelle, "the fold button no longer says its state"
 
 
-def test_die_zeitplaene_stehen_links_und_was_geschah_rechts():
+def test_the_calendar_stands_over_the_runs_in_one_column_in_every_width():
     quelle = (TEILE / "ModulCronjobs.svelte").read_text(encoding="utf-8")
     abschnitte = quelle.split("const ABSCHNITTE = $derived([", 1)[1].split("])", 1)[0]
-    spalten = dict(
-        zip(
-            re.findall(r"name: '(\w+)'", abschnitte),
-            re.findall(r"spalte: (\d)", abschnitte),
-            strict=True,
-        )
-    )
-    # The calendar on the left, the chosen day's runs on the right; the
-    # history and the failed runs left the rail with the scripts for
-    # Settings › Schedules.
-    assert spalten == {"kalender": "1", "tag": "2"}
-    assert "zweispaltig={flaeche.zweispaltig}" in quelle, "the view never asks for two columns"
+    # The calendar on top, the chosen day's runs under it; the history and the
+    # failed runs left the rail with the scripts for Settings › Schedules.
+    assert re.findall(r"name: '(\w+)'", abschnitte) == ["kalender", "tag"]
+    # No part names a column.
+    assert "spalte" not in abschnitte
     # Schweigeprobe: the surface hands the view nothing of its own any more.
     leiste = (TEILE / "Arbeitsleiste.svelte").read_text(encoding="utf-8")
     assert "CRON_ABSCHNITTE" not in leiste
+
+
+def test_no_view_and_no_frame_knows_two_columns_any_more():
+    """The agents bar and the schedules bar stand in one column however wide
+    the surface is dragged: the frame has no column grouping, no view hands it
+    `zweispaltig` or a `spalte`, and the surface knows no width for two columns."""
+    rahmen = RAHMEN.read_text(encoding="utf-8")
+    assert "zweispaltig" not in rahmen and 'class="spalte' not in rahmen
+    for name in ("ModulAgenten.svelte", "ModulCronjobs.svelte"):
+        quelle = (TEILE / name).read_text(encoding="utf-8")
+        assert "zweispaltig" not in quelle and "spalte:" not in quelle, name
+    flaeche = (WURZEL / "frontend/src/lib/flaeche.svelte.js").read_text(encoding="utf-8")
+    assert "zweispaltig" not in flaeche and "BREITE_ZWEI" not in flaeche
+    # Schweigeprobe: the tighter rows at the narrowest width stay.
+    assert "get eng()" in flaeche and "export const BREITE_ENG" in flaeche

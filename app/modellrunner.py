@@ -37,7 +37,7 @@ import sys
 import threading
 import time
 
-from app import modellzuordnung
+from app import shared_server, modellzuordnung
 from app import prozessstopp
 from app.feineinstellungen import Feineinstellungen, flags as feinflags
 from app.ggufmtp import BEIFAHRER, MODELL, dateiart, traegt_eingebettetes_mtp
@@ -133,20 +133,9 @@ SCHLUESSEL_VARIABLE = "EXE_RUNNER_API_KEY"
 
 
 def _ist_llama_server(pid: int) -> bool:
-    """Is this process id really our kind of server?
-
-    Asked before an orphan is ended: process ids get recycled, and ending
-    whatever happens to hold one now would hit an innocent program.
-    """
-    try:
-        antwort = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "comm="],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
-            **no_window(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return "llama-server" in antwort.stdout
+    """Is this process id really our kind of server? Asked before an orphan
+    is ended; the question itself is ``prozessstopp.runs_program``."""
+    return prozessstopp.runs_program(pid, "llama-server")
 
 
 def programm_finden(vorgabe: str | None = None) -> Path | None:
@@ -535,6 +524,7 @@ class Modellrunner:
         bereit_callback: Callable[[str, float], None] | None = None,
         zustand_callback: Callable[[bool, bool | None, str | None, str | None], None]
         | None = None,
+        shared_with: Callable[[], int | None] | None = None,
     ) -> None:
         """One server of one kind.
 
@@ -562,6 +552,16 @@ class Modellrunner:
         window, and whoever hands the callback in decides which runner is
         worth announcing — every server of the program hands one in, each
         under its own name (app/runnerzustand.py).
+
+        ``shared_with`` answers the port of ANOTHER service that uses the same
+        data folder, or None when this one is alone on it. The servers of a
+        folder belong to the service that started them: their notes and their
+        ports are shared, so a second service that started or ended any of
+        them would end or shoot down the first one's. While the answer is a
+        port this runner starts nothing and ends nothing — a start refuses
+        with ``server_geteilt``, and ``aufraeumen`` leaves the note and the
+        process it names alone. Asked at every start and every clean-up, not
+        once: the other service may be gone by the time a start is pressed.
         """
         self._ordner_quelle: Callable[[], Path] = (
             modelle_ordner if callable(modelle_ordner) else (lambda: Path(modelle_ordner))
@@ -577,6 +577,7 @@ class Modellrunner:
         self._sampling_flags = sampling_flags
         self._bereit_callback = bereit_callback
         self._zustand_callback = zustand_callback
+        self.shared_with = shared_with
         # When the current start began — read once, at the readiness line,
         # to turn it into a duration.
         self._start_zeit: float | None = None
@@ -658,6 +659,33 @@ class Modellrunner:
 
     def lauf(self) -> Lauf | None:
         return self._lauf if self.laeuft() else None
+
+    def shown_run(self, port: int | None = None) -> Lauf | None:
+        """What a window shows as running: this runner's own server, or —
+        while another service holds the data folder — the server that service
+        started, on ``port`` (the one the window would show when nothing
+        runs), as it answers (app/shared_server.py). Nothing is started,
+        ended or remembered here."""
+        eigener = self.lauf()
+        if eigener is not None or self._other_service_port() is None:
+            return eigener
+        port = self.port_vorgabe if port is None else port
+        if not shared_server.answers(port):
+            return None
+        note = shared_server.note_of(self._ordner, self._pid_datei, port)
+        return Lauf(
+            modell=str(note.get("modell") or ""),
+            kontext=int(note.get("kontext") or 0),
+            schichten=note.get("schichten"),
+            port=port,
+        )
+
+    def refuse_stop_when_shared(self) -> None:
+        """Raises ``server_geteilt`` for a stop of a server this runner does
+        not hold while another service is on the folder: it would end nothing,
+        and silence would read as success. A server of its own stops as ever."""
+        if not self.laeuft() and self._other_service_port() is not None:
+            raise RunnerFehler("server_geteilt")
 
     def bereit(self) -> bool:
         """Whether the running server has said that its model is loaded."""
@@ -865,8 +893,13 @@ class Modellrunner:
         vision: str | None = None,
         faeden: int | None = None,
         sampling: dict[str, float] | None = None,
+        extra_flags: tuple[str, ...] = (),
     ) -> list[str]:
         """The command as it will be run — the same list, shown and executed.
+
+        `extra_flags` are the words that belong to this start alone and
+        stand behind the runner's own extra flags (the embedding server's
+        batch size and pooling kind).
 
         Building it in one place is the point: what the window shows cannot
         drift away from what actually starts.
@@ -891,6 +924,9 @@ class Modellrunner:
             # flash-attention state (and any future line read back the same
             # way) would stay unknown forever. See PROTOKOLL_STUFE.
             "--log-verbosity", str(PROTOKOLL_STUFE),
+            # The route the program reads the tokens per second from
+            # (app/throughput.py); without the switch the server has none.
+            "--metrics",
         ]
         # Zero means "the engine decides", the same reading the threads
         # lever has everywhere else — so it travels as no flag at all.
@@ -905,6 +941,7 @@ class Modellrunner:
             # The set generation values stand behind the lore: last wins.
             zeile += samplingflags(sampling)
         zeile += list(self._zusatzflags)
+        zeile += list(extra_flags)
         # The advanced section's levers. They say nothing where they agree
         # with the engine, so a command with none of them set looks exactly
         # as it did before the section existed.
@@ -950,12 +987,21 @@ class Modellrunner:
             # said "none" about a command line carrying --mmproj.
             augen = None
         else:
-            augen = self._manifest_pfad(modell, "mmproj")
-            if augen is None:
-                augen = passende_mmproj(ordner, modell)
+            augen = self.projektor_fuer(modell)
         if augen is not None:
             zeile += ["--mmproj", str(augen)]
         return zeile
+
+    def projektor_fuer(self, modell: str) -> Path | None:
+        """The projector a start takes for this model when none is chosen:
+        the one the folder manifest pairs, else the one the name rule finds.
+
+        The start and every window row that tells which projector a model
+        comes up with read this one answer, so no two of them can disagree.
+        """
+        return self._manifest_pfad(modell, "mmproj") or passende_mmproj(
+            self._ordner, modell
+        )
 
     def _manifest_pfad(self, modell: str, rolle: str) -> Path | None:
         """The manifest companion for a model, as a path inside the folder.
@@ -990,12 +1036,18 @@ class Modellrunner:
                 fein: Feineinstellungen | None = None,
                 vision: str | None = None,
                 faeden: int | None = None,
-                sampling: dict[str, float] | None = None) -> Lauf:
+                sampling: dict[str, float] | None = None,
+                extra_flags: tuple[str, ...] = ()) -> Lauf:
         port = self._port if port is None else port
         with self._schloss:
             ordner = self._ordner
             if self.laeuft():
                 raise RunnerFehler("laeuft_schon")
+            # The servers of this folder belong to the service that holds it:
+            # a second one uses them and starts none, because the port and
+            # the note would be the first one's.
+            if self._other_service_port() is not None:
+                raise RunnerFehler("server_geteilt")
             # A new start answers for itself, also when it is refused below:
             # the architecture an earlier start failed on is not its reason.
             self._unknown_arch = None
@@ -1058,7 +1110,8 @@ class Modellrunner:
             os.environ[self._schluessel_variable] = schluessel
             self._schluessel = schluessel
             self._prozess = subprocess.Popen(
-                self.befehl(modell, kontext, schichten, port, drafter, fein, vision, faeden, sampling),
+                self.befehl(modell, kontext, schichten, port, drafter, fein, vision, faeden, sampling,
+                            extra_flags),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -1094,7 +1147,7 @@ class Modellrunner:
                 faeden=faeden,
                 sampling=sampling,
             )
-            self._pid_merken(self._prozess.pid)
+            self._pid_merken(self._prozess.pid, self._lauf)
             # Before the reader thread, not after: that thread announces the
             # flash state the moment the line goes by, and a server whose
             # log reaches it first would have "flash known" arrive ahead of
@@ -1173,7 +1226,7 @@ class Modellrunner:
         self._pid_vergessen()
         os.environ.pop(self._schluessel_variable, None)
 
-    def stoppen(self) -> bool:
+    def stoppen(self, frist: float = prozessstopp.FRIST) -> bool:
         with self._schloss:
             if self._prozess is None:
                 return False
@@ -1191,7 +1244,7 @@ class Modellrunner:
             # signal to the parent alone leaves them holding the port. How
             # that is reached differs per system, which is why it lives in
             # its own module.
-            prozessstopp.beenden(self._prozess)
+            prozessstopp.beenden(self._prozess, frist=frist)
             # Somebody ended this one; it did not fall over. Set before the
             # note is dropped, so the answer never depends on a file.
             self._von_hand_gestoppt = True
@@ -1201,12 +1254,19 @@ class Modellrunner:
 
     # --- The orphan after a service restart --------------------------------
 
-    def _pid_merken(self, pid: int) -> None:
+    def _pid_merken(self, pid: int, lauf: Lauf) -> None:
         ordner = self._ordner
         try:
             ordner.mkdir(parents=True, exist_ok=True)
+            # Besides the id, what a second service on this folder cannot ask
+            # the server for (its key is ours alone): which model, on which
+            # port, with which window (app/shared_server.py).
             (ordner / self._pid_datei).write_text(
-                json.dumps({"pid": pid}), encoding="utf-8"
+                json.dumps({
+                    "pid": pid, "modell": lauf.modell, "port": lauf.port,
+                    "kontext": lauf.kontext, "schichten": lauf.schichten,
+                }),
+                encoding="utf-8",
             )
             self._pid_ordner = ordner
         except OSError:
@@ -1221,6 +1281,10 @@ class Modellrunner:
         self._pid_ordner = None
         (ordner / self._pid_datei).unlink(missing_ok=True)
 
+    def _other_service_port(self) -> int | None:
+        """The port of another service on this data folder, asked now."""
+        return self.shared_with() if self.shared_with is not None else None
+
     def aufraeumen(self, ist_unserer=_ist_llama_server) -> bool:
         """Ends the server a previous service run left behind.
 
@@ -1229,7 +1293,12 @@ class Modellrunner:
         yesterday's settings, and making every new start die quietly. At
         service start this reads the note, makes sure the process really is
         a llama-server (ids get recycled), and ends it.
+
+        Not while another service is on this folder: the note then names
+        that service's server, which is in use and not an orphan.
         """
+        if self._other_service_port() is not None:
+            return False
         datei = self._ordner / self._pid_datei
         try:
             pid = int(json.loads(datei.read_text(encoding="utf-8"))["pid"])

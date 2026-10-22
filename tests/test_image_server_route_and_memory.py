@@ -106,10 +106,17 @@ def test_server_draws_without_live_preview(route: Route):
     assert route.body["sample_params"]["sample_steps"] > 0
 
 
-def test_sd_cli_draws_with_live_preview(route: Route, caplog):
+def test_server_draws_a_live_preview_and_carries_its_kind_and_rhythm(route: Route):
+    assert route.send(live_preview="proj", preview_interval=2) == ["server"]
+    assert route.body is not None
+    assert route.body["preview"] == "proj"
+    assert route.body["preview_interval"] == 2
+
+
+def test_sd_cli_draws_a_noisy_live_preview(route: Route, caplog):
     with caplog.at_level(logging.INFO, logger="app.api.v1.bild"):
-        assert route.send(live_preview="proj") == ["pause", "sd-cli", "resume"]
-    assert any("live preview" in line for line in caplog.messages)
+        assert route.send(live_preview="proj", preview_noisy=True) == ["pause", "sd-cli", "resume"]
+    assert any("noisy live preview" in line for line in caplog.messages)
 
 
 def test_sd_cli_draws_everything_without_server(route: Route):
@@ -192,7 +199,7 @@ def test_server_steps_aside_for_an_sd_cli_picture_that_does_not_fit_beside_it(
     _memory(monkeypatch, total=10.0, held=8.0, files=2.0)
     route.server_gb = 4.0
     with caplog.at_level(logging.INFO, logger="app.api.v1.bild"):
-        assert route.send(live_preview="proj") == ["pause", "sd-cli", "resume"]
+        assert route.send(live_preview="proj", preview_noisy=True) == ["pause", "sd-cli", "resume"]
     assert any("Image server steps aside for an sd-cli picture" in s for s in caplog.messages)
 
 
@@ -204,14 +211,14 @@ def test_server_steps_aside_for_every_sd_cli_picture_whatever_the_memory(
     sd-cli goes with it."""
     _memory(monkeypatch, total=64.0, held=8.0, files=2.0)
     route.server_gb = 4.0
-    assert route.send(live_preview="proj") == ["pause", "sd-cli", "resume"]
-    assert route.paused_for == "bild.live_preview"
+    assert route.send(live_preview="proj", preview_noisy=True) == ["pause", "sd-cli", "resume"]
+    assert route.paused_for == "bild.preview_noisy"
 
 
 def test_server_steps_aside_when_the_model_file_cannot_be_read(route: Route, monkeypatch):
     """No honest figure to add up — and still the server pauses."""
     monkeypatch.setattr(bildapi, "_kit_files_gb", lambda job: None)
-    assert route.send(live_preview="proj") == ["pause", "sd-cli", "resume"]
+    assert route.send(live_preview="proj", preview_noisy=True) == ["pause", "sd-cli", "resume"]
 
 
 def test_a_picture_the_server_draws_pauses_nothing(route: Route, monkeypatch):
@@ -221,13 +228,13 @@ def test_a_picture_the_server_draws_pauses_nothing(route: Route, monkeypatch):
     assert route.send() == ["server"]
     route.sequence.clear()
     route.running = False
-    assert route.send(live_preview="proj") == ["sd-cli"]
+    assert route.send(live_preview="proj", preview_noisy=True) == ["sd-cli"]
 
 
 def test_refusal_stays_when_it_does_not_fit_without_server(route: Route, monkeypatch):
     _memory(monkeypatch, total=10.0, held=8.0, files=6.0)
     route.server_gb = 4.0
-    assert route.send(status=507, live_preview="proj") == []
+    assert route.send(status=507, live_preview="proj", preview_noisy=True) == []
 
 
 def test_picture_on_loaded_server_needs_no_new_room(
@@ -348,7 +355,7 @@ def test_a_stop_while_the_server_steps_aside_never_starts_sd_cli(
     _memory(monkeypatch, total=10.0, held=8.0, files=2.0)
     route.server_gb = 4.0
 
-    assert route.send(status=499, live_preview="proj") == ["pause", "resume"]
+    assert route.send(status=499, live_preview="proj", preview_noisy=True) == ["pause", "resume"]
     assert answers == [True]
     assert started == []
     assert not client.app.state.bildrunner.laeuft()
@@ -419,7 +426,7 @@ def test_a_server_that_does_not_come_back_keeps_the_picture(
     _memory(monkeypatch, total=10.0, held=8.0, files=2.0)
     route.server_gb = 4.0
     with caplog.at_level(logging.WARNING, logger="app.api.v1.bild"):
-        assert route.send(live_preview="proj") == ["pause", "sd-cli", "resume"]
+        assert route.send(live_preview="proj", preview_noisy=True) == ["pause", "sd-cli", "resume"]
     assert any("could not start again" in line for line in caplog.messages)
     assert not client.app.state.bildrunner.laeuft()
 
@@ -460,7 +467,10 @@ def _asked(route: Route, **values) -> str | None:
 @pytest.mark.parametrize(
     ("values", "control"),
     [
-        ({"live_preview": "proj"}, "bild.live_preview"),
+        ({"live_preview": "proj", "preview_noisy": True}, "bild.preview_noisy"),
+        ({"live_preview": "proj", "preview_interval": 0}, "bild.preview_interval"),
+        ({"live_preview": "tae", "preview_taesd": True}, "bild.taesd"),
+        ({"live_preview": "proj", "video": True}, "bild.live_preview"),
         ({"pulid_weights": "p.safetensors", "pulid_id_embedding": "e.safetensors"}, "bild.pulid"),
         ({"sigmas": "a,b"}, "bild.sigmas"),
         ({"slg_scale": 2.5, "skip_layers": "[7,x]"}, "bild.skip_layers"),
@@ -483,17 +493,23 @@ def test_the_service_names_no_control_for_values_the_server_draws(route: Route):
     server — and with a picture server that does not run, where every
     picture is drawn by sd-cli and there is nothing to name."""
     assert _asked(route) is None
+    # The server draws a live preview of the kinds proj, vae and tae, at the
+    # rhythm chosen, and a tiny autoencoder named for the preview counts
+    # only where the VAE is none.
+    assert _asked(route, live_preview="proj") is None
+    assert _asked(route, live_preview="vae", preview_interval=2) is None
+    assert _asked(route, live_preview="tae") is None
     assert _asked(route, sigmas="14.6,7.8,0", slg_scale=2.5, skip_layers="[7,8,9]") is None
     assert _asked(route, lora=True, lora_apply_mode="at_runtime") is None
     route.running = False
-    assert _asked(route, live_preview="proj") is None
+    assert _asked(route, live_preview="proj", preview_noisy=True) is None
 
 
 def test_the_question_and_the_draw_route_decide_alike(route: Route):
     """The footer's answer and the route's choice come from one rule: a
     value the question names goes to sd-cli, and one it does not stays."""
-    assert _asked(route, live_preview="proj") == "bild.live_preview"
-    assert route.send(live_preview="proj") == ["pause", "sd-cli", "resume"]
+    assert _asked(route, live_preview="proj", preview_noisy=True) == "bild.preview_noisy"
+    assert route.send(live_preview="proj", preview_noisy=True) == ["pause", "sd-cli", "resume"]
     route.sequence.clear()
     assert _asked(route) is None
     assert route.send() == ["server"]
@@ -551,7 +567,7 @@ def test_the_footer_reads_the_kit_only_for_a_value_of_the_second_models_pass(
     monkeypatch.setattr(bildapi, "_kit_has_high_noise", never)
     assert _asked(route) is None
     assert _asked(route, video=True, switches={"eta": 0.5}) is None
-    assert _asked(route, live_preview="proj") == "bild.live_preview"
+    assert _asked(route, live_preview="proj", preview_noisy=True) == "bild.preview_noisy"
 
 
 def test_the_state_names_what_the_server_is_paused_for(route: Route, client: TestClient):
@@ -574,7 +590,7 @@ def test_every_control_a_reason_can_name_is_a_label_in_both_languages():
     keys = {
         "bild.nur_hochskalieren", "bild.nur_adetailer", "bild.referenzvideo",
         "bild.live_preview", "bild.pulid", "bild.sigmas", "bild.skip_layers",
-        "bild.lora_modus", "bildserver.wichtigkeitsmatrix",
+        "bild.lora_modus",
         *(f"bild.sw_{key}" for key in (
             "vae_tile_size", "vae_relative_tile_size", "hires_sigmas",
             "high_noise_skip_layers", "audio", "ref_audio", "ref_video_audio",

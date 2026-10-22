@@ -90,7 +90,8 @@ def _pruefordner():
 
 
 def _lauf(
-    jobs: list[dict], *, gesehen: str | None = None, gelesen: list[str] | None = None
+    jobs: list[dict], *, gesehen: str | None = None, gelesen: list[str] | None = None,
+    ausdruck: str = "a.punktfarbe()",
 ) -> str:
     """Compile the dot module, hand it `jobs` as the job list, and return
     the colour it decides on.
@@ -98,7 +99,8 @@ def _lauf(
     `gesehen` is the floor the rail keeps in memory ("everything that ended
     before this was over before anybody could look"); left out, it is set
     far enough back that every row in `jobs` counts as news. `gelesen` is
-    the ids of the runs somebody has opened since."""
+    the ids of the runs somebody has opened since. `ausdruck` is what is
+    asked of the module once that state stands."""
     with _pruefordner() as ordner:
         treiber = ordner / "pruefung.mjs"
         gebaut = ordner / "gebaut.mjs"
@@ -107,7 +109,8 @@ def _lauf(
             # Both of them: the module reads the job list and, when a run is
             # marked read, closes the notice standing for it.
             "export const zustand = { auftraege: [] }\n"
-            "export function meldungenZuAuftragSchliessen() {}\n",
+            "export const geschlossen = []\n"
+            "export function meldungenZuAuftragSchliessen(id) { geschlossen.push(id) }\n",
             encoding="utf-8",
         )
         treiber.write_text(
@@ -135,7 +138,8 @@ def _lauf(
                 zustand.auftraege = %s
                 a.agentenampel.seit = %s
                 a.agentenampel.gesehene = %s
-                console.log('---BERICHT---' + JSON.stringify(a.punktfarbe()))
+                const { geschlossen } = await import('./zustand.mjs')
+                console.log('---BERICHT---' + JSON.stringify(%s))
                 """
             )
             % (
@@ -145,6 +149,7 @@ def _lauf(
                 json.dumps(jobs),
                 "Date.parse(%s)" % json.dumps(gesehen) if gesehen else "0",
                 json.dumps(gelesen or []),
+                ausdruck,
             ),
             encoding="utf-8",
         )
@@ -467,8 +472,13 @@ def test_dot_and_list_take_the_rule_from_one_function():
     panel = REPORTS_PANEL.read_text(encoding="utf-8")
 
     assert dot.count("function worthReading(") == 1
-    decision = dot.split("export function punktfarbe() {", 1)[1]
-    assert "if (!worthReading(job)) continue" in decision
+    # The dot and the mark in a row ask one predicate, and that predicate
+    # asks `worthReading`.
+    assert dot.count("function countsForDot(") == 1
+    predicate = dot.split("function countsForDot(job) {", 1)[1].split("\n}", 1)[0]
+    assert "worthReading(job)" in predicate
+    assert "if (!countsForDot(job)) continue" in dot.split("export function punktfarbe() {", 1)[1]
+    assert "return countsForDot(job) &&" in dot.split("export function isRedRun(job) {", 1)[1]
 
     assert "function worthReading(" not in panel
     # Whatever else the panel takes from that module, this name is in it.
@@ -480,3 +490,104 @@ def test_dot_and_list_take_the_rule_from_one_function():
     assert "worthReading(auftrag)" in block
     for own_reading in ("auftrag.result", "'gescheitert'", "'abgebrochen'", "cronjob_id"):
         assert own_reading not in block, f"the list decides {own_reading} for itself again"
+
+
+# --- The row that carries the red bar of an unseen failure ------------------
+
+
+def _red_rows(jobs: list[dict], gelesen: list[str] | None = None) -> list[bool]:
+    """Which rows of the reports list carry the red bar: `isRedRun` of
+    each run, in order."""
+    return _lauf(jobs, gelesen=gelesen, ausdruck="zustand.auftraege.map((j) => a.isRedRun(j))")
+
+
+def test_every_unseen_failed_row_carries_the_red_bar():
+    jobs = [_job("gescheitert", "fehler: x", kennung="a"), _job("gescheitert", "fehler: y", kennung="b")]
+    assert _red_rows(jobs) == [True, True]
+
+
+def test_a_seen_run_loses_its_dot_the_other_keeps_it_and_the_sign_stays_red():
+    """The schweigeprobe of the order: two failed runs, one of them looked
+    at — by opening its report or by the cross of its notice, which is the
+    same call — and the sign stays red because of the other, whose row
+    still carries the dot."""
+    jobs = [_job("gescheitert", "fehler: x", kennung="a"), _job("gescheitert", "fehler: y", kennung="b")]
+    assert _red_rows(jobs, gelesen=["a"]) == [False, True]
+    assert _lauf(jobs, gelesen=["a"]) == "rot"
+    assert _red_rows(jobs, gelesen=["a", "b"]) == [False, False]
+    assert _lauf(jobs, gelesen=["a", "b"]) == "still"
+
+
+def test_a_single_run_has_a_row_dot_exactly_when_the_sign_is_red():
+    """With one run the row and the sign agree: the dot is red exactly when
+    that run is an unseen failure the list can show."""
+    faelle = [
+        [_job("gescheitert", "fehler: x", kennung="a")],
+        [_job("fertig", kennung="a")],
+        [_job("unterbrochen", "kontext_voll", kennung="a")],
+        [_job("unterbrochen", "dienst_neustart", kennung="a")],
+        [_job("abgebrochen", "benutzer_abbruch", kennung="a", result=None)],
+        [_job("abgebrochen", "benutzer_abbruch", kennung="a", result=None, schedule="c1")],
+    ]
+    for jobs in faelle:
+        assert any(_red_rows(jobs)) == (_lauf(jobs) == "rot"), jobs
+
+
+def test_every_unseen_failure_keeps_its_dot_whatever_the_sign_shows():
+    """The rows mark each unseen failure; the sign shows the newest unseen
+    run, or yellow or blue while something runs or waits. So an older failure
+    keeps its dot beside a newer success — the dot is cleared by looking at
+    that run, not by something else happening."""
+    aelter_fehler_neuer_erfolg = [
+        _job("fertig", None, SPAET, kennung="neu"),
+        _job("gescheitert", "fehler: x", MITTE, kennung="alt"),
+    ]
+    assert _lauf(aelter_fehler_neuer_erfolg) == "gruen"
+    assert _red_rows(aelter_fehler_neuer_erfolg) == [False, True]
+    mit_laufendem = [_job("laeuft", None, kennung="l"), _job("gescheitert", "fehler: x", kennung="f")]
+    assert _lauf(mit_laufendem) == "blau"
+    assert _red_rows(mit_laufendem) == [False, True]
+
+
+def test_what_ended_before_the_start_carries_no_dot():
+    assert _lauf(
+        [_job("gescheitert", "fehler: x", FRUEH, kennung="a")],
+        gesehen=MITTE,
+        ausdruck="zustand.auftraege.map((j) => a.isRedRun(j))",
+    ) == [False]
+
+
+def test_the_cross_of_a_notice_marks_a_run_as_opening_its_report_does():
+    """`markSeenIfOver` marks the run and closes the notices standing for
+    it, the way opening its report does; the cross of a notice goes through
+    it."""
+    ergebnis = _lauf(
+        [_job("gescheitert", "fehler: x", kennung="a")],
+        ausdruck="(a.markSeenIfOver('a'), { rot: a.isRedRun(zustand.auftraege[0]), zu: geschlossen })",
+    )
+    assert ergebnis == {"rot": False, "zu": ["a"]}
+
+
+def test_the_cross_of_a_notice_about_a_run_still_going_marks_nothing():
+    """A run standing on a question is not over: closing its notice must not
+    hide the failure it may still end in."""
+    jobs = [_job("wartet", None, kennung="a")]
+    ergebnis = _lauf(jobs, ausdruck="(a.markSeenIfOver('a'), { gesehen: a.agentenampel.gesehene.length, zu: geschlossen })")
+    assert ergebnis == {"gesehen": 0, "zu": []}
+    # Later it fails, and the dot still turns red.
+    spaeter = [_job("gescheitert", "fehler: x", kennung="a")]
+    assert _lauf(spaeter) == "rot"
+
+
+def test_the_cross_of_a_notice_about_an_unknown_run_marks_nothing():
+    ergebnis = _lauf([], ausdruck="(a.markSeenIfOver('gone'), a.agentenampel.gesehene.length)")
+    assert ergebnis == 0
+
+
+def test_the_cross_and_the_row_are_wired():
+    meldungen = (FRONTEND / "src" / "teile" / "Meldungen.svelte").read_text(encoding="utf-8")
+    assert "markSeenIfOver(meldung.auftragId)" in meldungen
+    assert "onclick={() => closeByHand(meldung)}" in meldungen
+    agenten = REPORTS_PANEL.read_text(encoding="utf-8")
+    assert "{@const unseen = isRedRun(auftrag)}" in agenten
+    assert "{#if unseen}" in agenten and 'class="unseen-bar"' in agenten

@@ -118,6 +118,49 @@ export function worthReading(job) {
   )
 }
 
+/** Does this run take part in the dot at all: it is over, it is no link
+ *  handed on, it has something to open and nobody has looked at it. The dot
+ *  asks it before it weighs the runs against each other, and the reports
+ *  list asks it for the mark in a row, so the two never disagree about which
+ *  runs are unseen.
+ *
+ *  A run that handed its work on is no ending here at all, so it decides the
+ *  dot not at all — skipped rather than merely painted 'still', because a
+ *  chain that is still going must not push an older unseen report or failure
+ *  off the dot either. The failure counter and CRONJOB_AUSGAENGE
+ *  (app/db/repositories/auftraege.py) leave such a run out too, but they are
+ *  not this rule and must not be read as one: those two leave out EVERY
+ *  `unterbrochen` row, `dienst_neustart` included. This leaves out the
+ *  handed-on ones only.
+ *
+ *  Nothing to open, nothing to colour: a run stopped by hand a minute ago
+ *  must not push an older failure nobody has opened off the dot. And it is
+ *  asked per run, not against one watermark: a newer report somebody has
+ *  read must not push an older one nobody has read off the dot. */
+function countsForDot(job) {
+  if (!job || !Object.hasOwn(AUSGANG, job.state)) return false
+  return !weitergereicht(job) && worthReading(job) && auftragUngesehen(job)
+}
+
+/** Is this an unseen run that ended in red — a failure nobody has looked at?
+ *  The reports list marks exactly these runs in their row, each of them,
+ *  until it is looked at. The sign shows the one newest unseen run (and
+ *  running or waiting runs come before it), so with several runs the rows
+ *  can show more red than the sign. */
+export function isRedRun(job) {
+  return countsForDot(job) && AUSGANG[job.state] === 'rot'
+}
+
+/** The cross of a notice is a hand: the run it is about counts as looked at,
+ *  exactly as when its report is opened — but only a run that is over. A
+ *  notice about a run that is still going (it stands on a question, say) is
+ *  closed without that: marking such a run now would hide the failure it may
+ *  still end in. */
+export function markSeenIfOver(id) {
+  const job = zustand.auftraege.find((auftrag) => auftrag.id === id)
+  if (istBeendet(job)) auftragGesehen(id)
+}
+
 /** Is this run still waiting to be looked at? */
 export function auftragUngesehen(job) {
   if (!job) return false
@@ -142,26 +185,7 @@ export function punktfarbe() {
      built on somebody else's ORDER BY. */
   let neuester = null
   for (const job of jobs) {
-    if (!Object.hasOwn(AUSGANG, job.state)) continue
-    /* A run that handed its work on is no ending here at all, so it
-       decides the dot not at all — skipped rather than merely painted
-       'still', because a chain that is still going must not push an older
-       unseen report or failure off the dot either.
-
-       The failure counter and CRONJOB_AUSGAENGE
-       (app/db/repositories/auftraege.py) leave such a run out too, but they
-       are not this rule and must not be read as one: those two leave out
-       EVERY `unterbrochen` row, `dienst_neustart` included. This leaves out
-       the handed-on ones only. */
-    if (weitergereicht(job)) continue
-    /* Nothing to open, nothing to colour. Skipped like a handed-on run
-       rather than painted 'still', and for the same reason: a run stopped
-       by hand a minute ago must not push an older failure nobody has
-       opened off the dot. */
-    if (!worthReading(job)) continue
-    /* Asked per run, not against one watermark: a newer report somebody
-       has read must not push an older one nobody has read off the dot. */
-    if (!auftragUngesehen(job)) continue
+    if (!countsForDot(job)) continue
     if (!neuester || abschluss(job) > abschluss(neuester)) neuester = job
   }
   if (!neuester) return 'still'

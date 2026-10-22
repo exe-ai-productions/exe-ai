@@ -18,6 +18,7 @@ the memory.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import logging
 import os
@@ -29,10 +30,10 @@ import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import Any, NamedTuple
 from pathlib import Path
 
-from app import bildbausatz, bildinhalt, image_switches, prozessstopp
+from app import bildbausatz, bildinhalt, image_switches, prozessstopp, upscaler_scale
 from app.bildwahlen import EMBEDDING_ORDNER, HIRES_UPSCALER_FESTE
 from app.no_console import no_window
 from app.pipe_text import live_text
@@ -61,17 +62,33 @@ _SCHRITT_MUSTER = re.compile(
     r"\|\s*(\d+)/(\d+)\s*-\s*[\d.]+(?:s/it|it/s)|(generating image:)"
 )
 
+# One bar of converting a model file: "|#####     | 12/1131 - 272.34MB/s".
+# It counts tensors written, not iterations, so the painting pattern above does
+# not take it; here it is the one share a conversion has.
+_CONVERT_PATTERN = re.compile(r"\|\s*(\d+)/(\d+)\s*-\s*[\d.]+MB/s")
+
 # The detector's own word that it found nothing to repaint: no pass of its
 # own follows, so the share must not wait for one.
 _NOTHING_DETECTED = re.compile(r"ADetailer detected 0 object")
 
-# The painter's own error lines carry a padded level tag, "[ERROR  ]": the
-# tag is space-filled to a fixed width, so the bracket closes after any
-# number of blanks.
-_ERROR_TAG = re.compile(r"\[ERROR\s*\]")
+# The painter's own error lines carry a level tag: a padded "[ERROR  ]" in
+# the builds before 948 (space-filled to a fixed width, so the bracket closes
+# after any number of blanks) and a bare "[E]" from that build on.
+_ERROR_TAG = re.compile(r"\[(?:ERROR\s*|E)\]")
 
 # The most the log part of a failed picture may carry, crash note included.
 LOG_LIMIT = 1200
+
+# What the painter writes around its progress bars for a terminal: "\x1b[K"
+# erases the rest of the line, colours and cursor moves look alike. Read
+# without a terminal they are only stray characters ("[K") in the words.
+_CONTROL_SEQUENCE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+# A progress bar at the start of a line, for the loading of the weights
+# ("|#####   | 598/626 - 325.55MB/s") and for the steps of a picture
+# ("|===>    | 3/20 - 1.50s/it"). A bar is never an error message; a line
+# that goes on after it keeps what follows.
+_PROGRESS_BAR = re.compile(r"^\s*\|[^|]*\|\s*\d+/\d+(?:\s+-\s+\S+)?\s*")
 
 
 # Marks the one line the app itself adds to the painter's log, so it never
@@ -101,7 +118,7 @@ class CrashNote(NamedTuple):
     line: str
 
 
-def _crash_note(returncode: int | None) -> CrashNote | None:
+def crash_note(returncode: int | None) -> CrashNote | None:
     """How the painter crashed, read once from its exit code: a short name
     for the server log ("SIGSEGV", "signal 200", "NTSTATUS 0xC0000005") and
     the app's marked note for the user. None for an ordinary exit.
@@ -170,6 +187,48 @@ def tail_lines(lines: list[str], limit: int) -> str:
     return "\n".join(reversed(kept))
 
 
+def _readable(lines: list[str]) -> list[str]:
+    """The painter's lines as a terminal would have shown them: without
+    control sequences and without a progress bar in front of the words of a
+    line. A line that only the bar or the sequences made up is dropped; a
+    blank line the painter wrote stays as it was."""
+    kept: list[str] = []
+    for line in lines:
+        shown = _PROGRESS_BAR.sub("", _CONTROL_SEQUENCE.sub("", line), count=1)
+        if shown.strip() or not line.strip():
+            kept.append(shown)
+    return kept
+
+
+def last_words(lines: list[str], crash: CrashNote | None) -> str:
+    """What a failed picture shows of the painter: its REAL lines, verbatim.
+    The telling ones (asserts, "[ERROR  ]" lines) usually stand BEFORE the
+    backtrace, so they are picked first; the raw tail only fills in when no
+    such line exists. The painter's lines are selected, never reworded; the
+    app's one marked crash note, when there is one, leads and counts toward
+    the same limit. Lines are dropped whole. The sd-cli path and the picture
+    server both come here with their log. What a terminal would not have
+    shown is taken out first: the control sequences, and the progress bars
+    that stand where the last words would be."""
+    lines = _readable(lines)
+    telling = [
+        line for line in lines
+        if "GGML_ASSERT" in line or "GGML_ABORT" in line
+        or _ERROR_TAG.search(line) or "error:" in line.lower()
+        # ggml aborts print "file.cpp:930: <reason>" without any ERROR marker
+        # — that reason line IS the crash message.
+        or (re.search(r"\.\w+:\d+: ", line) and not line.lstrip().startswith(("[INFO", "[WARN", "[DEBUG")))
+    ]
+    # A crash leaves no message of its own; the signal or status that ended
+    # the program is the reason, so it leads the log.
+    note = crash.line if crash else None
+    room = LOG_LIMIT - (len(note) + 1 if note else 0)
+    excerpt = tail_lines(telling[-8:] if telling else lines, room)
+    if note:
+        excerpt = f"{note}\n{excerpt}" if excerpt else note
+    return excerpt
+
+
 class BildFehler(Exception):
     """Carries the key of the sentence to show, not the sentence itself.
 
@@ -185,6 +244,12 @@ class BildFehler(Exception):
         super().__init__(grund)
         self.grund = grund
         self.protokoll = protokoll
+
+
+# What sd.cpp takes when an enlarging names neither the repeats nor the tile
+# size: one run, tiles of 128 pixels. Sent only when the wish differs.
+UPSCALE_REPEATS_START = 1
+UPSCALE_TILE_START = 128
 
 
 @dataclass(frozen=True)
@@ -276,6 +341,10 @@ class Auftrag:
     # into real pixels. A model's built-in VAE is often the weak link; the
     # right external one is where washed-out colour and mushy detail come back.
     vae: Path | None = None
+    # ``vae`` is a tiny autoencoder chosen in the VAE's place: it decodes the
+    # finished picture and reads a start picture in, and the live preview
+    # paints with the same file.
+    vae_is_tae: bool = False
     # ADetailer: a small detector that finds faces and redraws each one at
     # full resolution, so a face that came out as a smear in a wide shot is
     # painted again sharp. The model file is the detector (a YOLO net); an
@@ -297,17 +366,6 @@ class Auftrag:
     # deliberately only this one key of that key=value list. None keeps the
     # flag off and sd-cli's own default applies.
     ad_confidence: float | None = None
-    # Flash attention in the diffusion model — faster where the machine can do
-    # it, no effect on the picture. ON by default: measured on build 820, the
-    # second, high-resolution pass of the highres fix drops from ~30 s per
-    # step to ~3.5 s — nine times faster, the difference between a usable
-    # highres fix and one that runs past the time limit and gets killed. On
-    # build 920 a whole SD-1.5 highres run takes 26 s with it and 207 s
-    # without. The persistent server (Image-Turbo) already runs with it. The risk
-    # it was held back for — an older sd-cli a user swapped in that predates the
-    # flag and refuses the unknown argument — is against the binary we ship, so
-    # the default follows our build, not a hypothetical replacement.
-    diffusion_fa: bool = True
     # Highres fix: draw at the base size, then upscale and paint over the
     # result at the larger size, so fine detail the first pass could not fit
     # arrives on the second. `hires_scale` is how much larger (2.0 = double);
@@ -357,10 +415,10 @@ class Auftrag:
     skip_layer_start: float = 0.01
     skip_layer_end: float = 0.2
     skip_layers: str = ""
-    # sd-cli only -- the persistent server answers one request with one
-    # finished picture, no channel for a mid-draw preview frame to
-    # travel back on. Empty stays off the command line, same as every
-    # other unset start-of-scale field here.
+    # The kind of live preview (proj, tae or vae). The persistent server
+    # draws it too, except where ``preview_tae_only`` or the noisy variant
+    # asks for what only sd-cli does. Empty stays off the command line, same
+    # as every other unset start-of-scale field here.
     live_preview: str = ""
     # How often the preview is written: positive N every Nth step, -N only
     # after step N, 0 once after the first pass (sd-cli's own reading).
@@ -371,6 +429,15 @@ class Auftrag:
     # A tiny autoencoder for the "tae" preview — the preview only: the
     # finished picture is still decoded by the real VAE.
     taesd: Path | None = None
+
+    @property
+    def preview_tae_only(self) -> bool:
+        """Does a tiny autoencoder paint the preview alone? It does when the
+        "tae" preview has one of its own and the VAE is not one already:
+        when the VAE is a tiny autoencoder it paints the preview too, and
+        none is added."""
+        return self.live_preview == "tae" and self.taesd is not None and not self.vae_is_tae
+
     # sd.cpp's further switches (``app.image_switches``), by key: only the
     # ones that act, checked at the request boundary. File and picture
     # switches carry their resolved path in ``switch_paths``. Empty sends
@@ -383,6 +450,11 @@ class Auftrag:
     # Empty draws a picture.
     mode: str = ""
     upscale_model: Path | None = None
+    # How often the upscaler runs over the picture (each run enlarges by the
+    # model's own factor) and the size of the tiles it works in. The
+    # defaults are sd.cpp's own and stay off the command line.
+    upscale_repeats: int = UPSCALE_REPEATS_START
+    upscale_tile_size: int = UPSCALE_TILE_START
     # Collect an importance matrix for quantizing while this picture is
     # drawn (--imat-out), continuing the one already there (--imat-in).
     imatrix: Path | None = None
@@ -411,6 +483,7 @@ class Auftrag:
     audio_vae: Path | None = None
     audio_encoder: Path | None = None
     embeddings_connectors: Path | None = None
+    clip_vision: Path | None = None
     # A video instead of a still picture (``-M vid_gen``): its frame count
     # and rate (None leaves sd-cli's own), the last frame of a video drawn
     # between two, and the frames of a control video and of a reference
@@ -500,6 +573,43 @@ def programm_finden(datenordner: Path, variante: str | None = None) -> Path | No
     return gefundenes_programm(datenordner, variante)
 
 
+def _is_image_model(pfad: Path) -> bool:
+    """Whether this one entry of the image folder is an image model: a file the
+    content check does not know as a companion part, or a folder with the index
+    of its shards."""
+    ausgeschlossen = {bildinhalt.TEXTVERSTEHER, bildinhalt.SEHTEIL, bildinhalt.VAE}
+    return bool(
+        (pfad.is_file() and pfad.suffix in {".gguf", ".safetensors"}
+         and bildinhalt.sorte(pfad) not in ausgeschlossen)
+        or bildinhalt.folder_model(pfad)
+    )
+
+
+# What `is_image_model` found for a file, by path, size and modification time:
+# the content check reads the file's header, and the status answer that asks
+# is polled.
+_image_model_memory: dict[tuple[str, int, int], bool] = {}
+
+
+def is_image_model(bildordner: Path, name: str) -> bool:
+    """Whether a bare name is an image model lying in the folder — one entry
+    looked at, not the whole folder, and a file unchanged since the last look
+    is not read again."""
+    if not name or "/" in name or "\\" in name or name != Path(name).name:
+        return False
+    path = Path(bildordner).expanduser() / name
+    try:
+        info = path.stat()
+    except OSError:
+        return False
+    key = (str(path), info.st_size, info.st_mtime_ns)
+    if key not in _image_model_memory:
+        if len(_image_model_memory) > 256:
+            _image_model_memory.clear()
+        _image_model_memory[key] = _is_image_model(path)
+    return _image_model_memory[key]
+
+
 def modelle(bildordner: Path) -> list[str]:
     """The image models lying in their own folder, by file name.
 
@@ -513,16 +623,10 @@ def modelle(bildordner: Path) -> list[str]:
     ordner = Path(bildordner).expanduser()
     if not ordner.is_dir():
         return []
-    ausgeschlossen = {bildinhalt.TEXTVERSTEHER, bildinhalt.SEHTEIL, bildinhalt.VAE}
     # A model can also be a folder: one that holds the index of its shards
     # (``bildinhalt.folder_model``) is offered by the folder's name and
     # handed to sd-cli as it is. Any other folder is none.
-    return sorted(
-        p.name for p in ordner.iterdir()
-        if (p.is_file() and p.suffix in {".gguf", ".safetensors"}
-            and bildinhalt.sorte(p) not in ausgeschlossen)
-        or bildinhalt.folder_model(p)
-    )
+    return sorted(p.name for p in ordner.iterdir() if _is_image_model(p))
 
 
 def prompt_bauen(
@@ -684,16 +788,44 @@ def taesd_path(image_folder: Path, name: str) -> Path:
     return _begleiter_pfad(image_folder, name, TAESD_FOLDER, taesd_files(image_folder))
 
 
+def vae_choices(image_folder: Path) -> list[str]:
+    """What a VAE choice may be: the VAE files, then the tiny autoencoders
+    each under ``bildbausatz.TAE_PREFIX`` — a name of one folder is never
+    taken for a name of the other."""
+    return [*vaes(image_folder), *(bildbausatz.TAE_PREFIX + n for n in taesd_files(image_folder))]
+
+
+def vae_choice_path(image_folder: Path, name: str) -> Path:
+    """The file a VAE choice names, from the folder its kind lies in."""
+    if bildbausatz.is_tae_choice(name):
+        return taesd_path(image_folder, name[len(bildbausatz.TAE_PREFIX):])
+    return vae_pfad(image_folder, name)
+
+
 def controlnets(bildordner: Path) -> list[str]:
     """The ControlNet models in their own folder."""
     return _im_unterordner(bildordner, CONTROLNET_ORDNER)
 
 
 def upscalers(bildordner: Path) -> list[str]:
-    """The model-backed highres upscalers in their own folder, by file
-    name — what `--hires-upscaler` is allowed to carry beside sd-cli's
-    built-in names (``bildwahlen.HIRES_UPSCALER_FESTE``)."""
-    return _im_unterordner(bildordner, UPSCALER_ORDNER)
+    """The upscalers in their own folder that sd.cpp can read, by file name
+    — what `--hires-upscaler` is allowed to carry beside sd-cli's built-in
+    names (``bildwahlen.HIRES_UPSCALER_FESTE``) and what the enlarging of a
+    finished picture offers. A file of another architecture stays in the
+    folder: sd.cpp would write the unchanged picture and call it done
+    (``app/upscaler_scale.py``)."""
+    return list(upscaler_scales(bildordner))
+
+
+def upscaler_scales(bildordner: Path) -> dict[str, int]:
+    """The readable upscalers by file name, each with the factor it
+    enlarges by, in the order of the names."""
+    ordner = Path(bildordner).expanduser() / UPSCALER_ORDNER
+    return {
+        name: factor
+        for name in _im_unterordner(bildordner, UPSCALER_ORDNER)
+        if (factor := upscaler_scale.scale(ordner / name)) is not None
+    }
 
 
 def _textordner_dateien(bildordner: Path, sorte: str) -> set[str]:
@@ -844,11 +976,12 @@ def referenz_schalter(auftrag: Auftrag) -> list[str]:
     return teile
 
 
-def video_parts(auftrag: Auftrag) -> dict[str, Path]:
+def video_parts(auftrag: Auftrag) -> dict[str, Any]:
     """The video kit parts that are set, by their field name."""
     return {
         field: path for field in (
             "high_noise_diffusion_model", "audio_vae", "audio_encoder", "embeddings_connectors",
+            "clip_vision",
         )
         if (path := getattr(auftrag, field)) is not None
     }
@@ -918,10 +1051,6 @@ class Bildrunner:
         self.frames_folder = self._datenordner / f"control-frames-{os.getpid()}"
         # And the folder a reference video's frames are laid into, beside it.
         self.ref_frames_folder = self._datenordner / f"reference-frames-{os.getpid()}"
-        # The model files whose importance matrix is being collected, by
-        # name: every sd-cli picture drawn with one of them adds to it. For
-        # this session only — collecting is something one does for a while.
-        self.imatrix_models: set[str] = set()
 
     def fortschritt(self) -> dict | None:
         """The running picture's honest progress, or nothing while idle —
@@ -936,6 +1065,17 @@ class Bildrunner:
         except OSError:
             stamp = 0
         return {**self._fortschritt, "preview": stamp}
+
+    def report_progress(self, done: int, total: int) -> None:
+        """The progress of a hold of the lock that runs no program of the
+        runner's — a file the service writes itself. Its share is what
+        ``fortschritt`` answers until the holder takes it back with
+        ``clear_progress``."""
+        share = min(done / total, 1.0) if total else 0.0
+        self._fortschritt = {"anteil": share, "schritt": done, "gesamt": total}
+
+    def clear_progress(self) -> None:
+        self._fortschritt = None
 
     def preview(self) -> Path | None:
         """The running picture's live preview, while there is one."""
@@ -992,7 +1132,7 @@ class Bildrunner:
     def laeuft(self) -> bool:
         return self._schloss.locked()
 
-    def stoppen(self) -> bool:
+    def stoppen(self, frist: float = ABBRUCH_FRIST) -> bool:
         """End the running picture. True when there was one to end.
 
         The whole tree goes, not just the parent — a generator that kept
@@ -1014,7 +1154,7 @@ class Bildrunner:
         if prozess is None or prozess.poll() is not None:
             return False
         self._abgebrochen = True
-        prozessstopp.beenden(prozess, frist=ABBRUCH_FRIST)
+        prozessstopp.beenden(prozess, frist=frist)
         return True
 
     def run_tool(self, command: list[str], *, timeout: float) -> tuple[int, str]:
@@ -1022,6 +1162,9 @@ class Bildrunner:
         a model file — as this runner's process, so a stop reaches it the
         way it reaches a picture. The caller holds the one-picture lock
         (``reservieren``) and releases it itself.
+
+        While it runs, the bar the tool redraws for every tensor it writes
+        is the share ``fortschritt`` reports.
 
         Returns the exit code and everything the tool printed. A stopped
         tool raises ``BildFehler("bild.abgebrochen")``; one still running
@@ -1033,23 +1176,62 @@ class Bildrunner:
         # tool prints must not cost the answer.
         process = subprocess.Popen(
             command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            encoding=_pipe_encoding(), errors="replace", start_new_session=True,
-            **no_window(),
+            start_new_session=True, **no_window(),
         )
         self._prozess = process
+        self._fortschritt = {"anteil": 0.0, "schritt": 0, "gesamt": 0}
+        stdout_pipe, stderr_pipe = process.stdout, process.stderr
+        assert stdout_pipe is not None and stderr_pipe is not None  # both PIPE
+        printed: list[str] = []
+        complained: list[str] = []
+
+        def _read_bars() -> None:
+            # Every "\r" of the redrawn bar is a line end, as in a pipe
+            # opened in text mode: a state is whole when the next one begins.
+            rest = ""
+            for piece in live_text(stdout_pipe, _pipe_encoding(), universal_newlines=True):
+                printed.append(piece)
+                *whole, rest = (rest + piece).split("\n")
+                for line in whole:
+                    bar = _CONVERT_PATTERN.search(line)
+                    if bar and int(bar.group(2)):
+                        done, total = int(bar.group(1)), int(bar.group(2))
+                        self._fortschritt = {
+                            "anteil": min(done / total, 1.0), "schritt": done, "gesamt": total,
+                        }
+
+        def _read_complaints() -> None:
+            for piece in live_text(stderr_pipe, _pipe_encoding(), universal_newlines=True):
+                complained.append(piece)
+
+        readers = [
+            threading.Thread(target=_read_bars, daemon=True),
+            threading.Thread(target=_read_complaints, daemon=True),
+        ]
+        for reader in readers:
+            reader.start()
         try:
             try:
-                printed, complained = process.communicate(timeout=timeout)
+                process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 prozessstopp.beenden(process, frist=ABBRUCH_FRIST)
                 # Collect the child so no zombie is left behind.
-                process.communicate()
+                process.wait()
+                for reader in readers:
+                    reader.join(timeout=5)
                 raise
+            for reader in readers:
+                reader.join(timeout=5)
             if self._abgebrochen:
                 raise BildFehler("bild.abgebrochen")
-            return process.returncode, (printed or "") + "\n" + (complained or "")
+            return process.returncode, "".join(printed) + "\n" + "".join(complained)
         finally:
             self._prozess = None
+            self._fortschritt = None
+            # communicate() used to close the pipes; the readers own them now.
+            for pipe in (stdout_pipe, stderr_pipe):
+                with contextlib.suppress(OSError, ValueError):
+                    pipe.close()
 
     def befehl(self, auftrag: Auftrag, ziel: Path) -> list[str]:
         """The command line, built in one place so it can be read in one."""
@@ -1067,6 +1249,14 @@ class Bildrunner:
             return [
                 str(programm), "-M", "upscale",
                 "--upscale-model", str(auftrag.upscale_model),
+                *(
+                    ["--upscale-repeats", str(auftrag.upscale_repeats)]
+                    if auftrag.upscale_repeats != UPSCALE_REPEATS_START else []
+                ),
+                *(
+                    ["--upscale-tile-size", str(auftrag.upscale_tile_size)]
+                    if auftrag.upscale_tile_size != UPSCALE_TILE_START else []
+                ),
                 *_device_flags(auftrag),
                 *image_switches.cli_parts(
                     {k: v for k, v in auftrag.switches.items() if k in UPSCALE_SWITCHES},
@@ -1087,7 +1277,7 @@ class Bildrunner:
         # branch is new; the plain-model line below it is untouched.
         if auftrag.diffusion_model is not None:
             gespann = bildbausatz.Gespann(
-                familie=auftrag.familie,
+                familie=auftrag.familie or "",
                 diffusion_model=auftrag.diffusion_model,
                 t5xxl=auftrag.t5xxl, clip_l=auftrag.clip_l, clip_g=auftrag.clip_g,
                 llm=auftrag.llm, vae_format=auftrag.vae_format,
@@ -1166,7 +1356,7 @@ class Bildrunner:
         if auftrag.clip_skip >= 1:
             teile += ["--clip-skip", str(auftrag.clip_skip)]
         if auftrag.vae is not None:
-            teile += ["--vae", str(auftrag.vae)]
+            teile += bildbausatz.vae_switch(auftrag.vae, auftrag.vae_is_tae)
         # PhotoMaker needs both halves or neither: the model has no face to
         # carry without the photos, and the photos do nothing without it.
         # Passing one alone would load a model that changes nothing, and the
@@ -1207,8 +1397,6 @@ class Bildrunner:
             ]
             if auftrag.canny:
                 teile += ["--image-preprocess", "target=control,canny=true"]
-        if auftrag.diffusion_fa:
-            teile += ["--diffusion-fa"]
         # Memory & devices. RNG is always sent (see the field's own
         # comment); the rest stay off the command line entirely while
         # unset, matching whatever sd-cli would already do on its own.
@@ -1273,7 +1461,9 @@ class Bildrunner:
                 teile += ["--preview-interval", str(auftrag.preview_interval)]
             if auftrag.preview_noisy:
                 teile += ["--preview-noisy"]
-            if auftrag.live_preview == "tae" and auftrag.taesd is not None:
+            # One tiny autoencoder per run: when it already stands in the
+            # VAE's place it paints the preview too, and none is added.
+            if auftrag.preview_tae_only:
                 teile += ["--taesd", str(auftrag.taesd), "--taesd-preview-only"]
         if auftrag.ad_modell is not None:
             teile += ["--ad-model", str(auftrag.ad_modell)]
@@ -1522,7 +1712,7 @@ class Bildrunner:
                 ziel.unlink(missing_ok=True)
                 raise BildFehler("bild.abgebrochen")
             if self._prozess.returncode != 0 or not ziel.is_file():
-                crash = _crash_note(self._prozess.returncode)
+                crash = crash_note(self._prozess.returncode)
                 # Split on newlines only, and of a line redrawn with "\r"
                 # keep what stood last on screen (a "\r\n" ending is no
                 # redraw).
@@ -1535,28 +1725,11 @@ class Bildrunner:
                     self._prozess.returncode, f", {crash.name}" if crash else "",
                     tail_lines(lines, 500),
                 )
-                # The user sees the painter's REAL lines, verbatim. The
-                # telling ones (asserts, "[ERROR  ]" lines) usually stand
-                # BEFORE the backtrace, so they are picked first; the raw
-                # tail only fills in when no such line exists. The
-                # painter's lines are selected, never reworded; the app's
-                # one marked crash note, when there is one, leads and counts
-                # toward the same limit. Lines are dropped whole.
-                telling = [
-                    line for line in lines
-                    if "GGML_ASSERT" in line or "GGML_ABORT" in line
-                    or _ERROR_TAG.search(line) or "error:" in line.lower()
-                    # ggml aborts print "file.cpp:930: <reason>" without any
-                    # ERROR marker — that reason line IS the crash message.
-                    or (re.search(r"\.\w+:\d+: ", line) and not line.lstrip().startswith(("[INFO", "[WARN", "[DEBUG")))
-                ]
-                # A crash leaves no message of its own; the signal or status
-                # that ended the program is the reason, so it leads the log.
-                note = crash.line if crash else None
-                room = LOG_LIMIT - (len(note) + 1 if note else 0)
-                excerpt = tail_lines(telling[-8:] if telling else lines, room)
-                if note:
-                    excerpt = f"{note}\n{excerpt}" if excerpt else note
+                # A generator that does not know a switch this program sends
+                # is an old one: the sentence says so, in place of its line.
+                if any("unknown argument" in line for line in lines):
+                    raise BildFehler("bild.sdcpp_veraltet")
+                excerpt = last_words(lines, crash)
                 raise BildFehler("bild.gescheitert", protokoll=excerpt)
             return ziel
         finally:

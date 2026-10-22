@@ -45,6 +45,9 @@ VAE = "vae"
 # Not one of the kinds ``sorte`` answers — such a file is a VAE there — but
 # what ``companion`` calls a VAE of video frames.
 VIDEO_VAE = "video_vae"
+# The two further parts of an LTX kit that a companion file can be.
+AUDIO_VAE = "audio_vae"
+EMBEDDINGS_CONNECTORS = "embeddings_connectors"
 UNBEKANNT = "unbekannt"
 
 
@@ -130,10 +133,14 @@ _GGUF_TEXTVERSTEHER_ARCHITEKTUREN = {
     # architecture names llama.cpp itself writes for the families this
     # program is likeliest to see used as a Bausatz's LLM.
     "llama", "qwen2", "qwen3", "gemma", "gemma2", "phi3",
+    # Gemma 3, LTX-2's text encoder: llama.cpp writes it as ``gemma3``.
+    "gemma3",
     # The vision-language and Mistral encoders of Krea 2 (Qwen3-VL),
     # Qwen-Image (Qwen2.5-VL) and ERNIE-Image (Ministral 3), as their GGUF
     # headers name them.
     "qwen3vl", "qwen2vl", "mistral3",
+    # MOSS-Image's Qwen3.5 encoder.
+    "qwen35",
 }
 
 
@@ -501,8 +508,9 @@ def _patch_channels(shape: list[int]) -> int:
 
 def _family_from_names(raw: dict[str, list[int]], *, sort: bool = True) -> str | None:
     """sd.cpp's own ``get_sd_version`` (src/model_loader.cpp:438-699 of
-    build 920), rule for rule and in its order, answered with this
-    program's family names. Walked in sd.cpp's own order: a safetensors
+    build 920, with the rules of FLUX.3, MOSS-Image and Iris that build 975
+    adds), rule for rule and in its order, answered with this program's
+    family names. Walked in sd.cpp's own order: a safetensors
     header by name (sd.cpp reads it through a JSON object, which sorts its
     keys), a GGUF file in the order the file lists them (``sort``).
 
@@ -529,6 +537,15 @@ def _family_from_names(raw: dict[str, list[int]], *, sort: bool = True) -> str |
     def last(name: str) -> int | None:
         shape = names.get(name)
         return shape[-1] if shape else None
+
+    # FLUX.3 and MOSS-Image are told before any name is walked, as sd.cpp's
+    # own check does: a FLUX.3 file also carries names a Flux rule looks for.
+    if (has(_DIFFUSION_PREFIX + "emb_in.image.weight")
+            and has(_DIFFUSION_PREFIX + "txt_mode_blocks.0.q_proj.weight")):
+        return "flux3_klein"
+    if (has(_DIFFUSION_PREFIX + "video_embedder.weight")
+            and has(_DIFFUSION_PREFIX + "shared_block_modulation.weight")):
+        return "moss_image"
 
     flags = {
         "flux": False, "flux2": False, "single_47": False, "unet": False,
@@ -607,6 +624,9 @@ def _family_from_names(raw: dict[str, list[int]], *, sort: bool = True) -> str |
         if ("model.diffusion_model.video_patch_proj.weight" in name
                 and has("model.diffusion_model.audio_patch_proj.weight")):
             return "minimax_h3"
+        if (name == _DIFFUSION_PREFIX + "y_embedder.layer_pool.weight"
+                and has(_DIFFUSION_PREFIX + "modulation_cores.adaln_img.weight")):
+            return "iris"
         if "model.diffusion_model.blocks.0.cross_attn.norm_k.weight" in name:
             flags["wan"] = True
         if "casual_audio_encoder.weights" in name or "audio_injector.injector.0.q.weight" in name:
@@ -738,15 +758,43 @@ _T5_XXL_WIDTH = 4096
 _CLIP_WIDTHS = {768: "clip_l", 1280: "clip_g"}
 
 
+# What LTX's two further parts hold, as the checkpoint of LTX-2.3 names its
+# own copies: the sound decoder and its vocoder, and the embeddings
+# connectors with the projection that feeds them. A checkpoint holds them
+# beside its diffusion model; a file of their own holds nothing else.
+_AUDIO_VAE_PREFIXES = ("audio_vae.", "vocoder.")
+_CONNECTOR_PREFIXES = (
+    "video_embeddings_connector.", "audio_embeddings_connector.", "text_embedding_projection.",
+)
+
+
+def _further_part(names: dict[str, list[int]]) -> str:
+    """``audio_vae`` or ``embeddings_connectors`` for a file that holds only
+    that part's weights, else ``""``."""
+    if not names:
+        return ""
+    if all(n.startswith(_AUDIO_VAE_PREFIXES) for n in names) and any(
+        n.startswith(_AUDIO_VAE_PREFIXES[0]) for n in names
+    ):
+        return AUDIO_VAE
+    bare = [n.removeprefix(_DIFFUSION_PREFIX) for n in names]
+    if all(n.startswith(_CONNECTOR_PREFIXES) for n in bare):
+        return EMBEDDINGS_CONNECTORS
+    return ""
+
+
 def companion(path: Path) -> tuple[str, int | None]:
     """What a companion file is for a kit: ``t5xxl``, ``umt5``,
     ``clip_l``, ``clip_g``, ``llm``, ``vae`` or ``video_vae`` (both with
-    their latent channels), or ``""`` when the header does not say so for
-    certain."""
+    their latent channels), ``audio_vae`` or ``embeddings_connectors``, or
+    ``""`` when the header does not say so for certain."""
     read = tensors(path)
     if read is None:
         return "", None
     names, architecture = read
+    further = _further_part(names)
+    if further:
+        return further, None
     conv_in = names.get("decoder.conv_in.weight")
     if conv_in and len(conv_in) == 4:
         return VAE, conv_in[1]

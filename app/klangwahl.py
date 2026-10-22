@@ -22,15 +22,25 @@ from typing import Any
 
 SCHLUESSEL = "klaenge"
 
+# The four occurrences that have a sound of their own, each behind a switch
+# of its own. An agent's or a cronjob's run that ends well is its own
+# occurrence, not "done": that one belongs to an answer in a chat.
+SOUND_FIELDS = ("ton_fertig", "ton_wartet", "ton_fehler", "ton_agent_cronjob")
+
 # Shipped switched on, at a level that carries across a room without making
 # anybody jump, and only while the window is away — somebody looking at the
 # screen has already seen it.
 #
-# Whether a particular thing is worth reporting at all is NOT decided here.
-# That is one switch per occurrence in app/meldewahl.py, and it governs the
-# whole notice — its text as much as its sound. Two switches for one
-# question is how a settings page stops being readable.
-VORGABE: dict[str, Any] = {"an": True, "pegel": 70, "nur_hintergrund": True}
+# A sound plays when the main switch is on, the volume is above zero and the
+# switch of its own occurrence is on. Whether the notice itself is drawn is
+# not decided here: that is the popup switch of the same occurrence in
+# app/meldewahl.py. The window and the service ask the same switches.
+VORGABE: dict[str, Any] = {
+    "an": True,
+    "pegel": 70,
+    "nur_hintergrund": True,
+    **{name: True for name in SOUND_FIELDS},
+}
 
 
 def wahl_pruefen(wert: Any) -> dict[str, Any] | None:
@@ -38,7 +48,7 @@ def wahl_pruefen(wert: Any) -> dict[str, Any] | None:
     if not isinstance(wert, dict):
         return None
     sauber: dict[str, Any] = {}
-    for name in ("an", "nur_hintergrund"):
+    for name in ("an", "nur_hintergrund", *SOUND_FIELDS):
         if isinstance(wert.get(name), bool):
             sauber[name] = wert[name]
     pegel = wert.get("pegel")

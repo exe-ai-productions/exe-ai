@@ -42,7 +42,8 @@ router = APIRouter(tags=["dokumente"])
 
 # Every text ending a document may carry — the gate is the name's ending,
 # never the bytes. Read as UTF-8; ``.env`` is deliberately absent: it holds
-# keys, not prose. One list gates the upload and the card's kind.
+# keys, not prose. ``.svg`` is markup read as text; it is never served
+# inline. One list gates the upload and the card's kind.
 TEXT_ENDUNGEN = (
     ".txt", ".md", ".markdown", ".csv", ".tsv", ".log", ".json", ".jsonl", ".ndjson", ".xml",
     ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".properties", ".html", ".htm",
@@ -51,7 +52,7 @@ TEXT_ENDUNGEN = (
     ".java", ".kt", ".go", ".rs", ".rb", ".php", ".pl", ".lua", ".r", ".jl", ".swift", ".m",
     ".scala", ".clj", ".ex", ".exs", ".erl", ".sql", ".graphql", ".proto", ".tf", ".hcl",
     ".dockerfile", ".makefile", ".cmake", ".gradle", ".rst", ".tex", ".srt", ".vtt", ".diff",
-    ".patch",
+    ".patch", ".svg",
 )
 ERLAUBTE_ENDUNGEN = {
     **{endung: "text/plain" for endung in TEXT_ENDUNGEN},
@@ -88,7 +89,8 @@ class DokumentMeta(BaseModel):
     name: str
     typ: str  # the name's ending without its dot: "pdf", "html", …
     seiten: int | None = None
-    kb: int
+    # The file's weight in bytes, exactly as stored; None for a row without one.
+    size_bytes: int | None = None
     # One of GETRAGEN, or None while no answer has carried the document yet.
     getragen: str | None = None
     # Where the file itself lies, so the window can show it; None for an
@@ -451,7 +453,7 @@ def meta_bauen(dokument, getragen: str | None = None) -> DokumentMeta:
         name=dokument.filename,
         typ=endung[1:],
         seiten=dokument.pages,
-        kb=max(1, round((dokument.size_bytes or 0) / 1024)),
+        size_bytes=dokument.size_bytes,
         getragen=getragen if getragen in GETRAGEN else None,
         pfad=dokument.pfad or None,
     )

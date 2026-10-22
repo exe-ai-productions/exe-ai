@@ -264,6 +264,11 @@ class TerminalAsker(Asker):
             for key, value in arguments.items():
                 head.append(_Line([("muted", f"{_INDENT}{key}: {_one_line(value)}")], cut=True))
         reason = " ".join(str(event.get("grund") or "").split())
+        # The sentence names no place; the place follows it after a colon, as
+        # the window does where its command does not carry it.
+        place = " ".join(str(event.get("grund_wert") or "").split())
+        if reason and place:
+            reason = f"{reason}: {place}"
         if reason:
             head.append(_Line([("muted", _INDENT + reason)]))
         head.append(_Line([("text", texts.t("werkzeug.permission_question"))]))

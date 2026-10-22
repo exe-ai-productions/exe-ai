@@ -111,7 +111,7 @@ async def test_grenze_haelt_an_und_meldet_einmal(repos, gemeldet):
     assert frisch.aktiv is False
     assert frisch.fehlversuche == 2
     # The number is in the message — that is what makes it worth sending.
-    assert gemeldet == [("Ins Postfach sehen — stopped after 2 failed runs", False)]
+    assert gemeldet == [("Ins Postfach sehen - stopped after 2 failed runs", False)]
 
 
 async def test_bei_deliver_log_haelt_es_still_an(repos, gemeldet):

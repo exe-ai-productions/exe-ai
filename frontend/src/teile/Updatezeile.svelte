@@ -22,6 +22,8 @@
      be elsewhere in the list, and its line changes in place anyway. */
   let part = $state(null)
 
+  /* Looks for a newer version and rolls the answer into sight; the button of
+     this row calls it. */
   async function look() {
     await checkForUpdates()
     await tick()
@@ -98,9 +100,9 @@
   }
   /* A state says itself in its colour: fetching runs, a look that failed
      failed, a look that found nothing newer is done. */
-  .result.running { color: var(--blau); }
-  .result.failed { color: var(--rot); }
-  .result.done { color: var(--gruen); }
+  .result.running { color: var(--blau-text); }
+  .result.failed { color: var(--rot-text); }
+  .result.done { color: var(--gruen-text); }
   .act {
     flex: none;
     border: none;

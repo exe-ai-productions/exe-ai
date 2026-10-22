@@ -40,6 +40,7 @@
   import { punktAtmet } from '../lib/meldewesen.svelte.js'
   import { stopRun, terminal } from '../lib/terminalfenster.svelte.js'
   import { historie } from '../lib/werkzeughistorie.js'
+  import { displayPath } from '../lib/paths.js'
   import Werkzeugzeichen from './Werkzeugzeichen.svelte'
   import { serverLogo } from '../lib/serverlogo.svelte.js'
   import { nachrichtenAnzeige } from '../lib/zustand.svelte.js'
@@ -70,12 +71,19 @@
   const keyOf = (eintrag) =>
     eintrag.art === 'aufruf' ? eintrag.schluessel : eintrag.art === 'lauf' ? `l${eintrag.lauf.lauf}` : null
   async function showCall(key) {
-    const at = eintraege.findIndex((eintrag) => keyOf(eintrag) === key)
+    /* A shell call is asked for as `l` and its run's number; with the run
+       gone (the service was restarted) its line stands as a plain call and
+       is found by the number it still carries. */
+    const at = eintraege.findIndex(
+      (eintrag) =>
+        keyOf(eintrag) === key ||
+        (eintrag.art === 'aufruf' && eintrag.lauf_nummer != null && `l${eintrag.lauf_nummer}` === key),
+    )
     if (at === -1) {
       selected = null
       return
     }
-    selected = key
+    selected = keyOf(eintraege[at])
     if (eintraege[at].art === 'aufruf') {
       if (!offene.has(`a${at}`)) klappen(`a${at}`)
     } else {
@@ -85,7 +93,9 @@
     // The list stays where the reader put it; the call is brought into view.
     terminal.klebt = false
     await tick()
-    const button = spur?.querySelector(`[data-key="${CSS.escape(key)}"]`)
+    // A list that fits has no end to jump to: the button stays away.
+    if (spur && spur.scrollHeight <= spur.clientHeight + 1) terminal.klebt = true
+    const button = spur?.querySelector(`[data-key="${CSS.escape(selected)}"]`)
     button?.scrollIntoView({ block: 'nearest' })
     button?.focus({ preventScroll: true })
   }
@@ -240,8 +250,8 @@
           <!-- Where it runs: a relative path in the command means nothing
                without it. Cut at the start, where a long path is least
                telling; the whole of it is the title. -->
-          <div class="folder" title={eintrag.lauf.folder} transition:slideIfDrawn={{ duration: 200 }}>
-            <span>{eintrag.lauf.folder}</span>
+          <div class="folder" title={displayPath(eintrag.lauf.folder)} transition:slideIfDrawn={{ duration: 200 }}>
+            <span>{displayPath(eintrag.lauf.folder)}</span>
           </div>
         {/if}
         {#if isBlockOpen(eintrag.lauf) && eintrag.lauf.ausgabe}
@@ -286,7 +296,7 @@
         <button class="aufruf" class:offen={offene.has(`a${i}`)} data-key={eintrag.schluessel}
                 aria-expanded={offene.has(`a${i}`)} onclick={() => klappen(`a${i}`)}>
           <span class="zeichen"><Werkzeugzeichen name={eintrag.name} server={eintrag.server} logo={serverLogo(eintrag.server)} /></span>
-          <span class="name werkzeugname">{eintrag.name}</span>
+          <span class="name werkzeugname" title={eintrag.name}>{eintrag.name}</span>
           {#if eintrag.kurz}<span class="kurz">{eintrag.kurz}</span>{/if}
           <!-- Duration and the outcome mark share the row's far end — one
                pushed group, not two competing auto margins (same pitfall
@@ -428,11 +438,11 @@
     display: block;
   }
   .wz-ergebnis :global(.diff-entfernt) {
-    color: var(--rot);
+    color: var(--rot-text);
     background: color-mix(in srgb, var(--rot) 12%, transparent);
   }
   .wz-ergebnis :global(.diff-hinzu) {
-    color: var(--gruen);
+    color: var(--gruen-text);
     background: color-mix(in srgb, var(--gruen) 12%, transparent);
   }
   .wz-ergebnis :global(.diff-kopf) {
@@ -452,24 +462,20 @@
   .aufruf .zeichen {
     flex: none;
     display: inline-flex;
-    /* No opacity of its own any more: it dimmed the tool colour to 80 %
-       and made this the one place where a tool mark was a different
-       shade than everywhere else. */
+    /* No opacity of its own: it dimmed the mark and made this the one place
+       where a tool mark was a different shade than everywhere else. */
     /* Smaller than in the chat: here it identifies a line, there it heads
        a block. */
     --wz-groesse: 15px;
   }
-  /* The call's own colour, not a hover highlight — it used to brighten from
-     --text-still to --text on hover/open, but a colour that means "this is
-     a call" must not fade the moment someone points at or opens the very
-     row it names. The tool colour rather than blue since the house has a
-     colour for a tool: blue is a STATE (a run is going), and one colour
-     cannot carry both meanings in a window that shows the two side by
-     side. */
   /* Only what is about THIS row: how a tool name is set lives in one place
      for the whole program (`.werkzeugname`, stil/global.css). */
   .aufruf .name {
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .aufruf .kurz {
     color: var(--text-still);
@@ -500,10 +506,10 @@
      (same rule as the chat's own .wz-name) — .ausgang just repeats it in
      the one spot that stays readable at a glance. */
   .werkzeugblock.misslungen .name {
-    color: var(--rot);
+    color: var(--rot-text);
   }
   .werkzeugblock.misslungen .ausgang {
-    color: var(--rot);
+    color: var(--rot-text);
   }
   .leer {
     margin: 6px 2px;
@@ -601,7 +607,7 @@
     flex: none;
     font-family: var(--schrift-fest);
     font-size: 10.5px;
-    color: var(--rot);
+    color: var(--rot-text);
   }
   /* The folder under the command: a fact, so brightness only. */
   .folder {

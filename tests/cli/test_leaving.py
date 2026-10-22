@@ -17,7 +17,6 @@ import errno
 import io
 import os
 import signal
-import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -29,7 +28,6 @@ import pytest
 from prompt_toolkit.application import create_app_session, get_app
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
-from prompt_toolkit.patch_stdout import patch_stdout
 
 from cli import app as screen
 from cli import themes
@@ -221,19 +219,17 @@ def test_a_request_to_leave_that_came_before_the_screen_ran_is_carried_out_once_
 def test_nothing_is_written_once_the_screen_is_leaving(
     ctx: Context, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    written = io.StringIO()
-    monkeypatch.setattr(sys, "stdout", written)
     ctx.commands = _NoCommands()  # type: ignore[assignment]
     ctx.asker = _NoQuestions()  # type: ignore[assignment]
     with a_session_without_the_console():
         app = CliApp(ctx)
 
     app.print_above("before")
-    assert "before" in written.getvalue()
+    assert "before" in app.history_text()
 
     app.exit()
     app.print_above("after")
-    assert "after" not in written.getvalue()
+    assert "after" not in app.history_text()
 
 
 class _NoCommands:
@@ -346,16 +342,18 @@ def test_a_request_to_end_on_the_screens_way_up_is_carried_out_once_it_runs(
 ) -> None:
     before = signal.getsignal(signal.SIGTERM)
 
+    routed = screen.CliApp._stdout_to_the_screen
+
     @contextlib.contextmanager
-    def asked_on_the_way_up(**options: Any) -> Iterator[None]:
+    def asked_on_the_way_up(app: screen.CliApp) -> Iterator[None]:
         # Here the start has asked the service all it had to ask, and the
         # screen does not run yet.
         for _ in range(times):
             raise_a_request_to_end(before)
-        with patch_stdout(**options):
+        with routed(app):
             yield
 
-    monkeypatch.setattr(screen, "patch_stdout", asked_on_the_way_up)
+    monkeypatch.setattr(screen.CliApp, "_stdout_to_the_screen", asked_on_the_way_up)
 
     def drive(run: Run, type_in: Callable[[str], None]) -> None:
         # Nothing is typed: the client leaves because it was asked to.
@@ -417,6 +415,114 @@ def test_a_request_to_end_when_a_failed_start_begins_to_leave_is_not_raised_into
 
     assert asked == [True]
     assert run.code == 1
+    assert signal.getsignal(signal.SIGTERM) is before
+
+
+@posix_only
+def test_a_request_to_end_while_the_handlers_are_taken_gives_the_former_ones_back(
+    ctx: Context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx.commands = _NoCommands()  # type: ignore[assignment]
+    ctx.asker = _NoQuestions()  # type: ignore[assignment]
+    with a_session_without_the_console():
+        app = CliApp(ctx)
+    before = {number: signal.getsignal(number) for number in (signal.SIGTERM, signal.SIGHUP)}
+    real = signal.signal
+    asked: list[bool] = []
+
+    def ask_when_the_second_one_is_taken(number: int, handler: Any) -> Any:
+        former = real(number, handler)
+        if number == signal.SIGHUP and not asked:
+            asked.append(True)
+            # The request comes between the two: the handler already set
+            # for the first one runs.
+            signal.getsignal(signal.SIGTERM)()  # type: ignore[operator]
+        return former
+
+    try:
+        with monkeypatch.context() as patched:
+            patched.setattr(signal, "signal", ask_when_the_second_one_is_taken)
+            with pytest.raises(screen.LeaveAsked):
+                app.leave_on_signals()
+        after = {number: signal.getsignal(number) for number in before}
+    finally:
+        for number, handler in before.items():
+            real(number, handler)
+    # Without the fix the client's handler for the first signal stayed.
+    assert after == before
+    assert app._leave_asked is True
+    # The mask is the one the process had, also where the start was left.
+    assert not {signal.SIGTERM, signal.SIGHUP} & signal.pthread_sigmask(signal.SIG_BLOCK, [])
+
+
+@posix_only
+def test_a_signal_that_was_blocked_before_stays_blocked_after(
+    ctx: Context,
+) -> None:
+    ctx.commands = _NoCommands()  # type: ignore[assignment]
+    ctx.asker = _NoQuestions()  # type: ignore[assignment]
+    with a_session_without_the_console():
+        app = CliApp(ctx)
+    before = signal.getsignal(signal.SIGTERM)
+    signal.pthread_sigmask(signal.SIG_BLOCK, [signal.SIGTERM])
+    try:
+        give_back = app.leave_on_signals()
+        give_back()
+        assert signal.SIGTERM in signal.pthread_sigmask(signal.SIG_BLOCK, [])
+    finally:
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, [signal.SIGTERM])
+        signal.signal(signal.SIGTERM, before)
+
+
+@posix_only
+def test_a_handler_set_outside_python_is_given_back_as_the_default(
+    ctx: Context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``getsignal`` reads such a handler as nothing, which cannot be set
+    again: the client's own handler must not stay in its place."""
+    ctx.commands = _NoCommands()  # type: ignore[assignment]
+    ctx.asker = _NoQuestions()  # type: ignore[assignment]
+    with a_session_without_the_console():
+        app = CliApp(ctx)
+    before = signal.getsignal(signal.SIGTERM)
+    real_get = signal.getsignal
+    try:
+        with monkeypatch.context() as patched:
+            patched.setattr(
+                signal, "getsignal", lambda number: None if number == signal.SIGTERM else real_get(number)
+            )
+            give_back = app.leave_on_signals()
+            give_back()
+        assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+    finally:
+        signal.signal(signal.SIGTERM, before)
+
+
+@posix_only
+def test_the_handlers_are_held_back_while_they_are_taken_and_given_back_after(
+    ctx: Context, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx.commands = _NoCommands()  # type: ignore[assignment]
+    ctx.asker = _NoQuestions()  # type: ignore[assignment]
+    with a_session_without_the_console():
+        app = CliApp(ctx)
+    before = signal.getsignal(signal.SIGTERM)
+    seen: list[bool] = []
+    real = signal.signal
+
+    def look_at_the_mask(number: int, handler: Any) -> Any:
+        seen.append(signal.SIGTERM in signal.pthread_sigmask(signal.SIG_BLOCK, []))
+        return real(number, handler)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(signal, "signal", look_at_the_mask)
+        give_back = app.leave_on_signals()
+    try:
+        # Held while set, free afterwards.
+        assert seen and all(seen)
+        assert signal.SIGTERM not in signal.pthread_sigmask(signal.SIG_BLOCK, [])
+    finally:
+        give_back()
     assert signal.getsignal(signal.SIGTERM) is before
 
 

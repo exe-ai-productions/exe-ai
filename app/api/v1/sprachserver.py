@@ -21,13 +21,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
-from app import agentenserver, diktatsprachewahl, sprachserver, stimme
+from app import agentenserver, diktatsprachewahl, sprachserver, stimme, system_voice
 from app.api.abhaengigkeiten import hole_repositories, hole_sprache
 from app.api.v1.runner import Modelldatei, ProgramState, _fehler, program_state
 from app.db import Repositories
@@ -35,7 +36,7 @@ from app.feineinstellungen import MAX_FAEDEN, Feineinstellungen
 from app.i18n import t
 from app.modellrunner import RunnerFehler, passende_mmproj
 from app.ordner_oeffnen import OeffnenNichtMoeglich, ordner_oeffnen
-from app.voice_service import VoiceSpec, VoiceUnavailable
+from app.voice_service import HOLD_SECONDS, VoiceSpec, VoiceUnavailable
 from app.voice_worker import ALL_LAYERS
 
 log = logging.getLogger(__name__)
@@ -64,6 +65,14 @@ KONTEXT_MIN, KONTEXT_MAX = 512, 1_048_576
 SCHICHTEN_MIN, SCHICHTEN_MAX = 0, 999
 
 
+class SystemVoiceInfo(BaseModel):
+    """One voice of the operating system, as it is listed in the field
+    "Stimme": its name and its language, both as the system gives them."""
+
+    name: str
+    language: str
+
+
 class Auskunft(ProgramState):
     ordner: str
     # Every startable file in the folder, with its size like the model
@@ -81,8 +90,15 @@ class Auskunft(ProgramState):
     # it cannot hear at all — so the panel says so in plain words instead of
     # letting the start fail with something about a template.
     projektoren: dict[str, str | None] = {}
+    # The size in gigabytes of each projector in the folder, by name, as the
+    # model server's answer carries it — what the memory estimate adds when
+    # the chosen model starts with its projector.
+    projector_size_gb: dict[str, float] = {}
     laeuft: bool = False
     modell: str | None = None
+    # What a start would load: the stored choice, apart from `modell`, which
+    # stays the file that runs. None where nothing is chosen.
+    selected_model: str | None = None
     port: int | None = None
     kontext: int | None = None
     schichten: int | None = None
@@ -108,6 +124,21 @@ class Auskunft(ProgramState):
     # the projectors have theirs: a sample is not a model and cannot be
     # started, so it never belongs in "modelle".
     stimmproben: list[str] = []
+    # How long each of them is, in seconds — read from the file's header; a
+    # file laid out otherwise has no entry. The window shows it behind the
+    # chosen sample's name.
+    stimmproben_dauer: dict[str, float | None] = {}
+    # The voices the system itself brings (a Mac's `say`, Windows' speech
+    # synthesis; none on Linux), listed after the voice models in the field
+    # "Stimme".
+    system_voices: list[SystemVoiceInfo] = []
+
+
+class Stimmprobe(BaseModel):
+    """A recording that was just kept as a voice sample."""
+
+    name: str
+    seconds: float | None = None
 
 
 class Start(BaseModel):
@@ -153,7 +184,8 @@ def _auskunft(request: Request) -> Auskunft:
     import os
 
     runner = _runner(request)
-    lauf = runner.lauf()
+    repositories = request.app.state.repositories
+    lauf = runner.shown_run()
     ordner = Path(runner.ordner)
     dateien = runner.modelle()
     namen = [m.name for m in dateien]
@@ -164,12 +196,18 @@ def _auskunft(request: Request) -> Auskunft:
             Modelldatei(name=m.name, groesse_gb=m.groesse_gb) for m in dateien
         ],
         mmproj=runner.mmproj(),
+        projector_size_gb=runner.projector_sizes(),
         projektoren={
-            name: (p.name if (p := passende_mmproj(ordner, name)) else None)
+            name: (p.name if (p := runner.projektor_fuer(name)) else None)
             for name in namen
         },
-        laeuft=runner.laeuft(),
+        laeuft=lauf is not None,
         modell=lauf.modell if lauf else None,
+        selected_model=(
+            stored
+            if (stored := diktatsprachewahl.sprachstart(repositories)["modell"]) in namen
+            else (namen[0] if namen else None)
+        ),
         port=lauf.port if lauf else runner.port_vorgabe,
         kontext=lauf.kontext if lauf else None,
         schichten=lauf.schichten if lauf else None,
@@ -184,7 +222,12 @@ def _auskunft(request: Request) -> Auskunft:
             "threads": THREADS_VORGABE,
         },
         diktat_vorgaben=diktatsprachewahl.vorgaben(),
-        stimmproben=stimme.proben_auflisten(ordner),
+        stimmproben=(proben := stimme.proben_auflisten(ordner)),
+        stimmproben_dauer={name: stimme.probe_dauer(ordner / name) for name in proben},
+        system_voices=[
+            SystemVoiceInfo(name=voice.name, language=voice.language)
+            for voice in system_voice.list_voices()
+        ],
     )
 
 
@@ -210,7 +253,9 @@ def starten(
     # answers — one read of the setting for all of it.
     gespeichert = diktatsprachewahl.sprachstart(repositories)
     threads = gespeichert["threads"] if daten.threads is None else daten.threads
-    fein = Feineinstellungen(faeden=threads or None)
+    # The idle time is named only while the model is not kept in memory
+    # (``sprachstart`` decides); it is a start value of the engine.
+    fein = Feineinstellungen(faeden=threads or None, idle_minutes=gespeichert["leerlauf"])
     try:
         _runner(request).starten(
             daten.modell,
@@ -234,7 +279,11 @@ def starten(
 
 
 @router.post("/stop", response_model=Auskunft, summary="Stop the speech server")
-def stoppen(request: Request) -> Auskunft:
+def stoppen(request: Request, sprache: str = Depends(hole_sprache)) -> Auskunft:
+    try:
+        _runner(request).refuse_stop_when_shared()
+    except RunnerFehler as fehler:
+        raise _fehler(fehler.grund, sprache) from None
     _runner(request).stoppen()
     return _auskunft(request)
 
@@ -249,6 +298,105 @@ def ordner_zeigen(request: Request, sprache: str = Depends(hole_sprache)) -> boo
             status.HTTP_501_NOT_IMPLEMENTED, t("fehler.ordner_oeffnen", sprache)
         ) from None
     return True
+
+
+def _stimmprobe_waehlen(repositories: Repositories, name: str) -> None:
+    """Stores which voice sample the voice speaks with ('' for none), through
+    the same check and the same merge the settings route uses."""
+    repositories.einstellungen.zusammenlegen(
+        "global", diktatsprachewahl.SCHLUESSEL, {"stimmprobe": name},
+        pruefen=diktatsprachewahl.wahl_pruefen,
+    )
+
+
+@router.post(
+    "/voice-sample",
+    response_model=Stimmprobe,
+    summary="Keep a recording as a voice sample (raw WAV bytes)",
+)
+async def stimmprobe_sichern(
+    request: Request,
+    repositories: Repositories = Depends(hole_repositories),
+    sprache: str = Depends(hole_sprache),
+) -> Stimmprobe:
+    """The recording lands in the speech model folder as ``stimmprobe-N.wav``
+    with the next free number and is chosen as the voice sample at once."""
+    daten = await _aufnahme_lesen(request, sprache)
+    ordner = Path(_runner(request).ordner)
+
+    def ablegen() -> Stimmprobe:
+        name = stimme.probe_sichern(ordner, daten)
+        _stimmprobe_waehlen(repositories, name)
+        return Stimmprobe(name=name, seconds=stimme.probe_dauer(ordner / name))
+
+    try:
+        # Off the loop: a file is written and a setting stored.
+        return await asyncio.to_thread(ablegen)
+    except stimme.SprechenNichtMoeglich as fehler:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, t(f"fehler.{fehler.grund}", sprache)
+        ) from None
+
+
+@router.get("/voice-sample/{name}", summary="The voice sample as a WAV")
+def stimmprobe_liefern(
+    name: str, request: Request, sprache: str = Depends(hole_sprache)
+) -> Response:
+    try:
+        pfad = stimme.probe_pfad(Path(_runner(request).ordner), name)
+    except stimme.SprechenNichtMoeglich as fehler:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, t(f"fehler.{fehler.grund}", sprache)
+        ) from None
+    return Response(content=pfad.read_bytes(), media_type="audio/wav")
+
+
+@router.delete(
+    "/voice-sample/{name}",
+    response_model=Auskunft,
+    summary="Delete a voice sample",
+)
+def stimmprobe_loeschen(
+    name: str,
+    request: Request,
+    repositories: Repositories = Depends(hole_repositories),
+    sprache: str = Depends(hole_sprache),
+) -> Auskunft:
+    """The file goes; where it was the chosen sample, the choice goes with it
+    — first, so a choice never points at a file that is gone."""
+    ordner = Path(_runner(request).ordner)
+    try:
+        pfad = stimme.probe_pfad(ordner, name)
+    except stimme.SprechenNichtMoeglich as fehler:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, t(f"fehler.{fehler.grund}", sprache)
+        ) from None
+    if diktatsprachewahl.stimmprobe(repositories) == name:
+        _stimmprobe_waehlen(repositories, "")
+    pfad.unlink()
+    return _auskunft(request)
+
+
+async def _aufnahme_lesen(request: Request, sprache: str) -> bytes:
+    """The raw recording of a request: read in pieces up to the ceiling, so a
+    limit does not speak only once the whole upload is in memory. Empty and
+    over-long recordings are refused here, for every route that takes one."""
+    stuecke: list[bytes] = []
+    gelesen = 0
+    async for stueck in request.stream():
+        gelesen += len(stueck)
+        if gelesen > MAX_BYTES:
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                t("fehler.aufnahme_zu_gross", sprache),
+            )
+        stuecke.append(stueck)
+    daten = b"".join(stuecke)
+    if not daten:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, t("fehler.aufnahme_leer", sprache)
+        )
+    return daten
 
 
 def _putzziel(request: Request, wer: str) -> tuple[str, str | None] | None:
@@ -291,24 +439,7 @@ async def transkribieren(
         raise HTTPException(
             status.HTTP_409_CONFLICT, t("fehler.sprachserver_aus", sprache)
         )
-    # Read in pieces and stop at the ceiling, rather than materialising the
-    # whole upload and measuring it afterwards. A limit that only speaks once
-    # the payload is already in memory rejects the request but not its cost.
-    stuecke: list[bytes] = []
-    gelesen = 0
-    async for stueck in request.stream():
-        gelesen += len(stueck)
-        if gelesen > MAX_BYTES:
-            raise HTTPException(
-                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                t("fehler.aufnahme_zu_gross", sprache),
-            )
-        stuecke.append(stueck)
-    daten = b"".join(stuecke)
-    if not daten:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, t("fehler.aufnahme_leer", sprache)
-        )
+    daten = await _aufnahme_lesen(request, sprache)
 
     # Off the loop: this waits on another server for up to ZEITGRENZE, and a
     # blocking wait here is a wait for everything — a chat stream mid-answer
@@ -399,11 +530,8 @@ def _voice_files(
         raise HTTPException(
             status.HTTP_409_CONFLICT, t("fehler.stimme_keine_stimme", sprache)
         )
+    # An empty language is "-": the voice model takes its own.
     gewaehlte_sprache = wahl["stimmsprache"]
-    if not gewaehlte_sprache:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, t("fehler.stimme_keine_sprache", sprache)
-        )
     runner = _runner(request)
     ordner = Path(runner.ordner)
     # A stored setting, not something this request chooses — but stored
@@ -484,6 +612,10 @@ async def voice_hold(
     if not wahl["vorlesen"] or not diktatsprachewahl.keep_model_in_memory(repositories, wahl):
         await asyncio.to_thread(service.release)
         return VoiceHold(kept=False)
+    # A voice that failed in this conversation is not kept loaded again: the
+    # voice of the system speaks the pieces until the conversation is over.
+    if _fallback_active(request, wahl["stimme"]):
+        return VoiceHold(kept=False)
     try:
         files = _voice_files(request, repositories, sprache)
     except HTTPException:
@@ -501,6 +633,9 @@ async def voice_hold(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def voice_release(request: Request) -> Response:
+    # The voice of the system that stood in for a failed voice stops standing
+    # in: the next conversation asks the chosen voice again.
+    request.app.state.voice_fallback = None
     await asyncio.to_thread(request.app.state.voice_service.release)
     request.app.state.voice_library.conversation_over()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -527,6 +662,95 @@ async def _until_gone(
         listening.cancel()
 
 
+def _fallback_active(request: Request, chosen: str) -> bool:
+    """Whether the voice of the system stands in for the chosen voice, which
+    failed earlier in this conversation. Like the kept voice, it holds as long
+    as the conversation announces itself: every piece and every announcement
+    holds it a little longer, and a conversation whose page went away without
+    ending it lets it go when that time runs out."""
+    state = getattr(request.app.state, "voice_fallback", None)
+    if state is None or state[0] != chosen or time.monotonic() >= state[1]:
+        return False
+    request.app.state.voice_fallback = (chosen, time.monotonic() + HOLD_SECONDS)
+    return True
+
+
+def _fallback_start(request: Request, chosen: str) -> None:
+    request.app.state.voice_fallback = (chosen, time.monotonic() + HOLD_SECONDS)
+
+
+def _fallback_voice() -> str | None:
+    """The voice of the system that speaks when the chosen one cannot: the one
+    this machine starts with, and where the system does not have it, the voice
+    the system itself uses (an empty name). None where the system has no
+    voice at all."""
+    if not system_voice.available():
+        return None
+    factory = system_voice.factory_voice()
+    return factory if system_voice.has_voice(factory) else system_voice.default_voice()
+
+
+async def _finish(
+    request: Request, speaking: asyncio.Task, cancel: threading.Event, sprache: str
+) -> Response:
+    """Waits for the piece being spoken in its own thread and answers it. A
+    request that is given up (a conversation that ended while its sentence was
+    being made) ends the program too: nobody waits for the sound, and the model
+    it loads is a gigabyte or two."""
+    try:
+        await _until_gone(request, speaking, cancel)
+        wav = await speaking
+    except stimme.SpeakCancelled:
+        return Response(status_code=_CLIENT_CLOSED_REQUEST)
+    except asyncio.CancelledError:
+        # The server gave the request up itself: the program goes with it,
+        # and nobody is left to read how it ended.
+        cancel.set()
+        speaking.add_done_callback(lambda task: task.cancelled() or task.exception())
+        raise
+    except stimme.SprechenNichtMoeglich as fehler:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, t(f"fehler.{fehler.grund}", sprache)
+        ) from None
+    return Response(content=wav, media_type="audio/wav")
+
+
+async def _speak_with_system(
+    request: Request, text: str, voice: str, sprache: str
+) -> Response:
+    """The piece, spoken by a voice of the system. Off the loop: it waits on a
+    program."""
+    cancel = threading.Event()
+    speaking = asyncio.create_task(
+        asyncio.to_thread(system_voice.speak, text, voice, cancel=cancel)
+    )
+    return await _finish(request, speaking, cancel, sprache)
+
+
+async def _speak_with_fallback(
+    request: Request, text: str, chosen: str, reason: str, sprache: str,
+    refusal: HTTPException | None = None,
+) -> Response:
+    """The chosen voice cannot speak — its file is gone, its program or
+    projector is missing, it failed, or the voice of the system is not on this
+    machine — so the voice of the system speaks this piece and every following
+    one of the conversation: a voice that failed once is not asked again until
+    the conversation is over (``voice_release``). The reason is told on
+    WARNING. Where the system has no voice, the refusal stands."""
+    # Off the loop: the list of voices may have to be asked of the system.
+    voice = await asyncio.to_thread(_fallback_voice)
+    if voice is None:
+        raise refusal or HTTPException(
+            status.HTTP_409_CONFLICT, t("fehler.stimme_keine_stimme", sprache)
+        )
+    _fallback_start(request, chosen)
+    log.warning(
+        "The voice %r cannot speak (%s); the voice of the system speaks (%s)",
+        chosen, reason, voice or "default",
+    )
+    return await _speak_with_system(request, text, voice, sprache)
+
+
 @router.post(
     "/sprechen",
     summary="Convert text to speech (returns WAV bytes)",
@@ -538,7 +762,31 @@ async def sprechen(
     repositories: Repositories = Depends(hole_repositories),
     sprache: str = Depends(hole_sprache),
 ) -> Response:
-    files = _voice_files(request, repositories, sprache)
+    chosen = diktatsprachewahl.wahl(repositories)["stimme"]
+    # "-" is no voice chosen: said in plain words, nothing is reached for.
+    if not chosen:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, t("fehler.stimme_keine_stimme", sprache)
+        )
+    models = {m.name for m in _runner(request).modelle()}
+    # Which way speaks follows from the chosen name: a voice model of the
+    # speech folder, or a voice of the system.
+    if chosen not in models:
+        if await asyncio.to_thread(system_voice.has_voice, chosen):
+            return await _speak_with_system(request, daten.text, chosen, sprache)
+        return await _speak_with_fallback(request, daten.text, chosen, "voice not found", sprache)
+    if _fallback_active(request, chosen):
+        # The expected type of the call would otherwise be read from the
+        # `or ""` around it, so the result is named first.
+        fallback_voice = await asyncio.to_thread(_fallback_voice)
+        return await _speak_with_system(request, daten.text, fallback_voice or "", sprache)
+    try:
+        files = _voice_files(request, repositories, sprache)
+    except HTTPException as refusal:
+        return await _speak_with_fallback(
+            request, daten.text, chosen, f"program or projector missing ({refusal.status_code})",
+            sprache, refusal,
+        )
     # Off the loop for the same reason the transcription above is: this
     # waits on a subprocess for up to `stimme.ZEITGRENZE`, and a blocking
     # wait here is a wait for every other request too.
@@ -577,21 +825,10 @@ async def sprechen(
         )
     )
     try:
-        # A request that is given up (a conversation that ended while its
-        # sentence was being made) ends the program too: nobody waits for
-        # the sound, and the model it loads is a gigabyte or two.
-        await _until_gone(request, speaking, cancel)
-        wav = await speaking
-    except stimme.SpeakCancelled:
-        return Response(status_code=_CLIENT_CLOSED_REQUEST)
-    except asyncio.CancelledError:
-        # The server gave the request up itself: the program goes with it,
-        # and nobody is left to read how it ended.
-        cancel.set()
-        speaking.add_done_callback(lambda task: task.cancelled() or task.exception())
-        raise
-    except stimme.SprechenNichtMoeglich as fehler:
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, t(f"fehler.{fehler.grund}", sprache)
-        ) from None
-    return Response(content=wav, media_type="audio/wav")
+        return await _finish(request, speaking, cancel, sprache)
+    except HTTPException as refusal:
+        # llama-tts failed or ran out of time: the voice of the system speaks
+        # this piece, where the system has one.
+        return await _speak_with_fallback(
+            request, daten.text, chosen, "llama-tts failed", sprache, refusal,
+        )

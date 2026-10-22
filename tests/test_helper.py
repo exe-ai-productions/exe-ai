@@ -144,21 +144,21 @@ LIMIT_SENTENCES = [
         "No helper was started: 1 is already running, and the limit is 1 concurrent helper. "
         "Wait for one to finish, or specify an agent instead.",
         "Es wurde kein Helfer gestartet: Bereits 1 Helfer ist aktiv; höchstens 1 darf "
-        "gleichzeitig arbeiten. Warte, bis einer fertig ist, oder gib stattdessen einen Agenten an.",
+        "gleichzeitig arbeiten. Bitte warten, bis einer fertig ist, oder stattdessen einen Agenten angeben.",
     ),
     (
         (1, 3),
         "No helper was started: 1 is already running, and the limit is 3 concurrent helpers. "
         "Wait for one to finish, or specify an agent instead.",
         "Es wurde kein Helfer gestartet: Bereits 1 Helfer ist aktiv; höchstens 3 dürfen "
-        "gleichzeitig arbeiten. Warte, bis einer fertig ist, oder gib stattdessen einen Agenten an.",
+        "gleichzeitig arbeiten. Bitte warten, bis einer fertig ist, oder stattdessen einen Agenten angeben.",
     ),
     (
         (2, 1),
         "No helper was started: 2 are already running, and the limit is 1 concurrent helper. "
         "Wait for one to finish, or specify an agent instead.",
         "Es wurde kein Helfer gestartet: Bereits 2 Helfer sind aktiv; höchstens 1 darf "
-        "gleichzeitig arbeiten. Warte, bis einer fertig ist, oder gib stattdessen einen Agenten an.",
+        "gleichzeitig arbeiten. Bitte warten, bis einer fertig ist, oder stattdessen einen Agenten angeben.",
     ),
     # The silence side: both many reads as it always did.
     (
@@ -166,7 +166,7 @@ LIMIT_SENTENCES = [
         "No helper was started: 3 are already running, and the limit is 3 concurrent helpers. "
         "Wait for one to finish, or specify an agent instead.",
         "Es wurde kein Helfer gestartet: Bereits 3 Helfer sind aktiv; höchstens 3 dürfen "
-        "gleichzeitig arbeiten. Warte, bis einer fertig ist, oder gib stattdessen einen Agenten an.",
+        "gleichzeitig arbeiten. Bitte warten, bis einer fertig ist, oder stattdessen einen Agenten angeben.",
     ),
 ]
 

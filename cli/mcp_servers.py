@@ -40,12 +40,19 @@ _NEXT_WAIT = 1.5
 _ID_LENGTH = 30
 
 
+# The word that enters a server at the address behind it.
+ADD = "add"
+
+
 def run_command(ctx: Context, argument: str) -> None:
     word = argument.strip()
+    verb, _, address = word.partition(" ")
     if not word:
         _choose(ctx)
     elif word.isdecimal():
         _numbered(ctx, int(word), word)
+    elif verb.lower() == ADD:
+        _add(ctx, address.strip())
     else:
         ctx.renderer.error(ctx.texts.t("cli.unknown_choice", name=word))
 
@@ -182,9 +189,11 @@ def _numbered(ctx: Context, number: int, word: str) -> None:
 def _menu(ctx: Context, entry: dict[str, Any]) -> None:
     texts = ctx.texts
     actions = [("edit", texts.t("skills.bearbeiten"))]
-    # The sign-in is for a hosted server without a fixed key, as the service
-    # takes it.
-    if entry.get("type") == "http" and not entry.get("api_key_env"):
+    # The sign-in is for a hosted server without a fixed key — in
+    # `api_key_env` or in a header — as the service takes it; an entry that
+    # names the sign-in itself (`auth`) always has it.
+    fixed_key = entry.get("api_key_env") or entry.get("headers")
+    if entry.get("type") == "http" and (entry.get("auth") == "oauth" or not fixed_key):
         actions.append(("sign_in", texts.t("mcp.im_browser_anmelden")))
     actions.append(("remove", texts.t("verbindungen.entfernen")))
     picked = ctx.asker.choose(
@@ -205,10 +214,12 @@ def _menu(ctx: Context, entry: dict[str, Any]) -> None:
 # --- Adding ----------------------------------------------------------------------------------------
 
 
-def _add(ctx: Context) -> None:
+def _add(ctx: Context, given: str = "") -> None:
+    """Enters a server. With the address given — ``add`` and the address
+    behind it — nothing is asked for it; where the server needs no more,
+    nothing is asked at all."""
     texts = ctx.texts
-    typed = ctx.asker.ask_text(texts.t("mcp.url"))
-    url = (typed or "").strip()
+    url = given or (ctx.asker.ask_text(texts.t("mcp.url")) or "").strip()
     if not url:
         return
     try:
@@ -227,6 +238,18 @@ def _add(ctx: Context) -> None:
     name = _host_id(url)
     if not name:
         ctx.renderer.error(texts.t("mcp.name_ungueltig"))
+        return
+    if not ctx.asker.can_ask():
+        # A key is never typed in a command and a sign-in needs somebody to
+        # wait for it: with nobody to ask, the program says so and enters
+        # nothing.
+        key_needed = wanted == "schluessel"
+        ctx.renderer.error(
+            texts.t(
+                "mcp.needs_key_outside" if key_needed else "mcp.needs_sign_in_outside",
+                url=url,
+            )
+        )
         return
     if wanted == "schluessel":
         key = (ctx.asker.ask_text(texts.t("mcp.api_key"), secret=True) or "").strip()
@@ -268,7 +291,9 @@ def _connected(ctx: Context, name: str, polls: int) -> None:
     if answered is None:
         ctx.renderer.error(ctx.texts.t("mcp.nicht_erreichbar"))
         return
-    typed = ctx.asker.ask_text(ctx.texts.t("mcp.zeitgrenze"))
+    # The time limit is a question for somebody who is there to answer it;
+    # without one the server keeps the service's own.
+    typed = ctx.asker.ask_text(ctx.texts.t("mcp.zeitgrenze")) if ctx.asker.can_ask() else None
     seconds = time_limit(typed or "")
     if seconds is not None:
         try:

@@ -50,9 +50,13 @@ class Process:
 
     def __init__(self, returncode: int | None) -> None:
         self.returncode = returncode
+        self.told_to_end = 0
 
     def poll(self) -> int | None:
         return self.returncode
+
+    def terminate(self) -> None:
+        self.told_to_end += 1
 
     def wait(self) -> int:
         return self.returncode or 0
@@ -68,12 +72,14 @@ class Started:
         self.kept: list[tuple[list[str], dict[str, Any]]] = []
         self.outside: Outside | None = None
         self.exits: int | None = None
+        self.processes: list[Process] = []
 
     def popen(self, command: list[str], **kwargs: Any) -> Process:
         self.kept.append((command, kwargs))
         if self.outside is not None:
             self.outside.started = True
-        return Process(self.exits)
+        self.processes.append(Process(self.exits))
+        return self.processes[-1]
 
 
 @pytest.fixture
@@ -169,6 +175,59 @@ def test_a_process_that_ends_at_once_ends_the_wait(
 
     assert len(started.kept) == 1
     assert Texts("en").t("cli.service_start_failed", address="http://127.0.0.1:8123") in capsys.readouterr().err
+
+
+INTERFACE_SENTENCE = "The interface is missing"
+
+
+def _without_interface(request: httpx.Request) -> httpx.Response:
+    """A service that came up and answers, but has no page built."""
+    return httpx.Response(404, json={"detail": INTERFACE_SENTENCE})
+
+
+def test_a_started_service_without_its_interface_is_not_waited_for(
+    started, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run("", "--url", OWN_ADDRESS, outside=_without_interface, tmp_path=tmp_path) == 1
+
+    # Ended like at the interrupt key, and its own sentence came first.
+    assert len(started.processes) == 1 and started.processes[0].told_to_end == 1
+    said = capsys.readouterr().err.splitlines()
+    assert said == [
+        INTERFACE_SENTENCE,
+        Texts("en").t("cli.service_start_failed", address=OWN_ADDRESS),
+    ]
+
+
+def test_service_start_without_its_interface_says_so_ends_the_service_and_fails(
+    started, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run("", "service", "start", "--url", OWN_ADDRESS, outside=_without_interface, tmp_path=tmp_path) == 1
+
+    assert len(started.processes) == 1 and started.processes[0].told_to_end == 1
+    said = capsys.readouterr().err.splitlines()
+    assert said == [
+        INTERFACE_SENTENCE,
+        Texts("en").t("cli.service_start_failed", address=OWN_ADDRESS),
+    ]
+
+
+def test_silence_a_404_without_a_sentence_of_the_service_is_still_waited_out(
+    started, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Anything but the service's own sentence is no news about its page: the
+    wait goes on while the process lives, and ends when it ends."""
+    started.exits = 1
+
+    def plain_404(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="not found")
+
+    assert run("", "--url", OWN_ADDRESS, outside=plain_404, tmp_path=tmp_path) == 1
+
+    assert started.processes[0].told_to_end == 0
+    assert capsys.readouterr().err.splitlines() == [
+        Texts("en").t("cli.service_start_failed", address=OWN_ADDRESS)
+    ]
 
 
 def test_serve_runs_the_service_on_this_terminal_and_answers_with_its_code(
@@ -431,17 +490,35 @@ def test_the_number_of_a_process_here_with_another_beginning_is_a_process_elsewh
 
 
 @pytest.mark.parametrize(
-    ("steps_apart", "here"),
+    ("seconds_apart", "here"),
     [(0.0, True), (1.0, True), (-1.0, True), (2.0, True), (-2.0, True), (2.5, False), (-2.5, False)],
 )
-def test_two_readings_of_the_process_list_may_lie_two_of_its_seconds_apart(
-    steps_apart: float, here: bool, monkeypatch: pytest.MonkeyPatch
+def test_two_readings_of_one_beginning_may_lie_twice_the_tolerance_apart(
+    seconds_apart: float, here: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The service read its beginning from the process list, and so does the
-    client: each reading is exact to the second the list counts in."""
+    """What the service says of itself is compared with the client's own
+    reading, which may lie twice the tolerance away from it, and no further."""
     monkeypatch.setattr(service, "began", lambda pid: 1_000_000.0)
-    named = {"pid": 4242, "began": 1_000_000.0 + steps_apart * service.AGE_RESOLUTION_SECONDS}
+    named = {"pid": 4242, "began": 1_000_000.0 + seconds_apart}
     assert service.runs_here(health(named)) is here
+
+
+def test_asking_whether_a_service_runs_here_starts_no_program(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Not the process list, not a shell: every new chat asks, and on Windows
+    a shell takes its time to start."""
+
+    def refused(*args: object, **kwargs: object) -> None:
+        raise AssertionError(f"a program was started: {args!r}")
+
+    monkeypatch.setattr(subprocess, "run", refused)
+    monkeypatch.setattr(subprocess, "Popen", refused)
+    for platform in ("linux", "darwin", "win32"):
+        monkeypatch.setattr(sys, "platform", platform)
+        assert service.runs_here(health(this_process())) is True
+    # A service elsewhere stays elsewhere.
+    assert service.runs_here(health({"pid": os.getpid(), "began": 1.0})) is False
 
 
 @pytest.mark.parametrize(

@@ -494,7 +494,7 @@ def test_help_names_every_registered_command_with_its_one_line(ctx):
     names = ctx.commands.names()
     assert names == [
         "new", "chats", "rename", "delete", "archive", "project", "model", "server", "download", "provider", "status", "theme", "lang", "setup",
-        "settings", "agents", "cron", "tools", "ps", "mcp", "skills", "files", "image", "memory", "system", "dir", "think", "compact", "export", "stop", "clear", "help", "quit", "exit",
+        "settings", "agents", "cron", "tools", "ps", "mcp", "skills", "files", "image", "rollback", "memory", "system", "dir", "think", "compact", "export", "stop", "clear", "help", "quit", "exit",
     ]  # fmt: skip
     # A row begins with the command's name; whatever stands below it up to
     # the next name belongs to it. A line that carries a sentence on may

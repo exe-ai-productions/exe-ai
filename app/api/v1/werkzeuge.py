@@ -14,7 +14,6 @@ import html
 import json
 import logging
 import os
-import re
 
 from dotenv import dotenv_values, load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -33,7 +32,12 @@ from app.tools.aufbau import registry_bauen
 from app.tools.mcp_auth import MCPAnmeldeFehler, OAuthVermittler
 from app.tools.mcp_client import MCPFehler
 from app.tools.mcp_sondierung import sondieren
-from app.tools.registry import ENV_NAME_PATTERN, konfiguration_pruefen, read_server_file
+from app.tools.registry import (
+    PLATZHALTER_MUSTER,
+    konfiguration_pruefen,
+    read_server_file,
+    key_variables,
+)
 
 log = logging.getLogger(__name__)
 
@@ -41,10 +45,6 @@ router = APIRouter(tags=["werkzeuge"])
 
 # If the file does not exist yet, the editor form shows this skeleton.
 KONFIG_VORLAGE = '{\n  "mcpServers": {}\n}\n'
-
-# A placeholder takes the name an environment variable may have — the same
-# rule ``api_key_env`` is checked by (app/tools/registry.py), hyphen included.
-PLATZHALTER_MUSTER = re.compile(r"\$\{(" + ENV_NAME_PATTERN + r")\}")
 
 # Two quick saves in a row must not brawl over app.state.
 _neustart_sperre = asyncio.Lock()
@@ -231,12 +231,21 @@ class ServerUebersicht(BaseModel):
     url: str | None
     enabled: bool
     api_key_env: str | None
+    # ``oauth`` where the entry names the browser sign-in; None otherwise.
+    auth: str | None = None
+    # The entry's own headers, as they stand in the file: a key is a
+    # ``${NAME}`` there, never its value.
+    headers: dict[str, str] = {}
     allowed_tools: list[str] | None
     needs_confirmation: list[str]
     # Is the server currently alive in the registry?
     laeuft: bool
-    # Only with api_key_env: is the key present in the .env?
+    # Only with api_key_env or a ``${NAME}`` in a header: is every key
+    # present in the .env?
     schluessel_gesetzt: bool | None
+    # The names of the keys that are not set (never a value): empty where every
+    # one is set, None where the entry names no key at all.
+    missing_keys: list[str] | None = None
     # How many seconds one call may take; None: the default.
     timeout: float | None = None
     # If it is running: ALL tools the server offers — the checkbox list
@@ -281,6 +290,11 @@ class ServerSchreiben(BaseModel):
     env: dict[str, str] | None = None
     enabled: bool | None = None
     api_key_env: str | None = None
+    # ``oauth`` for the browser sign-in; an explicit null removes it.
+    auth: str | None = None
+    # Header name -> value; a key stands as ``${NAME}`` and arrives with
+    # ``api_key``. An explicit null removes the field.
+    headers: dict[str, str] | None = None
     allowed_tools: list[str] | None = None
     needs_confirmation: list[str] | None = None
     # How many seconds one call to this server's tools may take. An explicit
@@ -328,6 +342,20 @@ def _schluessel_gesetzt(name: str | None) -> bool | None:
     return bool(os.environ.get(name) or env_datei.get(name))
 
 
+def _missing_keys(names: list[str]) -> list[str] | None:
+    """None where no key is named; otherwise the names that are not set."""
+    if not names:
+        return None
+    return [name for name in names if not _schluessel_gesetzt(name)]
+
+
+def _all_keys_set(names: list[str]) -> bool | None:
+    """None where no key is named; otherwise whether every one is set."""
+    if not names:
+        return None
+    return all(_schluessel_gesetzt(name) for name in names)
+
+
 @router.get(
     "/tools/servers",
     response_model=list[ServerUebersicht],
@@ -342,6 +370,7 @@ def server_uebersicht(
     uebersicht = []
     for eintrag in server_lesen(config.pfad(config.mcp.servers_file)):
         client = registry.clients.get(eintrag.name) if registry else None
+        keys = key_variables(eintrag.api_key_env, eintrag.headers)
         uebersicht.append(
             ServerUebersicht(
                 name=eintrag.name,
@@ -349,10 +378,13 @@ def server_uebersicht(
                 url=eintrag.url,
                 enabled=eintrag.enabled,
                 api_key_env=eintrag.api_key_env,
+                auth=eintrag.auth,
+                headers=eintrag.headers,
                 allowed_tools=eintrag.allowed_tools,
                 needs_confirmation=eintrag.needs_confirmation,
                 laeuft=client is not None,
-                schluessel_gesetzt=_schluessel_gesetzt(eintrag.api_key_env),
+                schluessel_gesetzt=_all_keys_set(keys),
+                missing_keys=_missing_keys(keys),
                 timeout=eintrag.timeout,
                 alle_werkzeuge=[
                     WerkzeugKurz(name=w.name, beschreibung=w.beschreibung)
@@ -437,10 +469,18 @@ async def server_schreiben(
     # key shows a red lamp and can be repaired, a key without an entry
     # belongs to nothing and is only lying around.
     if api_key:
-        umgebungsname = eintrag.get("api_key_env")
-        if umgebungsname:
-            env_schreiben(config.pfad("./.env"), umgebungsname, api_key.strip())
-            os.environ[umgebungsname] = api_key.strip()
+        # The one variable the entry's headers read; with none or several
+        # there is no telling which the key is for, so it is not written.
+        namen = key_variables(eintrag.get("api_key_env"), eintrag.get("headers") or {})
+        if len(namen) == 1:
+            env_schreiben(config.pfad("./.env"), namen[0], api_key.strip())
+            os.environ[namen[0]] = api_key.strip()
+        elif namen:
+            log.warning(
+                "Server '%s': a key came with %d variables to choose from — not written",
+                name,
+                len(namen),
+            )
 
     if config.features.mcp:
         aufgaben.halten(
@@ -491,6 +531,9 @@ class OAuthStartAnfrage(BaseModel):
     # provider. Empty means: dynamic registration.
     client_id: str | None = None
     client_secret: str | None = None
+    # An https address of the person's own that takes the place of the one
+    # over 127.0.0.1 — for a provider that accepts nothing else.
+    redirect_uri: str | None = None
 
 
 class OAuthStartAntwort(BaseModel):
@@ -501,6 +544,24 @@ class OAuthStatusAntwort(BaseModel):
     server: str
     verbunden: bool
     laeuft_ab: float | None
+    # The https return address the sign-in was made with; None where it was
+    # the one over 127.0.0.1.
+    redirect_uri: str | None = None
+
+
+class OAuthRedirectAntwort(BaseModel):
+    redirect_uri: str
+
+
+@router.get(
+    "/tools/oauth/redirect",
+    response_model=OAuthRedirectAntwort,
+    summary="The return address a provider has to be given for the browser sign-in",
+)
+def oauth_redirect(
+    vermittler: OAuthVermittler = Depends(hole_oauth),
+) -> OAuthRedirectAntwort:
+    return OAuthRedirectAntwort(redirect_uri=vermittler.rueckleitung)
 
 
 @router.post(
@@ -525,10 +586,14 @@ async def oauth_start(
     eintrag = eintraege.get(daten.server)
     if eintrag is None or eintrag.type != "http" or not eintrag.url:
         raise HTTPException(404, t("mcp_datei.kein_http", sprache, name=daten.server))
-    if eintrag.api_key_env:
+    fixed = key_variables(eintrag.api_key_env, eintrag.headers)
+    if (eintrag.api_key_env or eintrag.headers) and eintrag.auth != "oauth":
         raise HTTPException(
             400,
-            t("mcp_datei.fester_schluessel", sprache, name=daten.server, env=eintrag.api_key_env),
+            t(
+                "mcp_datei.fester_schluessel", sprache, name=daten.server,
+                env=", ".join(fixed) or ", ".join(eintrag.headers),
+            ),
         )
     try:
         url = await vermittler.anmelde_url(
@@ -537,6 +602,7 @@ async def oauth_start(
             daten.client_id,
             daten.client_secret,
             language=sprache,
+            redirect_uri=daten.redirect_uri,
         )
     except MCPAnmeldeFehler as fehler:
         raise HTTPException(400, fehler.text(sprache)) from None
@@ -559,7 +625,7 @@ def _rueckruf_seite(gelungen: bool, text: str, language: str) -> str:
         titel = t("mcp_signin.not_connected", language)
         zeile = f'{text}<br><span class="note">{t("mcp_signin.not_completed", language)}</span>'
     return f"""<!doctype html>
-<html lang="{language}"><head><meta charset="utf-8"><title>{titel} — Exe AI</title>
+<html lang="{language}"><head><meta charset="utf-8"><title>{titel} - Exe AI</title>
 <style>
   body {{ font: 15px/1.6 -apple-system, system-ui, sans-serif; display: grid;
          place-items: center; min-height: 90vh; margin: 0;

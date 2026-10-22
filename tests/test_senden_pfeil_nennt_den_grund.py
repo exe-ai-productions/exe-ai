@@ -16,8 +16,9 @@ from pathlib import Path
 import pytest
 
 from tests.test_hausregeln import _node, _stueck
+from tests.fensterquelle import BAR_SOURCE
 
-BAR = Path(__file__).resolve().parent.parent / "frontend/src/teile/Eingabeleiste.svelte"
+BAR = BAR_SOURCE
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="no node on this machine")
 

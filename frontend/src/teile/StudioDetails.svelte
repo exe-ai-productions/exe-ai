@@ -25,14 +25,15 @@
   import StudioSwitches from './StudioSwitches.svelte'
   import Zahlenfeld from './Zahlenfeld.svelte'
   import { api } from '../lib/api.js'
-  import { PREDICTIONEN } from '../lib/bildlisten.js'
+  import { PREDICTIONEN, istTae } from '../lib/bildlisten.js'
   import { familyOf, imageFamilies } from '../lib/imageFamilies.svelte.js'
   import { imageSwitches } from '../lib/imageSwitches.svelte.js'
   import { rollfade } from '../lib/rollfade.js'
   import {
-    art, auswahl, emptyArea, familie, familieWaehlen, listen, pictureFromOutside, refVideo, refVideoRelease,
+    art, auswahl, bildmass, emptyArea, familie, familieWaehlen, listen, modelParts, pictureFromOutside, refVideo,
+    refVideoRelease,
     refVideoSet, searchRows, searching, steuervideo, steuervideoLoesen, steuervideoSetzen, strengthDecides,
-    takesRefVideo, werte,
+    takesRefVideo, upscaleWerte, werte,
   } from '../lib/studio.svelte.js'
   import { t } from '../lib/texte.svelte.js'
   import { melde } from '../lib/zustand.svelte.js'
@@ -82,9 +83,17 @@
   const hires = $derived(Boolean(werte.hires_wahl))
   // sd-cli's own rule: a set target size beats the ×-scale.
   const zielGesetzt = $derived(hires && (Number(werte.hires_breite) > 0 || Number(werte.hires_hoehe) > 0))
+  /* The family has a second, high-noise model but this model does not take it
+     (Wan 2.1): its values have no row here, as no part row at the model's page. */
+  const highNoiseAbsent = $derived(Boolean(
+    familyEntry?.parts?.includes('high_noise_diffusion_model') && modelParts.taken
+    && !modelParts.taken.includes('high_noise_diffusion_model'),
+  ))
   const bedingungen = $derived({
     ad_model: Boolean(werte.ad_modell), photomaker: Boolean(werte.pm_klasse), hires,
-    high_noise: Boolean(familyEntry?.parts?.includes('high_noise_diffusion_model')), video: kind.video,
+    high_noise: Boolean(familyEntry?.parts?.includes('high_noise_diffusion_model')) && !highNoiseAbsent,
+    absent: highNoiseAbsent ? ['high_noise'] : [],
+    video: kind.video,
     ref_video: Boolean(refVideo.datei),
   })
 
@@ -207,15 +216,21 @@
     if (hires && Number.isFinite(Number(wert))) werte.hires_wahl = String(wert)
   }
 
-  /* The model "Upscale" enlarges a finished picture with — apart from the
-     highres pass, and always a file of the folder: the row shows the one
-     chosen, otherwise the first, which is the one that is used. What the
-     chat keeps is only what was chosen. */
-  const upscaleAnzeige = () => (
-    listen.upscalers.includes(werte.upscale_model) ? werte.upscale_model : (listen.upscalers[0] ?? '')
-  )
-  const upscaleSetzen = (wert) => {
-    werte.upscale_model = wert
+  /* The model "Upscale" enlarges a finished picture with is the one chosen
+     in the row "Upscaler" — apart from the highres pass, and always a file
+     of the folder; "-" while none is chosen.
+     The size the enlarging ends at, told before the press: the picture's
+     width and height times the model's factor to the power of the repeats —
+     or, with no picture in the area, only the factor over all runs. The
+     model's factor is read from its weights by the service. */
+  const upscaleFaktor = () => listen.upscalerScales[werte.upscale_model] ?? null
+  const endgroesse = () => {
+    const faktor = upscaleFaktor()
+    if (!faktor) return t('bild.upscale_faktor_unbekannt')
+    const gesamt = faktor ** upscaleWerte().upscale_repeats
+    return bildmass.w > 0 && bildmass.h > 0
+      ? `${bildmass.w * gesamt} × ${bildmass.h * gesamt}`
+      : `×${gesamt}`
   }
 
   /* The face pass: the switch turns it on with the detector chosen last, or
@@ -520,10 +535,29 @@
     <div class="zeile" data-suche={t('bild.upscaler')}>
       <label class="name" for={feld('upscale_m')}>{t('bild.upscaler')}</label>
       <div class="rechts wahl">
-        <Auswahlfeld id={feld('upscale_m')} bind:wert={upscaleAnzeige, upscaleSetzen}
-                     beschriftung={t('bild.upscaler')}
-                     eintraege={listen.upscalers.length ? alsAuswahl(listen.upscalers) : keins([])} />
+        <Auswahlfeld id={feld('upscale_m')} bind:wert={werte.upscale_model}
+                     beschriftung={t('bild.upscaler')} eintraege={keins(listen.upscalers)} />
       </div>
+    </div>
+    <div class="zeile" data-suche={t('bild.upscale_repeats')}>
+      <label class="name" for={feld('upscale_r')}>{t('bild.upscale_repeats')}</label>
+      <InfoMark text={t('bild.info_upscale_repeats')} />
+      <div class="rechts">
+        <Zahlenfeld id={feld('upscale_r')} bind:wert={werte.upscale_repeats} min={1} max={4} schritt={1}
+                    ganzzahlig />
+      </div>
+    </div>
+    <div class="zeile" data-suche={t('bild.upscale_tile_size')}>
+      <label class="name" for={feld('upscale_k')}>{t('bild.upscale_tile_size')}</label>
+      <InfoMark text={t('bild.info_upscale_tile_size')} />
+      <div class="rechts">
+        <Zahlenfeld id={feld('upscale_k')} bind:wert={werte.upscale_tile_size} min={1} schritt={16}
+                    ganzzahlig />
+      </div>
+    </div>
+    <div class="zeile" data-suche={t('bild.upscale_final_size')}>
+      <span class="name">{t('bild.upscale_final_size')}</span>
+      <span class="rechts endgroesse">{endgroesse()}</span>
     </div>
     <div class="zeile" data-suche={t('bild.hires')}>
       <label class="name" for={feld('hires')}>{t('bild.hires')}</label>
@@ -661,7 +695,8 @@
         <InfoMark text={t('bild.info_taesd')} />
         <div class="rechts wahl">
           <Auswahlfeld id={feld('taesd')} bind:wert={werte.taesd}
-                       beschriftung={t('bild.taesd')} eintraege={keins(listen.taesd)} />
+                       beschriftung={t('bild.taesd')} eintraege={keins(listen.taesd)}
+                       gesperrt={istTae(auswahl.vae)} />
         </div>
       </div>
     {/if}
@@ -791,6 +826,12 @@
 </section>
 
 <style>
+  /* The size an enlarging ends at: a fact, in the weight of a field's text. */
+  .endgroesse {
+    font: 400 13px/18px var(--schrift);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-neben);
+  }
   .feinheiten {
     flex: 1;
     min-height: 0;
@@ -830,7 +871,7 @@
     width: 18px;
     height: 18px;
     padding: 0;
-    display: none;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     border: none;
@@ -838,10 +879,16 @@
     background: var(--glass-dropdown);
     color: var(--text);
     cursor: pointer;
+    /* Out of sight but not out of reach: a keyboard lands on it and it
+       shows. */
+    opacity: 0;
   }
   .ref:hover .weg,
   .ref .weg:focus-visible {
-    display: inline-flex;
+    opacity: 1;
+  }
+  @media (hover: none), (any-pointer: coarse) {
+    .ref .weg { opacity: 1; }
   }
   .dazu {
     display: inline-flex;

@@ -15,34 +15,38 @@
      the model on the same button, and each carries which model it belongs
      to and its role, so the service records the association and the runner
      attaches it later without guessing. */
+  import { untrack } from 'svelte'
   import Seitenrahmen from './Seitenrahmen.svelte'
   import Menueseite from './Menueseite.svelte'
+  import SettingsNav from './SettingsNav.svelte'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import Menuezeile from './Menuezeile.svelte'
-  import Schriftzug from './Schriftzug.svelte'
+  import Fensterzeichen from './Fensterzeichen.svelte'
+  import OwnerMark from './OwnerMark.svelte'
   import Modellkarte from './Modellkarte.svelte'
   import Modelldetail from './Modelldetail.svelte'
   import Downloadseite from './Downloadseite.svelte'
   import Hauszeichen from './Hauszeichen.svelte'
   import {
-    downloads, einreihen, fertigMerken, antreiben, anzahlAktiv,
+    downloads, einreihen, ausreihen, zieldatei, fertigMerken, antreiben, anzahlAktiv,
   } from '../lib/downloads.svelte.js'
   import { api } from '../lib/api.js'
+  import { pollWithoutOverlap } from '../lib/pollWithoutOverlap.js'
   import { weg, zurueckgehen } from '../lib/fensterweg.svelte.js'
-  import { t } from '../lib/texte.svelte.js'
+  import { t, texte } from '../lib/texte.svelte.js'
+  import { formatGb, formatNumber } from '../lib/numberDisplay.js'
   import { melde, zustand } from '../lib/zustand.svelte.js'
   import {
-    ARTEN, ZUBEHOER_ZIEL, SPALTEN_ZUBEHOER, ZUBEHOER_ORDNER, SUCHBARE_ARTEN,
+    ARTEN, ZUBEHOER_ZIEL, SPALTEN_ZUBEHOER, ZUBEHOER_ORDNER, SUCHBARE_ARTEN, dienstArt,
     kartePasst, katalogFuer, passendeFassung, passt, brauchtMaschine,
     SORTE_FARBE, SORTE_LABEL,
   } from '../lib/modellempfehlungen.js'
-  import { modellMarke } from '../lib/anbieterzeichen.js'
-  import { LOGOS } from '../lib/logos.js'
+  import { LOGOS, avatarOwnerOf } from '../lib/logos.js'
   import { familyOf, loadImageFamilies } from '../lib/imageFamilies.svelte.js'
 
   let { offen = $bindable(false) } = $props()
 
-  /* Which kind is open — Chat, Embedding, Speech, Picture, Accessories.
+  /* Which kind is open — Chat, Embedding, Speech, Picture, Video, Accessories.
      Always one of them, always switchable back to Chat: the search below is
      scoped to this, and so is the curated gallery. */
   let art = $state('chat')
@@ -51,14 +55,14 @@
      for the add-ons a model reads beside it. */
   const ARTZEICHEN = {
     chat: 'sprechblase', einbettung: 'einbettung', sprache: 'sprache_welle',
-    bild: 'bild', zubehoer: 'puzzle',
+    bild: 'bild', video: 'clapperboard', zubehoer: 'puzzle',
   }
 
   /* The heading each kind's page opens with. */
   const VORAUSWAHL = {
     chat: 'katalog.vorauswahl_chat', einbettung: 'katalog.vorauswahl_einbettung',
     sprache: 'katalog.vorauswahl_sprache', bild: 'katalog.vorauswahl_bild',
-    zubehoer: 'katalog.vorauswahl_zubehoer',
+    video: 'katalog.vorauswahl_video', zubehoer: 'katalog.vorauswahl_zubehoer',
   }
 
   /* Whether the right side shows the downloads page. */
@@ -97,18 +101,27 @@
      (five columns instead of the plain grid). */
   const suchbar = $derived(SUCHBARE_ARTEN.includes(art))
   const istZubehoer = $derived(art === 'zubehoer')
-  function artWaehlen(neu) {
-    dlOffen = false
-    if (neu === art) return
-    art = neu
+  /* Picture and video models both lie in the picture folder and carry a kit,
+     so the two tabs share everything that reads the picture side. */
+  const bildSeite = $derived(art === 'bild' || art === 'video')
+  /* The page of the downloads, in place of a kind of model. */
+  function dlOeffnen() {
+    dlOffen = true
     detail = null
     trefferSeite = null
+  }
+  function artWaehlen(neu) {
+    dlOffen = false
+    // Choosing the kind already shown still leaves a model's detail.
+    detail = null
+    trefferSeite = null
+    if (neu === art) return
+    art = neu
     // Leaving for a tab without a search: clear the field and its results,
     // or a stale term would keep the gallery dimmed on a tab that cannot search.
     if (!SUCHBARE_ARTEN.includes(neu)) {
       suchbegriff = ''
       treffer = null
-      trefferSeite = null
     } else if (suchAktiv) {
       suchen()
     }
@@ -130,7 +143,8 @@
      Chat as always. */
   $effect(() => {
     if (offen && zustand.katalogArtWunsch) {
-      artWaehlen(zustand.katalogArtWunsch)
+      if (zustand.katalogArtWunsch === 'downloads') dlOeffnen()
+      else artWaehlen(zustand.katalogArtWunsch)
       zustand.katalogArtWunsch = null
     }
   })
@@ -140,6 +154,15 @@
      finished download lights up the right card without a reopen. */
   let maschineGb = $state(null)
   let vorhanden = $state([])
+  /* The kind of model `vorhanden` was read for. A card says "download" or
+     "downloaded" only for a kind whose files were read in full: before that,
+     and while the other kind's list still stands after a change of kind,
+     the place stays empty. A read that fails leaves the last full one where it
+     is, and says why once (`letzterFehler`). */
+  let vorhandenArt = $state(null)
+  const bekannt = $derived(vorhandenArt === art)
+  let letzterFehler = null
+  let holenLauf = 0
   let stand = $state(null)
   /* The file this window saw running last, and the failed download already
      reported on top (by file and reason): a failure is told once, and only
@@ -167,26 +190,37 @@
     }
     messung = neu ? { datei: neu.datei, geladen: neu.geladen, zeit: jetzt } : null
   }
-  const mbs = $derived(tempo > 50_000 ? (tempo / 1e6).toFixed(1) + ' MB/s' : '')
+  const mbs = $derived(tempo > 50_000 ? formatNumber(tempo / 1e6, 1, texte.sprache) + ' MB/s' : '')
 
-  const gb = (bytes) => (bytes / 1e9).toFixed(1)
+  const gb = (bytes) => formatGb(bytes / 1e9, texte.sprache)
   const istDa = (datei) => Boolean(datei) && vorhanden.includes(datei)
   /* The kit parts the picture side offers, by the sub-folder they belong
      in: a part is tied to its model without a download only when it is one
      of these. Null until the lists have been read once. */
   let partLists = $state(null)
   const wirdGeholt = (datei) => laedt && stand?.datei === datei
-
-  function dran(f) {
-    // An accessory keeps its local name in `ziel` (the remote file is named
-    // the same across repositories); the progress and the presence check must
-    // follow that name, not the remote one, or a renamed card never registers.
-    return wirdGeholt(f.ziel ?? f.datei) || (f.mmproj_ziel && wirdGeholt(f.mmproj_ziel)) || (f.drafter_ziel && wirdGeholt(f.drafter_ziel))
+  /* Lined up behind the running download, not started yet. */
+  const isQueued = (datei) => Boolean(datei) && downloads.warteschlange.some((job) => zieldatei(job) === datei)
+  /* Takes every job of these local names out of the queue — the model and
+     the companions that were lined up with it. */
+  function dequeueNames(names) {
+    for (const job of [...downloads.warteschlange]) {
+      if (names.includes(zieldatei(job))) ausreihen(job)
+    }
   }
+
+  /* The local names a build downloads: the model and its companions.
+     An accessory keeps its local name in `ziel` (the remote file is named
+     the same across repositories); the progress and the presence check must
+     follow that name, not the remote one, or a renamed card never registers. */
+  const buildNames = (f) => [f.ziel ?? f.datei, f.mmproj_ziel, f.drafter_ziel, f.partner?.ziel].filter(Boolean)
+  const dran = (f) => buildNames(f).some(wirdGeholt)
   function status(f) {
     if (dran(f)) return 'laedt'
-    if (istDa(f.ziel ?? f.datei)) return 'bereit'
-    return 'neu'
+    // A pair is ready only with both of its models.
+    if (bekannt && istDa(f.ziel ?? f.datei) && (!f.partner || istDa(f.partner.ziel))) return 'bereit'
+    if (buildNames(f).some(isQueued)) return 'wartet'
+    return bekannt ? 'neu' : 'frage'
   }
   function fortschritt(f) {
     if (!dran(f) || !stand) return null
@@ -195,9 +229,8 @@
       : stand.datei === f.drafter_ziel ? t('modell.feld_drafter') + ' · '
       : ''
     const anteil = Math.round((stand.anteil ?? 0) * 100)
-    const text = `${teil}${gb(stand.geladen)} / ${gb(stand.gesamt)} GB · ${anteil} %${mbs ? ' · ' + mbs : ''}`
     const bytes = `${teil}${gb(stand.geladen)} / ${gb(stand.gesamt)} GB`
-    return { anteil, text, bytes }
+    return { anteil, bytes }
   }
 
   /* Fitting cards to the front — a fit is a fact worth surfacing. Ties keep
@@ -206,104 +239,119 @@
     [...katalogFuer(art)].sort((a, b) => Number(kartePasst(b, maschineGb)) - Number(kartePasst(a, maschineGb))),
   )
 
-  $effect(() => {
-    if (!offen) return
-    const holen = async () => {
-      try {
-        stand = await api.modellHolenStand()
-        tempoMessen(stand && !stand.fertig && !stand.fehler ? stand : null)
-        const auskunft = await api.runnerAuskunft()
-        maschineGb = auskunft.speicher_gb ?? null
-        // Collected fully, assigned ONCE at the end: an intermediate
-        // assignment made every card flip to "download" for a blink on
-        // each 2-second poll while the picture list was still in flight.
-        const liste = [
-          ...auskunft.modelle.map((m) => m.name),
-          ...(auskunft.mmproj ?? []),
-          ...(auskunft.mtp ?? []).map((m) => m.name),
-        ]
-        // Picture checkpoints and accessories land in the picture side's own
-        // folders, which the runner's list does not see. On those two tabs,
-        // add what the picture side already has, or a downloaded model keeps
-        // offering itself and a second click only earns a "already there"
-        // error (found live with CyberRealistic XL on the picture tab).
-        if (art === 'zubehoer' || art === 'bild') {
-          try {
-            const bild = await api.bildmodelle()
-            partLists = {
-              vae: bild.vaes ?? [],
-              text_encoders: [...(bild.textversteher ?? []), ...(bild.sehteile ?? [])],
-            }
-            liste.push(
-              ...(bild.modelle ?? []),
-              ...(bild.vaes ?? []), ...(bild.loras ?? []), ...(bild.yolos ?? []),
-              ...(bild.textversteher ?? []), ...(bild.sehteile ?? []),
-            )
-          } catch {
-            // No picture server yet — cards just show as not installed.
-          }
+  /* Something runs or waits. A boolean on purpose: every answer of the poll
+     sets a new object into `downloads.laufend`, and an effect reading that
+     would start over with each answer. */
+  const downloadsActive = $derived(anzahlAktiv() > 0)
+
+  /* Asked while the page is open — and, closed, for as long as something runs
+     or waits, so the sign in the chat's head goes out when it is done and the
+     next download in the row starts without the page being open. */
+  async function holen() {
+    // The newest read wins: one that began while this one was on its way
+    // (the change of kind below) hands in its answer instead of this.
+    const mein = ++holenLauf
+    const fuerArt = art
+    try {
+      stand = await api.modellHolenStand()
+      tempoMessen(stand && !stand.fertig && !stand.fehler ? stand : null)
+      const auskunft = await api.runnerAuskunft()
+      maschineGb = auskunft.speicher_gb ?? null
+      // Collected fully, assigned ONCE at the end: an intermediate
+      // assignment made every card flip to "download" for a blink on
+      // each 2-second poll while the picture list was still in flight.
+      const liste = [
+        ...auskunft.modelle.map((m) => m.name),
+        ...(auskunft.mmproj ?? []),
+        ...(auskunft.mtp ?? []).map((m) => m.name),
+      ]
+      // Picture checkpoints and accessories land in the picture side's own
+      // folders, which the runner's list does not see. On those two tabs,
+      // add what the picture side already has, or a downloaded model keeps
+      // offering itself and a second click only earns a "already there"
+      // error (found live with CyberRealistic XL on the picture tab).
+      if (fuerArt === 'zubehoer' || fuerArt === 'bild' || fuerArt === 'video') {
+        const bild = await api.bildmodelle()
+        partLists = {
+          vae: bild.vaes ?? [],
+          text_encoders: [...(bild.textversteher ?? []), ...(bild.sehteile ?? [])],
         }
-        // Embedding models land in the embedding server's own folder, which
-        // the runner's list does not see either — same story as the picture
-        // side, same fix, or a finished download keeps offering itself.
-        if (art === 'einbettung') {
-          try {
-            const einbettung = await api.einbettungAuskunft()
-            liste.push(...(einbettung.modelle ?? []).map((m) => m.name))
-          } catch {
-            // No embedding server yet — cards just show as not installed.
-          }
-        }
-        // And speech models land in the speech server's own folder, with
-        // their projectors beside them — same story again, same fix.
-        if (art === 'sprache') {
-          try {
-            const sprache = await api.spracheAuskunft()
-            liste.push(...(sprache.modelle ?? []).map((m) => m.name), ...(sprache.mmproj ?? []))
-          } catch {
-            // No speech server yet — cards just show as not installed.
-          }
-        }
-        vorhanden = liste
-        // A file that arrived stays in the panel as a receipt; a cancelled
-        // or failed one does not.
-        if (stand && stand.fertig && !stand.fehler) fertigMerken(stand.datei, stand.gesamt)
-        // A download that broke says so, once: its row is gone from the
-        // panel and nothing else would tell. Cancelling is no breaking.
-        if (stand && !stand.fertig && !stand.fehler) watchedFile = stand.datei
-        if (stand?.fehler && stand.fehler !== 'abgebrochen' && stand.datei === watchedFile) {
-          const mark = `${stand.datei}:${stand.fehler}`
-          if (mark !== lastFailure) {
-            lastFailure = mark
-            melde(t('bildserver.generator_fehler'), 'fehler')
-          }
-        } else if (!stand?.fehler) {
-          lastFailure = null
-        }
-        // The panel's own copy, so the header count is right even while the
-        // list below still shows the card that started it.
-        downloads.laufend = stand && !stand.fertig && !stand.fehler ? stand : null
-        // Nothing running any more: the next in the row goes. Cancelling
-        // ONE download is not cancelling the others that were asked for.
-        if (!downloads.laufend && downloads.warteschlange.length) {
-          try {
-            const naechster = await antreiben(vorhanden)
-            if (naechster) {
-              stand = naechster
-              watchedFile = naechster.datei
-              lastFailure = null
-            }
-          } catch (fehler) {
-            melde(fehler.message, 'fehler')
-          }
-        }
-      } catch {
-        // A service that is not answering is not this window's problem yet.
+        liste.push(
+          ...(bild.modelle ?? []),
+          ...(bild.vaes ?? []), ...(bild.loras ?? []), ...(bild.yolos ?? []),
+          ...(bild.textversteher ?? []), ...(bild.sehteile ?? []),
+        )
       }
+      // Embedding models land in the embedding server's own folder, which
+      // the runner's list does not see either — same story as the picture
+      // side, same fix, or a finished download keeps offering itself.
+      if (fuerArt === 'einbettung') {
+        const einbettung = await api.einbettungAuskunft()
+        liste.push(...(einbettung.modelle ?? []).map((m) => m.name))
+      }
+      // And speech models land in the speech server's own folder, with
+      // their projectors beside them — same story again, same fix.
+      if (fuerArt === 'sprache') {
+        const sprache = await api.spracheAuskunft()
+        liste.push(...(sprache.modelle ?? []).map((m) => m.name), ...(sprache.mmproj ?? []))
+      }
+      // A newer read took over while this one waited: its answer counts.
+      if (mein !== holenLauf) return
+      vorhanden = liste
+      vorhandenArt = fuerArt
+      letzterFehler = null
+      // A file that arrived stays in the panel as a receipt; a cancelled
+      // or failed one does not.
+      if (stand && stand.fertig && !stand.fehler) fertigMerken(stand.datei, stand.gesamt)
+      // A download that broke says so, once: its row is gone from the
+      // panel and nothing else would tell. Cancelling is no breaking.
+      if (stand && !stand.fertig && !stand.fehler) watchedFile = stand.datei
+      if (stand?.fehler && stand.fehler !== 'abgebrochen' && stand.datei === watchedFile) {
+        const mark = `${stand.datei}:${stand.fehler}`
+        if (mark !== lastFailure) {
+          lastFailure = mark
+          melde(t('bildserver.generator_fehler'), 'fehler')
+        }
+      } else if (!stand?.fehler) {
+        lastFailure = null
+      }
+      // The panel's own copy, so the header count is right even while the
+      // list below still shows the card that started it.
+      downloads.laufend = stand && !stand.fertig && !stand.fehler ? stand : null
+      // Nothing running any more: the next in the row goes. Cancelling
+      // ONE download is not cancelling the others that were asked for.
+      if (!downloads.laufend && downloads.warteschlange.length) {
+        try {
+          const naechster = await antreiben(vorhanden)
+          if (naechster) {
+            stand = naechster
+            watchedFile = naechster.datei
+            lastFailure = null
+          }
+        } catch (fehler) {
+          melde(fehler.message, 'fehler')
+        }
+      }
+    } catch (fehler) {
+      if (fehler.message !== letzterFehler) melde(fehler.message, 'fehler')
+      letzterFehler = fehler.message
     }
+  }
+  $effect(() => {
+    // Read before the condition, not inside it: the effect has to start over
+    // when this flips, whichever way the page stands.
+    const active = downloadsActive
+    if (!offen && !active) return
     holen()
-    const takt = setInterval(holen, 2000)
-    return () => clearInterval(takt)
+    return pollWithoutOverlap(holen, 2000)
+  })
+  /* A change of kind asks at once: the next beat would leave the cards of
+     the new kind on the files of the old one for up to two seconds. */
+  let gesehenArt = untrack(() => art)
+  $effect(() => {
+    if (art === gesehenArt) return
+    gesehenArt = art
+    if (offen || untrack(() => downloadsActive)) untrack(() => holen())
   })
 
   /* The companions a build fetches after the model: its vision, then its
@@ -322,8 +370,8 @@
      by its sorte (folder art + sub-folder, or a companion role in the model
      folder); everything else lands in the open tab's art. */
   function routing(karte) {
-    if (karte?.zubehoer) return ZUBEHOER_ZIEL[karte.sorte] ?? { art }
-    return { art }
+    if (karte?.zubehoer) return ZUBEHOER_ZIEL[karte.sorte] ?? { art: dienstArt(art) }
+    return { art: dienstArt(art) }
   }
   /* Every wish goes into the queue; the driver decides what actually
      starts. Clicking is thus the same act whether something runs or not —
@@ -353,11 +401,15 @@
      names its local file with `ziel` (two LoRA repositories share a file
      name), so the presence check follows that name, not the remote one. */
   async function fassungHolen(f, karte) {
+    if (karte.bild && !karte.zubehoer) {
+      await bildFassungHolen(f, karte)
+      return
+    }
     const ziel = routing(karte)
     const fehlend = begleiterJobs(f).filter((j) => !istDa(j.ziel))
     const lokal = f.ziel ?? f.datei
     if (!istDa(lokal)) {
-      await starteJob({ repo: f.id, datei: f.datei, ziel: f.ziel ?? null }, fehlend, ziel)
+      await starteJob({ repo: f.id, datei: f.datei, ziel: f.ziel ?? null, groesse: f.groesse }, fehlend, ziel)
       return
     }
     const [erst, ...rest] = fehlend
@@ -459,13 +511,13 @@
     headPage += 1
     heads = new Map()
     try {
-      const antwort = await api.modellDateien(fund.id, art)
+      const antwort = await api.modellDateien(fund.id, dienstArt(art))
       // A slow answer for a page that was left in the meantime must not
       // write the files of the page that stands now.
       if (trefferSeite?.id !== fund.id) return
       dateien = antwort.dateien
       repoAugen = antwort.mmproj
-      if (art === 'bild') readHeads(fund.id, antwort.dateien)
+      if (bildSeite) readHeads(fund.id, antwort.dateien)
     } catch (fehler) {
       if (trefferSeite?.id !== fund.id) return
       melde(fehler.message, 'fehler')
@@ -497,7 +549,7 @@
     // A picture file brings its kit with its head: the click waits for the
     // row's answer, so a model is never fetched without its parts.
     let d = picked
-    if (art === 'bild') {
+    if (bildSeite) {
       try {
         d = await headFor(repo, picked)
       } catch (fehler) {
@@ -511,13 +563,33 @@
     const jobs = []
     if (repoAugen && !modelThere) {
       const ziel = augenZiel(modell, repoAugen.datei)
-      if (!istDa(ziel)) jobs.push({ repo, datei: repoAugen.datei, ziel, gehoert_zu: modell, rolle: 'mmproj' })
+      if (!istDa(ziel)) jobs.push({ repo, datei: repoAugen.datei, ziel, gehoert_zu: modell, rolle: 'mmproj', groesse: repoAugen.groesse_gb })
     }
+    jobs.push(...(await kitJobs(d, modell)))
+    // A search hit downloads into the open tab's art (search runs only on the
+    // searchable tabs; the video tab fetches into the picture side); the
+    // routing argument is what starteJob requires.
+    const ziel = { art: dienstArt(art) }
+    if (modelThere) {
+      const [erst, ...rest] = jobs
+      if (erst) await starteJob(erst, rest, ziel)
+      return
+    }
+    await starteJob(
+      { repo, datei: d.datei, ziel: modell === flach(d.datei) ? null : modell, groesse: d.groesse_gb },
+      jobs, ziel,
+    )
+  }
+  /* The jobs of the kit parts of a model whose head has been read: each part
+     that is not there yet, and — for a part that lies in its folder — only
+     its bond to the model. */
+  async function kitJobs(d, modell) {
+    const jobs = []
     for (const teil of d.bausatz?.teile ?? []) {
       if (teil.rolle === 'modell') continue
       const job = {
         repo: teil.repo, datei: teil.datei, ziel: localName(teil), unterordner: teil.ordner,
-        gehoert_zu: modell, rolle: teil.feld,
+        gehoert_zu: modell, rolle: teil.feld, groesse: teil.groesse_gb,
       }
       // The lists read just now decide what is there; the file list's own
       // answer only until those lists have been read once. A part of another
@@ -528,16 +600,39 @@
       if (da) await tiePart(job)
       else jobs.push(job)
     }
-    // A search hit downloads into the open tab's art (search runs only on the
-    // searchable tabs); the routing argument is what starteJob now requires.
+    return jobs
+  }
+  /* A curated picture or video card downloads as a search hit does: its file
+     is looked up in the list of its repository, the head of that file names
+     its kit (text encoders, VAE) and the parts come with it — one way for
+     both. Where the hub or the head cannot be read, the file alone is fetched
+     and the model's own form asks for the rest. A pair (Wan 2.2 A14B) brings
+     its second model. */
+  async function bildFassungHolen(f, karte) {
+    const ziel = routing(karte)
+    let d = null
+    try {
+      const liste = await api.modellDateien(f.id, 'bild')
+      const zeile = liste.dateien.find((e) => e.datei === f.datei)
+      if (zeile) d = await api.fileHead(f.id, zeile)
+    } catch {
+      d = null
+    }
+    const modell = d ? localName(d) : (f.ziel ?? flach(f.datei))
+    const modelThere = d ? isThere(d) : istDa(modell)
+    const jobs = []
+    if (f.partner && !istDa(f.partner.ziel)) {
+      jobs.push({ repo: f.id, datei: f.partner.datei, ziel: f.partner.ziel })
+    }
+    if (d) jobs.push(...(await kitJobs(d, modell)))
     if (modelThere) {
       const [erst, ...rest] = jobs
-      if (erst) await starteJob(erst, rest, { art })
+      if (erst) await starteJob(erst, rest, ziel)
       return
     }
     await starteJob(
-      { repo, datei: d.datei, ziel: modell === flach(d.datei) ? null : modell },
-      jobs, { art },
+      { repo: f.id, datei: f.datei, ziel: modell === flach(f.datei) ? null : modell, groesse: d?.groesse_gb ?? f.groesse },
+      jobs, ziel,
     )
   }
   /* A part that lies in its folder already needs no download, only its bond
@@ -549,14 +644,16 @@
       melde(fehler.message, 'fehler')
     }
   }
-  function suchDran(d) {
+  /* The local names a found file downloads: itself, its projector and — a
+     kit's parts are shared by every file of its family — the parts of the
+     kit of a model that is here already, and of no other. */
+  function foundNames(d) {
     const ziel = repoAugen ? augenZiel(localName(d), repoAugen.datei) : null
-    return (
-      wirdGeholt(localName(d)) || (ziel && wirdGeholt(ziel))
-      // A kit's parts are shared by every file of its family: a part being
-      // fetched completes the kit of each model that is here, and of no other.
-      || (isThere(d) && (d.bausatz?.teile ?? []).some((teil) => wirdGeholt(localName(teil))))
-    )
+    return [
+      localName(d),
+      ...(ziel ? [ziel] : []),
+      ...(isThere(d) ? (d.bausatz?.teile ?? []).map(localName) : []),
+    ]
   }
   /* An accessory's kind and, where it is bound to a family, that family. */
   loadImageFamilies()
@@ -588,8 +685,8 @@
           // or the model list shows it now; the row is complete when the model
           // and every part are.
           const teile = d.bausatz?.teile.map((teil) => ({ ...teil, da: !teil.collision && (teil.da || istDa(localName(teil))) }))
-          const da = isThere(d) && (!ziel || istDa(ziel)) && (!teile || teile.every((teil) => teil.da))
-          const dran = suchDran(d)
+          const da = bekannt && isThere(d) && (!ziel || istDa(ziel)) && (!teile || teile.every((teil) => teil.da))
+          const names = foundNames(d)
           return {
             bausatz: teile ? { ...d.bausatz, teile } : null,
             plakette: artPlakette(d),
@@ -597,10 +694,11 @@
             name: d.datei,
             gb: d.groesse_gb,
             teile: d.teile ?? 1,
-            zustand: da ? 'bereit' : dran ? 'laedt' : 'neu',
+            zustand: da ? 'bereit' : names.some(wirdGeholt) ? 'laedt' : names.some(isQueued) ? 'wartet' : bekannt ? 'neu' : 'frage',
             anteil: Math.round((stand?.anteil ?? 0) * 100),
-            text: stand ? `${gb(stand.geladen)} / ${gb(stand.gesamt)} GB` : '',
+            text: stand ? `${gb(stand.geladen)} / ${gb(stand.gesamt)} GB${mbs ? ' · ' + mbs : ''}` : '',
             datei: d,
+            names,
           }
         })
       : null,
@@ -609,10 +707,10 @@
   function kartenSatz(fassung, empfohlen) {
     if (passt(fassung, maschineGb)) {
       return empfohlen
-        ? t('katalog.empfohlen_fuer', { gb: maschineGb })
-        : t('katalog.passt_fuer', { gb: maschineGb })
+        ? t('katalog.empfohlen_fuer', { gb: formatGb(maschineGb, texte.sprache) })
+        : t('katalog.passt_fuer', { gb: formatGb(maschineGb, texte.sprache) })
     }
-    return t('katalog.braucht_maschine', { gb: brauchtMaschine(fassung) })
+    return t('katalog.braucht_maschine', { gb: formatGb(brauchtMaschine(fassung), texte.sprache) })
   }
   const kartenZeilen = $derived.by(() => {
     if (!detail) return null
@@ -626,9 +724,10 @@
         satz: kartenSatz(f, f === empfohlen),
         gb: f.groesse,
         empfohlen: f === empfohlen,
-        zustand: st === 'laedt' ? 'laedt' : st === 'bereit' ? 'bereit' : 'neu',
+        zustand: st,
+        names: buildNames(f),
         anteil: fort?.anteil ?? 0,
-        text: fort?.bytes ?? '',
+        text: fort ? fort.bytes + (mbs ? ' · ' + mbs : '') : '',
         fassung: f,
       }
     })
@@ -636,35 +735,42 @@
   const zahlKurz = (n) => (n >= 1000 ? Math.round(n / 1000) + 'k' : String(n))
 </script>
 
+<!-- The kinds of model, one row each, and the downloads below them after a
+     line (Hugging Face is no kind of model but the account the downloads run
+     under, so it stands with them): the left column of the page. -->
+{#snippet kindRows()}
+  {#each ARTEN as eintrag (eintrag)}
+    <Menuezeile
+      titel={t(`katalog.art_${eintrag}`)}
+      gewaehlt={art === eintrag && !dlOffen}
+      size="list"
+      onclick={() => artWaehlen(eintrag)}
+    >
+      {#snippet zeichen()}<Hauszeichen zeichen={ARTZEICHEN[eintrag]} groesse={18} />{/snippet}
+    </Menuezeile>
+  {/each}
+  <div class="divider" role="separator"></div>
+  <Menuezeile
+    titel={t('downloads.titel')}
+    gewaehlt={dlOffen}
+    size="list"
+    onclick={dlOeffnen}
+  >
+    {#snippet zeichen()}<Hauszeichen zeichen="download" groesse={18} />{/snippet}
+    {#snippet rechts()}
+      {#if anzahlAktiv()}<span class="dlzahl">{anzahlAktiv()}</span>{/if}
+    {/snippet}
+  </Menuezeile>
+{/snippet}
+
 <Seitenrahmen {offen} beschriftung={t('menue.katalog')}>
   <!-- The page stays mounted under its frame while closed (Seitenrahmen
        hides it), so a chosen version and the gallery's scroll survive a
        look away. `offen` tells the frame whether its sections stand in
        the sidebar. -->
-  <Menueseite offen={offen} beschriftung={t('menue.katalog')}>
+  <Menueseite offen={offen} beschriftung={t('menue.katalog')} fuellen>
     {#snippet liste()}
-      <!-- The kinds of model, one row each — what the tab switch in the head
-           used to hold. The downloads below them, and Hugging Face last: it
-           is no kind of model but the account the downloads run under. -->
-      {#each ARTEN as eintrag (eintrag)}
-        <Menuezeile
-          titel={t(`katalog.art_${eintrag}`)}
-          gewaehlt={art === eintrag && !dlOffen}
-          onclick={() => artWaehlen(eintrag)}
-        >
-          {#snippet zeichen()}<Hauszeichen zeichen={ARTZEICHEN[eintrag]} groesse="gross" />{/snippet}
-        </Menuezeile>
-      {/each}
-      <Menuezeile
-        titel={t('downloads.titel')}
-        gewaehlt={dlOffen}
-        onclick={() => { dlOffen = true; detail = null; trefferSeite = null }}
-      >
-        {#snippet zeichen()}<Hauszeichen zeichen="download" groesse="gross" />{/snippet}
-        {#snippet rechts()}
-          {#if anzahlAktiv()}<span class="dlzahl">{anzahlAktiv()}</span>{/if}
-        {/snippet}
-      </Menuezeile>
+      <SettingsNav current={dlOffen ? 'downloads' : 'katalog'} />
     {/snippet}
 
     {#snippet kopf()}
@@ -680,19 +786,15 @@
               </svg>
             </button>
           {/if}
-          <svg viewBox="0 0 100 100" width="36" height="36" fill="none" stroke="currentColor"
-               stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="20" y="24" width="60" height="52" rx="11" />
-            <path d="M35 40 h30 M35 50 h30 M35 60 h18" />
-          </svg>
-          <Schriftzug zug="katalog" hoehe={17} />
+          <span class="sign-box"><Fensterzeichen name="katalog" groesse={22} /></span>
+          <h2 class="title">{t('menue.katalog')}</h2>
         </div>
       </div>
       <div class="kopfecke">
         {#if maschineGb}
           <div class="maschine">
-            <span class="wort">{t('katalog.maschine')}:</span>
-            <span class="wert">{maschineGb} GB</span>
+            <span class="wort">{t('modell.vram_label')}:</span>
+            <span class="wert">{formatGb(maschineGb, texte.sprache)} GB</span>
           </div>
         {/if}
       </div>
@@ -709,6 +811,14 @@
     {/snippet}
 
     {#snippet inhalt()}
+     <div class="two-columns">
+      <!-- The page's own left column: the kinds and the downloads. -->
+      <nav class="kinds" aria-label={t('menue.katalog')}>
+        <div class="kind-rows">
+          {@render kindRows()}
+        </div>
+      </nav>
+      <div class="page">
       {#if dlOffen}
         {@render seitenkopf(t('downloads.titel'), 'download')}
         <!-- The Hugging Face token sits over the downloads it acts on: it
@@ -716,12 +826,15 @@
              as masking dots with its last four characters, and "Remove"
              takes it out again (app/api/v1/hf_token.py). -->
         <div class="hf-zeile">
-          <svg class="hf-marke" viewBox={LOGOS.huggingface.vb} width="20" height="20" aria-hidden="true">{@html LOGOS.huggingface.html}</svg>
+          <svg class="hf-marke" viewBox={LOGOS.huggingface.vb} width="24" height="24" aria-hidden="true">{@html LOGOS.huggingface.html}</svg>
           <span class="hf-name">{t('editor.quelle_hf')}</span>
-          <Leuchtpunkt farbe={hfGesetzt ? 'gruen' : 'still'} groesse={11} />
+          <Leuchtpunkt farbe={hfGesetzt ? 'gruen' : 'still'} groesse={9} />
           {#if hfGesetzt}
             <span class="feld maskiert" aria-label={t('modell.hf_token')}>••••••••••••{hfEnde}</span>
-            <button class="knopf" onclick={hfEntfernen}>{t('editor.hf_entfernen')}</button>
+            <button class="sign-button" onclick={hfEntfernen}
+                    title={t('editor.hf_entfernen')} aria-label={t('editor.hf_entfernen')}>
+              <Hauszeichen zeichen="trash" groesse={14} />
+            </button>
           {:else}
             <input class="feld" type="password" bind:value={hfEingabe} aria-label={t('modell.hf_token')}
                    autocomplete="off" onkeydown={(e) => { if (e.key === 'Enter' && hfEingabe.trim().length >= 8) hfSetzen() }} />
@@ -739,6 +852,7 @@
           unter={detail.von}
           marke={detail.marke ? LOGOS[detail.marke] : null}
           buchstabe={detail.logo}
+          owner={detail.zubehoer ? avatarOwnerOf(detail) : ''}
           faehigkeiten={detail.zubehoer ? [] : (detail.faehigkeiten ?? [])}
           plaketten={detailPlaketten}
           {maschineGb}
@@ -748,12 +862,13 @@
           onZurueck={() => (detail = null)}
           onHolen={(z) => fassungHolen(z.fassung, detail)}
           onAbbrechen={abbrechen}
+          onDequeue={(z) => dequeueNames(z.names)}
         />
       {:else if trefferSeite}
         <Modelldetail
           name={trefferSeite.name}
           unter={`${trefferSeite.anbieter} · ${zahlKurz(trefferSeite.ladungen)} ↓`}
-          marke={modellMarke(trefferSeite.name, trefferSeite.anbieter)}
+          owner={trefferSeite.anbieter}
           buchstabe={String(trefferSeite.anbieter || '?').slice(0, 1).toUpperCase()}
           {maschineGb}
           repo={trefferSeite.id}
@@ -761,6 +876,7 @@
           onZurueck={() => (trefferSeite = null)}
           onHolen={(z) => suchDateiHolen(trefferSeite.id, z.datei)}
           onAbbrechen={abbrechen}
+          onDequeue={(z) => dequeueNames(z.names)}
         />
       {:else}
         {@render seitenkopf(t(VORAUSWAHL[art]), ARTZEICHEN[art])}
@@ -789,6 +905,7 @@
             onOeffnen={() => (detail = karte)}
             onDownload={() => fassungHolen(f, karte)}
             onCancel={abbrechen}
+            onDequeue={() => dequeueNames(buildNames(f))}
           />
         {/snippet}
 
@@ -828,29 +945,25 @@
 
         {#if suchbar && suchAktiv}
           <div class="suchteil">
-            <h4 class="abschnitt tafelkopf">{t('katalog.von_hf')}</h4>
+            <h4 class="abschnitt tafelkopf">
+              <svg viewBox={LOGOS.huggingface.vb} width="18" height="18" aria-hidden="true">{@html LOGOS.huggingface.html}</svg>
+              {t('katalog.von_hf')}
+            </h4>
             {#if sucht}
               <p class="leer">{t('modell.suche_laeuft')}</p>
             {:else if treffer?.length}
               {#each treffer as f (f.id)}
-                {@const marke = modellMarke(f.name, f.anbieter)}
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div class="treffer" role="button" tabindex="0"
                      onclick={() => trefferOeffnen(f)}
                      onkeydown={(e) => { if (e.key === 'Enter') trefferOeffnen(f) }}>
-                  <div class="tmarke" class:echt={marke}>
-                    {#if marke}
-                      <svg viewBox={marke.vb} width="19" height="19" aria-hidden="true">{@html marke.html}</svg>
-                    {:else}
-                      {String(f.anbieter || '?').slice(0, 1).toUpperCase()}
-                    {/if}
-                  </div>
+                  <OwnerMark owner={f.anbieter} size={30} />
                   <div class="twer">
                     <div class="tname">{f.name}</div>
                     <div class="tunter">{f.anbieter}</div>
                   </div>
                   <span class="tzieh">{zahlKurz(f.ladungen)} ↓</span>
-                  <span class="tpfeil" aria-hidden="true">▸</span>
+                  <span class="tpfeil" aria-hidden="true"><Hauszeichen zeichen="chevron_right" groesse="klein" /></span>
                 </div>
               {/each}
             {:else if treffer}
@@ -859,6 +972,8 @@
           </div>
         {/if}
       {/if}
+      </div>
+     </div>
     {/snippet}
   </Menueseite>
 </Seitenrahmen>
@@ -868,7 +983,7 @@
   .dlzahl {
     font: 600 14px var(--schrift);
     font-variant-numeric: tabular-nums;
-    color: var(--blau);
+    color: var(--blau-text);
   }
   .titelblock {
     flex: 1 1 260px;
@@ -877,8 +992,72 @@
   .markenzeile {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
     color: var(--text);
+  }
+  /* The catalogue sign in a 40 px box of button glass, the page's mark. */
+  .sign-box {
+    width: 40px;
+    height: 40px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9px;
+    /* The glass of a button with its fine line, drawn inside the box. */
+    background: var(--glass-button);
+    box-shadow: inset 0 0 0 1px var(--glass-button-edge);
+    color: var(--text);
+  }
+  .title {
+    margin: 0;
+    font-size: var(--schrift-seitentitel);
+    font-weight: 400;
+    line-height: 1.3;
+  }
+  /* Two columns in the page: the kinds at 300 px on the left, the chosen
+     page on the right. Both are as high as the taller of the two; nothing
+     stretches down to the foot of the window. */
+  .two-columns {
+    display: grid;
+    grid-template-columns: 300px minmax(0, 1fr);
+    gap: 24px;
+    align-items: stretch;
+  }
+  /* Both columns are panels of card glass; the cards inside them step up.
+     The panel of the kinds reaches as deep as the page beside it; its rows
+     stay in view while the page scrolls. */
+  .kinds {
+    padding: 16px 10px;
+    border-radius: 9px;
+    background: var(--glass-card);
+    box-shadow: inset 0 0 0 1px var(--glass-card-line);
+  }
+  .kind-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    position: sticky;
+    top: 12px;
+  }
+  .divider {
+    height: 1px;
+    background: var(--linie);
+    margin: 8px 0;
+  }
+  .page {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 16px 24px 24px;
+    border-radius: 9px;
+    background: var(--glass-card);
+    box-shadow: inset 0 0 0 1px var(--glass-card-line);
+  }
+  /* Narrow window: the kinds stand over the page instead of beside it. */
+  @media (max-width: 900px) {
+    .two-columns { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+    .kind-rows { position: static; }
   }
   .zurueck {
     width: 30px;
@@ -924,13 +1103,18 @@
     color: var(--text-leise);
     white-space: nowrap;
   }
+  /* As high as a row of the list beside it (40 px, its text in the middle) and
+     starting at the same height, so the first row there and this head stand
+     on one line; the hairline comes under that height. */
   .vorauswahl {
+    box-sizing: content-box;
     display: flex;
     align-items: center;
     justify-content: space-between;
     font: 500 var(--schrift-hinweis) var(--schrift);
     color: var(--text-still);
-    padding: 0 2px 6px;
+    height: 40px;
+    padding: 0 2px;
     margin-bottom: 14px;
     border-bottom: 1px solid var(--linie);
   }
@@ -974,13 +1158,21 @@
      and its button run into each other. */
   .galerie {
     container-type: inline-size;
+    display: flex;
+    flex-direction: column;
   }
+  /* Every row is as high as the highest card: the cards of a row are one
+     height, and nothing stretches below the last row. */
   .raster {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-auto-rows: 1fr;
     gap: 14px;
-    align-content: start;
     transition: opacity 0.16s;
+  }
+  /* Five cards of about 250px with their four gaps: 5 x 250 + 4 x 14. */
+  @container (min-width: 1306px) {
+    .raster { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   }
   @container (max-width: 780px) {
     .raster { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -996,15 +1188,19 @@
     gap: 12px;
     align-items: start;
   }
-  /* Five side by side only at the page's full content width — a column
-     narrower than that runs the kind badge into the mark beside it. */
-  @container (max-width: 799px) {
+  /* A column is never narrower than the foot of an accessory card, which does
+     not shrink: the widest one holds the kind pill "Vision (mmproj)" (the
+     same word in both languages), the largest size and the download sign,
+     224 px with the card's padding and line (measured in the browser). So
+     five columns stand side by side from 5 x 224 + 4 x 12 = 1168 px, three
+     from 696, two from 460, and one below. */
+  @container (max-width: 1167px) {
     .spaltenraster { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   }
-  @container (max-width: 519px) {
+  @container (max-width: 695px) {
     .spaltenraster { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
-  @container (max-width: 339px) {
+  @container (max-width: 459px) {
     .spaltenraster { grid-template-columns: minmax(0, 1fr); }
   }
   .zspalte {
@@ -1051,60 +1247,53 @@
   /* Text itself: global.css, .tafelkopf. */
   .abschnitt {
     margin: 0 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   .treffer {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     border-radius: 9px;
-    /* A card on the page: card glass with its fine line. */
+    /* A card on the page: card glass with its fine line. The line is drawn
+       inside the box, so the padding carries its pixel: 10 and 14 inside the
+       line, 11 and 15 from the edge. */
     background: var(--glass-card);
     box-shadow: inset 0 0 0 1px var(--glass-card-line);
-    padding: 10px 14px;
+    padding: 11px 15px;
     margin-bottom: 4px;
     cursor: pointer;
   }
   .treffer:not(.datei):hover {
     background: color-mix(in srgb, var(--text) 8%, var(--glass-card));
   }
-  /* The maker's mark in front of a hit — the same language as the cards:
-     a real vector on a filled square, a letter until one exists. */
-  .tmarke {
-    width: 30px;
-    height: 30px;
-    flex: none;
-    border-radius: 9px;
-    background: var(--glass-button);
-    color: var(--text-still);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font: 700 11px var(--schrift);
-  }
   .twer {
     flex: 1;
     min-width: 0;
   }
   .tname {
-    font-size: 13.5px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .tunter {
-    font-size: 11.5px;
+    margin-top: 2px;
+    font-size: 12px;
     color: var(--text-still);
   }
   .tzieh {
     flex: none;
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--text-still);
     white-space: nowrap;
   }
   .tpfeil {
+    display: flex;
     color: var(--text-still);
-    font-size: 11px;
-    transition: transform 0.15s;
   }
   .leer {
     color: var(--text-still);
@@ -1136,24 +1325,47 @@
   .hf-zeile {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     border-radius: 9px;
     background: var(--glass-card);
     box-shadow: inset 0 0 0 1px var(--glass-card-line);
-    padding: 10px 14px;
+    /* Inside the line 10 and 14 (right 10); the line itself is drawn inside
+       the box and takes no room, so the edge is one pixel further out. */
+    padding: 11px 11px 11px 15px;
     margin-bottom: 8px;
   }
   .hf-marke {
     flex: none;
   }
+  /* A sign button without a word: the bin that takes the token out, on the
+     glass of a button with its fine line. */
+  .sign-button {
+    width: 32px;
+    height: 32px;
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+    border: none;
+    border-radius: 9px;
+    background: var(--glass-button);
+    box-shadow: inset 0 0 0 1px var(--glass-button-edge);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .sign-button:hover {
+    background: color-mix(in srgb, var(--text) 6%, var(--glass-button));
+  }
   .hf-name {
     flex: none;
-    font-size: 13px;
+    font: 500 13.5px var(--schrift);
     color: var(--text);
-    margin-right: 4px;
   }
+  /* The field takes all the room the row has left after the name and the dot,
+     up to the button at its end, as the masked token and as the empty field
+     alike. */
   .feld {
-    flex: 1;
+    flex: 1 1 0;
     min-width: 0;
     height: 32px;
     box-sizing: border-box;
@@ -1161,7 +1373,7 @@
     border-radius: 9px;
     background: var(--glass-button);
     color: var(--text);
-    font: 13px var(--schrift);
+    font: 400 12.5px var(--schrift);
     padding: 0 12px;
   }
   /* The set token: masking dots and its last four characters, not a field

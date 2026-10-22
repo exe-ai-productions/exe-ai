@@ -27,12 +27,16 @@ from starlette.routing import Route
 
 from app.i18n import t
 from app.tools import mcp_auth
+from app.tools.registry import WerkzeugRegistry
 from app.tools.mcp_auth import (
     AuthSpeicher,
     MCPAnmeldeFehler,
     OAuthVermittler,
     _pkce_paar,
 )
+
+from tests.test_mcp_http import EchoServer, _hosted, _registry_against
+from tests.test_mcp_names_and_time_limit import _STDIO_SERVER, _stdio_entry
 
 RUECKLEITUNG = "http://127.0.0.1:8090/api/v1/tools/oauth/callback"
 
@@ -50,6 +54,8 @@ class Anbieter:
         self.ausgestellter_code: str | None = None
         self.erwartete_challenge: str | None = None
         self.erneuerungen = 0
+        # The return address each step of the dance carried, by step.
+        self.rueckleitungen: dict[str, str] = {}
 
     def app(self) -> Starlette:
         routen = [
@@ -83,7 +89,8 @@ class Anbieter:
     async def registrieren(self, request: Request) -> Response:
         self.registrierungen += 1
         anfrage = json.loads(await request.body())
-        assert RUECKLEITUNG in anfrage["redirect_uris"]
+        assert len(anfrage["redirect_uris"]) == 1
+        self.rueckleitungen["registration"] = anfrage["redirect_uris"][0]
         return JSONResponse({"client_id": "dyn-123"}, status_code=201)
 
     def code_ausstellen(self, anmelde_url: str) -> tuple[str, str]:
@@ -92,7 +99,7 @@ class Anbieter:
         anfrage = parse_qs(urlsplit(anmelde_url).query)
         assert anfrage["response_type"] == ["code"]
         assert anfrage["code_challenge_method"] == ["S256"]
-        assert anfrage["redirect_uri"] == [RUECKLEITUNG]
+        self.rueckleitungen["sign_in"] = anfrage["redirect_uri"][0]
         assert anfrage["resource"] == ["http://testserver/mcp"]
         self.erwartete_challenge = anfrage["code_challenge"][0]
         self.ausgestellter_code = "code-abc"
@@ -102,6 +109,7 @@ class Anbieter:
         felder = parse_qs((await request.body()).decode("utf-8"))
         art = felder["grant_type"][0]
         if art == "authorization_code":
+            self.rueckleitungen["exchange"] = felder["redirect_uri"][0]
             if felder["code"][0] != self.ausgestellter_code:
                 return JSONResponse({"error": "invalid_grant"}, status_code=400)
             pruefsumme = (
@@ -334,6 +342,7 @@ async def test_api_voller_tanz(client, http_serverdatei, tmp_path):
             "server": "recraft",
             "verbunden": True,
             "laeuft_ab": pytest.approx(time.time() + 3600, abs=30),
+            "redirect_uri": None,
         }
     ]
 
@@ -351,6 +360,24 @@ async def test_api_fester_schluessel_hat_nichts_zu_verbinden(
     antwort = client.post("/api/v1/tools/oauth/start", json={"server": "github"})
     assert antwort.status_code == 400
     assert "GITHUB_TOKEN" in antwort.json()["detail"]
+
+
+async def test_api_header_key_has_nothing_to_sign_in(client, http_serverdatei, tmp_path):
+    """An entry with a key in a header of its own is not signed in through the
+    browser — unless it says so itself with ``auth: oauth``."""
+    client.app.state.mcp_oauth = vermittler(Anbieter(), tmp_path)
+    daten = json.loads(http_serverdatei.read_text(encoding="utf-8"))
+    daten["mcpServers"]["recraft"]["headers"] = {"X-Goog-Api-Key": "${MAPS_KEY}"}
+    http_serverdatei.write_text(json.dumps(daten), encoding="utf-8")
+
+    antwort = client.post("/api/v1/tools/oauth/start", json={"server": "recraft"})
+    assert antwort.status_code == 400
+    assert "MAPS_KEY" in antwort.json()["detail"]
+
+    daten["mcpServers"]["recraft"]["auth"] = "oauth"
+    http_serverdatei.write_text(json.dumps(daten), encoding="utf-8")
+    antwort = client.post("/api/v1/tools/oauth/start", json={"server": "recraft"})
+    assert antwort.status_code == 200
 
 
 async def test_api_kaputter_rueckruf_zeigt_fehlerseite(client, tmp_path):
@@ -492,7 +519,7 @@ async def test_api_reason_on_the_page_is_said_in_the_language_too(
         headers={"Accept-Language": language},
     )
     words = {
-        "de": "Dieser Anmeldevorgang ist unbekannt oder abgelaufen. Bitte versuche es erneut.",
+        "de": "Dieser Anmeldevorgang ist unbekannt oder abgelaufen. Bitte erneut versuchen.",
         "en": "This sign-in request is unknown or has expired. Please try again.",
     }
     assert words[language] in unknown.text
@@ -554,7 +581,7 @@ async def test_api_start_says_why_it_failed_in_the_language_of_the_app(
     )
     assert antwort.status_code == 400
     reason = {
-        "de": "Der Anbieter unterstützt keine automatische Registrierung. Trage die Kennung (client_id) manuell ein.",
+        "de": "Der Anbieter unterstützt keine automatische Registrierung. Bitte die Kennung (client_id) manuell eintragen.",
         "en": "The provider does not support automatic registration. Enter client_id manually.",
     }
     assert antwort.json()["detail"] == reason[language]
@@ -565,7 +592,7 @@ def test_every_reason_of_the_sign_in_stands_in_both_catalogues():
     languages — a missing one would show the bare key on the page."""
     quelle = Path(mcp_auth.__file__).read_text(encoding="utf-8")
     keys = set(re.findall(r'MCPAnmeldeFehler\(\s*"(mcp_signin\.[a-z_]+)"', quelle))
-    assert len(keys) == 7
+    assert len(keys) == 8
     for key in sorted(keys | {"mcp_signin.provider_says"}):
         german, english = t(key, "de"), t(key, "en")
         assert german != key and english != key, key
@@ -605,3 +632,223 @@ async def test_api_vergessen(client, http_serverdatei, tmp_path):
     antwort = client.delete("/api/v1/tools/oauth/recraft")
     assert antwort.status_code == 204
     assert v.speicher.eintrag("recraft") is None
+
+
+# --- The return address ---------------------------------------------------------
+
+EIGENE = "https://weiter.beispiel.invalid/exe/rueckruf"
+
+
+async def test_the_service_names_the_address_it_writes_into_the_sign_in_address(
+    client, http_serverdatei, tmp_path
+):
+    """What the mask shows to be entered at the provider is the address the
+    sign-in really carries."""
+    anbieter = Anbieter()
+    client.app.state.mcp_oauth = vermittler(anbieter, tmp_path)
+    genannt = client.get("/api/v1/tools/oauth/redirect").json()["redirect_uri"]
+    assert genannt == RUECKLEITUNG
+
+    url = client.post("/api/v1/tools/oauth/start", json={"server": "recraft"}).json()["url"]
+    anbieter.code_ausstellen(url)
+    assert anbieter.rueckleitungen == {"registration": genannt, "sign_in": genannt}
+
+
+async def test_an_own_https_address_goes_to_registration_sign_in_and_exchange(tmp_path):
+    anbieter = Anbieter()
+    v = vermittler(anbieter, tmp_path)
+    url = await v.anmelde_url("recraft", "http://testserver/mcp", redirect_uri=EIGENE)
+    state, code = anbieter.code_ausstellen(url)
+    await v.rueckruf(state, code)
+    assert anbieter.rueckleitungen == {
+        "registration": EIGENE, "sign_in": EIGENE, "exchange": EIGENE,
+    }
+    # Kept with the client id, and shown back — also after a restart.
+    neu = OAuthVermittler(AuthSpeicher(tmp_path / "mcp_auth.json"), rueckleitung=RUECKLEITUNG)
+    assert neu.status()["recraft"]["redirect_uri"] == EIGENE
+
+
+async def test_without_an_own_address_everything_is_as_before(tmp_path):
+    anbieter = Anbieter()
+    v = vermittler(anbieter, tmp_path)
+    url = await v.anmelde_url("recraft", "http://testserver/mcp")
+    state, code = anbieter.code_ausstellen(url)
+    await v.rueckruf(state, code)
+    assert anbieter.rueckleitungen == {
+        "registration": RUECKLEITUNG, "sign_in": RUECKLEITUNG, "exchange": RUECKLEITUNG,
+    }
+    assert v.status()["recraft"]["redirect_uri"] is None
+
+
+async def test_a_client_made_for_one_address_is_not_used_for_another(tmp_path):
+    """The provider knows the client under the address it was registered
+    with: another address registers again."""
+    anbieter = Anbieter()
+    v = vermittler(anbieter, tmp_path)
+    url = await v.anmelde_url("recraft", "http://testserver/mcp")
+    state, code = anbieter.code_ausstellen(url)
+    await v.rueckruf(state, code)
+    assert anbieter.registrierungen == 1
+    await v.anmelde_url("recraft", "http://testserver/mcp")
+    assert anbieter.registrierungen == 1  # the same address: the client is reused
+    await v.anmelde_url("recraft", "http://testserver/mcp", redirect_uri=EIGENE)
+    assert anbieter.registrierungen == 2
+
+
+@pytest.mark.parametrize(
+    "adresse",
+    ["http://weiter.beispiel.invalid/x", "ftp://x.invalid/x", "https://", "weiter", "https://a b/x",
+     "https://[::1", "https://x.invalid:badport/x", "https://x.invalid/x#f",
+     "https://user:secret@x.invalid/x", "https://x.invalid/x\x00y"],
+)
+async def test_an_address_that_is_not_https_is_refused(tmp_path, adresse):
+    anbieter = Anbieter()
+    v = vermittler(anbieter, tmp_path)
+    with pytest.raises(MCPAnmeldeFehler) as caught:
+        await v.anmelde_url("recraft", "http://testserver/mcp", redirect_uri=adresse)
+    assert caught.value.key == "mcp_signin.redirect_https"
+    assert anbieter.registrierungen == 0
+
+
+async def test_api_the_own_address_reaches_the_dance_and_the_status(
+    client, http_serverdatei, tmp_path
+):
+    anbieter = Anbieter()
+    client.app.state.mcp_oauth = vermittler(anbieter, tmp_path)
+    url = client.post(
+        "/api/v1/tools/oauth/start", json={"server": "recraft", "redirect_uri": EIGENE}
+    ).json()["url"]
+    state, code = anbieter.code_ausstellen(url)
+    # The provider sends the browser to the person's own address, which hands
+    # the request on to this very endpoint.
+    antwort = client.get("/api/v1/tools/oauth/callback", params={"state": state, "code": code})
+    assert antwort.status_code == 200
+    assert anbieter.rueckleitungen["exchange"] == EIGENE
+    (status,) = client.get("/api/v1/tools/oauth/status").json()
+    assert status["redirect_uri"] == EIGENE
+
+
+async def test_a_scheme_in_capitals_is_written_in_lower_case_and_the_address_shown_back(tmp_path):
+    anbieter = Anbieter()
+    v = vermittler(anbieter, tmp_path)
+    url = await v.anmelde_url(
+        "recraft", "http://testserver/mcp", redirect_uri="HTTPS://Weiter.Beispiel.invalid/exe"
+    )
+    state, code = anbieter.code_ausstellen(url)
+    await v.rueckruf(state, code)
+    assert anbieter.rueckleitungen["exchange"] == "https://Weiter.Beispiel.invalid/exe"
+    assert v.status()["recraft"]["redirect_uri"] == "https://Weiter.Beispiel.invalid/exe"
+
+
+async def test_an_old_default_of_another_port_is_not_an_address_of_the_persons_own(tmp_path):
+    v = vermittler(Anbieter(), tmp_path)
+    v.speicher.setzen(
+        "recraft", access_token="a", redirect_uri="http://127.0.0.1:8091/api/v1/tools/oauth/callback"
+    )
+    assert v.status()["recraft"]["redirect_uri"] is None
+
+
+async def test_api_an_http_address_is_refused_with_the_reason(client, http_serverdatei, tmp_path):
+    client.app.state.mcp_oauth = vermittler(Anbieter(), tmp_path)
+    antwort = client.post(
+        "/api/v1/tools/oauth/start",
+        json={"server": "recraft", "redirect_uri": "http://weiter.beispiel.invalid/x"},
+    )
+    assert antwort.status_code == 400
+    assert "https://" in antwort.json()["detail"]
+
+
+# --- Which way the registry takes a hosted server ---------------------------
+
+
+def _with_access(tmp_path, zugang: str = "zugang-1") -> OAuthVermittler:
+    """A broker that holds a fresh access for the server ``gehostet``."""
+    v = vermittler(Anbieter(), tmp_path)
+    v.speicher.setzen(
+        "gehostet",
+        access_token=zugang,
+        refresh_token="erneuer-1",
+        token_endpoint="http://testserver/token",
+        client_id="dyn-123",
+        resource="http://testserver/mcp",
+        expires_at=time.time() + 3600,
+    )
+    return v
+
+
+async def test_an_entry_without_auth_and_without_access_connects_without_sign_in(
+    tmp_path, monkeypatch
+):
+    server = EchoServer()
+    registry = _registry_against(
+        server, _hosted(), monkeypatch, oauth=vermittler(Anbieter(), tmp_path)
+    )
+    await registry.starten()
+    try:
+        assert [w["function"]["name"] for w in registry.als_openai_werkzeuge()
+                if w["function"]["name"].startswith("mcp__")] == ["mcp__gehostet__echo"]
+        assert all("authorization" not in koepfe for koepfe in server.gesehene_koepfe)
+    finally:
+        await registry.stoppen()
+
+
+async def test_auth_oauth_without_access_is_skipped(tmp_path, monkeypatch):
+    server = EchoServer()
+    registry = _registry_against(
+        server, _hosted(auth="oauth"), monkeypatch, oauth=vermittler(Anbieter(), tmp_path)
+    )
+    await registry.starten()
+    assert registry.clients == {}
+    assert server.gesehene_koepfe == []
+
+
+async def test_auth_oauth_with_access_starts_with_the_access(tmp_path, monkeypatch):
+    server = EchoServer(schluessel="zugang-1")
+    registry = _registry_against(
+        server, _hosted(auth="oauth"), monkeypatch, oauth=_with_access(tmp_path)
+    )
+    await registry.starten()
+    try:
+        assert "gehostet" in registry.clients
+    finally:
+        await registry.stoppen()
+
+
+async def test_an_entry_without_auth_but_with_stored_access_starts_with_the_access(
+    tmp_path, monkeypatch
+):
+    server = EchoServer(schluessel="zugang-1")
+    registry = _registry_against(
+        server, _hosted(), monkeypatch, oauth=_with_access(tmp_path)
+    )
+    await registry.starten()
+    try:
+        assert "gehostet" in registry.clients
+        assert {k["authorization"] for k in server.gesehene_koepfe} == {"Bearer zugang-1"}
+    finally:
+        await registry.stoppen()
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_a_server_that_turns_the_caller_away_does_not_start(
+    tmp_path, monkeypatch, status
+):
+    server = EchoServer(abweisen=status)
+    registry = _registry_against(
+        server, _hosted(), monkeypatch, oauth=vermittler(Anbieter(), tmp_path)
+    )
+    await registry.starten()
+    assert registry.clients == {}
+
+
+async def test_a_stdio_entry_starts_as_before(tmp_path):
+    skript = tmp_path / "mcp_server.py"
+    skript.write_text(_STDIO_SERVER, encoding="utf-8")
+    registry = WerkzeugRegistry(
+        [_stdio_entry(skript)], oauth=vermittler(Anbieter(), tmp_path)
+    )
+    await registry.starten()
+    try:
+        assert "fs" in registry.clients
+    finally:
+        await registry.stoppen()

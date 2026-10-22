@@ -94,7 +94,7 @@ class _PictureRoute:
                 await asyncio.wait_for(self._stopped.wait(), timeout=self.drawing_s)
             except asyncio.TimeoutError:
                 return 200, {"bild": "out.png", "seed": 7}
-            return 499, {"detail": "Image generation cancelled"}
+            return 499, {"detail": "Image generation canceled"}
         return 200, {}
 
 
@@ -143,7 +143,7 @@ def test_a_stop_while_the_picture_waits_ends_it_as_before(tmp_path, monkeypatch)
         return text, route
 
     text, route = asyncio.run(run())
-    assert text == "The image could not be generated: Image generation cancelled"
+    assert text == "The image could not be generated: Image generation canceled"
     assert route.stops >= 1
 
 

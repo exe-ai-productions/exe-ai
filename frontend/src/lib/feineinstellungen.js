@@ -8,3 +8,8 @@
 */
 
 export const FEINEINSTELLUNGEN = 'feineinstellungen'
+
+/* The idle time, in minutes, is whole minutes up to what the engines take as
+   seconds (a 32-bit number): the backend's own ceiling
+   (app/feineinstellungen.py `MAX_IDLE_MINUTES`). */
+export const IDLE_MINUTEN_MAX = Math.floor(2147483647 / 60)

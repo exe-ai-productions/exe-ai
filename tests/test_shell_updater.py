@@ -636,7 +636,7 @@ def test_the_bridge_carries_these_calls_and_no_others():
     names = _bridge("return Object.keys(bridge).sort()")
     assert names == [
         "aufBetrachterEscape", "aufDiktat", "aufVorlesen", "frameColour", "frameScheme", "menuWords",
-        "terminal", "thumbnail", "updates", "vorlesenBeschriftung",
+        "onShellNotice", "sidebarFolded", "terminal", "thumbnail", "topBar", "updates", "vorlesenBeschriftung",
     ]
 
 

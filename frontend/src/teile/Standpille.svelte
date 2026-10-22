@@ -15,9 +15,11 @@
        rot    failed, dangerous
        still  no state worth a colour: off, unreachable, unset
 
-     And one that is NOT a state, the house's only such colour:
+     And two that are NOT a state:
 
-       werkzeug  a tool — its name, wherever it stands
+       werkzeug  a tool — its name, in the tool face and the text colour
+       count     a number in words (the tools in use) — no dot, the quiet
+                 text colour
 
      Nothing here positions the pill. Where it sits belongs to whoever puts
      it somewhere. */
@@ -70,13 +72,19 @@
      tool face as well, so a name in a pill reads like the same name in a
      row (`.werkzeugname`, stil/global.css), and it wears no state dot. */
   .pille[data-farbe='werkzeug'] {
-    color: var(--werkzeug);
     font-family: var(--schrift-fest);
     font-size: 12px;
     font-weight: 600;
   }
-  .pille[data-farbe='werkzeug']::before {
+  .pille[data-farbe='werkzeug']::before,
+  .pille[data-farbe='count']::before {
     display: none;
+  }
+  /* A figure in words beside a heading: no dot to say a state, the word
+     steps back like the fact it is. */
+  .pille[data-farbe='count'] {
+    color: var(--text-leise);
+    padding: 5px 11px;
   }
   .pille[data-farbe='gruen'] {
     --punkt: var(--gruen);

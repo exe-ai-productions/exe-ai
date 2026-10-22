@@ -129,6 +129,12 @@ HIRES_UPSCALER_FESTE = (
 # that applies when no init image was chosen at all.
 STAERKE_VORGABE = 1.0
 
+# The strength a picture handed to a drawing goes out with as its start
+# picture: low enough that it still shows in the result. The studio gives a
+# picture in its area the same number (`pictureInArea` in
+# frontend/src/lib/studio.svelte.js).
+PICTURE_STRENGTH = 0.6
+
 # What a LoRA is applied with when no strength was set.
 LORA_VORGABE = 0.70
 # A LoRA's strength as a number: negative turns its effect around. The slider
@@ -173,7 +179,7 @@ RASTER = 64
 MIN_SCHRITTE = 1
 
 
-def kante_pruefen(wert: object) -> int | None:
+def kante_pruefen(wert: str | float) -> int | None:
     """One edge of the picture, rounded up onto the grid inside sd.cpp's
     own range, or None if it is not a number."""
     try:
@@ -184,7 +190,7 @@ def kante_pruefen(wert: object) -> int | None:
     return min(MAX_KANTE, oben)
 
 
-def schritte_pruefen(wert: object) -> int | None:
+def schritte_pruefen(wert: str | float) -> int | None:
     """How many steps are kept: at least one, as sd-cli asks, and no upper
     limit, as it sets none; None if it is not a number."""
     try:

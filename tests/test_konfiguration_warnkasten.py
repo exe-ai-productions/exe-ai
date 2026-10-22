@@ -17,13 +17,13 @@ LOCALES = Path(__file__).resolve().parent.parent / "app/locales"
 
 
 def _box() -> str:
-    """The warning box: from its condition to its closing tag."""
-    return HUELLE.split("{#if kaputt || unlesbar}", 1)[1].split("{/if}", 1)[0]
+    """The warning box: the snippet both of its places draw."""
+    return HUELLE.split("{#snippet warningBox()}", 1)[1].split("{/snippet}", 1)[0]
 
 
 def test_the_box_of_a_file_page_names_the_file_not_an_agent():
     box = _box()
-    assert "t(istTools || istDatei ? 'werkzeuge.kaputt' : 'agenten.kaputt'" in box
+    assert "t(filePage ? 'werkzeuge.kaputt' : 'agenten.kaputt'" in box
     # Both file pages, and no other page, are `istDatei`.
     flag = HUELLE.split("const istDatei = $derived(", 1)[1].split(")\n", 1)[0]
     assert flag == "art === 'konfiguration' || art === 'zugangsdaten'"
@@ -42,3 +42,16 @@ def test_the_agent_page_and_the_tools_file_keep_their_sentences():
         catalogue = json.loads((LOCALES / f"{language}.json").read_text(encoding="utf-8"))
         assert catalogue["werkzeuge"]["kaputt"] == file_sentence
         assert catalogue["agenten"]["kaputt"].startswith(agent_sentence)
+
+
+def test_on_the_file_pages_the_box_comes_before_the_field_and_on_the_agent_pages_after_it():
+    """Where the box stands in the document: first in the content on the pages
+    of a file, behind the page's own part on every other page."""
+    content = HUELLE.split("{#snippet inhalt()}", 1)[1]
+    first = content.index("{@render warningBox()}")
+    second = content.index("{@render warningBox()}", first + 1)
+    field = content.index("<WachsendesFeld")
+    assert first < content.index("{#if istSprache}") < field < second
+    assert "{#if filePage && (kaputt || unlesbar)}" in content[max(0, first - 120) : first]
+    assert "{#if !filePage && (kaputt || unlesbar)}" in content[max(0, second - 120) : second]
+    assert "const filePage = $derived(istDatei || istTools)" in HUELLE

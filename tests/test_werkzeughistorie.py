@@ -35,7 +35,7 @@ def _laufen(js: str):
     treiber.write_text(
         textwrap.dedent(
             """
-            import { historie, kurzargument, leer } from %r
+            import { historie, kurzargument, leer, mainArgument } from %r
             const bericht = (() => {
             %s
             })()
@@ -168,6 +168,8 @@ def test_das_kurzargument_sagt_worum_es_ging():
           leer: kurzargument({}),
           keins: kurzargument(null),
           umbruch: kurzargument({ text: 'zwei\\n  zeilen' }),
+          datei: kurzargument({ content: 'Eine gute Frage', path: 'notizen\\\\absatz1.txt' }),
+          regex: kurzargument({ query: 'a\\\\d+' }),
         }
         """
     )
@@ -178,6 +180,11 @@ def test_das_kurzargument_sagt_worum_es_ging():
     assert bericht["leer"] == ""
     assert bericht["keins"] == ""
     assert bericht["umbruch"] == "zwei zeilen"
+    # A file tool names its path after its text: the line is about the file,
+    # not about its body — and the path is shown with slashes.
+    assert bericht["datei"] == "notizen/absatz1.txt"
+    # Only a place is rewritten: a backslash in a search stays.
+    assert bericht["regex"] == "a\\d+"
 
 
 def test_der_ausgang_wird_mitgefuehrt():
@@ -440,3 +447,26 @@ def test_alte_zeilen_ohne_nummern_werden_weiter_nach_reihenfolge_gepaart():
         """
     )
     assert bericht["arten"] == ["lauf", "lauf"]
+
+
+def test_the_main_argument_takes_the_place_first_then_the_first_argument():
+    bericht = _laufen(
+        """
+        return {
+          ort: mainArgument({ content: 'Inhalt', path: 'C:\\\\x\\\\a.txt', command: 'dir' }),
+          befehl: mainArgument({ content: 'Inhalt', command: 'dir' }),
+          erstes: mainArgument({ text: 'nur Text', zeilen: 3 }),
+          zahl: mainArgument({ zeilen: 3 }),
+          leer: mainArgument({ path: '   ' }),
+          keins: mainArgument(undefined),
+        }
+        """
+    )
+    assert bericht == {
+        "ort": "C:/x/a.txt",
+        "befehl": "dir",
+        "erstes": "nur Text",
+        "zahl": "3",
+        "leer": "",
+        "keins": "",
+    }

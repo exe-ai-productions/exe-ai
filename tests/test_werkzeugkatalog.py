@@ -184,6 +184,18 @@ def test_zuordnung_haelt_sich_an_die_reihenfolge(werkzeug, server, erwartet):
         ("shell", None, "eingabe"),
         ("memory", None, "wolke"),
         ("skills", None, "buch"),
+        # The sources that came later wear theirs too, and a server of the same
+        # name still borrows nothing.
+        ("image", True, "bild"),
+        ("cronjob", True, "stopwatch"),
+        ("goal", True, "flag"),
+        ("dock", True, "seite"),
+        ("clock", True, "clock"),
+        ("image", False, "winkel"),
+        ("cronjob", False, "winkel"),
+        ("goal", False, "winkel"),
+        ("dock", False, "winkel"),
+        ("clock", False, "winkel"),
     ],
 )
 def test_die_art_der_quelle_entscheidet_ueber_das_zeichen(server, eingebaut, erwartet):
@@ -218,14 +230,15 @@ def test_die_quellenzeile_zeichnet_die_art_der_quelle():
     assert '<Hauszeichen zeichen="plug"' in text
 
 
-def _marks(pairs: list[list[str]]) -> list[str]:
-    """What the catalogue itself answers — run, not read."""
+def _marks(pairs: list[list]) -> list[str]:
+    """What the catalogue itself answers — run, not read. A pair is the tool
+    name and the server; a third entry is the kind of the source."""
     frontend = WURZEL / "frontend"
     driver = frontend / f"marks-{os.getpid()}.pruefung.mjs"
     driver.write_text(
         "import { zeichenFuer } from './src/lib/werkzeugkatalog.js'\n"
         f"console.log('---REPORT---' + JSON.stringify({json.dumps(pairs)}"
-        ".map(([name, server]) => zeichenFuer(name, server))))\n",
+        ".map(([name, server, kind]) => zeichenFuer(name, server, kind))))\n",
         encoding="utf-8",
     )
     try:
@@ -255,6 +268,42 @@ CATALOGUE_SERVERS = {
     "vercel": "wolke",
     "sentry": "glocke",
 }
+
+
+@needs_node
+def test_the_tools_that_had_the_grey_angle_wear_their_own_mark():
+    """By name, so a chat that sees no server draws it too: the job start the
+    agent, both schedule tools the stopwatch, the report the flag, the time
+    the clock."""
+    assert _marks([
+        ["start_job", "shell"],
+        ["start_job", ""],
+        ["cronjob", ""],
+        ["cron_note", ""],
+        ["goal", ""],
+        ["get_current_time", ""],
+    ]) == ["agent", "agent", "stopwatch", "stopwatch", "flag", "clock"]
+
+
+@needs_node
+def test_the_built_in_sources_wear_their_marks_and_a_server_of_the_same_name_none():
+    names = ["shell", "memory", "skills", "image", "cronjob", "goal", "dock", "clock"]
+    built_in = _marks([["", name, True] for name in names])
+    assert built_in == ["eingabe", "wolke", "buch", "bild", "stopwatch", "flag", "seite", "clock"]
+    assert _marks([["", name, False] for name in names]) == ["winkel"] * len(names)
+
+
+@needs_node
+def test_silence_the_shell_mark_stays_with_run_command_and_an_unknown_tool_stays_unknown():
+    """Nothing else took the mark of the shell, the folder tools kept theirs,
+    and a tool nobody drew a mark for still looks unknown."""
+    assert _marks([
+        ["run_command", "shell", True],
+        ["list_dir", "shell", True],
+        ["create_folder", "shell", True],
+        ["something_new", "", None],
+        ["something_new", "somebodys_server", False],
+    ]) == ["eingabe", "ordner", "ordner", "winkel", "winkel"]
 
 
 @needs_node

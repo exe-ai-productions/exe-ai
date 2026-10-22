@@ -127,7 +127,7 @@ function fensterchen() {
   f.style.cssText = [
     'position:fixed', 'right:12px', 'top:52px', 'z-index:99999', 'width:360px',
     'max-height:60vh', 'overflow:auto', 'padding:10px 12px', 'border-radius:9px',
-    'background:rgba(20,20,20,.94)', 'color:#ddd', 'font:12px/1.4 ui-monospace,monospace',
+    'background:rgba(20,20,20,.94)', 'color:#ddd', 'font:12px/1.4 var(--schrift-fest)',
     'border:1px solid #666', 'white-space:pre-wrap',
   ].join(';')
   document.body.appendChild(f)
@@ -160,7 +160,7 @@ function fensterZeigen() {
   f.textContent = t('geometry_watch.title', { anzahl: wichtig.length }) + '\n\n' + zeilen.join('\n\n')
   const knopf = document.createElement('button')
   knopf.textContent = t('geometry_watch.buttons')
-  knopf.style.cssText = 'margin-top:8px;font:12px ui-monospace,monospace'
+  knopf.style.cssText = 'margin-top:8px;font:12px var(--schrift-fest)'
   knopf.onclick = () => {
     const text = JSON.stringify(alles, null, 1)
     navigator.clipboard?.writeText(text).catch(() => {})

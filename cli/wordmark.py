@@ -14,7 +14,14 @@ WORDMARK: tuple[str, ...] = (
     '╚═╝ ╚══════╝    ╚══════╝╚═╝  ╚═╝╚══════╝    ╚═╝  ╚═╝╚═╝',
 )
 
+# The same letters without the ">_" and the gap after it, for a window with
+# no room for the whole mark. They are cut out of the lines above, never set
+# by hand: "Exe AI" starts where the gap ends.
+NAME_START = 16
+WORDMARK_NAME: tuple[str, ...] = tuple(line[NAME_START:] for line in WORDMARK)
+
 WORDMARK_PLAIN = '>_ Exe AI'
 
 WIDTH = 55
 HEIGHT = 6
+NAME_WIDTH = len(WORDMARK_NAME[0])

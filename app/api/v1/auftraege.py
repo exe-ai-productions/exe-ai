@@ -54,8 +54,10 @@ from app import (
     auftragsfrage,
     auftragtokenwahl,
     befehlszeitwahl,
+    command_line_client,
     cronablauf,
     denkablehnung,
+    denkschalter,
     dokumentablage,
     faltpause,
     gedaechtnis,
@@ -68,6 +70,7 @@ from app import (
     reasoning,
     skills,
     skillwahl,
+    storage_prompt,
     verdichtung,
     verdichtungswahl,
     wachhalten,
@@ -125,7 +128,7 @@ from app.generationen import Generierung, Generierungsverwaltung
 from app import i18n
 from app.i18n import t
 from app import (
-    faltversuche, helper, kontextvoll, no_agent, round_end, run_chain, stop_note, task_images,
+    faltversuche, helper, job_watchdog, kontextvoll, no_agent, round_end, run_chain, stop_note, task_images,
 )
 from app.providers import ChatNachricht, Generierungsanfrage, ProviderFehler, openai_responses
 from app.schleifenwaechter import Schleifenwaechter
@@ -1290,7 +1293,17 @@ def auftrag_anstossen(
             regeln=regeln_laden(getattr(registry, "berechtigungen_pfad", None)),
         )
     model_name, provider_name = grundprompt.model_lines(zustand, modellname)
+    agents_dir, scripts_dir = grundprompt.setup_folders(config)
     grund = grundprompt.bauen(
+        # The folders Exe AI keeps its files in, and the command of its
+        # command line client where this run may start it — the run's own
+        # column of the rules decides, not the chat's.
+        storage=storage_prompt.block(config, ordner_effektiv),
+        agents_dir=agents_dir,
+        scripts_dir=scripts_dir,
+        command_line=command_line_client.for_prompt(
+            shell_offered=shell.WERKZEUG_NAME in angebotene_namen, zugriff=zugriff
+        ),
         werkzeuge=werkzeuge_im_prompt,
         ordner=ordner_effektiv,
         # The sending chat's own folder, named as that chat names it.
@@ -1435,6 +1448,18 @@ def auftrag_anstossen(
         anfrage.parameter,
         freigegeben=denklaenge_erlaubt(zustand, modellname, repositories.einstellungen),
     )
+    # An agent that asks for thinking off does not also carry a thinking
+    # length: beside a switch that says off it would be a second,
+    # contradicting answer — the chat and the folds drop it the same way.
+    if denkschalter.ist_aus(agent.thinking_stage):
+        _, anfrage.parameter = denkschalter.ausschalten(
+            zustand,
+            anfrage.parameter,
+            modell=modellname,
+            abgelehnt=denkablehnung.gemerkt(
+                repositories.einstellungen, refusal_key(zustand, modellname)
+            ),
+        )
 
     if werkzeuge_aktiv:
         # Only the intersection of the agent's list and the registry. Whatever
@@ -1714,6 +1739,20 @@ def auftrag_abbrechen(
             status.HTTP_404_NOT_FOUND, t("fehler.auftrag_nicht_gefunden", sprache)
         )
 
+    auftrag = stop_job(repositories, generierungen, auftrag)
+    werk, urspruenglicher_text = _kettendaten(repositories, auftrag)
+    return AuftragAntwort.aus(auftrag, werk=werk, urspruenglicher_text=urspruenglicher_text)
+
+
+def stop_job(
+    repositories: Repositories, generierungen: Generierungsverwaltung, auftrag,
+    *, reason: str = "benutzer_abbruch",
+):
+    """The stop button's own work: ends this run and everything it started.
+    Returns the row as it stands — the run itself when it is alive (it
+    records its ending once it has stopped), the recorded row otherwise.
+    The chat's ``job`` tool ends a run with this too, and the watchdog
+    (app/job_watchdog.py) with the reason of its own."""
     # Downwards first. A run an agent started is a part of this assignment,
     # so stopping the assignment stops it too — otherwise a branch nobody
     # can see keeps working for a run that is already over. Depth-first and
@@ -1727,20 +1766,18 @@ def auftrag_abbrechen(
     # The stop button names its own reason, so a stop that follows it — the
     # chat deleted a moment later — cannot rewrite who stopped the run.
     if auftrag.generation_id and generierungen.abbrechen(
-        auftrag.generation_id, reason="benutzer_abbruch"
+        auftrag.generation_id, reason=reason
     ):
         # The run is alive: it gets the signal and records state and reason
         # itself once it has stopped — exactly like the stop button in chat.
-        werk, urspruenglicher_text = _kettendaten(repositories, auftrag)
-        return AuftragAntwort.aus(auftrag, werk=werk, urspruenglicher_text=urspruenglicher_text)
+        return auftrag
 
     if auftrag.zustand not in ENDZUSTAENDE:
         # No live run (waiting/interrupted): record it directly.
         auftrag = auftragsende.beenden(
-            repositories, auftrag.id, "abgebrochen", ende_grund="benutzer_abbruch"
+            repositories, auftrag.id, "abgebrochen", ende_grund=reason
         )
-    werk, urspruenglicher_text = _kettendaten(repositories, auftrag)
-    return AuftragAntwort.aus(auftrag, werk=werk, urspruenglicher_text=urspruenglicher_text)
+    return auftrag
 
 
 def stop_jobs_of_chat(
@@ -2103,6 +2140,10 @@ def _auftragslauf(
     # The refused thinking stages of this model, under the id the model list
     # reads them under (see the docstring).
     refusal_id = refusal_key(zustand, anfrage.modell)
+    # The stages this model has already answered with an error, read once for
+    # the run like a chat reads them before it builds its request: the stage
+    # that goes out is never one that was refused before.
+    refused_stages = denkablehnung.gemerkt(repositories.einstellungen, refusal_id)
 
     def protokoll(typ: str, inhalt: str) -> str | None:
         # A job deleted under its run takes its transcript with it; a line
@@ -2525,6 +2566,19 @@ def _auftragslauf(
                         ordner, werkzeugvorpruefung.angebotene_namen(anfrage.werkzeuge),
                         config.datenverzeichnis,
                     )
+                    # The stage the agent's file names, through the switch the
+                    # chat uses and for the ceiling this round has: the
+                    # ceiling moves from round to round, and one provider
+                    # generation keeps its thinking budget below it. A file
+                    # that names none sends no thinking field, as ever.
+                    if agent.thinking_stage is not None:
+                        anfrage.zusatz = denkschalter.for_stage(
+                            agent.thinking_stage,
+                            zustand,
+                            modell=anfrage.modell,
+                            abgelehnt=refused_stages,
+                            max_tokens=anfrage.max_tokens,
+                        )
                     # Every send of this run goes out with no more than the
                     # ceiling a refusal brought it down to: the retry, a
                     # send after a fold, and every round after it.
@@ -3585,34 +3639,42 @@ def _auftragslauf(
                     elif declined is not None:
                         ergebnis, fehlgeschlagen, abgelehnt, at_path = declined, True, True, False
                     else:
-                        ergebnis, fehlgeschlagen, abgelehnt, at_path = await _werkzeug_ausfuehren(
-                            registry, aufruf, sprache, ordner=ordner, chat_id=auftrag_id,
-                            herkunft="agent", agent=agent,
-                            shell_zeitgrenze=befehl_zeitgrenze,
-                            # Which entry a `cron_note` call writes to.
-                            # From the run, never from the call's arguments.
-                            cronjob_id=cronjob_id,
-                            # One report per run: the
-                            # second `goal` call is refused instead of setting
-                            # off the same sound and the same notification
-                            # again. The run holds the answer; the tool holds
-                            # the rule.
-                            ziel_gemeldet=ziel_bericht is not None,
-                            # Only where the model has eyes. Without them
-                            # `read_file` says it cannot show the picture
-                            # instead of handing over one nobody can see.
-                            modellbild=modellbild if zustand.kann("vision") else None,
-                            # The memory's switch for this model's side, as in
-                            # the chat: not in the prompt, not in a listing.
-                            gedaechtnis_zeigen=aufruf.name == memory.WERKZEUG_NAME
-                            and gedaechtnis.mitschicken(repositories, zustand),
-                            # A run the chat model sent off is judged by the
-                            # chat's mode; what that mode asks about was
-                            # asked about above.
-                            rules_of="chat" if ask_in_chat else None,
-                            # The job's stop reaches a picture being drawn.
-                            abbruch=generierung.signal,
-                        )
+                        # The tool's own time is its own business: while it
+                        # runs, the watchdog does not wake for the silence of
+                        # the model (app/job_watchdog.py).
+                        generierung.tool_begins()
+                        try:
+                            ergebnis, fehlgeschlagen, abgelehnt, at_path = await _werkzeug_ausfuehren(
+                                registry, aufruf, sprache, ordner=ordner, chat_id=auftrag_id,
+                                herkunft="agent", agent=agent,
+                                shell_zeitgrenze=befehl_zeitgrenze,
+                                # Which entry a `cron_note` call writes to.
+                                # From the run, never from the call's arguments.
+                                cronjob_id=cronjob_id,
+                                # One report per run: the
+                                # second `goal` call is refused instead of setting
+                                # off the same sound and the same notification
+                                # again. The run holds the answer; the tool holds
+                                # the rule.
+                                ziel_gemeldet=ziel_bericht is not None,
+                                # Only where the model has eyes. Without them
+                                # `read_file` says it cannot show the picture
+                                # instead of handing over one nobody can see.
+                                modellbild=modellbild if zustand.kann("vision") else None,
+                                # The memory's switch for this model's side, as in
+                                # the chat: not in the prompt, not in a listing.
+                                gedaechtnis_zeigen=aufruf.name == memory.WERKZEUG_NAME
+                                and gedaechtnis.mitschicken(repositories, zustand),
+                                # A run the chat model sent off is judged by the
+                                # chat's mode; what that mode asks about was
+                                # asked about above.
+                                rules_of="chat" if ask_in_chat else None,
+                                # The job's stop reaches a picture being drawn.
+                                abbruch=generierung.signal,
+                                repositories=repositories, turn=auftrag_id,
+                            )
+                        finally:
+                            generierung.tool_ends()
                     if aufruf.name == datei_schreiben.WERKZEUG_NAME and not fehlgeschlagen:
                         datei_geschrieben = True
                     if aufruf.name == ablage_werkzeug.WERKZEUG_NAME:
@@ -3903,7 +3965,12 @@ def _auftragslauf(
                 fortsetzung_geplant = False
                 abgebrochen = True
 
-            if abgebrochen:
+            if abgebrochen and generierung.stop_reason == job_watchdog.REASON:
+                # Ended by the watchdog for its silence: not stopped by
+                # anybody, so it fails, with the reason that says what
+                # happened. The report reaches the chat like any ending.
+                zustand_ende, grund = "gescheitert", job_watchdog.REASON
+            elif abgebrochen:
                 # The stop button's reason, unless whoever stopped the run
                 # named another: the run above it, or its deleted chat.
                 zustand_ende, grund = "abgebrochen", generierung.stop_reason or "benutzer_abbruch"

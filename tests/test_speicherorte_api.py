@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 
 def test_uebersicht_listet_jeden_ort(client):
     antwort = client.get("/api/v1/speicherorte")
@@ -96,3 +98,66 @@ def test_a_folder_inside_the_data_folder_is_taken(client):
     ziel = daten / "elsewhere"
     antwort = client.put("/api/v1/speicherorte/agent_dock", json={"pfad": str(ziel)})
     assert antwort.status_code == 200, antwort.text
+
+
+# --- Only an absolute path is taken --------------------------------------------
+
+
+@pytest.mark.parametrize("pfad", ["bilder-relativ", "./neu", "a/b", "../nebenan", '"relativ/in-anfuehrungszeichen"'])
+def test_a_relative_path_is_refused_with_its_own_sentence_and_makes_nothing(
+    client, tmp_path, monkeypatch, pfad
+):
+    arbeit = tmp_path / "arbeitsverzeichnis"
+    arbeit.mkdir()
+    monkeypatch.chdir(arbeit)
+    vorher = client.get("/api/v1/speicherorte").json()
+
+    english = client.put(
+        "/api/v1/speicherorte/images", json={"pfad": pfad}, headers={"X-Ui-Language": "en"}
+    )
+    german = client.put(
+        "/api/v1/speicherorte/images", json={"pfad": pfad}, headers={"X-Ui-Language": "de"}
+    )
+
+    assert english.status_code == 400 and german.status_code == 400
+    assert english.json()["detail"] == "Enter an absolute folder path"
+    assert german.json()["detail"] == "Bitte einen absoluten Ordnerpfad angeben"
+    # Nothing was made where the service happens to run, and nothing stored.
+    assert list(arbeit.iterdir()) == []
+    assert client.get("/api/v1/speicherorte").json() == vorher
+
+
+def test_silence_an_absolute_path_the_same_in_quotes_and_with_a_tilde_are_taken(
+    client, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # The folder ``~`` stands for is named by this variable on Windows.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    plain = tmp_path / "plain"
+    quoted = tmp_path / "quoted dir"
+
+    for text, wanted in (
+        (str(plain), plain),
+        (f'"{quoted}"', quoted),
+        ("~/home-relative", tmp_path / "home-relative"),
+    ):
+        answer = client.put("/api/v1/speicherorte/images", json={"pfad": text})
+        assert answer.status_code == 200, (text, answer.text)
+        assert answer.json()["pfad"] == str(wanted.resolve())
+        assert wanted.is_dir()
+    client.delete("/api/v1/speicherorte/images")
+
+
+def test_silence_an_empty_path_stays_empty_and_a_file_stays_a_file(client, tmp_path):
+    for text in ("", "   "):
+        answer = client.put(
+            "/api/v1/speicherorte/images", json={"pfad": text}, headers={"X-Ui-Language": "en"}
+        )
+        assert answer.status_code == 400
+        assert answer.json()["detail"] == "Enter a folder path"
+    datei = tmp_path / "datei.txt"
+    datei.write_text("x", encoding="utf-8")
+    answer = client.put(
+        "/api/v1/speicherorte/images", json={"pfad": str(datei)}, headers={"X-Ui-Language": "en"}
+    )
+    assert answer.json()["detail"] == "This path already points to a file, not a folder"

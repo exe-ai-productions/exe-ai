@@ -46,9 +46,13 @@ const close = async () => {
   await wait(300)
 }
 const patches = (key) => stub.calls.filter((c) => c.name === 'patch' && c.key === key).map((c) => c.values)
-const switchFor = (word) =>
-  [...document.querySelectorAll('button[role="switch"]')].find((b) =>
-    (b.getAttribute('aria-label') || '').toLowerCase().includes(word))
+// The cache steps stand in a dropdown (the texts are not loaded here, an entry is named by its key).
+const kvField = () => document.getElementById('rs-kv')
+const chooseKv = async (word) => {
+  kvField().click()
+  await wait(300)
+  ;[...document.querySelectorAll('[role="option"]')].find((o) => o.textContent.includes(word)).click()
+}
 
 // 1. The model window: a port typed, the window gone within 100 ms.
 await open('modell')
@@ -88,9 +92,8 @@ stub.calls.length = 0
 stub.settings.feineinstellungen = {}
 await open('modell')
 stub.settings.feineinstellungen = { festnageln: true }
-const kv = switchFor('kv')
-report.kv_found = Boolean(kv)
-kv.click()
+report.kv_found = Boolean(kvField())
+await chooseKv('kv_q8')
 await wait(1400)
 report.lever_calls = stub.calls
   .filter((c) => c.key === 'feineinstellungen')
@@ -116,8 +119,7 @@ await wait(2600)
 stub.settings.feineinstellungen = { kv_cache: 'q8_0' }
 stub.running.chat = false
 await wait(5200)
-const kvAfter = switchFor('kv')
-report.after_run_kv_on = kvAfter ? kvAfter.getAttribute('aria-checked') : null
+report.after_run_kv_on = kvField() ? kvField().textContent.includes('kv_q8') : null
 report.after_run_writes = stub.calls.filter((c) => c.key === 'feineinstellungen').length
 await close()
 
@@ -167,6 +169,6 @@ def test_silence_levers_nobody_moved_are_not_sent(report):
 
 
 def test_the_levers_are_read_again_when_a_run_has_ended(report):
-    assert report["after_run_kv_on"] == "true"
+    assert report["after_run_kv_on"] is True
     # Reading is not writing: what was stored by somebody else stays theirs.
     assert report["after_run_writes"] == 0

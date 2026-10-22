@@ -73,12 +73,17 @@ def processes() -> Iterator[list[subprocess.Popen[str]]]:
             process.stdout.close()
 
 
-def note(port: int, pid: int, *, written: float | None = None) -> Path:
-    """The note of a service on ``port`` naming ``pid`` — written now, or
-    at the time given."""
+def note(port: int, pid: int, *, began: float | None = None, written: float | None = None) -> Path:
+    """The note of a service on ``port`` naming ``pid`` and, as a service
+    writes it, when that process began — as the system says, or at the moment
+    given. ``written`` sets the time the file was written at."""
     file = service.note_file(port)
     file.parent.mkdir(parents=True, exist_ok=True)
-    file.write_text(json.dumps({"pid": pid, "port": port}), encoding="utf-8")
+    beginning = service.began(pid) if began is None else began
+    content: dict[str, object] = {"pid": pid, "port": port}
+    if beginning is not None:
+        content["began"] = beginning
+    file.write_text(json.dumps(content), encoding="utf-8")
     if written is not None:
         os.utime(file, (written, written))
     return file
@@ -99,7 +104,7 @@ def test_a_stranger_that_inherited_the_number_gets_no_signal(
         # just now under the number the note names.
         stranger = subprocess.Popen([sys.executable, "-c", IDLE], text=True)
         processes.append(stranger)
-        note(port, stranger.pid, written=time.time() - HOUR)
+        note(port, stranger.pid, began=time.time() - HOUR)
 
         assert stop(port, tmp_path) == 0
 
@@ -119,7 +124,7 @@ def test_the_process_that_wrote_the_note_is_ended_as_ever(
     )
     processes.append(running)
     assert running.stdout is not None and running.stdout.readline().strip() == "listening"
-    # Written after the process began, the way a service writes it.
+    # The way a service writes it: its own beginning in the note.
     note(port, running.pid)
 
     assert stop(port, tmp_path) == 0
@@ -215,12 +220,13 @@ def test_a_note_of_a_stranger_does_not_hide_a_service_that_answers(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The note names a process that began after it was written — the number
-    was handed on — while the service itself answers at the port."""
+    """The note names a process that began at another time than the note says
+    — the number was handed on — while the service itself answers at the
+    port."""
     port, running = answering_with(processes, 200, SERVICE_HEALTH)
     stranger = subprocess.Popen([sys.executable, "-c", IDLE], text=True)
     processes.append(stranger)
-    note(port, stranger.pid, written=time.time() - HOUR)
+    note(port, stranger.pid, began=time.time() - HOUR)
 
     assert stop(port, tmp_path) == 1
 
@@ -250,35 +256,77 @@ def test_the_system_says_when_a_process_began() -> None:
     assert 0 < began <= time.time()
 
 
-def test_the_proof_goes_by_the_time_the_note_was_written(
+def test_the_proof_goes_by_the_beginning_the_note_names(
     data_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    file = note(8123, 4242, written=1_000_000.0)
-    # There before the note was: its writer.
-    monkeypatch.setattr(service, "began", lambda pid: 999_000.0)
+    file = note(8123, 4242, began=1_000_000.0)
+    # Began at the moment the note names: its writer.
+    monkeypatch.setattr(service, "began", lambda pid: 1_000_000.0)
     assert service.wrote(4242, file) is True
-    # Within the second the process list rounds to: still its writer.
-    monkeypatch.setattr(service, "began", lambda pid: 1_000_000.9)
-    assert service.wrote(4242, file) is True
-    # Begun after the note was written: a stranger.
-    monkeypatch.setattr(service, "began", lambda pid: 1_000_002.0)
-    assert service.wrote(4242, file) is False
+    # Within the tolerance of two readings: still its writer.
+    for apart in (0.9, -0.9):
+        monkeypatch.setattr(service, "began", lambda pid, apart=apart: 1_000_000.0 + apart)
+        assert service.wrote(4242, file) is True
+    # Began at another time: a stranger, before and after the note alike.
+    for apart in (2.0, -2.0, 3600.0, -3600.0):
+        monkeypatch.setattr(service, "began", lambda pid, apart=apart: 1_000_000.0 + apart)
+        assert service.wrote(4242, file) is False
 
 
-@pytest.mark.parametrize(
-    ("listed", "seconds"),
-    [
-        ("00:05", 5.0),
-        ("12:34", 754.0),
-        ("01:02:03", 3723.0),
-        ("2-03:04:05", 183845.0),
-        ("", None),
-        ("soon", None),
-        ("1:2:3:4", None),
-        ("x-00:01", None),
-    ],
-)
-def test_a_running_time_is_read_as_the_process_list_writes_it(
-    listed: str, seconds: float | None
+def test_a_note_that_names_no_beginning_proves_nothing(
+    data_root: Path,
+    processes: list[subprocess.Popen[str]],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    assert service._elapsed(listed) == seconds
+    """A note of a service of an older version carries no beginning: whatever
+    answers at the port is not ended on a guess."""
+    port, running = answering_with(processes, 200, SERVICE_HEALTH)
+    file = service.note_file(port)
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text(json.dumps({"pid": running.pid, "port": port}), encoding="utf-8")
+
+    assert service.wrote(running.pid, file) is False
+    assert stop(port, tmp_path) == 1
+
+    assert running.poll() is None
+    assert capsys.readouterr().err == Texts("en").t("cli.service_not_stopped", port=port) + "\n"
+
+
+@pytest.mark.parametrize("beginning", ["soon", None, True, [1.0], 10**400, -(10**400)])
+def test_a_note_whose_beginning_is_no_time_names_none(
+    data_root: Path, beginning: object
+) -> None:
+    file = service.note_file(8123)
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text(json.dumps({"pid": os.getpid(), "port": 8123, "began": beginning}))
+    assert service.read_beginning(file) is None
+    assert service.wrote(os.getpid(), file) is False
+
+
+def test_the_service_is_found_where_the_machine_has_no_ps_and_the_note_file_is_old(
+    data_root: Path,
+    processes: list[subprocess.Popen[str]],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slim machine lists no process by running time, and the time the note
+    file was written at proves nothing: the beginning the service wrote into
+    the note is what is compared."""
+    empty = tmp_path / "no-programs"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    port = free_port()
+    running = subprocess.Popen(
+        [sys.executable, "-c", LISTENING, str(port)], stdout=subprocess.PIPE, text=True
+    )
+    processes.append(running)
+    assert running.stdout is not None and running.stdout.readline().strip() == "listening"
+    # The file lies in the far past: its own time is not what is read.
+    note(port, running.pid, written=time.time() - 10 * HOUR)
+
+    assert stop(port, tmp_path) == 0
+
+    assert running.wait(service.STOP_WAIT_SECONDS) != 0
+    assert capsys.readouterr().out == Texts("en").t("cli.service_stopped", port=port) + "\n"

@@ -15,11 +15,10 @@
   import { t } from '../lib/texte.svelte.js'
 
   /* `open` and `onToggle` belong to the bar, which keeps one menu open at a
-     time; `narrow` shortens the name when the window runs out of room,
-     `tight` takes the lamps out of the row as well and cuts the name
-     shorter still, and `label` hands the bar the words shown, which it
-     measures by. */
-  let { open = false, onToggle = () => {}, narrow = false, tight = false, label = $bindable('') } = $props()
+     time; `tight` takes the lamps out of the row when the window runs out of
+     room and lets the name shrink to what the row has left, and `label`
+     hands the bar the words shown, which it measures by. */
+  let { open = false, onToggle = () => {}, tight = false, label = $bindable('') } = $props()
 
   /* Filtered even before the selection has arrived: unfiltered means every
      model of every catalogue, and one provider alone reports 124. */
@@ -98,9 +97,9 @@
   </span>
 {/snippet}
 
-<div class="anchor" data-bar-menu="model">
+<div class="anchor" class:tight data-bar-menu="model">
   <span class="group" class:open>
-    <button class="part" class:narrow class:tight onclick={() => onToggle(!open)}
+    <button class="part" class:tight onclick={() => onToggle(!open)}
             title={chosen?.name ?? emptyText} aria-label={t('modell.titel')} aria-expanded={open}>
       <span class="name" class:empty={!chosen}>{chosen?.name ?? emptyText}</span>
       {@render lampRow(chosenLamps)}
@@ -170,10 +169,13 @@
     text-overflow: ellipsis;
     color: var(--text);
   }
-  .part.narrow .name { max-width: 58px; }
-  /* Tight: the name down to a few letters, and no lamps in the row — the
-     readings stay on the model's own line in the menu (`tail-lamps`). */
-  .part.tight .name { max-width: 44px; }
+  /* Narrow takes the words out of the row and leaves the name whole: the
+     bar measures the narrow form by it. Tight takes the lamps out as well —
+     they stay on the model's own line in the menu (`tail-lamps`) — and lets
+     the picker shrink with the room the row has left: the name is cut only
+     as far as that takes, down to a few letters. */
+  .anchor.tight { flex: 0 1 auto; }
+  .part.tight .name { min-width: 44px; }
   .part.tight .lamps { display: none; }
   .name.empty { color: var(--text-still); }
   .chevron { display: inline-flex; color: var(--text-still); transition: transform 0.2s; }
@@ -248,7 +250,7 @@
   }
   .row:hover { background: var(--bg-hoch); color: var(--text); }
   .row.chosen { color: var(--text); }
-  .check { width: 14px; display: inline-flex; flex: none; color: var(--blau); }
+  .check { width: 14px; display: inline-flex; flex: none; color: var(--text); }
   .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tail-lamps { margin-left: auto; display: inline-flex; }
   .nothing { padding: 8px 10px; font-size: 12.5px; color: var(--text-still); }

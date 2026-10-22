@@ -22,7 +22,7 @@
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    color: var(--gruen);
+    color: var(--gruen-text);
   }
   .ring {
     display: inline-grid;

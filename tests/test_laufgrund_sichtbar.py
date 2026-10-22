@@ -89,7 +89,7 @@ def test_die_gruende_sind_wirklich_uebersetzt():
 
 def test_die_meldung_traegt_den_grund():
     assert cronmeldung.mit_grund("Postfach lesen", "zeitgrenze") == (
-        "Postfach lesen — time limit reached"
+        "Postfach lesen - time limit reached"
     )
 
 
@@ -100,7 +100,7 @@ def test_der_grund_kommt_aus_dem_vorhandenen_sprachblock():
         if grund == "fertig":
             continue
         satz = _katalog("en")["jobs"]["grund"][grund]
-        assert cronmeldung.mit_grund("Postfach lesen", grund).endswith(f" — {satz}")
+        assert cronmeldung.mit_grund("Postfach lesen", grund).endswith(f" - {satz}")
 
 
 def test_ein_sauberer_lauf_meldet_sich_wie_bisher():
@@ -117,7 +117,7 @@ def test_ein_unbekannter_grund_zeigt_sich_selbst():
     catalogue entry. Showing the key would put ``jobs.grund.fehler: Kabelbrand``
     in front of somebody."""
     text = cronmeldung.mit_grund("Postfach lesen", "fehler: Kabelbrand")
-    assert text == "Postfach lesen — fehler: Kabelbrand"
+    assert text == "Postfach lesen - fehler: Kabelbrand"
     assert "jobs.grund" not in text
 
 
@@ -137,9 +137,9 @@ def test_es_bleibt_bei_einer_mitteilung(monkeypatch):
     )
 
     klang, mitteilung = befehle
-    assert klang[0] == "afplay" and "fehler" in klang[1]
+    assert klang[0] == "afplay" and "fehler" in klang[-1]
     assert len([b for b in befehle if b[0] == "osascript"]) == 1
-    assert "Failed — Postfach lesen — delivery to the dock failed" in mitteilung[-1]
+    assert "Failed - Postfach lesen - delivery to the Doc folder failed" in mitteilung[-1]
 
 
 async def test_der_ganze_weg_bis_zur_mitteilung(repos, monkeypatch):
@@ -159,7 +159,7 @@ async def test_der_ganze_weg_bis_zur_mitteilung(repos, monkeypatch):
         repos, eintrag.id, "Postfach lesen", erfolgreich=False, grund="rundengrenze"
     )
 
-    assert aufrufe == [("Postfach lesen — round limit reached", False)]
+    assert aufrufe == [("Postfach lesen - round limit reached", False)]
 
 
 async def test_ein_stiller_eintrag_bleibt_still(repos, monkeypatch):
@@ -301,8 +301,8 @@ def test_die_route_nimmt_den_satz_aus_dem_ablauf(client):
             "/api/v1/cronjobs", headers={"Accept-Language": "de"}
         ).json()
         assert deutsch["skript_nicht_startbar"] == (
-            "„sicherung.sh“ ist nicht ausführbar. Erteile der Datei im Skriptordner "
-            "(/wo/anders) eine Ausführungsberechtigung und versuche es erneut."
+            "„sicherung.sh“ ist nicht ausführbar. Bitte der Datei im Skriptordner "
+            "(/wo/anders) eine Ausführungsberechtigung erteilen und erneut versuchen."
         )
 
         (englisch,) = client.get(

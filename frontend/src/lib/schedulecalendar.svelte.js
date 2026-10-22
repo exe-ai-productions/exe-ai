@@ -1,8 +1,7 @@
 /*
   The calendar's state, shared by the tool surface (teile/ModulCronjobs.svelte)
-  and Settings › Cronjobs (teile/SettingsCronjobs.svelte): day or month, the
-  chosen day, the month on show, and the rows the service answers for the
-  range on show. One object — `kalender`, below — so both faces read the same
+  and Settings › Cronjobs (teile/SettingsCronjobs.svelte): the chosen day,
+  the month on show, and the rows the service answers for the range on show. One object — `kalender`, below — so both faces read the same
   clock, the same chosen day and the same answer; the faces only draw it —
   ScheduleCalendar.svelte the calendar, ScheduleDayRuns.svelte the chosen
   day's runs. A face holds it while it stands (`hold`): the clock and the
@@ -20,7 +19,8 @@ import { untrack } from 'svelte'
 import { api } from './api.js'
 import { t, texte } from './texte.svelte.js'
 import { agentName } from './agentmarke.js'
-import { dayIn, partsIn } from './clock.js'
+import { dayIn } from './clock.js'
+import { isoWeek } from './isoweek.js'
 import { neuigkeit } from './ereignisstrom.svelte.js'
 import { zustand } from './zustand.svelte.js'
 
@@ -65,12 +65,9 @@ export const leadOf = (row) => (row.count > 1 ? `${row.count}×` : row.first)
 export const whoOf = (row) =>
   row.kind === 'reminder' ? t('cronjobs.kind_reminder') : row.skript || agentName(row.agent)
 
-const minuteOf = (clock) => Number(clock.slice(0, 2)) * 60 + Number(clock.slice(3, 5))
-
 export class ScheduleCalendar {
   jetzt = $state(new Date())
-  /* Day or month, the chosen day, and the month on show. */
-  view = $state('day')
+  /* The chosen day, and the month on show. */
   chosen = $state('')
   shownMonth = $state('')
   /* The calendar's rows per day, for the range on show. */
@@ -116,7 +113,6 @@ export class ScheduleCalendar {
   #reset() {
     const today = dayIn(new Date(), zustand.timezone)
     this.jetzt = new Date()
-    this.view = 'day'
     this.chosen = today
     this.shownMonth = today.slice(0, 7)
     this.calendar = {}
@@ -137,16 +133,27 @@ export class ScheduleCalendar {
     const cells = Math.ceil((lead + length) / 7) * 7
     return Array.from({ length: cells }, (_, i) => dayOf(new Date(y, m - 1, 1 - lead + i)))
   })
+  /* The calendar week of each row of the grid, by its Monday. */
+  weeks = $derived(
+    Array.from({ length: this.grid.length / 7 }, (_, row) => isoWeek(this.grid[row * 7])),
+  )
   weekdayHeads = $derived(
     Array.from({ length: 7 }, (_, i) =>
       new Date(2026, 0, 5 + i).toLocaleDateString(this.locale, { weekday: 'narrow' })),
   )
-  /* The date row names the day short; the heading over its runs names it
-     in full, or says "Today". */
+  /* The two-letter weekdays, "Mo", "Di": the month of the settings and the
+     month of the tool surface both name them so. */
+  weekdayShort = $derived(
+    Array.from({ length: 7 }, (_, i) =>
+      new Date(2026, 0, 5 + i)
+        .toLocaleDateString(this.locale, { weekday: 'short' })
+        .replace('.', '')
+        .slice(0, 2)),
+  )
+  /* The date row names the month; the heading over a day's runs names the
+     day in full, or says "Today". */
   title = $derived(
-    this.view === 'day'
-      ? dateOf(this.chosen).toLocaleDateString(this.locale, { weekday: 'short', day: 'numeric', month: 'short' })
-      : dateOf(`${this.shownMonth}-01`).toLocaleDateString(this.locale, { month: 'long', year: 'numeric' }),
+    dateOf(`${this.shownMonth}-01`).toLocaleDateString(this.locale, { month: 'long', year: 'numeric' }),
   )
   listTitle = $derived(
     this.chosen === this.today
@@ -155,50 +162,24 @@ export class ScheduleCalendar {
   )
 
   /* The month asks for its whole grid and, when the arrows have moved away
-     from it, the chosen day as well: its runs stay under the calendar. */
-  range = $derived(
-    this.view === 'day'
-      ? [this.chosen, this.chosen]
-      : [
-          this.chosen < this.grid[0] ? this.chosen : this.grid[0],
-          this.chosen > this.grid[this.grid.length - 1] ? this.chosen : this.grid[this.grid.length - 1],
-        ],
-  )
+     from it, the chosen day as well: its runs stay in view. */
+  range = $derived([
+    this.chosen < this.grid[0] ? this.chosen : this.grid[0],
+    this.chosen > this.grid[this.grid.length - 1] ? this.chosen : this.grid[this.grid.length - 1],
+  ])
   shaped = $derived(Object.fromEntries(Object.keys(this.calendar).map((day) => [day, rowsOf(this.calendar[day])])))
   dayRows = $derived(this.shaped[this.chosen] || [])
 
-  /* The day line: a dot for a schedule that comes once that day, at its
-     minute, in its state's colour; a band under the line for one that comes
-     often. Now's mark only on today. */
-  nowMinute = $derived.by(() => {
-    const { hour, minute } = partsIn(this.jetzt, zustand.timezone)
-    return hour * 60 + minute
-  })
-  dots = $derived(
-    this.dayRows
-      .filter((row) => row.count === 1 && row.first)
-      .map((row, i) => ({ key: row.cronjob_id || `gone:${i}`, minute: minuteOf(row.first), colour: row.colour })),
-  )
-  band = $derived(this.dayRows.some((row) => row.count > 1))
-
-  /* ‹ and › step a day in the day, a month in the month. */
+  /* ‹ and › step a month. */
   step(by) {
-    if (this.view === 'day') {
-      const d = dateOf(this.chosen)
-      d.setDate(d.getDate() + by)
-      this.chosen = dayOf(d)
-    } else {
-      const [y, m] = this.shownMonth.split('-').map(Number)
-      const d = new Date(y, m - 1 + by, 1)
-      this.shownMonth = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`
-    }
+    const [y, m] = this.shownMonth.split('-').map(Number)
+    const d = new Date(y, m - 1 + by, 1)
+    this.shownMonth = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`
   }
-  showDay() {
-    this.view = 'day'
-  }
-  showMonth() {
-    this.shownMonth = this.chosen.slice(0, 7)
-    this.view = 'month'
+  /* "Today": back to the month that holds it, with today chosen. */
+  toToday() {
+    this.chosen = this.today
+    this.shownMonth = this.today.slice(0, 7)
   }
   /* A day clicked in the month is chosen, and the month stays. */
   choose(day) {

@@ -118,14 +118,14 @@ def test_installierte_variante_wird_beim_namen_genannt():
     # "Version:" with nothing behind it, and never silence either.
     assert re.search(
         r"\{#if stand\?\.programm_da\}[\s\S]*?"
-        r"\{t\('bildserver\.version_zeile', \{ bau: stand\.bau \?\? '—' \}\)\}",
+        r"<span class=\"versionsmarke\">\{stand\.bau \?\? '-'\}</span>",
         quelle,
     ), "the installed build is not named"
-    assert re.search(
-        r"\{#if v\.variante === varianten\.installiert\}\s*"
-        r"<span class=\"v_still\">\{t\('bildserver\.variante_installiert'\)\}</span>",
-        quelle,
-    ), "the installed variant is not named"
+    # The variant rows are the shared piece's: it names the installed one,
+    # and the page tells it which one that is.
+    assert "installed={varianten?.installiert}" in quelle, "the installed variant is not handed over"
+    bauzeilen = (QUELLE.parent / "BuildRows.svelte").read_text(encoding="utf-8")
+    assert "{t('bildserver.variante_installiert')}" in bauzeilen, "the installed variant is not named"
 
 
 def test_zweiter_download_bekommt_weiter_fortschritt():

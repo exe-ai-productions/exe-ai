@@ -6,11 +6,9 @@ where it is on every call — and anything passed as an argument can be forged
 by the model.
 
 What it can do is deliberately narrow. It appends ONE entry under one of two
-headings, or replaces ONE existing entry with a new one, and called without a
-text it lists the entries it holds. It cannot hand over whole file contents,
-and it cannot delete: a model that can write the file in one go can also wipe
-it in one go, and clearing the memory is the user's move, one button away in
-the settings window.
+headings, replaces ONE existing entry with a new one, or deletes ONE entry. It
+cannot hand over whole file contents: the model names a short part of the
+entry it means and the program finds it.
 
 The tool exists only where the memory travels to the model (app/gedaechtnis.py
 ``mitschicken``): where the switch for the endpoint's side is off, the model
@@ -19,24 +17,32 @@ not in a call (app/tools/registry.py). Storing without being shown what is
 stored would tell the model, through the answer to each call, whether a
 sentence is already there.
 
-The list is a way of its own because the entries stand in the system prompt
-only from the start of a conversation: a model that can write but never read
-cannot correct anything that was saved since.
+There is no way to read the memory through the tool: the entries stand in the
+system prompt from the start of a conversation, and a refusal that names the
+entries (a part that matched none or several, a memory that is full) carries
+them in its answer, so the next call can aim right.
 
-An entry to replace is found by a short part of its text, not by its full
-wording — the model rarely has the exact sentence in front of it. The part
-has to point at ONE entry; when it points at none or at several, nothing is
-written and the answer carries the entries, so the next call can aim right.
+An entry to replace or delete is found by a short part of its text, not by
+its full wording — the model rarely has the exact sentence in front of it.
+The part has to point at ONE entry; when it points at none or at several,
+nothing is written and the answer carries the entries.
+
+The memory is one size: the entries of both lists together hold at most
+``MAX_TOTAL`` characters, an entry at most ``MAX_LAENGE``. A write that would
+take the entries past it is refused with the entries in the answer, so the
+model can summarize or delete first.
 
 The two kinds are not decoration:
 
   * A **rule** changes behaviour and applies always.
   * A **fact** is knowledge and applies where it fits.
 
-Neither asks before it is stored. There is exactly one prompt in the whole
-program — the shell reaching outside the shared folders — and it is worth
-something only because it is rare. A prompt that comes ten times a session
-gets clicked away without reading, and then it protects nothing.
+Nothing asks before it is stored, replaced or deleted
+(app/berechtigungen.py ``NEVER_ASKED``). There is exactly one prompt in the
+whole program that matters — the shell reaching outside the shared folders —
+and it is worth something only because it is rare. A prompt that comes ten
+times a session gets clicked away without reading, and then it protects
+nothing.
 
 What carries that here is that the memory is **visible and reversible**: it
 is one file, it stands open in the settings window, and a line can be taken
@@ -65,6 +71,10 @@ WERKZEUG_NAME = "memory_save"
 # whole document in the file that travels with every single request.
 MAX_LAENGE = 600
 
+# The entries of both lists together, one per line: 2,200 characters for the
+# rules and 1,375 for the facts, as one budget.
+MAX_TOTAL = 3575
+
 REGEL = "rule"
 FAKTUM = "fact"
 
@@ -89,6 +99,10 @@ class ErsetztNichtEindeutig(MemoryVerboten):
         self.eintraege = eintraege
 
 
+class MemoryFull(MemoryVerboten):
+    """The write would take the entries past ``MAX_TOTAL`` — nothing was written."""
+
+
 def _vergleichbar(text: str) -> str:
     """Case and runs of whitespace do not decide whether a part matches."""
     return " ".join(text.split()).casefold()
@@ -98,36 +112,34 @@ def werkzeug_beschreibung() -> MCPWerkzeug:
     """The tool as the model sees it.
 
     It is only ever shown to a model the memory travels to, where the entries
-    are read when a conversation begins: a new one is in front of the model
+    are read when a conversation begins: a change is in front of the model
     from the next conversation on and not at once.
     """
-    when = (
-        "Both are saved without confirmation. Memory is loaded at the start of a "
-        "conversation, so newly saved entries become available in the next conversation, "
-        "not immediately. This tool's response confirms that an entry was saved."
-    )
-    correcting = (
-        "to correct something, pass a short part of the existing entry's "
-        "text as 'replaces'; that part must match exactly one entry.\n"
-        "Called with an empty 'text', it saves nothing and lists the "
-        "entries you have stored.\n"
-        "The answer says what happened: saved, replaced, already known, or "
-        "which entries there are when 'replaces' matched none or several."
-    )
     return MCPWerkzeug(
         name=WERKZEUG_NAME,
         beschreibung=(
-            "Remembers one thing about this user across conversations: how "
-            "they want to be worked with, what they prefer, who they are, how "
-            "their project is put together.\n"
+            "Keeps the memory about this user across conversations: how they "
+            "want to be worked with, what they prefer, who they are, how their "
+            "project is put together.\n"
             "Kind 'rule' is an instruction that changes how you work and "
             "always applies. Kind 'fact' is knowledge that applies where it "
-            f"fits. {when} A correction the user "
-            "makes, or a preference they state in passing, is worth an entry "
-            "even when they never asked for one.\n"
-            "One entry per call, one sentence, at most "
-            f"{MAX_LAENGE} characters. It cannot delete and it cannot take "
-            f"whole file contents — {correcting}"
+            "fits. A correction the user makes, or a preference they state in "
+            "passing, is worth an entry even when they never asked for one.\n"
+            "The tool does three things, one entry per call. To save a new "
+            "entry, pass 'text' and 'kind'. To change one, pass the new 'text' "
+            "and 'kind', and in 'replaces' a short part of the old entry's "
+            "text. To delete one, pass only 'remove' with a short part of its "
+            "text. The part must match exactly one entry, otherwise nothing is "
+            "changed and the answer lists the entries.\n"
+            "Nothing is asked before an entry is saved, changed or deleted. "
+            "Memory is loaded at the start of a conversation, so a change is in "
+            "front of you in the next conversation, not immediately; the answer "
+            "of this tool says what was done.\n"
+            f"An entry is one sentence of at most {MAX_LAENGE} characters, and "
+            f"the whole memory holds at most {MAX_TOTAL:,} characters. When a "
+            "change would exceed that, nothing is saved and the answer lists the "
+            "entries: summarize some with 'replaces' or delete stale ones with "
+            "'remove', then save again."
         ),
         schema={
             "type": "object",
@@ -151,8 +163,15 @@ def werkzeug_beschreibung() -> MCPWerkzeug:
                         "new information."
                     ),
                 },
+                "remove": {
+                    "type": "string",
+                    "description": (
+                        "A brief excerpt from the existing entry to delete. Pass it alone, "
+                        "without 'text'."
+                    ),
+                },
             },
-            "required": ["text", "kind"],
+            "required": [],
         },
         server=SERVER_NAME,
     )
@@ -277,6 +296,68 @@ def auflisten(inhalt: str) -> str:
     return _zusammensetzen(regeln, fakten)
 
 
+def _total_size(regeln: list[str], fakten: list[str]) -> int:
+    """How much room the entries take: both lists, one entry to a line."""
+    return len("\n".join(regeln + fakten))
+
+
+def _refuse_if_full(inhalt: str, regeln: list[str], fakten: list[str], before: int, was: str) -> None:
+    """Refuses a write that would take the entries past ``MAX_TOTAL``.
+
+    Only a write that grows them counts: a file somebody filled past the line
+    by hand can still be summarized or cleared, which is the way out.
+    """
+    now = _total_size(regeln, fakten)
+    if now > MAX_TOTAL and now > before:
+        raise MemoryFull(
+            f"The memory holds {before:,} of {MAX_TOTAL:,} characters. {was} would exceed the "
+            "limit. Nothing was saved. Summarize overlapping entries with 'replaces' or delete "
+            "stale ones with 'remove', then try again.\n\n" + auflisten(inhalt)
+        )
+
+
+def _single_match(inhalt: str, regeln: list[str], fakten: list[str], teil: str, purpose: str) -> str:
+    """The comparable form of the ONE entry a part of text points at.
+
+    The whole entry first: a short entry is also a part of every longer one
+    that repeats it, and could otherwise never be named alone. Copies of the
+    same sentence (case and spacing aside) count as one. Pointing at none or
+    at several raises ``ErsetztNichtEindeutig``, the entries in its
+    ``eintraege``; ``purpose`` names what the part was for in the sentence.
+    """
+    alle = [_vergleichbar(e) for e in regeln + fakten]
+    gesucht = _vergleichbar(teil)
+    getroffen = {e for e in alle if e == gesucht}
+    if not getroffen:
+        getroffen = {e for e in alle if gesucht in e}
+    if len(getroffen) != 1:
+        grund = (
+            f"No entry contains '{teil}'."
+            if not getroffen
+            else f"{len(getroffen)} entries contain '{teil}'."
+        )
+        raise ErsetztNichtEindeutig(
+            f"{grund} Nothing was saved. Retry with text matching exactly one entry as "
+            f"'{purpose}'.",
+            eintraege=auflisten(inhalt),
+        )
+    (alter,) = getroffen
+    return alter
+
+
+def _compose_file(inhalt: str, regeln: list[str], fakten: list[str]) -> str:
+    """The file from the two lists, what the person wrote kept as it stood:
+    the text above the first heading of ours, and every heading of their own
+    with its lines."""
+    preamble, blocks = _gliedern(inhalt)
+    entries = _zusammensetzen(regeln, fakten, blocks)
+    if not preamble.strip():
+        return entries
+    # As written, the gap before the first heading included; a note without
+    # a line break of its own gets one, so the heading stays a heading.
+    return preamble + entries if preamble.endswith("\n") else f"{preamble}\n{entries}"
+
+
 def eintragen(inhalt: str, text: str, art: str, ersetzt: str = "") -> str:
     """The new file content — pure text in, pure text out, nothing on disk.
 
@@ -287,35 +368,19 @@ def eintragen(inhalt: str, text: str, art: str, ersetzt: str = "") -> str:
     ``ersetzt`` is a part of the entry's text. It has to point at one entry;
     copies of the same sentence (case and spacing aside) count as one, and
     all of them go. Pointing at none or at several raises
-    ``ErsetztNichtEindeutig``, the entries in its ``eintraege``.
+    ``ErsetztNichtEindeutig``, the entries in its ``eintraege``. A result that
+    would take the entries past ``MAX_TOTAL`` raises ``MemoryFull``.
 
     What the person wrote into the file stays as it stood: the text above the
     first heading of ours, and every heading of their own with its lines.
     """
     regeln, fakten = _zeilen_teilen(inhalt)
+    before = _total_size(regeln, fakten)
     ersetzt = ersetzt.strip().removeprefix("-").strip()
 
     ziel = regeln if art == REGEL else fakten
     if ersetzt:
-        alle = [_vergleichbar(e) for e in regeln + fakten]
-        gesucht = _vergleichbar(ersetzt)
-        # The whole entry first: a short entry is also a part of every longer
-        # one that repeats it, and could otherwise never be named alone.
-        getroffen = {e for e in alle if e == gesucht}
-        if not getroffen:
-            getroffen = {e for e in alle if gesucht in e}
-        if len(getroffen) != 1:
-            grund = (
-                f"No entry contains '{ersetzt}'."
-                if not getroffen
-                else f"{len(getroffen)} entries contain '{ersetzt}'."
-            )
-            raise ErsetztNichtEindeutig(
-                f"{grund} Nothing was saved. Retry with text matching exactly one entry as "
-                "'replaces'.",
-                eintraege=auflisten(inhalt),
-            )
-        (alter,) = getroffen
+        alter = _single_match(inhalt, regeln, fakten, ersetzt, "replaces")
         # Every copy goes, so no stale sentence is left beside the new one;
         # under its own heading the new entry takes the old one's place.
         stelle = next((i for i, e in enumerate(ziel) if _vergleichbar(e) == alter), None)
@@ -326,28 +391,44 @@ def eintragen(inhalt: str, text: str, art: str, ersetzt: str = "") -> str:
 
     if text not in ziel:
         ziel.append(text)
-    preamble, blocks = _gliedern(inhalt)
-    entries = _zusammensetzen(regeln, fakten, blocks)
-    if not preamble.strip():
-        return entries
-    # As written, the gap before the first heading included; a note without
-    # a line break of its own gets one, so the heading stays a heading.
-    return preamble + entries if preamble.endswith("\n") else f"{preamble}\n{entries}"
+    was = "Replacing the entry" if ersetzt else "Saving this entry"
+    _refuse_if_full(inhalt, regeln, fakten, before, f"{was} ({len(text)} characters)")
+    return _compose_file(inhalt, regeln, fakten)
+
+
+def remove_entry(inhalt: str, teil: str) -> str:
+    """The new file content without the ONE entry a part of its text points
+    at — pure text in, pure text out, like ``eintragen``. Copies of the same
+    sentence go together. Pointing at none or at several raises
+    ``ErsetztNichtEindeutig``."""
+    regeln, fakten = _zeilen_teilen(inhalt)
+    teil = teil.strip().removeprefix("-").strip()
+    alter = _single_match(inhalt, regeln, fakten, teil, "remove")
+    for liste in (regeln, fakten):
+        liste[:] = [e for e in liste if _vergleichbar(e) != alter]
+    return _compose_file(inhalt, regeln, fakten)
 
 
 async def ausfuehren(argumente: dict[str, Any], pfad: Path) -> str:
-    """Writes one entry, or lists them all when no text is given. Returns
-    what the model is told about it.
+    """Saves, replaces or deletes one entry. Returns what the model is told
+    about it.
 
     Only a model the memory travels to gets here
     (app/gedaechtnis.py ``mitschicken``): the registry refuses the call for
     any other (app/tools/registry.py).
     """
     text = _text_von(argumente)
-    if not text:
-        async with _schleuse:
-            alt = pfad.read_text(encoding="utf-8") if pfad.exists() else ""
-        return f"No text provided; nothing was saved. Stored entries:\n\n{auflisten(alt)}"
+    removed = str(argumente.get("remove") or "").strip().removeprefix("-").strip()
+    if removed and text:
+        raise MemoryVerboten(
+            "'remove' deletes an entry and takes no 'text'. Nothing was changed. To change an "
+            "entry, pass the new 'text' with 'replaces' instead."
+        )
+    if not text and not removed:
+        raise MemoryVerboten(
+            "No text provided; nothing was changed. To save an entry pass 'text' and 'kind'; "
+            "to delete one pass 'remove' with a short part of its text."
+        )
     if len(text) > MAX_LAENGE:
         raise MemoryVerboten(
             f"The entry is too long ({len(text)} characters; maximum: {MAX_LAENGE}). A memory "
@@ -360,7 +441,7 @@ async def ausfuehren(argumente: dict[str, Any], pfad: Path) -> str:
     async with _schleuse:
         alt = pfad.read_text(encoding="utf-8") if pfad.exists() else ""
         try:
-            neu = eintragen(alt, text, art, ersetzt)
+            neu = remove_entry(alt, removed) if removed else eintragen(alt, text, art, ersetzt)
         except ErsetztNichtEindeutig as fehler:
             raise MemoryVerboten(f"{fehler}\n\n{fehler.eintraege}") from fehler
         if neu.strip() == alt.strip():
@@ -373,5 +454,8 @@ async def ausfuehren(argumente: dict[str, Any], pfad: Path) -> str:
         # ``newline=""``: \n stays \n on Windows too (app/tools/datei_schreiben.py).
         await asyncio.to_thread(atomic_file.write, pfad, neu + "\n", newline="")
 
+    if removed:
+        log.info("Memory entry deleted")
+        return "Removed."
     log.info("Memory extended (%s): %s", art, text)
     return "Replaced." if ersetzt else "Saved."

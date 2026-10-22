@@ -8,7 +8,6 @@ or the light one, as the machine was set when it was chosen."""
 from __future__ import annotations
 
 import io
-import plistlib
 import sys
 import threading
 from pathlib import Path
@@ -25,12 +24,12 @@ from cli import appearance, prefs, themes
 from cli.client import KEY_HEADER
 from cli.main import main
 
-LOOKS = ("exe", "darkmatter", "moune", "heaven", "pearl")
+LOOKS = ("exe", "darkmatter", "moune", "heaven", "pearl", "snow")
 # The one that follows the machine, and the two it can be.
-AUTO, AUTO_DARK, AUTO_LIGHT = "auto", "exe", "pearl"
+AUTO, AUTO_DARK, AUTO_LIGHT = "auto", "exe", "snow"
 # The accent of each look that has one of its own, and the three colours
 # that say how something stands in the look that has none.
-ACCENTS = {"darkmatter": "#b18cff", "moune": "#688a57", "heaven": "#517bba", "pearl": "#928057"}
+ACCENTS = {"darkmatter": "#b18cff", "moune": "#526e47", "heaven": "#486ca4", "pearl": "#6a5d40", "snow": "#696969"}
 STATES_OF_EXE = {"green": "#6b8e6f", "yellow": "#c9a227", "red": "#bb655d"}
 # Two Markdown styles of rich's that no look touches: nothing is written in them.
 RICHS_OWN = ("markdown.h1.border", "markdown.h7")
@@ -103,7 +102,7 @@ def start(*arguments: str, prefs_path: Path) -> int:
 
 def written(theme: themes.Theme) -> str:
     """What a terminal that shows every colour is sent when lines in the
-    look's accent and in its tool colour are written."""
+    look's accent and in its tool style are written."""
     sent = io.StringIO()
     console = Console(
         file=sent,
@@ -379,9 +378,10 @@ def test_a_look_that_names_no_colours_keeps_the_terminals_own():
 MARKS = {
     "exe": "#ecebe6",
     "darkmatter": "#ded4f9",
-    "moune": "#2e402d",
-    "heaven": "#2b3f60",
-    "pearl": "#373021",
+    "moune": "#293a29",
+    "heaven": "#2a3c5c",
+    "pearl": "#2f291d",
+    "snow": "#2b2b2b",
 }
 
 
@@ -567,23 +567,162 @@ def test_the_five_looks_with_colours_of_their_own_do_not_ask_the_machine(monkeyp
 
 
 @pytest.mark.parametrize(
-    ("entries", "like"),
-    [({"AppleInterfaceStyle": "Dark"}, AUTO_DARK), ({"AppleLanguages": ["en"]}, AUTO_LIGHT)],
+    ("style", "like"), [("Dark", AUTO_DARK), (None, AUTO_LIGHT)]
 )
-def test_auto_follows_what_the_preferences_of_a_mac_say(tmp_path, monkeypatch, entries, like):
-    file = tmp_path / "Library" / "Preferences" / ".GlobalPreferences.plist"
-    file.parent.mkdir(parents=True)
-    with file.open("wb") as written_to:
-        plistlib.dump(entries, written_to)
+def test_auto_follows_what_the_system_of_a_mac_says(monkeypatch, style, like):
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(appearance, "_mac_style", lambda: style)
     assert themes.set_look(AUTO).colours == themes.get(like).colours
 
 
-def test_on_a_machine_that_says_nothing_auto_is_the_dark_look(tmp_path, monkeypatch):
-    # A Mac without preferences, and a system that has no such setting.
+def test_on_a_machine_that_says_nothing_auto_is_the_dark_look(monkeypatch):
+    # A Mac that cannot be asked, and a system that has no such setting.
+    def cannot_be_asked() -> str | None:
+        raise OSError("no system to ask")
+
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(appearance, "_mac_style", cannot_be_asked)
     assert themes.set_look(AUTO).colours == themes.get(AUTO_DARK).colours
     monkeypatch.setattr(sys, "platform", "linux")
     assert themes.set_look(AUTO).colours == themes.get(AUTO_DARK).colours
+
+
+# --- Light looks that read ---------------------------------------------------------
+
+# The colours of the two dark looks as they were: they are not touched.
+DARK_LOOKS = {
+    "exe": {
+        "ground": "#1c1c1a", "text": "#ecebe6", "muted": "#9d9c98", "line": "#3b3a36",
+        "accent": "#ecebe6", "green": "#6b8e6f", "yellow": "#c9a227",
+        "red": "#bb655d", "blue": "#5b8dbe", "violet": "#9b8ac4", "code": "#dedbd3",
+        "keyword": "#d9a05b", "string": "#8fc099", "comment": "#8a877c", "number": "#c1a3d8",
+        "call": "#8ab4d8",
+    },
+    "darkmatter": {
+        "ground": "#0b0817", "text": "#e9e6f7", "muted": "#9592a2", "line": "#443a76",
+        "accent": "#b18cff", "green": "#7ea885", "yellow": "#d6b13f",
+        "red": "#e0687e", "blue": "#8bb8ff", "violet": "#b18cff", "code": "#e3def5",
+        "keyword": "#e0a86a", "string": "#8fd6a8", "comment": "#8781a8", "number": "#c9a3f0",
+        "call": "#8ab8f5",
+    },
+}
+LIGHT_LOOKS = ("moune", "heaven", "pearl", "snow")
+# What a light look leaves as it is: the ground is no text, and the line is only to show.
+NOT_READ = ("ground", "line")
+
+
+# The values of the light looks as they are written in the table of the looks:
+# ground, text, line, accent, then the eleven tones.
+GIVEN = {
+    "moune": (
+        "#e0e7d6", "#1f2d22", "#b1a687", "#688a57",
+        "#4f7d57", "#725c16", "#95453f", "#3e6183", "#8d78bd",
+        "#2a2620", "#8a5a2b", "#3f6b4a", "#7d7a71", "#7a5c8f", "#2f5d80",
+    ),
+    "heaven": (
+        "#e8eef8", "#22304a", "#a2b7d8", "#517bba",
+        "#4f7357", "#81681e", "#ac5048", "#3f6da5", "#7f68b8",
+        "#253248", "#8a5a2b", "#3f6b4a", "#78809a", "#7a5c8f", "#2f5d80",
+    ),
+    "pearl": (
+        "#e0d7c3", "#201c14", "#b1a687", "#928057",
+        "#4b644e", "#725c16", "#95453f", "#3e6183", "#846db8",
+        "#2a2620", "#8a5a2b", "#3f6b4a", "#7d7a71", "#7a5c8f", "#2f5d80",
+    ),
+    "snow": (
+        "#eaeaea", "#1c1c1c", "#b8b8b8", "#828282",
+        "#4b644e", "#725c16", "#95453f", "#3e6183", "#846db8",
+        "#272727", "#8a5a2b", "#3f6b4a", "#7a7a7a", "#7a5c8f", "#2f5d80",
+    ),
+}
+
+
+def as_given(name: str) -> themes.Theme:
+    """The light look as the table writes it, without the step that takes
+    its tones towards the text."""
+    return themes._look(name, *GIVEN[name])
+
+
+def test_the_contrast_of_two_colours_runs_from_one_to_twentyone():
+    assert themes.contrast("#000000", "#ffffff") == pytest.approx(21)
+    assert themes.contrast("#ffffff", "#000000") == pytest.approx(21)
+    assert themes.contrast("#6d7a8c", "#6d7a8c") == pytest.approx(1)
+
+
+@pytest.mark.parametrize("name", LIGHT_LOOKS)
+def test_every_text_colour_of_a_light_look_reads_against_its_ground(name):
+    theme = themes.get(name)
+    ground = theme.colours["ground"]
+    assert len(theme.colours) == 16
+    for colour_name, colour in theme.colours.items():
+        if colour_name in NOT_READ:
+            continue
+        assert themes.contrast(colour, ground) >= 4.5, (colour_name, colour)
+
+
+@pytest.mark.parametrize("name", LIGHT_LOOKS)
+def test_the_light_looks_without_the_step_fall_short_in_many_colours(name):
+    # What the test above holds, and nothing else, is what the step brings.
+    given = as_given(name)
+    ground = given.colours["ground"]
+    short = [
+        colour_name
+        for colour_name, colour in given.colours.items()
+        if colour_name not in NOT_READ and themes.contrast(colour, ground) < 4.5
+    ]
+    assert len(short) >= 4
+
+
+@pytest.mark.parametrize("name", LIGHT_LOOKS)
+def test_a_tone_that_reads_stays_as_it_is_and_one_that_does_not_gets_the_least_text(name):
+    given, theme = as_given(name), themes.get(name)
+    text, ground = theme.colours["text"], theme.colours["ground"]
+    for colour_name, colour in given.colours.items():
+        if colour_name in NOT_READ:
+            assert theme.colours[colour_name] == colour
+        elif themes.contrast(colour, ground) >= 4.5:
+            assert theme.colours[colour_name] == colour, colour_name
+        else:
+            # A mix of the tone and the text colour, and one step less of the
+            # text colour would not have read.
+            mixes = (themes._mixed(text, colour, n / 256) for n in range(1, 257))
+            step = 1 + [*mixes].index(theme.colours[colour_name])
+            before = colour if step == 1 else themes._mixed(text, colour, (step - 1) / 256)
+            assert themes.contrast(before, ground) < 4.5, colour_name
+
+
+@pytest.mark.parametrize("name", sorted(DARK_LOOKS))
+def test_the_dark_looks_keep_exactly_the_colours_they_had(name):
+    assert themes.get(name).colours == DARK_LOOKS[name]
+
+
+def test_a_tone_that_cannot_read_even_in_the_text_colour_ends_in_the_text_colour():
+    # A look whose own text does not read against its ground has no tone that does.
+    tones = ["#838383"] * 11
+    look = themes._look("faint", "#808080", "#8a8a8a", "#707070", None, *tones, readable=True)
+    assert {look.colours[name] for name in look.colours if name not in NOT_READ} == {"#8a8a8a"}
+
+
+# --- A tool stands in the text colour --------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["exe", "darkmatter", "moune", "heaven", "pearl", "snow"])
+def test_a_tool_is_written_in_the_text_colour_of_every_look(name, monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    theme = themes.get(name)
+    # No look keeps a tone of its own for tools; the style follows the text.
+    assert theme.styles()["tool"] == theme.styles()["text"]
+    rich_styles = theme.rich_theme().styles
+    assert rich_styles["exe.tool"].color == Style.parse(theme.colours["text"]).color
+    # What is written for a tool is what is written for the text, side by
+    # side in one console (rich keeps the codes of a style it has met, so the
+    # comparison is made in the same breath and not against a fixed code).
+    sent = io.StringIO()
+    console = Console(file=sent, force_terminal=True, color_system="truecolor",
+                      no_color=False, legacy_windows=False)
+    console.push_theme(theme.rich_theme())
+    console.print("tool", style="exe.tool")
+    console.print("tool", style="exe.text")
+    tool_line, text_line = sent.getvalue().splitlines()
+    assert tool_line == text_line

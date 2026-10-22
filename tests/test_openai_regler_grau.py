@@ -40,8 +40,8 @@ def test_the_three_are_locked_at_openais_own_host_with_the_reason(sprache):
     for name in DREI:
         assert reihen[name]["aktiv"] is False, name
         assert reihen[name]["grund"] == grund, name
-    assert deutsch == "Wirkt bei OpenAI nicht, wenn Werkzeuge oder Denken an sind."
-    assert englisch == "Has no effect with OpenAI when tools or thinking are on."
+    assert deutsch == "Wirkt bei OpenAI nicht, wenn Werkzeuge oder Denken aktiv sind."
+    assert englisch == "Has no effect with OpenAI when tools or thinking are active."
 
 
 @pytest.mark.parametrize(

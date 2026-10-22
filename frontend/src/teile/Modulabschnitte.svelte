@@ -10,69 +10,50 @@
      `abschnitte` describes the stack, top to bottom: name, the title's
      catalog key (or `text`, a title already in words, for one that changes
      with what is shown) and, where a part counts something, `zahl` beside
-     the title. A part with neither stands without a title row. `inhalt` is the snippet rendered inside each section, handed the
-     section's name. A part that can be folded gives `klapp`
+     the title. A part with neither stands without a title row. `inhalt` is
+     the snippet rendered inside each section, handed the section's name. A
+     part that can be folded gives `klapp`
      ({ offen, schalten }): its title row becomes the button that does it,
      with the chevron before the title.
 
-     A view that has two columns when the surface is wide enough names the
-     column of each part (`spalte`, 1 or 2) and passes `zweispaltig`. Below
-     that width the columns stand one under the other, in the order they are
-     written — the same single column as ever. Parts that name no column
-     are one column of their own. */
+     The parts stand in the order they are written, in every width of the
+     surface: it never folds into two columns, however wide it is dragged. */
   import { rollfade } from '../lib/rollfade.js'
   import { t } from '../lib/texte.svelte.js'
 
-  let { abschnitte, inhalt = null, zweispaltig = false } = $props()
-
-  const spalten = $derived.by(() => {
-    const gruppen = []
-    for (const a of abschnitte) {
-      const nummer = a.spalte ?? 1
-      const gruppe = gruppen.find((g) => g.nummer === nummer)
-      if (gruppe) gruppe.abschnitte.push(a)
-      else gruppen.push({ nummer, abschnitte: [a] })
-    }
-    return gruppen.sort((a, b) => a.nummer - b.nummer)
-  })
+  let { abschnitte, inhalt = null } = $props()
 </script>
 
 <div class="abschnitte" use:rollfade>
-  <div class="spalten" class:zwei={zweispaltig && spalten.length > 1}>
-    {#each spalten as gruppe (gruppe.nummer)}
-      <div class="spalte">
-        {#each gruppe.abschnitte as a (a.name)}
-          <section class="abschnitt">
-            {#if !a.titel && !a.text}
-              <!-- No title: the part starts with its content. -->
-            {:else if a.klapp}
-              <button class="titel klapp" aria-expanded={a.klapp.offen} onclick={a.klapp.schalten}>
-                <svg class="winkel" class:auf={a.klapp.offen} width="11" height="11" viewBox="0 0 24 24"
-                     fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
-                     stroke-linejoin="round" aria-hidden="true">
-                  <path d="M9 6l6 6-6 6" />
-                </svg>
-                <span class="tafelkopf">{a.text ?? t(a.titel)}</span>
-                {#if a.zahl != null && a.zahl !== ''}
-                  <span class="zahl">{a.zahl}</span>
-                {/if}
-              </button>
-            {:else}
-              <div class="titel">
-                <span class="tafelkopf">{a.text ?? t(a.titel)}</span>
-                {#if a.zahl != null && a.zahl !== ''}
-                  <span class="zahl">{a.zahl}</span>
-                {/if}
-              </div>
-            {/if}
-            {#if !a.klapp || a.klapp.offen}
-              {@render inhalt?.(a.name)}
-            {/if}
-          </section>
-        {/each}
-      </div>
-    {/each}
-  </div>
+  {#each abschnitte as a (a.name)}
+    <section class="abschnitt">
+      {#if !a.titel && !a.text}
+        <!-- No title: the part starts with its content. -->
+      {:else if a.klapp}
+        <button class="titel klapp" aria-expanded={a.klapp.offen} onclick={a.klapp.schalten}>
+          <svg class="winkel" class:auf={a.klapp.offen} width="11" height="11" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
+               stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 6l6 6-6 6" />
+          </svg>
+          <span class="tafelkopf">{a.text ?? t(a.titel)}</span>
+          {#if a.zahl != null && a.zahl !== ''}
+            <span class="zahl">{a.zahl}</span>
+          {/if}
+        </button>
+      {:else}
+        <div class="titel">
+          <span class="tafelkopf">{a.text ?? t(a.titel)}</span>
+          {#if a.zahl != null && a.zahl !== ''}
+            <span class="zahl">{a.zahl}</span>
+          {/if}
+        </div>
+      {/if}
+      {#if !a.klapp || a.klapp.offen}
+        {@render inhalt?.(a.name)}
+      {/if}
+    </section>
+  {/each}
 </div>
 
 <style>
@@ -86,20 +67,6 @@
   }
   .abschnitt + .abschnitt {
     margin-top: 22px;
-  }
-  /* Stacked, the columns follow each other like parts of one column. */
-  .spalte + .spalte {
-    margin-top: 22px;
-  }
-  /* Two equal columns side by side; the whole surface still scrolls as one. */
-  .spalten.zwei {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    column-gap: 24px;
-    align-items: start;
-  }
-  .spalten.zwei .spalte + .spalte {
-    margin-top: 0;
   }
   /* The part's heading, 10px above its card. Text itself: global.css,
      .tafelkopf. */

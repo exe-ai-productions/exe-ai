@@ -15,9 +15,19 @@ import pytest
 
 from cli import service, themes
 from cli.main import VERSION_FILE, help_text, main
+from cli import texts as texts_module
 from cli.texts import Texts
 from test_texts import _catalogue as catalogue_of
 from test_texts import _sentences as sentences_below
+
+
+@pytest.fixture(autouse=True)
+def _system_speaks_english(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Where a switch is refused before the language is known, the client
+    speaks the system's: pinned, so the sentences read the same on any
+    machine."""
+    monkeypatch.setattr(texts_module, "system_language", lambda: "en")
+
 
 OWN_ADDRESS = "http://127.0.0.1:8123"
 PORT = 8123
@@ -289,11 +299,19 @@ def data_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
-def note(root: Path, pid: int = 4242, port: int = PORT) -> Path:
+# The moment the process of a note began, as the stand-in for the system's
+# answer says it (``Listening``).
+BEGAN = 0.0
+
+
+def note(root: Path, pid: int = 4242, port: int = PORT, *, began: float | None = BEGAN) -> Path:
     file = service.note_file(port)
     assert file == root / "data" / f".dienst-{port}.json"
     file.parent.mkdir(parents=True, exist_ok=True)
-    file.write_text(json.dumps({"pid": pid, "port": port}), encoding="utf-8")
+    content: dict[str, object] = {"pid": pid, "port": port}
+    if began is not None:
+        content["began"] = began
+    file.write_text(json.dumps(content), encoding="utf-8")
     return file
 
 
@@ -307,9 +325,9 @@ class Listening:
         self.ends = ends
         monkeypatch.setattr(service, "answering", lambda host, port: self.answering)
         monkeypatch.setattr(service.os, "kill", self.kill)
-        # The process the note names has been there since long before the
-        # note was written: it is the one that wrote it.
-        monkeypatch.setattr(service, "began", lambda pid: 0.0)
+        # The process the note names began at the moment the note says: it is
+        # the one that wrote it.
+        monkeypatch.setattr(service, "began", lambda pid: BEGAN)
         # The way these tests follow is the one that signals the process;
         # on Windows the service is asked through a marker file and only
         # then ended from outside, which test_service_windows_stop.py holds.

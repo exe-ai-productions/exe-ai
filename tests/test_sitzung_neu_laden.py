@@ -23,10 +23,11 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import node_script
+from tests.fensterquelle import BAR_SOURCE
 
 WURZEL = Path(__file__).resolve().parents[1]
 API = WURZEL / "frontend/src/lib/api.js"
-EINGABELEISTE = WURZEL / "frontend/src/teile/Eingabeleiste.svelte"
+EINGABELEISTE = BAR_SOURCE
 
 # The browser the module expects: a window with a key and a reload that only
 # counts, a tab storage that remembers, and a fetch that answers what the
@@ -298,3 +299,69 @@ def test_nach_drei_neuladungen_in_zehn_minuten_bleibt_die_abweisung_stehen():
 """)
     assert ergebnis["nachDrei"] == 0
     assert ergebnis["spaeter"] == 1
+
+
+ANSWERS_OK = """globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({}) })"""
+ANSWERS_REFUSAL = """globalThis.fetch = async () => ({
+  ok: false, status: 401, json: async () => ({ detail: 'Sitzungsschlüssel ungültig' }),
+})"""
+
+
+@ohne_node
+def test_a_reload_the_service_accepted_does_not_count_against_the_lock():
+    """A service restarted a fourth time within ten minutes hands out a new
+    key again, and the window has to take it: every reload that ended with
+    the service answering the page is forgotten, so none of them counts."""
+    ergebnis = _node(f"""
+{UMGEBUNG}
+{_modul()}
+;(async () => {{
+  for (let restart = 0; restart < 5; restart++) {{
+    {ANSWERS_REFUSAL}
+    await ruf('/models').catch(() => null)
+    // The page came back with the new key, and the service answers it.
+    {ANSWERS_OK}
+    await ruf('/models')
+  }}
+  console.log(JSON.stringify({{ reloads: globalThis.__reloads }}))
+}})()
+""")
+    assert ergebnis["reloads"] == 5
+
+
+@ohne_node
+def test_a_key_that_stays_refused_after_the_reload_is_not_reloaded_again():
+    """The lock stays for what it was made for: the reload did not help, the
+    page was refused again, and no answer ever followed that would forget it."""
+    ergebnis = _node(f"""
+{UMGEBUNG}
+{_modul()}
+;(async () => {{
+  for (let attempt = 0; attempt < 5; attempt++) {{
+    await ruf('/models').catch(() => null)
+    // The minute is over each time, the ten minutes are not.
+    const marks = JSON.parse(sessionStorage.getItem('exe-ai:sitzung-neu-geladen') || '[]')
+    sessionStorage.setItem('exe-ai:sitzung-neu-geladen', JSON.stringify(marks.map((m) => m - 61_000)))
+  }}
+  console.log(JSON.stringify({{ reloads: globalThis.__reloads }}))
+}})()
+""")
+    assert ergebnis["reloads"] == 3
+
+
+@ohne_node
+def test_silence_an_answer_on_a_page_without_a_key_forgets_nothing():
+    """The sign-in's own answer is no sign that a key was accepted: without
+    one in the page there is nothing it could say about."""
+    ergebnis = _node(f"""
+{UMGEBUNG}
+globalThis.window.__SITZUNGSSCHLUESSEL__ = null
+{_modul()}
+;(async () => {{
+  sessionStorage.setItem('exe-ai:sitzung-neu-geladen', JSON.stringify([Date.now()]))
+  {ANSWERS_OK}
+  await ruf('/login', {{ method: 'POST', body: '{{}}' }})
+  console.log(JSON.stringify({{ mark: sessionStorage.getItem('exe-ai:sitzung-neu-geladen') !== null }}))
+}})()
+""")
+    assert ergebnis["mark"] is True

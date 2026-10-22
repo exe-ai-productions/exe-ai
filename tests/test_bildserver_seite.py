@@ -177,11 +177,16 @@ def test_the_tile_starts_with_the_stored_memory_and_devices(hand_start, client):
     antwort, befehl = hand_start("sdxl.safetensors")
     assert antwort.status_code == 200, antwort.text
     # Silence: nothing stored, no switch.
-    for flag in ("--max-vram", "--threads", "--split-mode", "--backend", "--offload-to-cpu", "--fa"):
+    for flag in ("--max-vram", "--threads", "--split-mode", "--backend", "--offload-to-cpu", "--sage-attn"):
         assert flag not in befehl
+    # The start value of flash attention goes out once, and the fixed flag of
+    # the earlier builds does not.
+    assert befehl.count("--flash-attn") == 1
+    assert befehl[befehl.index("--flash-attn") + 1] == "off,diffusion=on"
+    assert "--diffusion-fa" not in befehl
     antwort = client.put("/api/v1/settings/global/bildgeraete", json={"wert": {
         "vram_limit": "cuda0=6", "threads": 8, "offload_to_cpu": True,
-        "split_mode": "diffusion=row", "backend": "diffusion=cuda0", "switches": {"fa": True},
+        "split_mode": "diffusion=row", "backend": "diffusion=cuda0", "switches": {"sage_attn": True},
     }})
     assert antwort.status_code < 300, antwort.text
     antwort, befehl = hand_start("sdxl.safetensors")
@@ -190,7 +195,7 @@ def test_the_tile_starts_with_the_stored_memory_and_devices(hand_start, client):
     assert befehl[befehl.index("--threads") + 1] == "8"
     assert befehl[befehl.index("--split-mode") + 1] == "diffusion=row"
     assert befehl[befehl.index("--backend") + 1] == "diffusion=cuda0"
-    assert "--offload-to-cpu" in befehl and "--fa" in befehl
+    assert "--offload-to-cpu" in befehl and "--sage-attn" in befehl
 
 
 @pytest.mark.parametrize(("roh", "erwartet"), [
@@ -219,8 +224,8 @@ def test_threads_are_a_count_or_the_generator_s_own(roh, erwartet):
 
 def test_only_the_memory_block_s_switches_are_kept():
     assert bildgeraete.switches_pruefen(
-        {"fa": True, "vae_tiling": True, "timestep_shift": 250, "made_up": 1, "mmap": "ja"},
-    ) == {"fa": True, "vae_tiling": True}
+        {"sage_attn": True, "vae_tiling": True, "timestep_shift": 250, "made_up": 1, "mmap": "ja"},
+    ) == {"sage_attn": True, "vae_tiling": True}
 
 
 # --- Converting only into a smaller copy -------------------------------------
@@ -308,15 +313,15 @@ def test_a_stopped_conversion_is_no_failure_on_the_page():
     """A conversion stopped on request answers 499, as a stopped picture
     does. The page tells nothing then and the file's row stands as before
     the start; every other answer that is no success stays a failure."""
-    source = (Path(__file__).resolve().parent.parent / "frontend/src/teile/ImageServerFiles.svelte").read_text(
+    source = (Path(__file__).resolve().parent.parent / "frontend/src/teile/ImageConvert.svelte").read_text(
         encoding="utf-8")
-    start = source.split("async function startConverting() {", 1)[1].split("\n  }\n", 1)[0]
+    start = source.split("async function runConversion(call) {", 1)[1].split("\n  }\n", 1)[0]
     caught = start.split("} catch (error) {", 1)[1]
     assert "if (error.status !== 499) melde(String(error.message || error), 'fehler')" in caught
     # The copy asked for stays chosen; only the running ends.
     assert "converting = null" not in caught and "running = false" in caught
-    # The silence check: the row's other job tells every failure.
-    other = source.split("async function toggleImatrix(file) {", 1)[1].split("\n  }\n", 1)[0]
+    # The silence check: the block's other job, the switch, tells every failure.
+    other = source.split("async function switchImatrix(on) {", 1)[1].split("\n  }\n", 1)[0]
     assert "melde(String(error.message || error), 'fehler')" in other and "499" not in other
 
 
@@ -395,7 +400,9 @@ def test_the_time_limit_is_one_field_that_may_stay_empty_and_goes_out_as_null():
 
     assert markup.index("{t('bild.threads')}") < markup.index("{t('mcp.zeitgrenze')}") < markup.index(
         "{t('bild.split_mode')}")
-    assert "aria-label={t('mcp.zeitgrenze')}" in row and "value={w.zeitgrenze ?? ''}" in row
+    # Without a value the field shows a dash, and is empty while it is typed in.
+    assert "aria-label={t('mcp.zeitgrenze')}" in row
+    assert "value={zeitFokus || w.zeitgrenze != null ? (w.zeitgrenze ?? '') : '-'}" in row
     assert "<span class=\"still\">{t('mcp.zeitgrenze_einheit')}</span>" in row
     assert "Zahlenfeld" not in row
     assert "e.currentTarget.value.replace(/\\D/g, '')" in row

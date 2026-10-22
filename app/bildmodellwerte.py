@@ -49,7 +49,7 @@ NAME_MAX = 255
 # window and ``/bild/vorgaben`` give them.
 MASSFELDER = (
     "breite", "hoehe", "schritte", "cfg", "guidance", "flow_shift",
-    "sampler", "scheduler",
+    "sampler", "scheduler", "video_frames", "fps",
 )
 # What belongs to the model itself and has no family value: empty is "Auto".
 MODELLFELDER = ("clip_skip", "prediction", "trigger", "hinweis")
@@ -59,7 +59,7 @@ MODELLFELDER = ("clip_skip", "prediction", "trigger", "hinweis")
 BAUSATZFELDER = (
     "vae", "t5xxl", "clip_l", "clip_g", "llm", "llm_vision", "tokenizer",
     "uncond_diffusion_model", "high_noise_diffusion_model",
-    "audio_vae", "audio_encoder", "embeddings_connectors",
+    "audio_vae", "audio_encoder", "embeddings_connectors", "clip_vision",
 )
 # Whether the model's family is read from its own file. A switch and no
 # value: it is on unless the user switched it off for this model, so only
@@ -80,6 +80,12 @@ def _zahl(wert: Any) -> float | None:
         return float(wert) if math.isfinite(wert) else None
     except OverflowError:
         return None
+
+
+def _whole_number(value: Any) -> int | None:
+    """A whole number from 1 on, or None."""
+    number = _zahl(value)
+    return int(number) if number is not None and number >= 1 and number == int(number) else None
 
 
 def _dateiname(wert: Any) -> str | None:
@@ -113,6 +119,8 @@ def _feld(name: str, wert: Any) -> Any:
         return None if zahl is None else max(0.0, zahl)
     if name == "flow_shift":
         return _zahl(wert)
+    if name in ("video_frames", "fps"):
+        return _whole_number(wert)
     if name == "sampler":
         return wert if wert in SAMPLER else None
     if name == "scheduler":

@@ -82,6 +82,25 @@ class TestSchutzregel:
         assert "script-src 'unsafe-inline'" in ergebnis
         assert "style-src 'unsafe-inline'" in ergebnis
 
+    def test_the_rule_lets_the_document_run_eval_webassembly_and_a_blob_worker(self):
+        """A script that builds code itself is still a script of the document."""
+        rule = _faelle()["without_doctype"].split(MARKE)[1].split(">")[0]
+        script = next(part for part in rule.split(";") if "script-src" in part)
+        assert "'unsafe-eval'" in script
+        assert "'wasm-unsafe-eval'" in script
+        assert "worker-src blob:" in rule
+
+    def test_silence_the_way_out_stays_shut_beside_eval_and_workers(self):
+        """The widening is for running code, never for reaching out."""
+        rule = _faelle()["without_doctype"].split(MARKE)[1].split(">")[0]
+        assert "default-src 'none'" in rule
+        assert "connect-src 'none'" in rule
+        assert "form-action 'none'" in rule
+        assert "base-uri 'none'" in rule
+        assert "'self'" not in rule
+        for part in rule.split(";"):
+            assert " *" not in part, part
+
     def test_ein_doctype_bleibt_vorn(self):
         """In front of it the browser would switch to quirks mode."""
         faelle = _faelle()

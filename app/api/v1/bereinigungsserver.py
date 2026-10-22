@@ -22,6 +22,7 @@ from app import diktatsprachewahl
 from app.api.abhaengigkeiten import hole_repositories, hole_sprache
 from app.api.v1.runner import Modelldatei, ProgramState, _fehler, program_state
 from app.db import Repositories
+from app.feineinstellungen import Feineinstellungen
 from app.modellrunner import RunnerFehler
 
 router = APIRouter(prefix="/bereinigungsserver", tags=["bereinigungsserver"])
@@ -34,6 +35,9 @@ class Auskunft(ProgramState):
     # What the field shows: the run's file while one runs, the stored choice
     # otherwise — the same two sources the speech panel reads.
     modell: str | None = None
+    # What a start would load: the stored choice, apart from `modell`, which
+    # stays the file that runs. None where nothing is chosen.
+    selected_model: str | None = None
     port: int | None = None
     kerne: int | None = None
     # The architecture the last start failed on because the server's build
@@ -58,19 +62,22 @@ def _runner(request: Request):
 
 def _auskunft(request: Request, repositories: Repositories) -> Auskunft:
     runner = _runner(request)
-    lauf = runner.lauf()
+    files = runner.modelle()
+    stand = diktatsprachewahl.wahl(repositories)
+    idle_port = stand["cleanup_port"] or runner.port_vorgabe
+    lauf = runner.shown_run(idle_port)
+    stored = stand["putzmodell"]
     return Auskunft(
         **program_state(runner, request.app.state.config),
         ordner=str(runner.ordner),
         modelle=[
             Modelldatei(name=m.name, groesse_gb=m.groesse_gb)
-            for m in runner.modelle()
+            for m in files
         ],
-        laeuft=runner.laeuft(),
-        modell=lauf.modell if lauf else (diktatsprachewahl.putzmodell(repositories) or None),
-        port=lauf.port if lauf else (
-            diktatsprachewahl.wahl(repositories)["cleanup_port"] or runner.port_vorgabe
-        ),
+        laeuft=lauf is not None,
+        modell=lauf.modell if lauf else (stored or None),
+        selected_model=stored if stored in {m.name for m in files} else None,
+        port=lauf.port if lauf else idle_port,
         kerne=os.cpu_count(),
         unknown_architecture=runner.unknown_architecture(),
         diktat_vorgaben=diktatsprachewahl.vorgaben(),
@@ -100,6 +107,7 @@ def starten(
     # One read of the setting for everything this start needs from it.
     stand = diktatsprachewahl.wahl(repositories)
     kontext, schichten, faeden = diktatsprachewahl.putzspeicher(repositories, stand)
+    leerlauf = diktatsprachewahl.putzleerlauf(repositories, stand)
     try:
         _runner(request).starten(
             daten.modell,
@@ -114,6 +122,8 @@ def starten(
             drafter="",
             vision="",
             faeden=faeden,
+            # Nothing stored, nothing passed: the command stays as it was.
+            fein=Feineinstellungen(idle_minutes=leerlauf) if leerlauf else None,
             sampling=diktatsprachewahl.putzsampling(repositories, stand),
         )
     except RunnerFehler as fehler:
@@ -125,6 +135,11 @@ def starten(
 def stoppen(
     request: Request,
     repositories: Repositories = Depends(hole_repositories),
+    sprache: str = Depends(hole_sprache),
 ) -> Auskunft:
+    try:
+        _runner(request).refuse_stop_when_shared()
+    except RunnerFehler as fehler:
+        raise _fehler(fehler.grund, sprache) from None
     _runner(request).stoppen()
     return _auskunft(request, repositories)

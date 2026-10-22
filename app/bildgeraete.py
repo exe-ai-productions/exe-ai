@@ -16,6 +16,14 @@ count of 0 or below being the generator's own choice, as if none was given.
 The time limit is a whole number of seconds from 1 on, or nothing: a picture
 that takes longer is ended after it, and nothing means no limit — it is
 stopped by hand. A value the generator would not read is not kept.
+
+The idle time is whole minutes from 1 on, or nothing: after that long without
+a picture the program ends the picture server (it has no switch to free its
+model by itself), and the next picture starts it again; nothing means never.
+
+The importance matrix is one switch for every model file, on unless it was
+turned off: while it is on, every picture drawn with sd-cli adds to the
+matrix beside its model file.
 """
 
 from __future__ import annotations
@@ -25,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app import image_switches
+from app.feineinstellungen import MAX_IDLE_MINUTES
 
 SCHLUESSEL = "bildgeraete"
 
@@ -46,7 +55,8 @@ _SPLIT = re.compile(rf"(?:{_MODE}|{_NAME}={_MODE}(?:,{_NAME}={_MODE})*)")
 
 @dataclass(frozen=True)
 class Geraete:
-    """What the generator starts with; every default leaves its switch out."""
+    """What the generator starts with; every default leaves its switch out,
+    except the switches of ``START_SWITCHES``."""
 
     vram_limit: str = ""
     offload_to_cpu: bool = False
@@ -56,6 +66,11 @@ class Geraete:
     switches: dict[str, Any] = field(default_factory=dict)
     # Seconds a picture may take; None means no limit.
     zeitgrenze: int | None = None
+    # Every sd-cli picture adds to the importance matrix of its model file.
+    imatrix: bool = True
+    # Minutes without a picture after which the picture server is ended;
+    # None means never.
+    idle_minutes: int | None = None
 
 
 def _text(wert: Any) -> str:
@@ -96,11 +111,61 @@ def zeitgrenze_pruefen(wert: Any) -> int | None:
     return sekunden if sekunden > 0 and sekunden == wert else None
 
 
+def idle_pruefen(wert: Any) -> int | None:
+    """Whole minutes from 1 up to what the engines' own idle times take, or
+    None: never. A zero, a negative number, a text or a fraction is not an
+    idle time."""
+    if isinstance(wert, bool) or not isinstance(wert, (int, float)):
+        return None
+    try:
+        minuten = int(wert)
+    except (OverflowError, ValueError):
+        return None
+    return minuten if 0 < minuten <= MAX_IDLE_MINUTES and minuten == wert else None
+
+
 def backend_pruefen(wert: Any) -> str:
     """The generator's own assignment syntax (``clip=cpu,vae=cuda0``) is not
     parsed here; it is kept as one line, and the generator says what it
     cannot read."""
     return _text(wert)
+
+
+# What the on/off switches of the generator's earlier builds say now: each
+# turned a part of the generator on everywhere, and the new switches take the
+# same thing by name. A value stored under an old key is read as the new one
+# and kept under it the next time it is saved.
+_EARLIER_SWITCHES = {
+    "fa": ("flash_attn", "on"),
+    "diffusion_conv_direct": ("conv_direct", "diffusion=on,controlnet=on"),
+    "vae_conv_direct": ("conv_direct", "vae=on"),
+}
+
+# What a machine starts with while nothing is stored for the switch: flash
+# attention in the diffusion model only, the way the generator was always
+# started — drawing a highres fix without it takes about eight times as long.
+# `auto` hands the choice to the generator.
+# Batched CFG starts off: with it on, build 975 computes the picture and its
+# negative in one pass for models built on a UNet (SD 1.5, SDXL), and on Metal
+# that pass draws a plain white picture whenever CFG is above 1. Off computes
+# them one after the other, as the builds before did; a stored value wins.
+START_SWITCHES = {"flash_attn": "off,diffusion=on", "batched_cfg": "off"}
+
+
+def _read_earlier_keys(wert: dict) -> dict:
+    """The stored switches with the old on/off keys read as the new ones; a
+    key that is stored under its new name wins over its old spelling."""
+    translated: dict[str, Any] = {}
+    collected: dict[str, list[str]] = {}
+    for key, value in wert.items():
+        target = _EARLIER_SWITCHES.get(key) if isinstance(key, str) else None
+        if target is None:
+            translated[key] = value
+        elif value is True:
+            collected.setdefault(target[0], []).append(target[1])
+    for key, parts in collected.items():
+        translated.setdefault(key, ",".join(parts))
+    return translated
 
 
 def switches_pruefen(wert: Any) -> dict[str, Any]:
@@ -109,7 +174,7 @@ def switches_pruefen(wert: Any) -> dict[str, Any]:
     if not isinstance(wert, dict):
         return {}
     sauber: dict[str, Any] = {}
-    for key, value in wert.items():
+    for key, value in _read_earlier_keys(wert).items():
         row = image_switches.get(key) if isinstance(key, str) else None
         if row is None or row.group != GRUPPE:
             continue
@@ -139,6 +204,11 @@ def pruefen(wert: Any) -> dict[str, Any]:
         sauber["switches"] = switches_pruefen(wert["switches"])
     if "zeitgrenze" in wert:
         sauber["zeitgrenze"] = zeitgrenze_pruefen(wert["zeitgrenze"])
+    if "idle_minutes" in wert:
+        sauber["idle_minutes"] = idle_pruefen(wert["idle_minutes"])
+    if "imatrix" in wert:
+        # Only a stored "off" turns it off; anything else is the default.
+        sauber["imatrix"] = wert["imatrix"] is not False
     return sauber
 
 
@@ -152,8 +222,10 @@ def lesen(repositories) -> Geraete:
         threads=werte.get("threads", -1),
         split_mode=werte.get("split_mode", ""),
         backend=werte.get("backend", ""),
-        switches=werte.get("switches", {}),
+        switches={**START_SWITCHES, **werte.get("switches", {})},
         zeitgrenze=werte.get("zeitgrenze"),
+        imatrix=werte.get("imatrix", True),
+        idle_minutes=werte.get("idle_minutes"),
     )
 
 

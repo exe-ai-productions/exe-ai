@@ -34,7 +34,7 @@ from ruamel.yaml.representer import RoundTripRepresenter
 from app import atomic_file
 from app.api.abhaengigkeiten import hole_config, hole_sprache
 from app import fenstergroesse
-from app.config import Config, EndpointConfig
+from app.config import Config, EndpointConfig, config_file
 from app.env_datei import env_entfernen, env_schreiben, key_leaves_with
 from app.i18n import t
 
@@ -183,20 +183,6 @@ def _atomar_schreiben(konfig_datei: Path, rohdaten: Any, schreiber: YAML) -> Non
 _schleuse = asyncio.Lock()
 
 
-def _konfig_datei(config: Config) -> Path:
-    """The file the running service actually read its endpoints from.
-
-    ``EXE_AI_CONFIG`` points a run at a different file (a test service with
-    its own data does exactly that). Writing to the default location then
-    changes a file NOBODY reads — and worse, one that belongs to somebody
-    else's setup. The write has to land where the read came from.
-    """
-    eigen = os.getenv("EXE_AI_CONFIG")
-    if eigen:
-        return Path(eigen)
-    return config.pfad("./config.yaml")
-
-
 class KontextAendern(BaseModel):
     """The context window of an endpoint, said by hand.
 
@@ -260,6 +246,9 @@ class Angelegt(BaseModel):
     # just hands that one result on instead of letting the caller re-derive
     # it (or worse, assume success) from silence.
     erreichbar: bool
+    # Where the provider said why it refuses, the sentence for the window to
+    # show; None otherwise.
+    hinweis: str | None = None
 
 
 @router.post("", response_model=Angelegt, summary="Add a cloud provider")
@@ -296,7 +285,7 @@ async def hinzufuegen(
     else:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, t("fehler.anbieter_art", sprache))
 
-    konfig_datei = _konfig_datei(config)
+    konfig_datei = config_file(config)
     async with _schleuse:
         rohdaten, schreiber = _lesen(konfig_datei)
         endpunkte = rohdaten.setdefault("endpoints", [])
@@ -323,11 +312,19 @@ async def hinzufuegen(
     config.endpoints.append(endpunkt)
     await request.app.state.discovery.anmelden(endpunkt)
     zustand = request.app.state.discovery.zustaende.get(kennung)
+    erreichbar = bool(zustand and zustand.erreichbar)
+    hinweis = None
+    if zustand is not None and not erreichbar and zustand.grund:
+        hinweis = t(
+            "fehler.anbieter_nicht_erreichbar", sprache,
+            name=zustand.provider.name, detail=zustand.grund,
+        )
 
     return Angelegt(
         id=kennung,
         api_key_env=vorlage["api_key_env"],
-        erreichbar=bool(zustand and zustand.erreichbar),
+        erreichbar=erreichbar,
+        hinweis=hinweis,
     )
 
 
@@ -371,7 +368,7 @@ async def faehigkeiten_setzen(
     # Then the file, so the word survives a restart. The file may not exist
     # on setups configured purely by environment — then the running value is
     # all there is, and saying nothing would hide that.
-    konfig_datei = _konfig_datei(config)
+    konfig_datei = config_file(config)
     async with _schleuse:
         if konfig_datei.is_file():
             rohdaten, schreiber = _lesen(konfig_datei)
@@ -440,7 +437,7 @@ async def kontext_setzen(
                 )
             )
 
-    konfig_datei = _konfig_datei(config)
+    konfig_datei = config_file(config)
     async with _schleuse:
         if konfig_datei.is_file():
             rohdaten, schreiber = _lesen(konfig_datei)
@@ -489,7 +486,7 @@ async def zeitgrenze_setzen(
 
     endpunkt.timeout_enabled = daten.timeout_enabled
 
-    konfig_datei = _konfig_datei(config)
+    konfig_datei = config_file(config)
     async with _schleuse:
         if konfig_datei.is_file():
             rohdaten, schreiber = _lesen(konfig_datei)
@@ -524,7 +521,7 @@ async def loeschen(
     The entry leaves ``config.yaml`` and its key line leaves ``.env`` — unless
     another provider reads the same variable, then the line stays for that
     one. Writing happens where the running service actually read its
-    endpoints from (``_konfig_datei``), never the template, and the other
+    endpoints from (``config_file``), never the template, and the other
     entries and lines travel through the round trip unchanged.
     """
     endpunkt = next((e for e in config.endpoints if e.id == endpoint_id), None)
@@ -537,7 +534,7 @@ async def loeschen(
     # The file first: if this write fails, the running service and the
     # discovery list stay exactly as they were, and the client sees an
     # error instead of state that disagrees with the file.
-    konfig_datei = _konfig_datei(config)
+    konfig_datei = config_file(config)
     async with _schleuse:
         if konfig_datei.is_file():
             entfernt = False

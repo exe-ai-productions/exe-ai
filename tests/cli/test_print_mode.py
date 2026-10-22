@@ -14,9 +14,18 @@ import pytest
 
 from cli import chat, main as main_module
 from cli.main import help_text, main
+from cli import texts as texts_module
 from cli.texts import Texts
 from tests.cli import stub_service as service
 from tests.cli.stub_service import StubService
+
+
+@pytest.fixture(autouse=True)
+def _system_speaks_english(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Where a switch is refused before the language is known, the client
+    speaks the system's: pinned, so the sentences read the same on any
+    machine."""
+    monkeypatch.setattr(texts_module, "system_language", lambda: "en")
 
 
 class Terminal(io.StringIO):
@@ -184,3 +193,12 @@ def test_a_service_that_does_not_answer_is_said_on_the_error_output(tmp_path, ca
 def test_the_parser_still_refuses_an_unknown_switch(run, capsys):
     assert run("--answer", "x") == 2
     assert main_module.PROGRAM in capsys.readouterr().err
+
+
+def test_the_asker_of_the_print_mode_can_be_made_and_lets_typed_text_go() -> None:
+    """The screen calls ``typed`` on every change of the input field on
+    whatever asker the context holds; the one of the print mode takes it up
+    like any asker that has no search."""
+    asker = main_module.print_mode.AutoAsker()
+    assert asker.typed("any text") is None
+    assert asker.pending() is False

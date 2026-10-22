@@ -38,7 +38,7 @@ STAND_INS = {
     "zustand.mjs": """
 import { proxy } from 'svelte/internal/client'
 export const zustand = proxy({ modelle: [], modellId: '' })
-export const aktuellesModell = () => null
+export const aktuellesModell = () => globalThis.current ?? null
 """,
     # `globalThis.answer` is what the service says to `/models?alle=true`;
     # `globalThis.failure` makes the read fail.
@@ -49,6 +49,8 @@ export const api = {
     return globalThis.answer
   },
   einstellungAufgeloest: async () => null,
+  // What the module stores: [scope, key, value], read back by a scenario.
+  einstellungSetzen: async (...call) => { (globalThis.saved ??= []).push(call) },
 }
 """,
 }
@@ -220,3 +222,134 @@ def test_the_cloud_window_reads_the_full_list():
     assert "const haeuser = $derived(anbieterAlle())" in source
     assert "alleAnbieterLaden()" in source
     assert "$derived(anbieter())" not in source
+
+
+# --- One state for a cloud model ---------------------------------------------------
+#
+# A cloud model out of a catalogue is on when it is ticked in its catalogue and
+# off when it is not; the quick picker's "off" list says nothing about it. A
+# provider's single model has no catalogue to tick in, and keeps the "off"
+# list; so does a local model.
+
+_CLOUD = """
+const catalogued = (name) => ({
+  id: 'cloud/' + name, name, anbieter: 'cloud', anbieter_name: 'Cloud',
+  group: 'cloud', erreichbar: true, modell: name,
+  capabilities: {}, context_tokens: null, timeout_enabled: true,
+})
+const single = {
+  id: 'homelab', name: 'homelab-model', anbieter: 'homelab', anbieter_name: 'Homelab',
+  group: 'cloud', erreichbar: true, capabilities: {}, context_tokens: null,
+  timeout_enabled: true,
+}
+const local = {
+  id: 'local-a', name: 'local-a', anbieter: 'omlx', group: 'local',
+  erreichbar: true, capabilities: {}, context_tokens: null,
+}
+zustand.modelle = [catalogued('m1'), catalogued('m2'), single, local]
+globalThis.answer = zustand.modelle
+// m1 is ticked; the old "off" list still names it, and names a local model.
+modelle.modellwahl.gewaehlt = { cloud: ['m1'] }
+modelle.modellwahl.aus = ['cloud/m1', 'local-a']
+"""
+
+
+def test_a_ticked_cloud_model_is_on_whatever_the_old_off_list_says():
+    seen = _run(
+        _CLOUD
+        + """
+        globalThis.current = true
+        const modelWord = (id) => { zustand.modellId = id; return modelle.chosenModelOff() }
+        return {
+          ticked: modelle.istAn('cloud/m1'),
+          unticked: modelle.istAn('cloud/m2'),
+          chatOffTicked: modelWord('cloud/m1'),
+          chatOffUnticked: modelWord('cloud/m2'),
+          visible: modelle.sichtbare().map((m) => m.id),
+        }
+        """
+    )
+    assert seen == {
+        "ticked": True,
+        "unticked": False,
+        "chatOffTicked": False,
+        "chatOffUnticked": True,
+        "visible": ["cloud/m1", "homelab"],
+    }
+
+
+def test_unticking_in_the_catalogue_is_switching_the_model_off():
+    seen = _run(
+        _CLOUD
+        + """
+        const m1 = zustand.modelle[0]
+        await modelle.katalogSchalten(m1, false)
+        return { on: modelle.istAn('cloud/m1'), off: [...modelle.modellwahl.aus] }
+        """
+    )
+    assert seen["on"] is False
+    # The picker's "off" list is not touched by a cloud model's tick.
+    assert seen["off"] == ["cloud/m1", "local-a"]
+
+
+def test_the_switch_of_a_cloud_model_is_its_tick_and_writes_the_pick_only():
+    seen = _run(
+        _CLOUD
+        + """
+        await modelle.schalten('cloud/m2', true)
+        const after = { m2: modelle.istAn('cloud/m2'), picked: modelle.modellwahl.gewaehlt.cloud }
+        await modelle.schalten('cloud/m1', false)
+        return {
+          ...after,
+          m1: modelle.istAn('cloud/m1'),
+          off: [...modelle.modellwahl.aus],
+          keys: globalThis.saved.map((call) => call[1]),
+        }
+        """
+    )
+    assert seen["m2"] is True
+    assert seen["picked"] == ["m1", "m2"]
+    assert seen["m1"] is False
+    assert seen["off"] == ["cloud/m1", "local-a"]
+    assert seen["keys"] == ["katalog_wahl", "katalog_wahl"]
+
+
+def test_silence_a_local_model_keeps_the_off_list():
+    seen = _run(
+        _CLOUD
+        + """
+        const before = modelle.istAn('local-a')
+        await modelle.schalten('local-a', true)
+        return {
+          before, after: modelle.istAn('local-a'),
+          off: [...modelle.modellwahl.aus],
+          keys: globalThis.saved.map((call) => call[1]),
+        }
+        """
+    )
+    assert seen == {"before": False, "after": True, "off": ["cloud/m1"], "keys": ["modelle_aus"]}
+
+
+def test_a_providers_single_model_unticked_leaves_the_provider_standing():
+    seen = _run(
+        _CLOUD
+        + """
+        await modelle.alleAnbieterLaden()
+        await modelle.schalten('homelab', false)
+        const house = modelle.anbieterAlle().find((h) => h.id === 'homelab')
+        const off = {
+          on: modelle.istAn('homelab'),
+          kept: house?.modelle.map((m) => m.id),
+          visible: modelle.sichtbare().map((m) => m.id),
+          off: [...modelle.modellwahl.aus],
+        }
+        await modelle.schalten('homelab', true)
+        return { ...off, back: modelle.istAn('homelab') }
+        """
+    )
+    assert seen["on"] is False
+    # The provider and its model stand; only the model choice lost it.
+    assert seen["kept"] == ["homelab"]
+    assert "homelab" not in seen["visible"]
+    assert "homelab" in seen["off"]
+    assert seen["back"] is True

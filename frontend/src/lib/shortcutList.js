@@ -1,7 +1,9 @@
 /* The shortcuts the program has besides the microphone key, to look up:
    the page's own (frontend/src/App.svelte) and those of the shell's menu
    (fenster-electron/main.js). Neither place has a list to read, so the rows
-   are written out here; the names are the ones the Mac menu shows.
+   are written out here; the names are the ones the Mac menu shows. The
+   groups stand in the order the page lays them side by side: the chat's,
+   the editing ones, the developer options.
 
    Each row: its name, its keys the way the Mac has them, and — only where
    the shell's menu answers differently off the Mac — what it answers to
@@ -30,6 +32,17 @@ const GROUPS = [
     ],
   },
   {
+    title: 'shortcuts.group_edit',
+    rows: [
+      ['shortcuts.undo', [['Mod'], 'Z']],
+      ['shortcuts.redo', [['Shift', 'Mod'], 'Z'], { windows: [['Mod'], 'Y'] }],
+      ['shortcuts.cut', [['Mod'], 'X']],
+      ['shortcuts.copy', [['Mod'], 'C']],
+      ['shortcuts.paste', [['Mod'], 'V']],
+      ['shortcuts.select_all', [['Mod'], 'A']],
+    ],
+  },
+  {
     title: 'shortcuts.group_app',
     rows: [
       ['shortcuts.reload', [['Mod'], 'R']],
@@ -44,17 +57,6 @@ const GROUPS = [
       ['shortcuts.minimize', [['Mod'], 'M'], {}, 'shortcuts.minimize_windows'],
       ['shortcuts.close_window', [['Mod'], 'W']],
       ['shortcuts.quit', [['Mod'], 'Q'], { windows: null, other: null }],
-    ],
-  },
-  {
-    title: 'shortcuts.group_edit',
-    rows: [
-      ['shortcuts.undo', [['Mod'], 'Z']],
-      ['shortcuts.redo', [['Shift', 'Mod'], 'Z'], { windows: [['Mod'], 'Y'] }],
-      ['shortcuts.cut', [['Mod'], 'X']],
-      ['shortcuts.copy', [['Mod'], 'C']],
-      ['shortcuts.paste', [['Mod'], 'V']],
-      ['shortcuts.select_all', [['Mod'], 'A']],
     ],
   },
 ]

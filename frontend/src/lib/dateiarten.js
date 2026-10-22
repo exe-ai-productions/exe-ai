@@ -60,14 +60,96 @@ const ARTEN = {
   xml: { endung: 'xml', typ: 'application/xml', zeigen: 'text', zeichen: 'klammern' },
 }
 
-/** The finished mark for a fence language, ready to drop into markup. */
+/*
+  What a FILE is, apart from what a fence is. A fence becomes a file box only
+  when it is a document (`ARTEN` above); a file that lies somewhere — handed
+  over by the model, kept in a chat's folder — is shown by its ending, and
+  there are more kinds of it than there are documents:
+
+      doc     one of `ARTEN`: drawn, tabled or set as its source (above)
+      pdf     the pages, drawn by pdf.js from the file's address
+      code    the text with colours and line numbers; `language` names the
+              grammar where highlight.js has one, and is empty where it has
+              none (the lines are numbered all the same)
+      text    the text, as written
+      image   a picture, drawn from the file's address
+      video   a player with its own controls, from the file's address
+      audio   a player with its own controls, from the file's address
+      word    a Word document (docx), its pages drawn from the file's address
+      sheet   a spreadsheet (xlsx, xls), a tab per sheet and its values as a table
+      slides  a presentation (pptx), its slides one under the other
+
+  The old binary formats of Word and PowerPoint (doc, ppt) have no kind: they
+  stay a card with name, size and the download.
+
+  The endings of text files are the ones the service accepts as text
+  (app/api/v1/dokumente.py, `TEXT_ENDUNGEN`); everything it accepts that is
+  neither a document nor plain text is code.
+*/
+const CODE_LANGUAGES = {
+  py: 'python', pyi: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+  ts: 'typescript', tsx: 'typescript', sh: 'bash', bash: 'bash', zsh: 'bash', fish: 'bash', ps1: '', bat: '',
+  c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', hpp: 'cpp', cs: 'csharp', java: 'java', kt: 'kotlin', go: 'go',
+  rs: 'rust', rb: 'ruby', php: 'php', pl: '', lua: 'lua', r: '', jl: '', swift: 'swift', m: '', scala: '',
+  clj: '', ex: '', exs: '', erl: '', sql: 'sql', graphql: '', proto: '', tf: '', hcl: '',
+  dockerfile: 'dockerfile', makefile: 'makefile', cmake: '', gradle: '', rst: '', tex: '',
+  diff: 'diff', patch: 'diff', css: 'css', scss: 'scss', sass: 'scss', less: '',
+  toml: 'toml', ini: 'ini', cfg: 'ini', conf: 'ini', properties: 'ini', jsonl: 'json', ndjson: 'json',
+}
+const TEXT_ENDINGS = ['txt', 'log', 'srt', 'vtt']
+const IMAGE_ENDINGS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'ico']
+const VIDEO_ENDINGS = ['mp4', 'webm', 'mov', 'm4v']
+const AUDIO_ENDINGS = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'oga', 'flac', 'opus']
+const WORD_ENDINGS = ['docx']
+const SHEET_ENDINGS = ['xlsx', 'xls']
+const SLIDE_ENDINGS = ['pptx']
+const MARK_OF_KIND = {
+  code: 'klammern', text: 'zeilen', image: 'bild', video: 'bild', audio: 'zeilen',
+  word: 'zeilen', sheet: 'gitter', slides: 'bild',
+}
+
+/** The kinds that have no text to hand over: the page draws or plays them
+ *  from the file's own address. */
+export const ADDRESS_KINDS = ['image', 'video', 'audio', 'word', 'sheet', 'slides']
+/** The kinds of an Office file, which the reader shows as a page. */
+export const OFFICE_KINDS = ['word', 'sheet', 'slides']
+
+/** What a file is, from its ending (with or without the dot): `{ kind,
+ *  language }`, or null for an ending the program shows nothing of. `htm`
+ *  is html. */
+export function fileKind(ending) {
+  const raw = String(ending || '').toLowerCase().trim().replace(/^\./, '')
+  const name = raw === 'htm' ? 'html' : raw
+  if (!name) return null
+  if (name === 'pdf') return { kind: 'pdf', language: '' }
+  if (ARTEN[name]) return { kind: 'doc', language: name }
+  if (Object.hasOwn(CODE_LANGUAGES, name)) return { kind: 'code', language: CODE_LANGUAGES[name] }
+  if (TEXT_ENDINGS.includes(name)) return { kind: 'text', language: '' }
+  if (IMAGE_ENDINGS.includes(name)) return { kind: 'image', language: '' }
+  if (VIDEO_ENDINGS.includes(name)) return { kind: 'video', language: '' }
+  if (AUDIO_ENDINGS.includes(name)) return { kind: 'audio', language: '' }
+  if (WORD_ENDINGS.includes(name)) return { kind: 'word', language: '' }
+  if (SHEET_ENDINGS.includes(name)) return { kind: 'sheet', language: '' }
+  if (SLIDE_ENDINGS.includes(name)) return { kind: 'slides', language: '' }
+  return null
+}
+
+/** A drawing from its text as an address an image element can load. The
+ *  element runs no script in it, whatever the file holds. */
+export function svgAddress(text) {
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(String(text ?? ''))
+}
+
+/** The finished mark for a fence language or a file's ending, ready to drop
+ *  into markup. */
 export function dateizeichen(sprache, groesse = 22) {
   const art = dateiart(sprache)
-  if (!art) return ''
+  const zeichen = art ? art.zeichen : MARK_OF_KIND[fileKind(sprache)?.kind]
+  if (!zeichen) return ''
   return `<svg class="datei-zeichen" width="${groesse}" height="${groesse}" ` +
     'viewBox="0 0 64 64" fill="none" stroke="currentColor" ' +
     'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    ZEICHEN[art.zeichen] + '</svg>'
+    ZEICHEN[zeichen] + '</svg>'
 }
 
 /* What a text weighs as a file: its bytes, not its characters. */
@@ -76,15 +158,22 @@ function byteCount(inhalt) {
 }
 
 /**
- * How much a file weighs, in the shortest honest form.
+ * How much a file weighs, in the shortest honest form: bytes up to 1 KB,
+ * whole kilobytes up to 1 MB, megabytes with one decimal after that.
  *
  * A fact, not a state — so it is told in plain text and carries no colour.
+ * The one place that turns a byte count into words: the card in the chat and
+ * the tab beside it both ask here.
  */
-export function dateigroesse(inhalt) {
-  const bytes = byteCount(inhalt)
+export function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+/** What a text weighs as a file. */
+export function dateigroesse(inhalt) {
+  return formatSize(byteCount(inhalt))
 }
 
 /** The catalogue entry for a fence language, or null if it is not a document. */
@@ -95,7 +184,8 @@ export function dateiart(sprache) {
 /** The line under a written file's name: what kind it is, and how big. */
 export function dateiFakten(datei) {
   const art = dateiart(datei?.art)
-  return [art?.endung.toUpperCase(), dateigroesse(datei?.inhalt)].filter(Boolean).join(' · ')
+  const ending = art ? art.endung : fileKind(datei?.art) ? String(datei.art).toLowerCase() : ''
+  return [ending.toUpperCase(), dateigroesse(datei?.inhalt)].filter(Boolean).join(' · ')
 }
 
 /**

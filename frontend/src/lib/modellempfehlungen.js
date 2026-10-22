@@ -34,11 +34,17 @@
 
 import { speicherSchaetzung } from './speicherschaetzung.js'
 
-/* The catalogue's three tabs. Each is its own search on the server side
+/* The catalogue's tabs. Each is its own search on the server side
    (see app/api/v1/modellsuche.py) and its own curated list here — a chat
    model, an embedding model and an image model are different things to
-   run, and a merged list offers each one where it cannot work. */
-export const ARTEN = ['chat', 'einbettung', 'sprache', 'bild', 'zubehoer']
+   run, and a merged list offers each one where it cannot work. A video model
+   lies in the picture folder and is drawn by the picture server, so its tab
+   fetches into the picture side (`dienstArt`). */
+export const ARTEN = ['chat', 'einbettung', 'sprache', 'bild', 'video', 'zubehoer']
+
+/* The kind the service files a tab's models under: the video tab downloads
+   into the picture folder, whose server draws them. */
+export const dienstArt = (art) => (art === 'video' ? 'bild' : art)
 
 /* Where each accessory kind is downloaded to — a sub-folder of its server, so
    each folder shows only its own kind and the file appears where it belongs at
@@ -68,10 +74,10 @@ export const ZUBEHOER_ORDNER = {
   mmproj: { seite: 'chat', unter: 'vision' },
 }
 
-/* The tabs whose search box does something. The two curated tabs (empty here)
-   hide the box entirely — a search that always returns nothing is worse than
-   no box. */
-export const SUCHBARE_ARTEN = ['chat', 'einbettung', 'sprache', 'bild']
+/* The tabs whose search box does something. The curated accessory tab hides
+   the box entirely — a search that always returns nothing is worse than no
+   box. */
+export const SUCHBARE_ARTEN = ['chat', 'einbettung', 'sprache', 'bild', 'video']
 
 /* The colour each accessory kind wears on its card. The design rule of the
    house: one capability, one colour, EVERYWHERE. MTP is the blue of its
@@ -193,7 +199,7 @@ export const KATALOG = [
     marke: 'ista',
     satz: 'katalog.satz_qwen38',
     langsatz: 'katalog.lang_qwen38',
-    faehigkeiten: ['werkzeug', 'auge'],
+    faehigkeiten: ['werkzeug', 'auge', 'gluehbirne'],
     kontext: 262144,
     fassungen: [
       {
@@ -279,6 +285,99 @@ export const KATALOG = [
       },
     ],
   },
+  {
+    /* NVIDIA's current 30B mixture of experts with 3B active parameters, in
+       ggml-org's Q4_0 build with its own MTP file. Repository, file names and
+       sizes verified against Hugging Face; the context is the one the hub
+       reads from the file. */
+    id: 'nemotron-35-lightning',
+    name: 'Nemotron 3.5 Lightning',
+    von: 'NVIDIA',
+    logo: 'N',
+    marke: 'nvidia',
+    satz: 'katalog.satz_nemotron',
+    faehigkeiten: ['werkzeug', 'blitz'],
+    kontext: 1048576,
+    fassungen: [
+      {
+        id: 'ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF',
+        name: '4-Bit · Q4_0',
+        datei: 'NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
+        groesse: 18.9,
+        drafter: 'mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
+        drafter_ziel: 'mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
+      },
+    ],
+  },
+  {
+    /* Google's Gemma 4 12B in Unsloth's GGUF build, with its projector and
+       its MTP drafter from the same repository. Repository, file names,
+       sizes and context verified against Hugging Face. */
+    id: 'gemma-4-12b',
+    name: 'Gemma 4 12B',
+    von: 'Google',
+    logo: 'G',
+    marke: 'google',
+    satz: 'katalog.satz_gemma12b',
+    faehigkeiten: ['werkzeug', 'auge', 'blitz'],
+    kontext: 131072,
+    fassungen: [
+      {
+        id: 'unsloth/gemma-4-12b-it-GGUF',
+        name: '4-Bit · Q4_K_M',
+        datei: 'gemma-4-12b-it-Q4_K_M.gguf',
+        groesse: 7.1,
+        mmproj: 'mmproj-F16.gguf',
+        mmproj_ziel: 'gemma-4-12b-it-mmproj-F16.gguf',
+        drafter: 'mtp-gemma-4-12b-it.gguf',
+        drafter_ziel: 'mtp-gemma-4-12b-it.gguf',
+      },
+    ],
+  },
+  {
+    /* Ornith AI's 35B mixture of experts with vision, the big sibling of the
+       9B. Repository, file names, sizes and context verified against
+       Hugging Face. */
+    id: 'ornith-15-35b',
+    name: 'Ornith 1.5 35B-A3B',
+    von: 'Ornith AI',
+    logo: 'O',
+    marke: 'ornith',
+    satz: 'katalog.satz_ornith35b',
+    faehigkeiten: ['werkzeug', 'auge'],
+    kontext: 262144,
+    fassungen: [
+      {
+        id: 'ornith-ai/Ornith-1.5-35B-A3B-GGUF',
+        name: '4-Bit · Q4_K_M',
+        datei: 'Ornith-1.5-35B-Q4_K_M.gguf',
+        groesse: 21.7,
+        mmproj: 'mmproj-Ornith-1.5-35B-BF16.gguf',
+        mmproj_ziel: 'Ornith-1.5-35B-mmproj-BF16.gguf',
+      },
+    ],
+  },
+  {
+    /* Liquid AI's 24B mixture of experts with 2B active, in the
+       quantisation-aware 4-bit build; it reasons before every answer.
+       Repository, file name, size and context verified against Hugging
+       Face. */
+    id: 'lfm25-24b-a2b',
+    name: 'LFM2.5 24B-A2B',
+    von: 'Liquid AI',
+    logo: 'L',
+    satz: 'katalog.satz_lfm25_24b',
+    faehigkeiten: ['werkzeug', 'gluehbirne'],
+    kontext: 131072,
+    fassungen: [
+      {
+        id: 'LiquidAI/LFM2.5-24B-A2B-GGUF',
+        name: '4-Bit QAD · Q4_0',
+        datei: 'LFM2.5-24B-A2B-QAD-Q4_0.gguf',
+        groesse: 13.6,
+      },
+    ],
+  },
 ]
 
 /* The embedding catalogue — small single-purpose models for the embedding
@@ -323,6 +422,31 @@ export const KATALOG_EINBETTUNG = [
     satz: 'katalog.satz_emb_minilm',
     fassungen: [{ id: 'second-state/All-MiniLM-L6-v2-Embedding-GGUF', name: '8-Bit · Q8_0', datei: 'all-MiniLM-L6-v2-Q8_0.gguf', groesse: 0.03 }],
   },
+  {
+    id: 'emb-qwen3-4b', name: 'Qwen3-Embedding 4B', von: 'Alibaba',
+    logo: 'Q', marke: 'qwen', faehigkeiten: [], kontext: 32768,
+    satz: 'katalog.satz_emb_qwen3_4b',
+    fassungen: [{ id: 'Qwen/Qwen3-Embedding-4B-GGUF', name: '8-Bit · Q8_0', datei: 'Qwen3-Embedding-4B-Q8_0.gguf', groesse: 4.3 }],
+  },
+  {
+    id: 'emb-qwen3-8b', name: 'Qwen3-Embedding 8B', von: 'Alibaba',
+    logo: 'Q', marke: 'qwen', faehigkeiten: [], kontext: 32768,
+    satz: 'katalog.satz_emb_qwen3_8b',
+    fassungen: [{ id: 'Qwen/Qwen3-Embedding-8B-GGUF', name: '8-Bit · Q8_0', datei: 'Qwen3-Embedding-8B-Q8_0.gguf', groesse: 8.0 }],
+  },
+  {
+    id: 'emb-bgelarge', name: 'BGE-Large-EN v1.5', von: 'BAAI',
+    logo: 'B', marke: 'baai', faehigkeiten: [], kontext: 512,
+    satz: 'katalog.satz_emb_bgelarge',
+    fassungen: [{ id: 'CompendiumLabs/bge-large-en-v1.5-gguf', name: '8-Bit · Q8_0', datei: 'bge-large-en-v1.5-q8_0.gguf', groesse: 0.36 }],
+  },
+  {
+    // The context is the card's `max_seq_length`; the file's header says more.
+    id: 'emb-lfm25-350m', name: 'LFM2.5-Embedding 350M', von: 'Liquid AI',
+    logo: 'L', faehigkeiten: [], kontext: 512,
+    satz: 'katalog.satz_emb_lfm25',
+    fassungen: [{ id: 'LiquidAI/LFM2.5-Embedding-350M-GGUF', name: '8-Bit · Q8_0', datei: 'LFM2.5-Embedding-350M-Q8_0.gguf', groesse: 0.38 }],
+  },
 ]
 
 /* The image catalogue — single-file checkpoints for the local drawer
@@ -364,6 +488,193 @@ export const KATALOG_BILD = [
       datei: 'animagine-xl-3.1.safetensors', groesse: 6.9,
     }],
   },
+  {
+    id: 'realistic-vision', name: 'Realistic Vision V6.0', von: 'SG161222',
+    logo: 'S', marke: null, bild: true, klasse: 'sd15',
+    satz: 'katalog.satz_realisticvision',
+    fassungen: [{
+      id: 'SG161222/Realistic_Vision_V6.0_B1_noVAE', name: 'safetensors',
+      datei: 'Realistic_Vision_V6.0_NV_B1_fp16.safetensors', groesse: 2.1,
+    }],
+  },
+  {
+    id: 'pony-v6-xl', name: 'Pony Diffusion V6 XL', von: 'LyliaEngine',
+    logo: 'L', marke: 'purplesmartai', bild: true, klasse: 'sdxl',
+    satz: 'katalog.satz_ponyv6xl',
+    fassungen: [{
+      id: 'LyliaEngine/Pony_Diffusion_V6_XL', name: 'safetensors',
+      datei: 'ponyDiffusionV6XL_v6StartWithThisOne.safetensors', groesse: 6.9,
+    }],
+  },
+  // The four below are assembled from parts (text encoder, VAE): the download
+  // asks the head of the file for its kit, as the search's hits do.
+  {
+    id: 'qwen-image-21', name: 'Qwen-Image 2.1', von: 'Alibaba Qwen',
+    logo: 'Q', marke: 'qwen', bild: true, klasse: 'qwen_image_2_1',
+    satz: 'katalog.satz_qwenimage21',
+    fassungen: [{
+      id: 'unsloth/Qwen-Image-2.1-GGUF', name: '4-Bit · Q4_K_M',
+      datei: 'qwen-image-2.1-Q4_K_M.gguf', groesse: 4.2,
+    }],
+  },
+  {
+    id: 'flux2-klein-4b', name: 'FLUX.2 klein 4B', von: 'Black Forest Labs',
+    logo: 'B', marke: 'black-forest-labs', bild: true, klasse: 'flux2_klein',
+    satz: 'katalog.satz_flux2klein',
+    fassungen: [{
+      id: 'unsloth/FLUX.2-klein-4B-GGUF', name: '4-Bit · Q4_K_M',
+      datei: 'flux-2-klein-4b-Q4_K_M.gguf', groesse: 2.6,
+    }],
+  },
+  {
+    id: 'z-image-turbo', name: 'Z-Image Turbo', von: 'Tongyi-MAI',
+    logo: 'T', marke: 'tongyi-mai', bild: true,
+    satz: 'katalog.satz_zimageturbo',
+    fassungen: [{
+      id: 'unsloth/Z-Image-Turbo-GGUF', name: '4-Bit · Q4_K_M',
+      datei: 'z-image-turbo-Q4_K_M.gguf', groesse: 5.0,
+    }],
+  },
+  {
+    // The repository is gated: the download needs the Hugging Face key.
+    id: 'krea-2-turbo', name: 'Krea 2 Turbo', von: 'Krea',
+    logo: 'K', marke: 'krea', bild: true, klasse: 'krea2',
+    satz: 'katalog.satz_krea2turbo',
+    fassungen: [{
+      id: 'krea/Krea-2-Turbo', name: 'safetensors',
+      datei: 'turbo.safetensors', groesse: 26.3,
+    }],
+  },
+  {
+    // The text encoder, the tokenizer and the VAE come with the family.
+    id: 'moss-image-sft', name: 'MOSS-Image SFT', von: 'OpenMOSS',
+    logo: 'O', marke: 'openmoss-team', bild: true, klasse: 'moss_image',
+    satz: 'katalog.satz_moss_image',
+    fassungen: [{
+      id: 'leejet/MOSS-Image-SFT-GGUF', name: '4-Bit · Q4_K',
+      datei: 'MOSS-Image-SFT-Q4_K.gguf', groesse: 3.3,
+    }],
+  },
+]
+
+/* The video catalogue — models the picture server draws in video mode, as
+   families `app/image_families.py` already knows. A card is the one file of a
+   family (a Wan 2.2 A14B pair is two: `partner`, the second of the two models
+   it draws with); the text encoders and the VAE come with it as the kit. The
+   file lies in a sub-folder of its repository; `ziel` is the name it keeps in
+   our folder. Every repository, file name and size checked against Hugging
+   Face when this list was written. */
+export const KATALOG_VIDEO = [
+  {
+    id: 'wan21-t2v-13b', name: 'Wan 2.1 T2V 1.3B', von: 'Alibaba Wan-AI',
+    logo: 'W', marke: 'wan-ai', bild: true, klasse: 'wan',
+    satz: 'katalog.satz_wan21_t2v',
+    fassungen: [{
+      id: 'Comfy-Org/Wan_2.1_ComfyUI_repackaged', name: 'safetensors',
+      datei: 'split_files/diffusion_models/wan2.1_t2v_1.3B_fp16.safetensors',
+      ziel: 'wan2.1_t2v_1.3B_fp16.safetensors', groesse: 2.8,
+    }],
+  },
+  {
+    id: 'wan21-i2v-14b', name: 'Wan 2.1 I2V 14B', von: 'Alibaba Wan-AI',
+    logo: 'W', marke: 'wan-ai', bild: true, klasse: 'wan',
+    satz: 'katalog.satz_wan21_i2v',
+    fassungen: [{
+      id: 'Comfy-Org/Wan_2.1_ComfyUI_repackaged', name: 'safetensors',
+      datei: 'split_files/diffusion_models/wan2.1_i2v_480p_14B_fp8_e4m3fn.safetensors',
+      ziel: 'wan2.1_i2v_480p_14B_fp8_e4m3fn.safetensors', groesse: 16.4,
+    }],
+  },
+  {
+    id: 'wan22-ti2v-5b', name: 'Wan 2.2 TI2V 5B', von: 'Alibaba Wan-AI',
+    logo: 'W', marke: 'wan-ai', bild: true, klasse: 'wan22_ti2v',
+    satz: 'katalog.satz_wan22_ti2v',
+    fassungen: [{
+      id: 'Comfy-Org/Wan_2.2_ComfyUI_Repackaged', name: 'safetensors',
+      datei: 'split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors',
+      ziel: 'wan2.2_ti2v_5B_fp16.safetensors', groesse: 10.0,
+    }],
+  },
+  {
+    id: 'wan22-t2v-a14b', name: 'Wan 2.2 T2V A14B', von: 'Alibaba Wan-AI',
+    logo: 'W', marke: 'wan-ai', bild: true, klasse: 'wan',
+    satz: 'katalog.satz_wan22_t2v',
+    fassungen: [{
+      id: 'Comfy-Org/Wan_2.2_ComfyUI_Repackaged', name: 'safetensors',
+      datei: 'split_files/diffusion_models/wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors',
+      ziel: 'wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors',
+      partner: {
+        datei: 'split_files/diffusion_models/wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors',
+        ziel: 'wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors',
+      },
+      groesse: 28.6,
+    }],
+  },
+  {
+    id: 'wan22-i2v-a14b', name: 'Wan 2.2 I2V A14B', von: 'Alibaba Wan-AI',
+    logo: 'W', marke: 'wan-ai', bild: true, klasse: 'wan22_i2v',
+    satz: 'katalog.satz_wan22_i2v',
+    fassungen: [{
+      id: 'Comfy-Org/Wan_2.2_ComfyUI_Repackaged', name: 'safetensors',
+      datei: 'split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors',
+      ziel: 'wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors',
+      partner: {
+        datei: 'split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors',
+        ziel: 'wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors',
+      },
+      groesse: 28.6,
+    }],
+  },
+  {
+    id: 'wan22-s2v-14b', name: 'Wan 2.2 S2V 14B', von: 'Alibaba Wan-AI',
+    logo: 'W', marke: 'wan-ai', bild: true, klasse: 'wan22_s2v',
+    satz: 'katalog.satz_wan22_s2v',
+    fassungen: [{
+      id: 'Comfy-Org/Wan_2.2_ComfyUI_Repackaged', name: 'safetensors',
+      datei: 'split_files/diffusion_models/wan2.2_s2v_14B_fp8_scaled.safetensors',
+      ziel: 'wan2.2_s2v_14B_fp8_scaled.safetensors', groesse: 16.4,
+    }],
+  },
+  {
+    id: 'ltx-23', name: 'LTX-2.3', von: 'Lightricks',
+    logo: 'L', marke: 'lightricks', bild: true, klasse: 'ltx',
+    satz: 'katalog.satz_ltx23',
+    fassungen: [{
+      id: 'unsloth/LTX-2.3-GGUF', name: '4-Bit · Q4_K_M',
+      datei: 'ltx-2.3-22b-dev-Q4_K_M.gguf', groesse: 14.3,
+    }],
+  },
+  {
+    id: 'minimax-h3', name: 'MiniMax-H3', von: 'MiniMax',
+    logo: 'M', marke: 'minimaxai', bild: true, klasse: 'minimax_h3',
+    satz: 'katalog.satz_minimaxh3',
+    fassungen: [{
+      id: 'unsloth/MiniMax-H3-GGUF', name: '4-Bit · Q4_K',
+      datei: 'minimax_h3_fl2va_pruned-Q4_K.gguf', groesse: 11.4,
+    }],
+  },
+  {
+    id: 'hunyuanvideo-15', name: 'HunyuanVideo 1.5', von: 'Tencent',
+    logo: 'T', marke: 'tencent', bild: true, klasse: 'hunyuan_video',
+    satz: 'katalog.satz_hunyuan15',
+    fassungen: [{
+      id: 'Comfy-Org/HunyuanVideo_1.5_repackaged', name: 'safetensors',
+      datei: 'split_files/diffusion_models/hunyuanvideo1.5_480p_t2v_cfg_distilled_fp8_scaled.safetensors',
+      ziel: 'hunyuanvideo1.5_480p_t2v_cfg_distilled_fp8_scaled.safetensors', groesse: 8.3,
+    }],
+  },
+  {
+    // The file lies in a sub-folder of its repository; the local name carries
+    // the family's name, which is how the picture server finds the family.
+    id: 'lingbot-video-13b', name: 'LingBot-Video 1.3B', von: 'Robbyant',
+    logo: 'R', marke: 'robbyant', bild: true, klasse: 'lingbot_video',
+    satz: 'katalog.satz_lingbot_video',
+    fassungen: [{
+      id: 'robbyant/lingbot-video-dense-1.3b', name: 'safetensors',
+      datei: 'transformer/diffusion_pytorch_model.safetensors',
+      ziel: 'lingbot-video-dense-1.3b.safetensors', groesse: 2.8,
+    }],
+  },
 ]
 
 /* The accessories: small companion files, not models. Each carries a `sorte`
@@ -397,8 +708,10 @@ export const KATALOG_ZUBEHOER = [
     'latent-consistency/lcm-lora-sdv1-5', 'pytorch_lora_weights.safetensors', 0.14, 'lcm-lora-sdv1-5.safetensors', 'sd15'),
   _zub('lora-hyper-15', 'Hyper-SD', 'ByteDance', 'B', 'lora',
     'ByteDance/Hyper-SD', 'Hyper-SD15-8steps-lora.safetensors', 0.27, null, 'sd15'),
-  _zub('lora-lcm-xl', 'LCM', 'Latent Consistency', 'L', 'lora',
-    'latent-consistency/lcm-lora-sdxl', 'pytorch_lora_weights.safetensors', 0.39, 'lcm-lora-sdxl.safetensors', 'sdxl'),
+  // Krea 2 draws edits only with a LoRA; this one also halves 8 steps to 4.
+  { ..._zub('lora-krea2-4step', 'Krea 2 Turbo 4-Step', 'lvladikov', 'K', 'lora',
+    'lvladikov/Krea2-Turbo-Distill-4step-LoRA', 'krea2_turbo_4step_rank_64_lora_comfyui.safetensors', 0.44, null, 'krea2'),
+    satz: 'katalog.satz_zub_krea2_lora' },
   _zub('lora-light-xl', 'Lightning', 'ByteDance', 'B', 'lora',
     'ByteDance/SDXL-Lightning', 'sdxl_lightning_8step_lora.safetensors', 0.39, null, 'sdxl'),
   // Quality detailers, straight from the author's own repositories.
@@ -415,6 +728,16 @@ export const KATALOG_ZUBEHOER = [
     'madebyollin/sdxl-vae-fp16-fix', 'sdxl_vae.safetensors', 0.34, 'sdxl-vae-fp16-fix.safetensors', 'sdxl'),
   _zub('vae-orig-xl', 'Original', 'Stability AI', 'S', 'vae',
     'stabilityai/sdxl-vae', 'sdxl_vae.safetensors', 0.34, 'sdxl-vae-original.safetensors', 'sdxl'),
+  // Flux's VAE (Z-Image decodes with it too). The repository is gated: the
+  // download needs the Hugging Face key.
+  { ..._zub('vae-flux-ae', 'Flux AE', 'Black Forest Labs', 'B', 'vae',
+    'black-forest-labs/FLUX.1-dev', 'ae.safetensors', 0.34, null, 'flux'),
+    satz: 'katalog.satz_zub_flux_ae' },
+  // Qwen-Image 2.1 has a VAE of its own; the 1.0 one cannot stand in for it.
+  { ..._zub('vae-qwen-image-21', 'Qwen-Image 2.1 VAE', 'Alibaba Qwen', 'Q', 'vae',
+    'Comfy-Org/Qwen-Image-2.1', 'vae/qwen_image_2.1_vae_bf16.safetensors', 0.68,
+    'qwen_image_2.1_vae_bf16.safetensors', 'qwen_image_2_1'),
+    satz: 'katalog.satz_zub_qwen_vae', avatarOwner: 'Qwen' },
   // — ADetailer —
   // The raw Bingsu .pt files use a torch pickle the generator cannot read;
   // the catalogue hands out the same weights repackaged as safetensors from
@@ -424,13 +747,69 @@ export const KATALOG_ZUBEHOER = [
   // language: `nameKey` is the catalogue key the card reads instead of `name`.
   { ..._zub('ad-face-n', 'Faces v8n', 'Bingsu', 'B', 'adetailer',
     'exeterminal/adetailer-yolov8-safetensors', 'face_yolov8n.safetensors', 0.01),
-    nameKey: 'katalog.name_ad_face_n' },
+    nameKey: 'katalog.name_ad_face_n', avatarOwner: 'Bingsu' },
   { ..._zub('ad-face-s', 'Faces v8s', 'Bingsu', 'B', 'adetailer',
     'exeterminal/adetailer-yolov8-safetensors', 'face_yolov8s.safetensors', 0.02),
-    nameKey: 'katalog.name_ad_face_s' },
+    nameKey: 'katalog.name_ad_face_s', avatarOwner: 'Bingsu' },
+  { ..._zub('ad-face-m', 'Faces v8m', 'Bingsu', 'B', 'adetailer',
+    'exeterminal/adetailer-yolov8-safetensors', 'face_yolov8m.safetensors', 0.05),
+    nameKey: 'katalog.name_ad_face_m', avatarOwner: 'Bingsu', satz: 'katalog.satz_ad_face_m' },
   { ..._zub('ad-hand-n', 'Hands v8n', 'Bingsu', 'B', 'adetailer',
     'exeterminal/adetailer-yolov8-safetensors', 'hand_yolov8n.safetensors', 0.01),
-    nameKey: 'katalog.name_ad_hand_n' },
+    nameKey: 'katalog.name_ad_hand_n', avatarOwner: 'Bingsu' },
+  { ..._zub('ad-hand-s', 'Hands v8s', 'Bingsu', 'B', 'adetailer',
+    'exeterminal/adetailer-yolov8-safetensors', 'hand_yolov8s.safetensors', 0.02),
+    nameKey: 'katalog.name_ad_hand_s', avatarOwner: 'Bingsu', satz: 'katalog.satz_ad_hand_s' },
+  { ..._zub('ad-face-n2', 'Faces v8n v2', 'Bingsu', 'B', 'adetailer',
+    'exeterminal/adetailer-yolov8-safetensors', 'face_yolov8n_v2.safetensors', 0.01),
+    nameKey: 'katalog.name_ad_face_n2', avatarOwner: 'Bingsu', satz: 'katalog.satz_ad_face_n2' },
+  // — MTP — the speed module of a chat model. The file names carry the model's
+  // name, so the runner pairs each with its model by name.
+  { ..._zub('mtp-occamy', 'Occamy MTP', 'Accio', 'A', 'mtp',
+    'IsValorum/Occamy-1.0-APEX-I-MiniPlus-V2.1-GGUF', 'occamy-1.0-mtp-Q4_K_M.gguf', 1.3),
+    satz: 'katalog.satz_zub_mtp_occamy' },
+  { ..._zub('mtp-qwen38', 'Qwen3.8 MTP', 'Unsloth', 'U', 'mtp',
+    'unsloth/Qwen3.8-27B-GGUF', 'MTP/mtp-Qwen3.8-27B-Q4_0.gguf', 1.4, 'mtp-Qwen3.8-27B-Q4_0.gguf'),
+    satz: 'katalog.satz_zub_mtp_qwen38' },
+  { ..._zub('mtp-ornith-9b', 'Ornith MTP-Head', 'protoLabsAI', 'P', 'mtp',
+    'protoLabsAI/Ornith-1.5-9B-MTP-GGUF', 'mtp-head/mtp-Ornith-1.5-9B-head-Q8_0.gguf', 2.4,
+    'mtp-Ornith-1.5-9B-head-Q8_0.gguf'),
+    satz: 'katalog.satz_zub_mtp_ornith' },
+  { ..._zub('mtp-gemma-e2b', 'Gemma 4 E2B MTP', 'Unsloth', 'U', 'mtp',
+    'unsloth/gemma-4-E2B-it-qat-mobile-GGUF', 'mtp-gemma-4-E2B-it.gguf', 0.06),
+    satz: 'katalog.satz_zub_mtp_gemma_e2b' },
+  { ..._zub('mtp-gemma-12b', 'Gemma 4 12B MTP', 'Unsloth', 'U', 'mtp',
+    'unsloth/gemma-4-12b-it-GGUF', 'mtp-gemma-4-12b-it.gguf', 0.47),
+    satz: 'katalog.satz_zub_mtp_gemma_12b' },
+  { ..._zub('mtp-nemotron', 'Nemotron MTP', 'ggml-org', 'G', 'mtp',
+    'ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF',
+    'mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf', 1.2),
+    satz: 'katalog.satz_zub_mtp_nemotron' },
+  // — Vision (mmproj) — the projector of a chat model, named after the model's
+  // own file so the runner pairs the two by name.
+  { ..._zub('mmproj-occamy', 'Occamy Vision', 'Accio', 'A', 'mmproj',
+    'IsValorum/Occamy-1.0-APEX-I-MiniPlus-V2.1-GGUF', 'mmproj-Accio-Lab_occamy-1.0-Q8_0.gguf', 0.61,
+    'Occamy-1.0.APEX-I-MiniPlus-V2.1-mmproj-Q8_0.gguf'),
+    satz: 'katalog.satz_zub_mmproj_occamy' },
+  { ..._zub('mmproj-gptoss', 'GPT-OSS Vision', 'SoAI', 'S', 'mmproj',
+    'SoAIHQ/gpt-oss-20b-VISION-v2-GGUF', 'mmproj-gpt-oss-20b-VISION-v2-f16.gguf', 0.65,
+    'gpt-oss-20b-VISION-v2-mmproj-f16.gguf'),
+    satz: 'katalog.satz_zub_mmproj_gptoss' },
+  { ..._zub('mmproj-qwen38', 'Qwen3.8 Vision', 'Qwen', 'Q', 'mmproj',
+    'ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF', 'mmproj-Qwen3.8-27B-BF16.gguf', 0.93,
+    'Qwen3.8-27B-mmproj-BF16.gguf'),
+    satz: 'katalog.satz_zub_mmproj_qwen38', avatarOwner: 'Qwen' },
+  { ..._zub('mmproj-ornith-9b', 'Ornith 9B Vision', 'Ornith AI', 'O', 'mmproj',
+    'ornith-ai/Ornith-1.5-9B-GGUF', 'mmproj-Ornith-1.5-9B-BF16.gguf', 0.92,
+    'Ornith-1.5-9B-mmproj-BF16.gguf'),
+    satz: 'katalog.satz_zub_mmproj_ornith_9b' },
+  { ..._zub('mmproj-ornith-35b', 'Ornith 35B Vision', 'Ornith AI', 'O', 'mmproj',
+    'ornith-ai/Ornith-1.5-35B-A3B-GGUF', 'mmproj-Ornith-1.5-35B-BF16.gguf', 0.9,
+    'Ornith-1.5-35B-mmproj-BF16.gguf'),
+    satz: 'katalog.satz_zub_mmproj_ornith_35b' },
+  { ..._zub('mmproj-gemma-12b', 'Gemma 4 12B Vision', 'Google', 'G', 'mmproj',
+    'unsloth/gemma-4-12b-it-GGUF', 'mmproj-F16.gguf', 0.18, 'gemma-4-12b-it-mmproj-F16.gguf'),
+    satz: 'katalog.satz_zub_mmproj_gemma_12b', avatarOwner: 'google' },
 ]
 
 /* The speech catalogue — models the speech server can load. Nothing ships
@@ -490,13 +869,84 @@ export const KATALOG_SPRACHE = [
       mmproj_ziel: 'Qwen3-TTS-12Hz-1.7B-Base-Q4_K_M-mmproj-Q8_0.gguf',
     }],
   },
+  /* The voices of Serveurperso's repository: one repository for the four
+     talkers, and a shared tokenizer file that is the other half of each, so it
+     comes beside the voice under the voice's own name. */
+  {
+    id: 'tts-qwen3-06b-base', name: 'Qwen3-TTS 0.6B Base', von: 'Alibaba',
+    logo: 'Q', marke: 'qwen', faehigkeiten: [], kontext: 4096,
+    satz: 'katalog.satz_tts_qwen3_06_base',
+    fassungen: [{
+      id: 'Serveurperso/Qwen3-TTS-GGUF', name: '4-Bit · Q4_K_M',
+      datei: 'qwen-talker-0.6b-base-Q4_K_M.gguf', groesse: 0.63,
+      mmproj: 'qwen-tokenizer-12hz-Q8_0.gguf',
+      mmproj_ziel: 'qwen-talker-0.6b-base-Q4_K_M-mmproj-Q8_0.gguf',
+    }],
+  },
+  {
+    id: 'tts-qwen3-06b-custom', name: 'Qwen3-TTS 0.6B CustomVoice', von: 'Alibaba',
+    logo: 'Q', marke: 'qwen', faehigkeiten: [], kontext: 4096,
+    satz: 'katalog.satz_tts_qwen3_06_custom',
+    fassungen: [{
+      id: 'Serveurperso/Qwen3-TTS-GGUF', name: '4-Bit · Q4_K_M',
+      datei: 'qwen-talker-0.6b-customvoice-Q4_K_M.gguf', groesse: 0.6,
+      mmproj: 'qwen-tokenizer-12hz-Q8_0.gguf',
+      mmproj_ziel: 'qwen-talker-0.6b-customvoice-Q4_K_M-mmproj-Q8_0.gguf',
+    }],
+  },
+  {
+    id: 'tts-qwen3-17b-custom', name: 'Qwen3-TTS 1.7B CustomVoice', von: 'Alibaba',
+    logo: 'Q', marke: 'qwen', faehigkeiten: [], kontext: 4096,
+    satz: 'katalog.satz_tts_qwen3_17_custom',
+    fassungen: [{
+      id: 'Serveurperso/Qwen3-TTS-GGUF', name: '4-Bit · Q4_K_M',
+      datei: 'qwen-talker-1.7b-customvoice-Q4_K_M.gguf', groesse: 1.2,
+      mmproj: 'qwen-tokenizer-12hz-Q8_0.gguf',
+      mmproj_ziel: 'qwen-talker-1.7b-customvoice-Q4_K_M-mmproj-Q8_0.gguf',
+    }],
+  },
+  {
+    id: 'tts-qwen3-17b-design', name: 'Qwen3-TTS 1.7B VoiceDesign', von: 'Alibaba',
+    logo: 'Q', marke: 'qwen', faehigkeiten: [], kontext: 4096,
+    satz: 'katalog.satz_tts_qwen3_17_design',
+    fassungen: [{
+      id: 'Serveurperso/Qwen3-TTS-GGUF', name: '4-Bit · Q4_K_M',
+      datei: 'qwen-talker-1.7b-voicedesign-Q4_K_M.gguf', groesse: 1.2,
+      mmproj: 'qwen-tokenizer-12hz-Q8_0.gguf',
+      mmproj_ziel: 'qwen-talker-1.7b-voicedesign-Q4_K_M-mmproj-Q8_0.gguf',
+    }],
+  },
+  {
+    id: 'asr-voxtral-4b-realtime', name: 'Voxtral Mini 4B Realtime', von: 'Mistral AI',
+    logo: 'M', marke: 'mistral', faehigkeiten: [], kontext: 4096,
+    satz: 'katalog.satz_voxtral_4b_realtime',
+    fassungen: [{
+      id: 'ggml-org/Voxtral-Mini-4B-Realtime-2602-GGUF', name: '4-Bit · Q4_K_M',
+      datei: 'Voxtral-Mini-4B-Realtime-2602-Q4_K_M.gguf', groesse: 2.6,
+      mmproj: 'mmproj-Voxtral-Mini-4B-Realtime-2602-Q8_0.gguf',
+      mmproj_ziel: 'Voxtral-Mini-4B-Realtime-2602-Q4_K_M-mmproj-Q8_0.gguf',
+    }],
+  },
+  {
+    // The projector's local name begins with the model file's name: that is how
+    // it is paired with the model.
+    id: 'asr-voxtral-small-24b', name: 'Voxtral Small 24B', von: 'Mistral AI',
+    logo: 'M', marke: 'mistral', faehigkeiten: [], kontext: 32768,
+    satz: 'katalog.satz_voxtral_24b',
+    fassungen: [{
+      id: 'bartowski/mistralai_Voxtral-Small-24B-2507-GGUF', name: '4-Bit · Q4_K_M',
+      datei: 'mistralai_Voxtral-Small-24B-2507-Q4_K_M.gguf', groesse: 14.3,
+      mmproj: 'mmproj-mistralai_Voxtral-Small-24B-2507-f16.gguf',
+      mmproj_ziel: 'mistralai_Voxtral-Small-24B-2507-Q4_K_M-mmproj-f16.gguf',
+    }],
+  },
 ]
 
 /* One table carries all lists, keyed by the same names as ARTEN — so the tabs,
    the lookup and the per-kind data cannot disagree. */
 const KATALOGE = {
   chat: KATALOG, einbettung: KATALOG_EINBETTUNG, sprache: KATALOG_SPRACHE,
-  bild: KATALOG_BILD, zubehoer: KATALOG_ZUBEHOER,
+  bild: KATALOG_BILD, video: KATALOG_VIDEO, zubehoer: KATALOG_ZUBEHOER,
 }
 
 /** The curated list for a catalogue tab — what `Katalog.svelte` shows when

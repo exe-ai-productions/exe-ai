@@ -11,16 +11,22 @@
      means — the same setting, written from here now. The memory and the
      five generation values are settings the start reads; a value stored
      here is what the next start runs with, and the log at the foot is the
-     same log window every other server panel has. */
+     same log window every other server panel has. The page stands in rows
+     of two columns: the model card beside the network, the advanced drawer
+     over the full width, the memory beside the generation values. */
   import { api } from '../lib/api.js'
+  import { pollWithoutOverlap } from '../lib/pollWithoutOverlap.js'
   import { t, texte } from '../lib/texte.svelte.js'
   import { fractionDigits, formatNumber } from '../lib/numberDisplay.js'
+  import { entryMark, entrySize } from '../lib/modelEntry.js'
+  import { serverAnteil } from '../lib/speicherschaetzung.js'
   import { katalogOeffnen, melde } from '../lib/zustand.svelte.js'
   import { diktat, schreibenAbwarten, standLaden, werteSetzen } from '../lib/diktat.svelte.js'
   import { createDelayedWriter } from '../lib/delayedWriter.js'
   import Servertafel from './Servertafel.svelte'
+  import Serverreihe from './Serverreihe.svelte'
+  import { serverHead } from '../lib/serverHead.svelte.js'
   import Serverregler from './Serverregler.svelte'
-  import Startknopf from './Startknopf.svelte'
   import Startfehler from './Startfehler.svelte'
   import Serverabschnitt from './Serverabschnitt.svelte'
   import Serverlogkopf from './Serverlogkopf.svelte'
@@ -72,6 +78,10 @@
     strafe: t('sprachserver.feld_strafe'),
   })
 
+  /* What this page hands up to the page head (ModelleLokal.svelte), which draws
+     it: the start button, the short line beside the name and the port. */
+  let { head = $bindable(null) } = $props()
+
   let auskunft = $state(null)
   let arbeitet = $state(false)
   let protokoll = $state([])
@@ -87,6 +97,8 @@
      server once, then left alone: every poll would otherwise put the
      default back over a number somebody just typed. */
   let port = $state(8085)
+  // Minutes without a request after which the server frees its model; null is never.
+  let idle = $state(null)
   let portGesetzt = false
   /* The server's own port, frozen when the field is filled. */
   let werkPort = 8085
@@ -105,36 +117,43 @@
   let werkSpeicher = null
   let gespiegelt = false
 
+  /* What a failed read reported last, so a failure that lasts is said once
+     and not every few seconds; a read that gets through clears it, so the
+     same failure returning later is news again. The answer before it stays
+     on the page — a server shown as stopped because one read failed is a
+     wrong picture, not a quiet one. */
+  let letzterFehler = null
+
   async function laden() {
     try {
       auskunft = await api.bereinigungAuskunft()
-    } catch {
-      auskunft = null
-      return
-    }
-    if (!portGesetzt && auskunft?.port) {
-      port = auskunft.port
-      portGesetzt = true
-    }
-    /* The field follows the setting (the mirror below); the run's own file
-       only fills it while nothing is chosen, or when the chosen file has
-       gone from the folder. An empty choice is a real answer here — "no
-       cleaner chosen" — and is never overwritten by a default. */
-    if (!putzwahl && auskunft.laeuft && auskunft.modell) {
-      putzwahl = auskunft.modell
-    } else if (putzwahl && !auskunft.modelle.some((m) => m.name === putzwahl)) {
-      putzwahl = auskunft.laeuft ? (auskunft.modell ?? '') : ''
-    }
-    if (protokollAuf || protokollOffen()) {
-      protokoll = await api.bereinigungProtokoll()
+      if (!portGesetzt && auskunft?.port) {
+        port = auskunft.port
+        portGesetzt = true
+      }
+      /* The field follows the setting (the mirror below); the run's own file
+         only fills it while nothing is chosen, or when the chosen file has
+         gone from the folder. An empty choice is a real answer here — "no
+         cleaner chosen" — and is never overwritten by a default. */
+      if (!putzwahl && auskunft.laeuft && auskunft.modell) {
+        putzwahl = auskunft.modell
+      } else if (putzwahl && !auskunft.modelle.some((m) => m.name === putzwahl)) {
+        putzwahl = auskunft.laeuft ? (auskunft.modell ?? '') : ''
+      }
+      if (protokollAuf || protokollOffen()) {
+        protokoll = await api.bereinigungProtokoll()
+      }
+      letzterFehler = null
+    } catch (fehler) {
+      if (fehler.message !== letzterFehler) melde(fehler.message, 'fehler')
+      letzterFehler = fehler.message
     }
   }
 
   $effect(() => {
     standLaden()
     laden()
-    const takt = setInterval(laden, 3000)
-    return () => clearInterval(takt)
+    return pollWithoutOverlap(laden, 3000)
   })
 
   /* Both halves have to be in before the fields can be filled: the stored
@@ -147,6 +166,7 @@
        from now on the field is the hand's, the poll leaves it alone. */
     werkPort = auskunft.port ?? 8085
     if (!auskunft.laeuft) port = diktat.cleanup_port ?? werkPort
+    idle = diktat.cleanup_idle_minutes ?? null
     portGesetzt = true
     werkZahlen = {
       temperatur: werk.putztemperatur,
@@ -204,6 +224,22 @@
       werteSetzen({ cleanup_port: wert }).catch(() => {
         melde(t('fehler.einstellung_speichern'), 'fehler')
         port = stand ?? werkPort
+      }),
+    )
+  })
+
+  /* The idle time, written as it is touched; empty and zero both mean never,
+     and a value that could not be stored goes back to what is. */
+  $effect(() => {
+    const wert = idle
+    writer.cancel('idle')
+    if (!gespiegelt || auskunft?.laeuft) return
+    const stand = diktat.cleanup_idle_minutes ?? null
+    if ((wert || null) === stand || (!wert && stand === null)) return
+    writer.plan('idle', () =>
+      werteSetzen({ cleanup_idle_minutes: wert || null }).catch(() => {
+        melde(t('fehler.einstellung_speichern'), 'fehler')
+        idle = stand
       }),
     )
   })
@@ -315,15 +351,18 @@
   const laeuft = $derived(Boolean(auskunft?.laeuft))
   const bereit = $derived(Boolean(putzwahl) && Boolean(auskunft?.programm))
 
-  /* The window's one deed, handed to the network group's head line — the
-     button stands in the line of the group, flush with the card
-     below it, not up in the head card. */
+  /* The server's one deed. The page head (ModelleLokal.svelte) draws its
+     button; the page keeps what the button says and does. */
   const tat = $derived({
     text: laeuft ? t('modell.server_anhalten') : t('modell.server_starten'),
     punkt: laeuft ? 'gruen' : 'still',
     gesperrt: arbeitet || (!laeuft && !bereit),
     onTat: schalten,
   })
+
+  serverHead('bereinigung', (value) => (head = value), () => ({
+    tat, line: '', port: laeuft ? auskunft.port : null,
+  }))
 
   /* The empty entry, like the model server's own: a cleaner somebody
      switches off entirely, and the panel's "bereinigt durch" then says by
@@ -334,9 +373,16 @@
     ...(auskunft?.modelle?.length ? [{ wert: '', text: t('bereinigungsserver.leer') }] : []),
     ...(auskunft?.modelle ?? []).map((m) => ({
       wert: m.name,
-      text: `${m.name} · ${m.groesse_gb} GB`,
+      text: `${m.name} · ${entrySize(m.groesse_gb)}`,
+      ...entryMark(m.name),
     })),
   ])
+
+  /* What the start of the chosen model is planned to take: its file and the
+     context that is set. */
+  const schaetzung = $derived(
+    serverAnteil(auskunft?.modelle, [], { modell: putzwahl, kontext: speicher.kontext }),
+  )
 
   function anzeige(zahl, ganzzahlig, schritt) {
     return ganzzahlig ? String(zahl) : formatNumber(zahl, fractionDigits(schritt), texte.sprache)
@@ -344,11 +390,8 @@
 </script>
 
 <Servertafel
-  titel={t('bereinigungsserver.titel')}
-  zeichen="besen"
-  standfarbe={laeuft ? 'gruen' : 'still'}
-  standtext={laeuft ? t('status.aktiv') : t('status.inaktiv')}
   modelle={modellauswahl}
+  throughput="cleanup"
   bind:gewaehlt={putzwahl}
   modellBeschriftung={t('bereinigungsserver.modell')}
   modellGesperrt={laeuft}
@@ -357,58 +400,63 @@
   katalogTat={() => katalogOeffnen('sprache')}
   speicherort="speech_models"
 >
-  {#snippet mitte()}
-    <!-- One column: network with the window's one
-         deed, storage and the sampling values across the full width. -->
-    <Startfehler arch={auskunft?.unknown_architecture} />
-    <Serverregler kennung="bs" teil="netzwerk" gesperrt={laeuft} bind:port>
-      {#snippet kopfrechts()}
-        <Startknopf text={tat.text} punkt={tat.punkt} gesperrt={tat.gesperrt} onTat={tat.onTat} />
+  {#snippet inhalt(modellkarte)}
+    <Serverreihe>
+      {#snippet links()}{@render modellkarte()}{/snippet}
+      {#snippet rechts()}
+        <Serverregler kennung="bs" teil="netzwerk" gesperrt={laeuft} bind:port />
       {/snippet}
-    </Serverregler>
-
-    <Serverregler
-      kennung="bs"
-      teil="speicher"
-      gesperrt={laeuft}
-      moe={false}
-      bind:kontext={speicher.kontext}
-      {kontextstufen}
-      bind:schichten={speicher.schichten}
-      maxSchichten={MAX_SCHICHTEN}
-      bind:faeden={speicher.faeden}
-      maxFaeden={auskunft?.kerne ?? 8}
-    />
-
-    <Serverabschnitt titel={t('sprachserver.gruppe_parameter')}>
-      {#each PARAMETER as p (p.knopf)}
-        <div class="zeile regel">
-          <div class="kopfzeile">
-            <label class="regelname" for="bs-{p.knopf}">{parameterlabels[p.knopf]}</label>
-            <div class="zahlplatz">
-              <Zahlenfeld
+    </Serverreihe>
+    <Startfehler arch={auskunft?.unknown_architecture} />
+    <Serverregler kennung="bs" teil="leerlauf" gesperrt={laeuft} bind:idle />
+    <Serverreihe>
+      {#snippet links()}
+        <Serverregler
+          kennung="bs"
+          teil="speicher"
+          gesperrt={laeuft}
+          moe={false}
+          bind:kontext={speicher.kontext}
+          {kontextstufen}
+          bind:schichten={speicher.schichten}
+          maxSchichten={MAX_SCHICHTEN}
+          bind:faeden={speicher.faeden}
+          maxFaeden={auskunft?.kerne ?? 8}
+          {schaetzung}
+        />
+      {/snippet}
+      {#snippet rechts()}
+        <Serverabschnitt zeichen="settings_two" titel={t('sprachserver.gruppe_parameter')}>
+          {#each PARAMETER as p (p.knopf)}
+            <div class="zeile regel">
+              <div class="kopfzeile">
+                <label class="regelname" for="bs-{p.knopf}">{parameterlabels[p.knopf]}</label>
+                <div class="zahlplatz">
+                  <Zahlenfeld
+                    bind:wert={regler[p.knopf]}
+                    gesperrt={laeuft}
+                    min={p.min}
+                    max={p.max}
+                    schritt={p.schritt}
+                    ganzzahlig={p.ganzzahlig}
+                  />
+                </div>
+              </div>
+              <Schieberegler
+                id="bs-{p.knopf}"
                 bind:wert={regler[p.knopf]}
+                stufen={p.stufen}
                 gesperrt={laeuft}
-                min={p.min}
-                max={p.max}
-                schritt={p.schritt}
-                ganzzahlig={p.ganzzahlig}
+                beschriftung={parameterlabels[p.knopf]}
+                anzeige={(w) => anzeige(w, p.ganzzahlig, p.schritt)}
+                mit_zahl={false}
+                fuellung
               />
             </div>
-          </div>
-          <Schieberegler
-            id="bs-{p.knopf}"
-            bind:wert={regler[p.knopf]}
-            stufen={p.stufen}
-            gesperrt={laeuft}
-            beschriftung={parameterlabels[p.knopf]}
-            anzeige={(w) => anzeige(w, p.ganzzahlig, p.schritt)}
-            mit_zahl={false}
-            fuellung
-          />
-        </div>
-      {/each}
-    </Serverabschnitt>
+          {/each}
+        </Serverabschnitt>
+      {/snippet}
+    </Serverreihe>
     <LlamaCppSection {auskunft} onrefresh={laden} />
   {/snippet}
 
@@ -417,7 +465,7 @@
       <Serverlogkopf offen={protokollAuf} onumschalten={protokollKlappen}
                      onauskoppeln={() => oeffneProtokoll(t('modell.protokoll_titel'))} />
       {#if protokollAuf}
-        <pre class="protokoll">{protokoll.join('\n') || '—'}</pre>
+        <pre class="protokoll">{protokoll.join('\n') || '-'}</pre>
       {/if}
     </div>
   {/snippet}

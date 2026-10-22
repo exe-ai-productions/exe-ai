@@ -22,7 +22,7 @@ from cli.client import KEY_HEADER, ServiceClient
 from cli.interfaces import Asker, Context, Renderer, Screen
 from cli.main import main
 from cli.texts import Texts
-from stub_service import foreground, noted, process_by_name
+from stub_service import foreground, noted, process_elsewhere
 
 KEY = "key-of-this-run"
 PAGE = f'<html><head><script>window.__SITZUNGSSCHLUESSEL__="{KEY}";</script></head></html>'
@@ -92,9 +92,10 @@ class Service:
         # What a stream left unsent when it broke, for whoever attaches again.
         self.rest: list[dict[str, Any]] = []
         self.when_all_answers_are_over: Callable[[], None] | None = None
-        # What the stand-in says of its process, by the name it is asked
-        # under. A test puts another answer here.
-        self.process: Callable[[str], dict[str, Any] | None] = process_by_name
+        # What the stand-in says of its process: that of a service elsewhere,
+        # whatever name it is asked under. A test that stands for the
+        # service of this machine puts another answer here.
+        self.process: Callable[[str], dict[str, Any] | None] = process_elsewhere
 
     def paths(self) -> list[str]:
         return [

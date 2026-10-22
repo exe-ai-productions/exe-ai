@@ -41,6 +41,7 @@ from app import agentenmodellwahl
 from app.feineinstellungen import context_per_request
 from app.agentenserver import ENDPUNKT_ID, MODELL_VORGABE, endpunkt_bauen
 from app.api.abhaengigkeiten import hole_config, hole_sprache
+from app import chat_template_doors
 from app.api.v1.runner import Modelldatei, ProgramState, _zuordnung, program_state
 from app.config import Config
 from app.i18n import t
@@ -76,6 +77,9 @@ class Auskunft(ProgramState):
     belegt_gb: float | None = None
     laeuft: bool
     modell: str | None = None
+    # What a start would load: the stored choice, apart from `modell`, which
+    # stays the file that runs. None where nothing is chosen.
+    selected_model: str | None = None
     # What the RUNNING process was started with — None while it is off. The
     # page then shows the stored choice instead, exactly as the model server's
     # does.
@@ -124,19 +128,22 @@ def _runner(request: Request):
 
 def _auskunft(request: Request) -> Auskunft:
     runner = _runner(request)
-    lauf = runner.lauf()
+    lauf = runner.shown_run()
+    files = runner.modelle()
+    slot = agentenmodellwahl.slot_datei(request.app.state.repositories)
     return Auskunft(
         **program_state(runner, request.app.state.config),
         ordner=str(runner.ordner),
-        modelle=[Modelldatei(name=m.name, groesse_gb=m.groesse_gb) for m in runner.modelle()],
+        modelle=[Modelldatei(name=m.name, groesse_gb=m.groesse_gb) for m in files],
         mmproj=runner.mmproj(),
         projector_size_gb=runner.projector_sizes(),
         mtp=[Modelldatei(name=m.name, groesse_gb=m.groesse_gb) for m in runner.mtp()],
         speicher_gb=gesamt_gb(),
         kerne=os.cpu_count(),
         belegt_gb=runner.belegt_gb(),
-        laeuft=runner.laeuft(),
+        laeuft=lauf is not None,
         modell=lauf.modell if lauf else None,
+        selected_model=slot if slot in {m.name for m in files} else None,
         kontext=lauf.kontext if lauf else None,
         schichten=lauf.schichten if lauf else None,
         kontext_je_anfrage=(
@@ -187,6 +194,7 @@ async def starten(
         lage = {
             "laeuft_schon": status.HTTP_409_CONFLICT,
             "port_belegt": status.HTTP_409_CONFLICT,
+            "server_geteilt": status.HTTP_409_CONFLICT,
             "kein_programm": status.HTTP_412_PRECONDITION_FAILED,
             "kein_modell": status.HTTP_404_NOT_FOUND,
         }.get(fehler.grund, status.HTTP_400_BAD_REQUEST)
@@ -217,8 +225,30 @@ async def starten(
     return _auskunft(request)
 
 
+@router.post("/chat-template/edit", response_model=chat_template_doors.TemplatePath,
+             summary="Copy the model's chat template out and open it in the text editor")
+def edit_chat_template(
+    daten: chat_template_doors.TemplateRequest, request: Request, sprache: str = Depends(hole_sprache)
+) -> chat_template_doors.TemplatePath:
+    return chat_template_doors.edit(request, _runner(request), daten.modell, sprache)
+
+
+@router.post("/chat-template/reveal", response_model=bool,
+             summary="Show the chat template file in the file manager")
+def reveal_chat_template(
+    daten: chat_template_doors.TemplateRequest, request: Request, sprache: str = Depends(hole_sprache)
+) -> bool:
+    return chat_template_doors.reveal(request, _runner(request), daten.modell, sprache)
+
+
 @router.post("/stop", response_model=Auskunft, summary="Switch the agent model off")
-async def stoppen(request: Request) -> Auskunft:
+async def stoppen(request: Request, sprache: str = Depends(hole_sprache)) -> Auskunft:
+    try:
+        _runner(request).refuse_stop_when_shared()
+    except RunnerFehler as fehler:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, t(f"fehler.runner_{fehler.grund}", sprache)
+        ) from None
     _runner(request).stoppen()
     # Unregistered the moment the process goes, so nothing keeps offering a
     # model that is no longer there — the picker loses the entry, and a run

@@ -50,21 +50,32 @@ export const VORGABE_DARSTELLUNG = {
   chat: {},
 }
 
-/* Where nothing is stored, both panels stand folded to their bars of signs:
-   a fresh installation opens in its basic state. The service answers with
-   what is stored and nothing else, so these are the values in effect then;
-   its own copy (app/layoutwahl.py) is kept equal to them. */
+/* The width of the right panel on a fresh installation: the narrowest one at
+   which the CLI tab counts 60 columns, from where the client draws its whole
+   wordmark ">_ EXE AI" (measured in the shell at 13 px type: 511 px counts 59,
+   512 px counts 60). The narrowest the panel may be dragged to stays 364. */
+export const PANEL_DEFAULT_WIDTH = 512
+
+/* Where nothing is stored, the left panel stands folded to its bar of signs
+   and the right one stands open on the CLI tab, wide enough for the whole
+   wordmark: a fresh installation shows the program at work and not an empty
+   frame. The service answers with what is stored and nothing else, so these
+   are the values in effect then; its own copy (app/layoutwahl.py) is kept
+   equal to them. */
 export const VORGABE_LAYOUT = {
-  leiste_offen: false,
-  leiste_modul: 'terminal',
-  leiste_breite: 364,
+  leiste_offen: true,
+  leiste_modul: 'cli',
+  leiste_breite: PANEL_DEFAULT_WIDTH,
   seitenleiste_zu: true,
-  seitenleiste_breite: 314,
+  seitenleiste_breite: 285,
 }
 
-/* A fresh installation opens in Exe, the grey dark look — the same default
+/* A fresh installation follows the device: Snow where the system is light,
+   Exe where it is dark. The first picture (index.html sets nothing without a
+   stored look, the stylesheet shows Auto) and the answer of the service then
+   agree, so the look never changes on the way up — the same default
    app/moduswahl.py hands out. */
-export const VORGABE_MODUS = 'dunkel'
+export const VORGABE_MODUS = 'auto'
 
 const SCHLUESSEL = ['darstellung', 'layout', 'modus', 'modell_zuletzt']
 
@@ -144,7 +155,7 @@ export const MODUS_SCHLUESSEL = 'exe-modus'
 const browserSpeicher = () => globalThis.localStorage ?? null
 
 /* The looks the service knows (app/moduswahl.py, MODI). */
-const MODI = ['auto', 'hell', 'dunkel', 'darkmatter', 'heaven', 'moune', 'eigen']
+const MODI = ['auto', 'hell', 'dunkel', 'darkmatter', 'heaven', 'moune', 'snow', 'eigen']
 
 /* The look the app begins with: the one the page already put on the root
    element before the first paint (index.html reads the same key), not the

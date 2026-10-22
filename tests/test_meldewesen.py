@@ -23,6 +23,7 @@ from uuid import uuid4
 import pytest
 
 from app import meldewahl
+from tests.fensterquelle import WINDOW_SOURCE
 
 WURZEL = Path(__file__).resolve().parents[1]
 QUELLE = WURZEL / "frontend" / "src"
@@ -59,7 +60,7 @@ def test_kein_aufrufer_klingt_selbst():
 
 def test_das_meldemodul_ist_der_einzige_weg_hinein():
     """The four places that stop and wait report an occurrence now."""
-    app = (QUELLE / "App.svelte").read_text(encoding="utf-8")
+    app = WINDOW_SOURCE.read_text(encoding="utf-8")
     zustand = (QUELLE / "lib" / "zustand.svelte.js").read_text(encoding="utf-8")
     assert app.count("melden({ was: 'wartet'") == 3
     assert "melden({ was: 'wartet'" in zustand
@@ -249,12 +250,20 @@ def test_alle_vier_punkte_haengen_an_ihrem_schalter():
 # --- A switch that is off means nothing happens ----------------------------
 
 
-def _gemeldet(faelle: list[dict], *, aus: list[str] | None = None) -> dict:
+def _gemeldet(
+    faelle: list[dict],
+    *,
+    aus: list[str] | None = None,
+    popups_aus: bool = False,
+    extra: str = "",
+) -> dict:
     """Run `melden()` for each case against the shipped module and report
     what reached the sound and what reached the notice list."""
     with _pruefordner() as ordner:
         gebaut = ordner / "gebaut.mjs"
-        (ordner / "api.mjs").write_text("export const api = {}\n", encoding="utf-8")
+        (ordner / "api.mjs").write_text(
+            "export const api = { einstellungSetzen: () => Promise.resolve() }\n", encoding="utf-8"
+        )
         # The catalogue, stubbed: `meldeText` reads it to build its sentence,
         # and none of these measurements is about words.
         (ordner / "texte.mjs").write_text(
@@ -284,14 +293,16 @@ def _gemeldet(faelle: list[dict], *, aus: list[str] | None = None) -> dict:
                 const m = await import('./gebaut.mjs')
                 const { gehoert } = await import('./klaenge.mjs')
                 for (const name of %s) m.meldewesen.melder[name] = false
+                m.meldewesen.popupsAus = %s
                 for (const fall of %s) m.melden(fall)
+                %s
                 console.log('---BERICHT---' + JSON.stringify({
                   gehoert,
                   meldungen: m.meldungen.liste.map((n) => n.text),
                 }))
                 """
             )
-            % (str(MODUL), str(gebaut), json.dumps(aus or []), json.dumps(faelle)),
+            % (str(MODUL), str(gebaut), json.dumps(aus or []), json.dumps(popups_aus), json.dumps(faelle), extra),
             encoding="utf-8",
         )
         ergebnis = subprocess.run(
@@ -316,9 +327,10 @@ def test_angeschaltet_kommt_text_und_ton():
 
 
 @node_da
-def test_ein_ausgeschalteter_melder_schweigt_ganz():
-    """Not a quieter version of the notice — none of it. The switch is
-    called "Failed", not "Failure sound"."""
+def test_a_switched_off_popup_shows_no_card_and_the_sound_asks_its_own_switch():
+    """The popup switch of a row decides about the card and nothing else:
+    the sound is asked of `klingen`, whose own switch (klaenge.svelte.js)
+    answers for it. Two switches in a row, two questions."""
     ergebnis = _gemeldet(
         [
             {"was": "fertig", "text": "Rechercheur · fertig"},
@@ -326,8 +338,25 @@ def test_ein_ausgeschalteter_melder_schweigt_ganz():
         ],
         aus=["fehler"],
     )
-    assert ergebnis["gehoert"] == ["fertig"]
+    assert ergebnis["gehoert"] == ["fertig", "fehler"]
     assert ergebnis["meldungen"] == ["Rechercheur · fertig"]
+
+
+@node_da
+def test_the_good_ending_of_an_agent_is_an_occurrence_of_its_own():
+    """Its own sound and its own popup switch: with the popup of
+    `agent_cronjob` off its card stays away, with "done" off it does not."""
+    faelle = [{"was": "agent_cronjob", "text": "Sammler · fertig"}]
+    angeschaltet = _gemeldet(faelle)
+    assert angeschaltet["gehoert"] == ["agent_cronjob"]
+    assert angeschaltet["meldungen"] == ["Sammler · fertig"]
+
+    nur_agent_aus = _gemeldet(faelle, aus=["agent_cronjob"])
+    assert nur_agent_aus["gehoert"] == ["agent_cronjob"]
+    assert nur_agent_aus["meldungen"] == []
+
+    nur_fertig_aus = _gemeldet(faelle, aus=["fertig"])
+    assert nur_fertig_aus["meldungen"] == ["Sammler · fertig"]
 
 
 @node_da
@@ -390,7 +419,9 @@ def test_ein_fehlertoast_ohne_umweg_haengt_am_selben_schalter():
         )
     assert ergebnis.returncode == 0, (ergebnis.stdout + ergebnis.stderr)[-2000:]
     bericht = json.loads(ergebnis.stdout.split("---BERICHT---", 1)[1].strip())
-    assert bericht["gehoert"] == ["fehler"]
+    # Both failures ask for their sound; the popup switch only holds the
+    # card of the second back.
+    assert bericht["gehoert"] == ["fehler", "fehler"]
     assert bericht["meldungen"] == ["could not save", "saved"]
 
 
@@ -579,3 +610,105 @@ def test_ein_geladener_zu_grosser_wert_laesst_den_haken_nicht_lange_stehen():
         gespeichert={"popup_sekunden": 900},
     )
     assert haken == 60_000
+
+
+# --- The popups can be switched off as a whole -----------------------------
+
+
+def test_the_popups_are_shown_by_default_and_the_switch_survives_saving():
+    """The switch "disable popups" comes off: the popups are shown. Either value
+    has to be kept: a plain False inside the object must not read as "nothing
+    set"."""
+    assert meldewahl.aufgeloest(None)[meldewahl.POPUPS_AUS] is False
+    stored = meldewahl.wahl_pruefen({"popups_aus": True})
+    assert stored == {"popups_aus": True}
+    assert meldewahl.aufgeloest(stored)["popups_aus"] is True
+    assert meldewahl.wahl_pruefen({"popups_aus": False}) == {"popups_aus": False}
+
+
+def test_a_stored_state_without_the_switch_loads_as_before():
+    """Silence probe: an older stored object says nothing about popups, and the
+    popups stay on, with every other value as it was."""
+    stored = meldewahl.wahl_pruefen({"popup_sekunden": 0, "punkt_chat": False})
+    resolved = meldewahl.aufgeloest(stored)
+    assert resolved["popups_aus"] is False
+    assert resolved["popup_sekunden"] == 0
+    assert resolved["punkt_chat"] is False
+
+
+def test_a_popups_value_that_is_no_bool_is_dropped():
+    assert meldewahl.wahl_pruefen({"popups_aus": "ja"}) is None
+    assert meldewahl.wahl_pruefen({"popups_aus": 1}) is None
+
+
+@node_da
+def test_with_the_popups_off_no_card_is_drawn_but_the_sound_is_heard():
+    """The switch stops the display only: the occurrence still rings, and the
+    notice list stays empty."""
+    cases = [
+        {"was": "fertig", "text": "Rechercheur · fertig"},
+        {"was": "fehler", "text": "Sammler · gescheitert"},
+    ]
+    shown = _gemeldet(cases, popups_aus=False)
+    assert shown["meldungen"] == ["Rechercheur · fertig", "Sammler · gescheitert"]
+    off = _gemeldet(cases, popups_aus=True)
+    assert off["meldungen"] == []
+    assert off["gehoert"] == ["fertig", "fehler"]
+
+
+def test_the_store_reads_and_writes_the_switch_and_the_page_greys_the_duration():
+    store = (QUELLE / "lib" / "meldewesen.svelte.js").read_text(encoding="utf-8")
+    assert "popupsAus: false," in store
+    assert "typeof wert.popups_aus === 'boolean'" in store
+    assert "popups_aus: meldewesen.popupsAus," in store
+    assert "if (meldewesen.popupsAus) return 0" in store
+    page = (QUELLE / "teile" / "Meldewahl.svelte").read_text(encoding="utf-8")
+    assert "class:grau={meldewesen.popupsAus}" in page
+    assert "gesperrt={meldewesen.popupsAus}" in page
+    # In the popup block the switch comes first, the duration after it.
+    assert page.index("meldewesen.popups_aus") < page.index("meldewesen.popup_einheit")
+    assert "blocktitel::after" not in page
+
+
+def test_the_renamed_and_new_words_of_the_notices_page_stand_in_both_files():
+    """The trial button reads "Test", the waiting notice "Wartet"/"Waiting",
+    and the switch that stops the popups has its own name in both languages."""
+    texts = {
+        name: json.loads(
+            (WURZEL / "app" / "locales" / f"{name}.json").read_text(encoding="utf-8")
+        )["meldewesen"]
+        for name in ("de", "en")
+    }
+    assert texts["de"]["probe"] == "Test" and texts["en"]["probe"] == "Test"
+    assert texts["de"]["wartet"] == "Wartet" and texts["en"]["wartet"] == "Waiting"
+    assert texts["de"]["popups_aus"] == "Popups deaktivieren"
+    assert texts["en"]["popups_aus"] == "Disable popups"
+    assert "Anhören" not in json.dumps(texts, ensure_ascii=False)
+
+
+@node_da
+def test_with_the_popups_off_a_plain_failure_toast_draws_no_card_but_rings():
+    """The straight `melde(text, 'fehler')` of whoever could not save goes the
+    same way: no card, and the failure sound still plays."""
+    result = _gemeldet(
+        [],
+        popups_aus=True,
+        extra="m.melde('nicht gespeichert', 'fehler')",
+    )
+    assert result["meldungen"] == []
+    assert result["gehoert"] == ["fehler"]
+
+
+@node_da
+def test_switching_the_popups_off_closes_the_cards_standing_and_stops_rewrites():
+    result = _gemeldet(
+        [],
+        extra="""
+          const id = m.melde('läuft', 'hinweis', { dauerhaft: true })
+          m.melde('zweite', 'hinweis')
+          await m.popupsAusSchalten(true)
+          m.aktualisiereMeldung(id, { text: 'fertig' })
+          m.melde('danach', 'hinweis')
+        """,
+    )
+    assert result["meldungen"] == []

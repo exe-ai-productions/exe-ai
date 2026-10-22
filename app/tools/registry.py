@@ -25,12 +25,13 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from app import image_families
+from app import aufgaben, image_families
 from app.agenten import GELOESCHT_DATEI, agenten_laden
 from app.i18n import t
 from app.paketierung import ist_eingefroren, programmpfad
@@ -44,16 +45,20 @@ if TYPE_CHECKING:
 # Which shipped servers the program can be itself. Same list as in
 # start.py, and short on purpose: only what travels with the program.
 MCP_SERVER = {"websuche", "searxng"}
-import httpx
 
 from app.tools import (
     bild_werkzeug, cron_notiz, cronjob, dateiwerkzeuge, frage_werkzeug, grenzen, memory,
     shell, skill, uhr, video_tool, ziel_werkzeug,
 )
 from app.tools import agentendock as ablage_werkzeug
-from app.tools import auftrag_werkzeug
-from app.tools.mcp_client import CALL_TIMEOUT, MCPFehler, MCPStdioClient, MCPWerkzeug
-from app.tools.mcp_http import MCPHttpClient
+from app.tools import auftrag_werkzeug, job_werkzeug
+from app.tools.mcp_client import (
+    CALL_TIMEOUT,
+    MCPStdioClient,
+    MCPWerkzeug,
+    start_failure_text,
+)
+from app.tools.mcp_http import MCPHttpClient, put_header
 from app.tools.mcp_names import model_name
 
 log = logging.getLogger(__name__)
@@ -100,11 +105,20 @@ class ServerEintrag:
     # means the default of ``CALL_TIMEOUT``. Starting the server keeps its
     # own, shorter limit.
     timeout: float | None = None
+    # ``oauth`` names the browser sign-in for a hosted server. Left out, the
+    # server is reached without a sign-in — unless access is already stored
+    # for it, which then is used as before.
+    auth: str | None = None
+    # Header name -> value sent with every request to a hosted server. A
+    # value may carry ``${NAME}``, resolved from the environment (.env) when
+    # the server connects; the key itself never stands in the file.
+    headers: dict[str, str] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         self.args = self.args or []
         self.env = self.env or {}
         self.needs_confirmation = self.needs_confirmation or []
+        self.headers = self.headers or {}
 
 
 def read_server_file(path: Path, language: str) -> tuple[str, str | None]:
@@ -181,7 +195,60 @@ _UMGEBUNGSNAME = re.compile(ENV_NAME_PATTERN)
 _ERLAUBTE_FELDER = {
     "type", "command", "args", "env", "enabled",
     "allowed_tools", "needs_confirmation", "url", "api_key_env", "timeout",
+    "auth", "headers",
 }
+
+# What a header may be called (RFC 9110 token) and what its value may not
+# hold: a line break in either would start a second header.
+_HEADER_NAME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+")
+PLATZHALTER_MUSTER = re.compile(r"\$\{(" + ENV_NAME_PATTERN + r")\}")
+
+
+def header_sources(api_key_env: str | None, headers: dict[str, str]) -> dict[str, str]:
+    """What an entry sends as headers, before ``${NAME}`` is filled in.
+
+    An entry's ``api_key_env`` is read as ``Authorization: Bearer ${NAME}``,
+    so there is one way in the service; a header of the entry's own with the
+    same name (in any case) takes its place.
+    """
+    sources: dict[str, str] = {}
+    if api_key_env:
+        sources["Authorization"] = "Bearer ${" + api_key_env + "}"
+    for name, value in headers.items():
+        put_header(sources, name, value)
+    return sources
+
+
+def key_variables(api_key_env: str | None, headers: dict[str, str]) -> list[str]:
+    """The environment variables the headers of an entry actually read."""
+    names: list[str] = []
+    for value in header_sources(api_key_env, headers).values():
+        for name in PLATZHALTER_MUSTER.findall(value):
+            if name not in names:
+                names.append(name)
+    return names
+
+
+def resolve_headers(eintrag: ServerEintrag) -> tuple[dict[str, str], list[str]]:
+    """The headers one hosted server is sent, with ``${NAME}`` filled in from
+    the environment, and the names that are not set.
+
+    A name that is not set is returned, not filled with nothing: the server
+    then does not start instead of running with an empty key.
+    """
+    missing: list[str] = []
+
+    def substitute(match: re.Match[str]) -> str:
+        value = os.environ.get(match.group(1)) or ""
+        if not value and match.group(1) not in missing:
+            missing.append(match.group(1))
+        return value
+
+    sources = header_sources(eintrag.api_key_env, eintrag.headers)
+    return (
+        {name: PLATZHALTER_MUSTER.sub(substitute, value) for name, value in sources.items()},
+        missing,
+    )
 
 
 def konfiguration_pruefen(text: str, sprache: str) -> str | None:
@@ -229,6 +296,15 @@ def konfiguration_pruefen(text: str, sprache: str) -> str | None:
             return t("mcp_datei.api_key_env", sprache, name=name)
         if typ == "http" and not felder.get("url"):
             return t("mcp_datei.http_url", sprache, name=name)
+        if felder.get("auth") not in (None, "", "oauth"):
+            return t("mcp_datei.auth", sprache, name=name)
+        kopfzeilen = felder.get("headers", {})
+        if not isinstance(kopfzeilen, dict) or not all(
+            isinstance(k, str) and isinstance(v, str)
+            and _HEADER_NAME.fullmatch(k) and not re.search(r"[\r\n]", v)
+            for k, v in kopfzeilen.items()
+        ):
+            return t("mcp_datei.headers", sprache, name=name)
         args = felder.get("args", [])
         if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
             return t("mcp_datei.args", sprache, name=name)
@@ -279,7 +355,26 @@ def program_tool_names() -> set[str]:
         cron_notiz.WERKZEUG_NAME,
         ablage_werkzeug.WERKZEUG_NAME,
         auftrag_werkzeug.WERKZEUG_NAME,
+        job_werkzeug.WERKZEUG_NAME,
     }
+
+
+def _interpreter(command: str) -> str:
+    """The command of a stdio server, as this system spells the venv's Python.
+
+    The shipped list names it the POSIX way, ``.venv/bin/python``. A venv on
+    Windows keeps it at ``.venv\\Scripts\\python.exe``, so run from source
+    there the server never started ("[WinError 2]") and its tools were
+    missing. The service itself runs on that venv's interpreter, so that is
+    the one named. Packaged, the program is its own server and this is not
+    asked (``_client_bauen``).
+    """
+    if sys.platform == "win32" and command.replace("\\", "/") in (
+        ".venv/bin/python",
+        ".venv/bin/python3",
+    ):
+        return sys.executable or command
+    return command
 
 
 @dataclass(frozen=True)
@@ -373,6 +468,7 @@ class WerkzeugRegistry:
         zeitzone: str | None = None,
         skripte_ordner: Any | None = None,
         folder_share: Any | None = None,
+        service_port: int | None = None,
         chat_delivery: Any | None = None,
         on_tool_list: Callable[[str, list[str]], None] | None = None,
     ) -> None:
@@ -454,10 +550,15 @@ class WerkzeugRegistry:
         # from the model's arguments. None means the folder is shared with
         # the run only, which is what a job run gets anyway.
         self.folder_share = folder_share
+        # The port this service listens on: a command that speaks to it over
+        # the loopback address is refused (app/tools/shell.py ``blockiert``).
+        self.service_port = service_port
         # The OAuthVermittler (mcp_auth) — for hosted servers without a
         # fixed key. None means: such servers remain unconnected.
         self.oauth = oauth
         self.clients: dict[str, MCPClient] = {}
+        # The start under way behind the service's own (``start_in_background``).
+        self._start_task: asyncio.Task | None = None
         # Tool name -> (client, tool, needs confirmation)
         self._werkzeuge: dict[str, tuple[MCPClient, MCPWerkzeug, bool]] = {}
         # Switched off by the user (app/werkzeugwahl.py). Not part of the
@@ -469,61 +570,105 @@ class WerkzeugRegistry:
     # --- Setup -----------------------------------------------------------
 
     async def starten(self) -> None:
-        for eintrag in self.eintraege:
-            if not eintrag.enabled:
-                continue
-            client = self._client_bauen(eintrag)
-            if client is None:
-                continue
-            # Hosted servers without a fixed key run via the browser
-            # sign-in: fetch access, silently renewed if needed.
-            # Without access the server does not start — the tile shows
-            # "reconnect", the model is offered nothing dead.
-            if (
-                isinstance(client, MCPHttpClient)
-                and client.api_key is None
-                and not eintrag.api_key_env
-            ):
-                if self.oauth is None:
-                    log.info(
-                        "MCP server '%s': no sign-in possible (no "
-                        "broker) — skipped",
-                        eintrag.name,
-                    )
-                    continue
-                zugang = await self.oauth.gueltiges_token(eintrag.name)
-                if zugang is None:
-                    log.info(
-                        "MCP server '%s': not connected — sign in through "
-                        "the settings",
-                        eintrag.name,
-                    )
-                    continue
-                client.api_key = zugang
-                client.token_erneuern = (
-                    lambda name=eintrag.name: self.oauth.token_erneuern(name)
-                )
-            try:
-                await client.starten()
-            except (MCPFehler, OSError, asyncio.TimeoutError, httpx.HTTPError) as fehler:
-                log.error("MCP server '%s' could not start: %s", eintrag.name, fehler)
-                continue
-
-            self.clients[eintrag.name] = client
-            self._werkzeuge_uebernehmen(eintrag, client)
-            if self.on_tool_list is not None:
-                try:
-                    self.on_tool_list(eintrag.name, [w.name for w in client.werkzeuge])
-                except Exception:  # noqa: BLE001 - a failed move must not take the server down
-                    log.exception(
-                        "The stored tool names of '%s' could not be moved", eintrag.name
-                    )
-
+        """Starts every switched-on server, side by side: a server that takes
+        its whole time to start holds up no other, and the start is over after
+        the slowest, not after the sum. Each brings its tools into the offer
+        as soon as it is ready."""
+        await asyncio.gather(
+            *(self._start_one(eintrag) for eintrag in self.eintraege if eintrag.enabled)
+        )
         log.info(
             "Tools ready: %d from %d MCP server(s)",
             len(self._werkzeuge),
             len(self.clients),
         )
+
+    def start_in_background(self) -> asyncio.Task:
+        """The service's start: the built-in tools are there at once and the
+        servers start behind them. ``stoppen`` ends a start still under way."""
+        self._start_task = aufgaben.halten(
+            self.starten(), name="mcp-start", bei_ende=self._start_over
+        )
+        return self._start_task
+
+    @staticmethod
+    def _start_over(aufgabe: asyncio.Task) -> None:
+        if not aufgabe.cancelled() and aufgabe.exception() is not None:
+            log.error("The MCP start failed", exc_info=aufgabe.exception())
+
+    async def _start_one(self, eintrag: ServerEintrag) -> None:
+        client = self._client_bauen(eintrag)
+        if client is None:
+            return
+        # A hosted server signs in through the browser where its entry
+        # says ``auth: oauth`` or access is already stored for it:
+        # fetch the access, silently renewed if needed. Without access
+        # the server does not start — the tile shows "reconnect", the
+        # model is offered nothing dead. One with a key or any header of
+        # its own uses those (``auth: oauth`` puts the sign-in first),
+        # and one with neither is reached without a
+        # sign-in; a server that wants one answers 401 or 403 and does
+        # not start either.
+        if isinstance(client, MCPHttpClient) and self._uses_browser_access(eintrag):
+            if self.oauth is None:
+                log.info(
+                    "MCP server '%s': no sign-in possible (no "
+                    "broker) — skipped",
+                    eintrag.name,
+                )
+                return
+            zugang = await self.oauth.gueltiges_token(eintrag.name)
+            if zugang is None:
+                log.info(
+                    "MCP server '%s': not connected — sign in through "
+                    "the settings",
+                    eintrag.name,
+                )
+                return
+            client.api_key = zugang
+            client.token_erneuern = (
+                lambda name=eintrag.name: self.oauth.token_erneuern(name)
+            )
+        try:
+            await client.starten()
+        except asyncio.CancelledError:
+            # The service ends while this server is still starting: its
+            # process ends with it.
+            await client.stoppen()
+            raise
+        except Exception as fehler:  # noqa: BLE001 - one server must not hold the others back
+            log.error(
+                "MCP server '%s' could not start: %s", eintrag.name, start_failure_text(fehler)
+            )
+            # Whatever it had started goes too: a process that never answered
+            # would run on beside the program.
+            try:
+                await client.stoppen()
+            except Exception:  # noqa: BLE001 - the failed server is gone either way
+                log.debug("MCP server '%s' could not be ended", eintrag.name, exc_info=True)
+            return
+
+        self.clients[eintrag.name] = client
+        self._werkzeuge_uebernehmen(eintrag, client)
+        if self.on_tool_list is not None:
+            try:
+                self.on_tool_list(eintrag.name, [w.name for w in client.werkzeuge])
+            except Exception:  # noqa: BLE001 - a failed move must not take the server down
+                log.exception(
+                    "The stored tool names of '%s' could not be moved", eintrag.name
+                )
+
+    def _uses_browser_access(self, eintrag: ServerEintrag) -> bool:
+        """Does this hosted server run on the access of a browser sign-in?
+        Yes where the entry says so, and where it has no key or header of
+        its own and access is stored for it."""
+        if eintrag.auth == "oauth":
+            return True
+        if eintrag.api_key_env or eintrag.headers:
+            return False
+        if self.oauth is None:
+            return False
+        return bool(self.oauth.status().get(eintrag.name, {}).get("verbunden"))
 
     def _client_bauen(self, eintrag: ServerEintrag) -> MCPClient | None:
         """Builds the client matching the variant — or explains why not."""
@@ -535,7 +680,7 @@ class WerkzeugRegistry:
             if ist_eingefroren() and eintrag.name in MCP_SERVER:
                 befehl, argumente = str(programmpfad()), ["--mcp", eintrag.name]
             else:
-                befehl, argumente = eintrag.command, eintrag.args
+                befehl, argumente = _interpreter(eintrag.command), eintrag.args
 
             return MCPStdioClient(
                 name=eintrag.name,
@@ -561,27 +706,22 @@ class WerkzeugRegistry:
                     eintrag.name,
                 )
                 return None
-            schluessel = None
-            if eintrag.api_key_env:
-                schluessel = os.environ.get(eintrag.api_key_env) or None
-                if schluessel is None:
-                    # House rule: the model is offered nothing that is sure
-                    # to fail. Without a key the server doesn't even start —
-                    # the editor form shows the missing name as a red light.
-                    log.error(
-                        "MCP server '%s': key '%s' is not set (.env) "
-                        "— skipped",
-                        eintrag.name,
-                        eintrag.api_key_env,
-                    )
-                    return None
-            # Without api_key_env, the connection is made unauthenticated —
-            # servers that demand OAuth visibly reject that with a 401 until
-            # the sign-in flow (next build step) is in place.
+            headers, missing = resolve_headers(eintrag)
+            if missing:
+                # House rule: the model is offered nothing that is sure
+                # to fail. Without a key the server doesn't even start —
+                # the editor form shows the missing name as a red light.
+                log.error(
+                    "MCP server '%s': key '%s' is not set (.env) "
+                    "— skipped",
+                    eintrag.name,
+                    ", ".join(missing),
+                )
+                return None
             return MCPHttpClient(
                 name=eintrag.name,
                 url=eintrag.url,
-                api_key=schluessel,
+                headers=headers,
                 timeout=eintrag.timeout or CALL_TIMEOUT,
             )
 
@@ -622,9 +762,33 @@ class WerkzeugRegistry:
                 werkzeug.name in eintrag.needs_confirmation,
             )
 
-    async def stoppen(self) -> None:
-        for client in self.clients.values():
-            await client.stoppen()
+    async def stoppen(self, frist: float | None = None) -> None:
+        """Ends every client side by side, so one that does not end holds up
+        the others for no longer than its own time. ``frist`` is how long a
+        process gets to end after the polite request, and again after the
+        kill; the whole call is over after twice that. None is the unlimited
+        wait of before."""
+        start = self._start_task
+        if start is not None and not start.done():
+            # Servers still starting are not in ``clients`` yet: each ends
+            # its own process when the start is cancelled.
+            start.cancel()
+            waiting = asyncio.gather(start, return_exceptions=True)
+            try:
+                await (waiting if frist is None else asyncio.wait_for(waiting, timeout=2 * frist))
+            except asyncio.TimeoutError:
+                log.warning("Not every starting MCP server ended in time")
+        stops = [
+            client.stoppen(frist)
+            if frist is not None and isinstance(client, MCPStdioClient)
+            else client.stoppen()
+            for client in self.clients.values()
+        ]
+        both = asyncio.gather(*stops, return_exceptions=True)
+        try:
+            await (both if frist is None else asyncio.wait_for(both, timeout=2 * frist))
+        except asyncio.TimeoutError:
+            log.warning("Not every MCP client ended in time")
         self.clients.clear()
         self._werkzeuge.clear()
 
@@ -686,6 +850,7 @@ class WerkzeugRegistry:
             namen.append(ablage_werkzeug.WERKZEUG_NAME)
         if self.agenten_orte is not None:
             namen.append(auftrag_werkzeug.WERKZEUG_NAME)
+            namen.append(job_werkzeug.WERKZEUG_NAME)
         if self.memory_pfad is not None:
             namen.append(memory.WERKZEUG_NAME)
         if self.skills_orte is not None:
@@ -882,6 +1047,18 @@ class WerkzeugRegistry:
                     # The confirmation IS the editable task window the chat
                     # shows before anything starts — nothing runs without it.
                     "needs_confirmation": True,
+                }
+            )
+            beschreibung = job_werkzeug.werkzeug_beschreibung()
+            eintraege.append(
+                {
+                    "name": beschreibung.name,
+                    "beschreibung": beschreibung.beschreibung,
+                    "server": beschreibung.server,
+                    # Shows and ends only the runs this chat's own model sent
+                    # off, with the stop button's own code — nothing of the
+                    # user's is touched.
+                    "needs_confirmation": False,
                 }
             )
         if self.shell_an:
@@ -1164,9 +1341,21 @@ class WerkzeugRegistry:
         ):
             liste.append(
                 auftrag_werkzeug.werkzeug_beschreibung(
-                    agenten(), helpers=helpers
+                    agenten(), helpers=helpers,
+                    with_job_tool=not for_job
+                    and job_werkzeug.WERKZEUG_NAME not in self.abgeschaltet
+                    and (nur is None or job_werkzeug.WERKZEUG_NAME in nur),
                 ).als_openai_werkzeug()
             )
+        # The runs of a chat belong to the chat: no run is offered the tool
+        # that lists and stops them.
+        if (
+            not for_job
+            and self.agenten_orte is not None
+            and (nur is None or job_werkzeug.WERKZEUG_NAME in nur)
+            and job_werkzeug.WERKZEUG_NAME not in self.abgeschaltet
+        ):
+            liste.append(job_werkzeug.werkzeug_beschreibung().als_openai_werkzeug())
         return liste
 
     def server_von(self, name: str) -> str:
@@ -1199,6 +1388,8 @@ class WerkzeugRegistry:
             return cron_notiz.SERVER_NAME if self.cronjobs_repo is not None else ""
         if name == auftrag_werkzeug.WERKZEUG_NAME:
             return auftrag_werkzeug.SERVER_NAME if self.agenten_orte is not None else ""
+        if name == job_werkzeug.WERKZEUG_NAME:
+            return job_werkzeug.SERVER_NAME if self.agenten_orte is not None else ""
         eintrag = self._werkzeuge.get(name)
         return eintrag[1].server if eintrag else ""
 
@@ -1321,7 +1512,7 @@ class WerkzeugRegistry:
             return self.cronjobs_repo is None
         if name == ablage_werkzeug.WERKZEUG_NAME:
             return self.agentendock is None
-        if name == auftrag_werkzeug.WERKZEUG_NAME:
+        if name in (auftrag_werkzeug.WERKZEUG_NAME, job_werkzeug.WERKZEUG_NAME):
             return self.agenten_orte is None
         if name == shell.WERKZEUG_NAME or dateiwerkzeuge.modul(name) is not None:
             return not self.shell_an
@@ -1536,6 +1727,7 @@ class WerkzeugRegistry:
                     data_dir=getattr(self.folder_share, "data_dir", None),
                     # The run's stop ends a command in the foreground.
                     abbruch=abbruch,
+                    service_port=self.service_port,
                 )
             except shell.ShellVerboten as fehler:
                 raise WerkzeugVerboten(str(fehler)) from fehler
@@ -1566,6 +1758,12 @@ class WerkzeugRegistry:
             # with no chat and no assignment behind it at all. That is still
             # a refusal.
             raise WerkzeugVerboten(auftrag_werkzeug.NUR_IM_CHAT)
+
+        if name == job_werkzeug.WERKZEUG_NAME:
+            # The chat run answers this call with its own world in hand
+            # (app/api/v1/generierung.py); reaching this line means no chat
+            # stood in between.
+            raise WerkzeugVerboten(job_werkzeug.ONLY_IN_A_CHAT)
 
         if name in video_tool.DRAWING_TOOLS:
             painter = video_tool if name == video_tool.WERKZEUG_NAME else bild_werkzeug

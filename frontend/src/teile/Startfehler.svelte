@@ -16,7 +16,7 @@
 <style>
   .start-error {
     margin: 0;
-    color: var(--rot);
+    color: var(--rot-text);
     font-size: 13px;
   }
 </style>

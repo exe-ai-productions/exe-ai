@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from tests.fensterquelle import BAR_SOURCE, WINDOW_SOURCE
 
 WURZEL = Path(__file__).resolve().parent.parent
-APP = (WURZEL / "frontend/src/App.svelte").read_text()
-EINGABELEISTE = (WURZEL / "frontend/src/teile/Eingabeleiste.svelte").read_text()
+APP = WINDOW_SOURCE.read_text()
+EINGABELEISTE = BAR_SOURCE.read_text()
 
 
 def test_dokument_upload_lebt_in_der_eingabeleiste_nicht_mehr_in_app():
@@ -45,7 +46,7 @@ def test_der_upload_haelt_den_chat_besetzt():
         re.S,
     ), "senden() no longer claims the chat before the upload"
     assert "delete zustand.sendet[sendeChat]" in APP, "the lock is never released"
-    assert "zustand.sendet[chatId] || haelt(chatId)" in APP, (
+    assert "laufVon(chatId) || zustand.sendet[chatId]) return" in APP, (
         "the queue fires into the lock"
     )
     assert "zustand.sendet[zustand.aktiverChat]" in EINGABELEISTE, (

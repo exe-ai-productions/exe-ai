@@ -85,14 +85,18 @@ def _in_kit(folder: Path, model: str, field: str, name: str) -> bool:
 
 def offered(folder: Path, field: str) -> list[str]:
     """The files the picture side offers for this field."""
-    if field == "vae":
+    if field in ("vae", "audio_vae"):
         return bildrunner.vaes(folder)
     if field == "llm_vision":
         return bildrunner.sehteile(folder)
+    if field == "tokenizer":
+        return bildrunner.tokenizers(folder)
     return bildrunner.textversteher(folder)
 
 
-def matching_parts(folder: Path, family: image_families.Family) -> dict[str, str]:
+def matching_parts(
+    folder: Path, family: image_families.Family, model: str | None = None,
+) -> dict[str, str]:
     """The first file per part of a kit whose own header says it is that
     part. A part with no such file is left out — the field stays the
     user's. An LLM is put in only when its header names an architecture and
@@ -101,7 +105,12 @@ def matching_parts(folder: Path, family: image_families.Family) -> dict[str, str
     8B, depending on the model, so a folder holding both leaves the choice
     to the user. A VAE only where its channels tell it apart from every
     other VAE (``image_families.vae_by_itself``) — otherwise the model's own
-    setting holds it."""
+    setting holds it.
+
+    A part no header tells apart — the LLM of a family that reads no pair of
+    its own, a sound decoder, an image or speech encoder — is the file of
+    the name the family's kit gives it, when ``model`` is given and that
+    file lies in the folder. The VAE is never put in by its name."""
     parts: dict[str, str] = {}
     # Each list is read once; a name in it sits in its own folder or, when
     # the catch net found it loose, in the main folder.
@@ -132,6 +141,29 @@ def matching_parts(folder: Path, family: image_families.Family) -> dict[str, str
             if kind == vae_kind and channels == family.vae_channels:
                 parts["vae"] = name
                 break
+    # The further parts of a kit — LTX's sound decoder and embeddings
+    # connectors — by what their own header says they are. Only LTX's headers
+    # are read for them: another family's sound decoder is not told from a file
+    # of LTX's by anything measured.
+    if family.name == "ltx":
+        for field, listing, below in (
+            ("audio_vae", bildrunner.vaes, bildrunner.VAE_ORDNER),
+            ("embeddings_connectors", bildrunner.textversteher, bildrunner.TEXTVERSTEHER_ORDNER),
+        ):
+            for name in listing(folder):
+                if bildinhalt.companion(where(name, below))[0] == field:
+                    parts[field] = name
+                    break
+    if model is not None:
+        for part in image_families.kit_of_family(family, model):
+            if part.part not in ("llm", *family.parts) or part.part in parts:
+                continue
+            # A family with LLM pairs leaves an LLM no header fits to the
+            # user: its kit holds several (Flux.2 klein) or the pair decides.
+            if part.part == "llm" and family.llms:
+                continue
+            if part.name in offered(folder, part.part):
+                parts[part.part] = part.name
     return parts
 
 

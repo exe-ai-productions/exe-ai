@@ -52,12 +52,12 @@ def test_values_that_are_unset_stay_off_the_line(tmp_path, monkeypatch):
 
 def test_only_the_switch_the_upscaler_reads_is_carried(tmp_path, monkeypatch):
     command = _runner(tmp_path, monkeypatch).befehl(
-        _upscale(switches={"params_backend": "cpu", "conditioning_cache_size": 4, "fa": True}),
+        _upscale(switches={"params_backend": "cpu", "conditioning_cache_size": 4, "sage_attn": True}),
         Path("/out.png"),
     )
     assert command[command.index("--params-backend") + 1] == "cpu"
     assert "--conditioning-cache-size" not in command
-    assert "--fa" not in command
+    assert "--sage-attn" not in command
 
 
 def test_a_picture_carries_the_same_device_values(tmp_path, monkeypatch):

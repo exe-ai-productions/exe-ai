@@ -15,6 +15,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.anmeldung import via_tailscale
 from app.api.abhaengigkeiten import hole_sprache
 from app.i18n import t
 from app.ordner_dialog import (
@@ -48,7 +49,9 @@ class OrdnerAntwort(BaseModel):
 
 
 def _ist_lokal(request: Request) -> bool:
-    return bool(request.client and request.client.host in LOKAL)
+    # A request through Tailscale Serve arrives from the loopback address as
+    # well, but the dialog would open on this machine for somebody elsewhere.
+    return bool(request.client and request.client.host in LOKAL) and not via_tailscale(request)
 
 
 @router.get(
@@ -93,7 +96,7 @@ def ordner_dialog_oeffnen(
     except DialogAbgebrochen:
         return OrdnerAntwort(pfad=None)
     except DialogNichtVerfuegbar:
-        raise HTTPException(400, t("fehler.ordnerdialog_fehlt", sprache))
+        raise HTTPException(400, t("fehler.ordnerdialog_fehlt", sprache)) from None
     except DialogZeitueberschreitung:
-        raise HTTPException(408, t("fehler.ordnerdialog_zeit", sprache))
+        raise HTTPException(408, t("fehler.ordnerdialog_zeit", sprache)) from None
     return OrdnerAntwort(pfad=pfad)

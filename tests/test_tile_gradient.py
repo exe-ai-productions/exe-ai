@@ -28,7 +28,7 @@ PAGE = ROOT / "frontend" / "src" / "teile" / "Seitenrahmen.svelte"
 LOOKS = {
     "light": ":root",
     "exe": ":root[data-eigen='dunkel'],\n:root[data-modus='dunkel']",
-    "auto": ":root:not([data-modus='hell'], [data-eigen='hell'])",
+    "auto": ":root:not([data-modus='hell'], [data-modus='snow'], [data-eigen='hell'])",
     "own": ":root[data-modus='eigen']",
     "own-light": ":root[data-modus='eigen'][data-eigen='hell']",
     "own-dark": ":root[data-modus='eigen'][data-eigen='dunkel']",

@@ -120,7 +120,7 @@ async def test_the_dock_is_not_named_a_share(client, config, tmp_path):
     dock = str(speicherorte.ort(config, agentendock.ORT_NAME))
     shared = content.split("The user has shared these working folders with you:\n\n")[1]
     assert shared.split("\n\n")[0] == f"- {folder}"
-    assert "The dock folder holds finished files delivered to the user" in " ".join(content.split())
+    assert "The Doc folder holds finished files delivered to the user" in " ".join(content.split())
     assert f"- {dock}" in content
 
 
@@ -133,7 +133,7 @@ async def test_a_run_with_only_the_dock_has_no_note_duty(client, config, tmp_pat
     text = _system(request)
     assert "The user has shared" not in text
     assert "Keeping each `exe.md` current" not in text
-    assert "The dock folder holds finished files delivered to the user" in text
+    assert "The Doc folder holds finished files delivered to the user" in text
 
 
 async def test_a_shared_folder_keeps_the_note_duty(client, config, tmp_path):
@@ -149,8 +149,9 @@ def _memory_tools(request) -> list[dict]:
 
 
 async def test_the_memory_tool_of_a_job_follows_the_switch(client, config, tmp_path):
-    """The test endpoint is a provider: the memory stays away by default and
-    the job has no memory tool then; it has it once its side is switched on."""
+    """The test endpoint is a provider: the memory travels to it from the
+    start, so the job has the memory tool; it loses it once that side is
+    switched off."""
     registry = WerkzeugRegistry(
         [], shell_an=True, berechtigungen_pfad=_rules(tmp_path),
         memory_pfad=tmp_path / "memory.md",
@@ -158,16 +159,16 @@ async def test_the_memory_tool_of_a_job_follows_the_switch(client, config, tmp_p
     request, _folder = await _request(
         client, config, tmp_path, tools="memory_save", registry=registry
     )
-    assert _memory_tools(request) == []
+    (entry,) = _memory_tools(request)
+    assert "in the next conversation, not immediately" in entry["function"]["description"]
 
     client.app.state.repositories.einstellungen.setzen(
-        "global", gedaechtnis.SCHLUESSEL, {"lokal": True, "cloud": True}
+        "global", gedaechtnis.SCHLUESSEL, {"lokal": True, "cloud": False}
     )
     request, _folder = await _request(
         client, config, tmp_path, tools="memory_save", registry=registry
     )
-    (entry,) = _memory_tools(request)
-    assert "in the next conversation, not immediately" in entry["function"]["description"]
+    assert _memory_tools(request) == []
 
 
 async def test_a_job_lists_no_skill_whose_tool_it_lacks(client, config, tmp_path, monkeypatch):

@@ -89,7 +89,17 @@ def edit(ctx: Context, text: str) -> str | None:
         words = [*command(), str(path)]
 
         def run() -> int:
-            return subprocess.run(words, check=False).returncode
+            try:
+                return subprocess.run(words, check=False).returncode
+            except OSError as error:
+                # A POSIX system names the program it could not start, a
+                # Windows one says only that a file was not found: the
+                # program is put where the system names it.
+                if error.filename is None and isinstance(
+                    error, (FileNotFoundError, PermissionError, NotADirectoryError)
+                ):
+                    error.filename = words[0]
+                raise
 
         try:
             code = ctx.screen.hand_over(run)

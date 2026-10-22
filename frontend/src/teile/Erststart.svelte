@@ -21,6 +21,7 @@
     ['darkmatter', 'einstellungen.darkmatter'],
     ['heaven', 'einstellungen.heaven'],
     ['moune', 'einstellungen.moune'],
+    ['snow', 'einstellungen.snow'],
     ['eigen', 'einstellungen.eigen'],
   ]
 
@@ -199,9 +200,9 @@
   .titel { font: 600 18px var(--schrift); letter-spacing: -0.01em; }
   .satz { color: var(--text-still); font-size: 12.5px; margin: 0; }
   .sprachfehler {
-    /* The colour of something that failed (Repo-CLAUDE.md), on the quiet
+    /* The colour of something that failed, on the quiet
        surface every other notice sits on — not the full colour behind text. */
-    color: var(--rot);
+    color: var(--rot-text);
     background: color-mix(in srgb, var(--rot) 12%, var(--bg));
     font-size: 12.5px;
     margin: 0 0 8px;

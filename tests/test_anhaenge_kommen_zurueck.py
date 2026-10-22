@@ -20,10 +20,11 @@ from pathlib import Path
 import pytest
 
 from tests.test_hausregeln import _node, _stueck as _piece
+from tests.fensterquelle import BAR_SOURCE, WINDOW_SOURCE
 
 ROOT = Path(__file__).resolve().parent.parent
-APP = ROOT / "frontend/src/App.svelte"
-BAR = ROOT / "frontend/src/teile/Eingabeleiste.svelte"
+APP = WINDOW_SOURCE
+BAR = BAR_SOURCE
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="no node on this machine")
 
@@ -60,11 +61,13 @@ const make = (over = {{}}) => {{
   const chatsLaden = async () => {{}}
   const nachrichtenSetzen = () => {{}}
   const runter = () => {{}}
+  const nameUpload = () => {{}}
   const antwortHolen = async () => {{
     log.answered += 1
     log.heldDuringAnswer = log.kept.length > 0 && log.released.length === 0
   }}
   const benutzerfrageBeantworten = async (words) => {{ log.benutzerfrage.push(words) }}
+  const haltendenWertSetzen = async () => true
   const {{ chosenModelOff, api, openNewChat }} = env
   {senden}
   return {{ senden, log, zustand }}
@@ -186,10 +189,10 @@ const kept = { bilder: [{ datei: 'p.png' }], dokumente: [{ id: 'd1' }] }
 
 
 def _bar_script(case: str) -> str:
-    keep = _piece(BAR, r"\n  export function keep\(messageId, kept\) \{.*?\n  \}\n", "keep")
+    keep = _piece(BAR, r"\n  (?:export )?function keep\(messageId, kept\) \{.*?\n  \}\n", "keep")
     give_back = _piece(
         BAR,
-        r"\n  export function zurueckgeben\(inhalt, chat = entwurfChat, messageId = null\) \{.*?\n  \}\n",
+        r"\n  (?:export )?function zurueckgeben\(inhalt, chat = entwurfChat, messageId = null\) \{.*?\n  \}\n",
         "zurueckgeben",
     )
     return f"""
@@ -250,12 +253,12 @@ def test_the_queue_carries_the_entries_and_both_ways_out_pass_them_on():
     bar = BAR.read_text(encoding="utf-8")
     # The entry the bar lines up carries what it took out of the bar.
     assert "einreihen(chatBeimStart, { ...auftrag, kept })" in bar
-    # By itself and by the button on the bubble: both hand the entries to
-    # `senden`, and nothing else sends an entry.
+    # Only the queue's own move hands the entries to `senden`, and nothing
+    # else sends an entry.
     call = (
         "senden(\n      eintrag.inhalt, eintrag.bilder, eintrag.dokumente, eintrag.denken, "
         "eintrag.skill,\n      false, null, eintrag.kept, eintrag,\n    )"
     )
-    assert app.count(call) == 2
+    assert app.count(call) == 1
     # The bar's own send keeps its entries the same way.
     assert "const release = keep(messageId, kept)" in bar

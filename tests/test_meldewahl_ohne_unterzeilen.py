@@ -56,8 +56,16 @@ def test_the_labels_of_the_five_rows_stay_in_the_page_and_in_both_files():
 
 
 def test_a_row_without_a_line_is_one_text_in_its_cell():
-    """Each of the five labels stands alone in its cell, like the rows of the
-    group below them."""
+    """Each of the four labels that still head a row stands alone in its
+    cell, like the rows of the group below them; the two that carry an info
+    mark have the mark right after the label and nothing else. The fifth,
+    the word of the test buttons, is the label of a button in each row of
+    the table and no longer the label of a row of its own."""
     source = _source()
-    for label in ("toene", "lautstaerke", "nur_hintergrund", "probe", "popup"):
+    for label in ("lautstaerke", "popup"):
         assert f"<div class=\"zeilentext\">{{t('meldewesen.{label}')}}</div>" in source, label
+    for label in ("toene", "nur_hintergrund"):
+        assert (
+            f"<div class=\"zeilentext mitmarke\">{{t('meldewesen.{label}')}}"
+            f"<InfoMark text={{t('meldewesen.info_{label}')}} /></div>"
+        ) in source, label

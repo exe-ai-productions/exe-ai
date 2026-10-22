@@ -1108,7 +1108,7 @@ def _skriptarbeit(
             await melde_wenn_faellig(
                 repositories,
                 cronjob_id,
-                f"{pfad.name} — {letzte}" if letzte else pfad.name,
+                f"{pfad.name} - {letzte}" if letzte else pfad.name,
                 erfolgreich=ergebnis.erfolgreich,
                 sprache=sprache,
                 # Why it ended, the same as the model run's own end path
@@ -1490,7 +1490,11 @@ async def _ausgang_buchen(
         eintrag,
         cronmeldung.mit_grund(
             i18n.t(
-                "cronjobs.nach_fehlversuchen_gestoppt",
+                # One failed run is a singular in both languages; from two on
+                # the count stands in the sentence.
+                "cronjobs.nach_fehlversuchen_gestoppt_eins"
+                if eintrag.fehlversuche == 1
+                else "cronjobs.nach_fehlversuchen_gestoppt",
                 sprache,
                 aufgabe=aufgabentext,
                 n=eintrag.fehlversuche,
@@ -1657,7 +1661,7 @@ async def ziel_verbuchen(
             )
             await mitteilen(
                 eintrag,
-                f"{aufgabentext} — {i18n.t(ZIEL_NICHT_ERREICHT, sprache)}",
+                f"{aufgabentext} - {i18n.t(ZIEL_NICHT_ERREICHT, sprache)}",
                 erfolgreich=False,
                 sprache=sprache,
             )
@@ -1691,7 +1695,11 @@ async def ziel_verbuchen(
     await mitteilen(
         eintrag,
         i18n.t(
-            "cronjobs.ohne_zielmeldung_seit",
+            # One quiet run is a singular in both languages, like a single
+            # failed run above.
+            "cronjobs.ohne_zielmeldung_seit_eins"
+            if eintrag.laeufe_ohne_ruf == 1
+            else "cronjobs.ohne_zielmeldung_seit",
             sprache,
             aufgabe=aufgabentext,
             n=eintrag.laeufe_ohne_ruf,

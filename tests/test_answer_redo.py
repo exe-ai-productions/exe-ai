@@ -23,11 +23,12 @@ from app.providers import MockProvider, ProviderFehler, mock_endpunkt
 from app.providers.base import Stueck, Werkzeugaufruf
 from tests.conftest import node_script, provider_setzen, senden
 from tests.test_auftraege_api import mcp_client as _mcp_client
+from tests.fensterquelle import WINDOW_SOURCE
 
 mcp_client = _mcp_client
 
 ROOT = Path(__file__).resolve().parents[1]
-WINDOW = ROOT / "frontend/src/App.svelte"
+WINDOW = WINDOW_SOURCE
 BUBBLE = ROOT / "frontend/src/teile/Nachricht.svelte"
 WINDOW_API = ROOT / "frontend/src/lib/api.js"
 ENDING = ROOT / "frontend/src/lib/answerEnding.js"

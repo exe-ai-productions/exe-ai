@@ -424,12 +424,12 @@ def test_the_tool_list_names_both_places_the_file_lands():
         for sprache in ("en", "de")
     }
     assert satz["en"] == (
-        "Hands you a finished file: in a chat it appears in the response, from a task it "
-        "lands in the doc folder."
+        "Hands you a finished file: in a chat it appears in the response, from a job it "
+        "lands in the Doc folder."
     )
     assert satz["de"] == (
-        "Übergibt dir eine fertige Datei: im Chat erscheint sie in der Antwort, aus einer "
-        "Aufgabe landet sie im Doc-Ordner."
+        "Übergibt eine fertige Datei: Im Chat erscheint sie in der Antwort, aus einem "
+        "Auftrag landet sie im Doc-Ordner."
     )
 
 

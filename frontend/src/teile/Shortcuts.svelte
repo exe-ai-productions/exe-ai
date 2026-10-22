@@ -3,7 +3,9 @@
      assigned, and every other shortcut the program has, to look up.
 
      The rows to look up come from lib/shortcutList.js, by the system the
-     page runs on. Four groups, in the order the settings name them; the
+     page runs on. The microphone card stands over the full width, its two
+     rows side by side; the groups stand under it in equally wide columns
+     as high as the tallest, their rows spread evenly over the height. The
      tile is declared here as well, a component cannot borrow its parent's
      scoped styles (Meldewahl.svelte does the same). */
   import Hauszeichen from './Hauszeichen.svelte'
@@ -92,7 +94,7 @@
 <div class="bloecke">
   <section class="block">
     <div class="blocktitel tafelkopf">{t('shortcuts.group_microphone')}</div>
-    <div class="kachelliste">
+    <div class="kachelliste microphone-rows">
       <div class="einstellkachel">
         <span class="mikrozeichen"><Hauszeichen zeichen="microphone" /></span>
         <div class="zeilentext">{t('shortcuts.microphone_assignable')}</div>
@@ -124,19 +126,21 @@
       </div>
     </div>
   </section>
-  {#each groups as group (group.title)}
-    <section class="block">
-      <div class="blocktitel tafelkopf">{t(group.title)}</div>
-      <div class="kachelliste">
-        {#each group.rows as [name, keys] (name)}
-          <div class="einstellkachel">
-            <div class="zeilentext">{t(name)}</div>
-            <span class="taste">{keys}</span>
-          </div>
-        {/each}
-      </div>
-    </section>
-  {/each}
+  <div class="shortcut-columns">
+    {#each groups as group (group.title)}
+      <section class="block">
+        <div class="blocktitel tafelkopf">{t(group.title)}</div>
+        <div class="kachelliste">
+          {#each group.rows as [name, keys] (name)}
+            <div class="einstellkachel">
+              <div class="zeilentext">{t(name)}</div>
+              <span class="taste">{keys}</span>
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/each}
+  </div>
 </div>
 
 <style>
@@ -151,15 +155,7 @@
     gap: 10px;
   }
   .blocktitel {
-    display: flex;
-    align-items: center;
-    gap: 8px;
     padding: 0 2px;
-  }
-  .blocktitel::after {
-    content: '';
-    flex: 1;
-    border-top: 1px solid var(--linie);
   }
   .kachelliste {
     display: flex;
@@ -178,6 +174,57 @@
   }
   .einstellkachel + .einstellkachel {
     border-top: 1px solid var(--linie);
+  }
+  /* The two microphone rows side by side, exactly as wide as each other, a
+     hairline in the gap between them; they stack in a narrow window like
+     every other row of the page. */
+  .microphone-rows {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 33px;
+  }
+  .microphone-rows .einstellkachel {
+    position: relative;
+  }
+  .microphone-rows .einstellkachel + .einstellkachel {
+    border-top: none;
+  }
+  .microphone-rows .einstellkachel + .einstellkachel::before {
+    content: '';
+    position: absolute;
+    left: -17px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--linie);
+  }
+  /* Three equally wide columns, 24 px apart, as high as the tallest card:
+     each card takes the height of its column and its rows share it out. */
+  .shortcut-columns {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 26px 24px;
+    align-items: stretch;
+  }
+  .shortcut-columns .kachelliste {
+    flex: 1;
+  }
+  .shortcut-columns .einstellkachel {
+    flex: 1;
+  }
+  @media (max-width: 900px) {
+    .shortcut-columns {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .microphone-rows {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .microphone-rows .einstellkachel + .einstellkachel {
+      border-top: 1px solid var(--linie);
+    }
+    .microphone-rows .einstellkachel + .einstellkachel::before {
+      display: none;
+    }
   }
   .zeilentext {
     flex: 1;
@@ -221,6 +268,6 @@
   .belegt {
     flex: none;
     font-size: 12.5px;
-    color: var(--rot);
+    color: var(--rot-text);
   }
 </style>

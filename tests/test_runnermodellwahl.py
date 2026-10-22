@@ -202,7 +202,7 @@ def test_merken_auf_einer_leeren_ablage(repos):
 def test_die_vorgaben_nennen_keine_wahl():
     """What is sent to the page is the fallback, never the answer — the choice
     is what the field says, not what a default would say."""
-    assert set(wahl.vorgaben()) == {"kontext", "schichten", "port", "vorladen"}
+    assert set(wahl.vorgaben()) == {"kontext", "schichten", "port", "vorladen", "use_for_runs"}
 
 
 # --- May the program start this server by itself? ---

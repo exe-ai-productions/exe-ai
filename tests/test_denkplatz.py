@@ -22,10 +22,11 @@ from typing import AsyncIterator
 from app.providers import MockProvider, mock_endpunkt
 from app.providers.base import Generierungsanfrage, Stueck, Werkzeugaufruf
 from tests.conftest import provider_setzen
+from tests.fensterquelle import WINDOW_SOURCE
 
 
 WURZEL = Path(__file__).resolve().parent.parent
-FENSTER = (WURZEL / "frontend/src/App.svelte").read_text()
+FENSTER = WINDOW_SOURCE.read_text()
 
 
 def test_ein_textstueck_setzt_die_taetigkeit_schreibt():

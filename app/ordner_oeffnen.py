@@ -90,3 +90,48 @@ def datei_oeffnen(pfad: Path) -> None:
     except OSError as fehler:
         log.warning("File cannot be opened: %s", fehler)
         raise OeffnenNichtMoeglich() from None
+
+
+def open_file_in_editor(pfad: Path) -> None:
+    """Opens one text file in the computer's text editor, whatever program
+    the system has for the file's ending: a file with an ending of no program
+    (a template) would otherwise bring up a question of which one to use.
+
+    macOS asks for its default text editor (``open -t``), Windows takes the
+    Notepad every installation has, and elsewhere the file goes to whatever
+    ``xdg-open`` knows for it.
+    """
+    ziel = Path(pfad).expanduser()
+    if sys.platform == "darwin":
+        befehl = ["open", "-t", str(ziel)]
+    elif sys.platform.startswith("win"):
+        befehl = ["notepad.exe", str(ziel)]
+    elif shutil.which("xdg-open"):
+        befehl = ["xdg-open", str(ziel)]
+    else:
+        raise OeffnenNichtMoeglich()
+    try:
+        subprocess.Popen(befehl, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as fehler:
+        log.warning("File cannot be opened in an editor: %s", fehler)
+        raise OeffnenNichtMoeglich() from None
+
+
+def show_file(pfad: Path) -> None:
+    """Shows one file in the file manager, selected in its folder where the
+    system can do that (macOS ``open -R``, Windows ``explorer /select,``),
+    else the folder it lies in."""
+    ziel = Path(pfad).expanduser()
+    if sys.platform == "darwin":
+        befehl = ["open", "-R", str(ziel)]
+    elif sys.platform.startswith("win"):
+        befehl = ["explorer", f"/select,{ziel}"]
+    elif shutil.which("xdg-open"):
+        befehl = ["xdg-open", str(ziel.parent)]
+    else:
+        raise OeffnenNichtMoeglich()
+    try:
+        subprocess.Popen(befehl, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as fehler:
+        log.warning("File cannot be shown: %s", fehler)
+        raise OeffnenNichtMoeglich() from None

@@ -25,6 +25,7 @@
   import { slideIfDrawn } from '../lib/slideIfDrawn.js'
   import Kontextstrich from './Kontextstrich.svelte'
   import { api } from '../lib/api.js'
+  import { pollWithoutOverlap } from '../lib/pollWithoutOverlap.js'
   import { showAgentQuestion } from '../lib/questionbox.svelte.js'
   import { dateiart, dateiFakten, dateiHerunterladen } from '../lib/dateiarten.js'
   import { dateienAus } from '../lib/markdown.js'
@@ -37,14 +38,13 @@
   /* And the other one they share: which endings have a row here at all.
      The dot can only lose its colour through a row that is opened, so it
      must not colour for a run this list leaves out. */
-  import { auftragGesehen, worthReading } from '../lib/agentenampel.svelte.js'
+  import { auftragGesehen, isRedRun, worthReading } from '../lib/agentenampel.svelte.js'
   import { showPage, showReport } from '../lib/bildschau.svelte.js'
   import { farbenSetzen, farbeVon, lesbar } from '../lib/agentenfarbe.svelte.js'
   import { zeitpunkt } from '../lib/zeitpunkt.js'
   import { grundtext } from '../lib/auftragsmelder.js'
   import { agentName } from '../lib/agentmarke.js'
   import { t } from '../lib/texte.svelte.js'
-  import { flaeche } from '../lib/flaeche.svelte.js'
   import {
     auftragLoeschen, frage, melde, zustand, auftraegeStillLaden,
   } from '../lib/zustand.svelte.js'
@@ -57,12 +57,11 @@
      view somebody may still have to act on — a question to answer, a run
      to stop — and it must not sit under lists that grow all day. */
   const ABSCHNITTE = $derived([
-    { name: 'aktiv', titel: 'agenten.abschnitt_aktiv', zahl: aktive.length, spalte: 1 },
+    { name: 'aktiv', titel: 'agenten.abschnitt_aktiv', zahl: aktive.length },
     {
       name: 'bericht',
       titel: 'agenten.abschnitt_bericht',
       zahl: `${gezeigteBerichte.length}/${berichte.length}`,
-      spalte: 2,
     },
   ])
 
@@ -121,10 +120,13 @@
 
   /* Five reports stand at first; "more" adds five, "less" goes back to
      five. A day of schedules writes dozens, and an endless list pushed the
-     newest ones' neighbours out of reach of the eye. */
+     newest ones' neighbours out of reach of the eye. Always as many as it
+     takes to reach the last failure nobody has looked at: that one never
+     sits behind "more". */
   const PAGE = 5
   let shownReports = $state(PAGE)
-  const gezeigteBerichte = $derived(berichte.slice(0, shownReports))
+  const unseenFloor = $derived(Math.max(PAGE, berichte.findLastIndex(isRedRun) + 1))
+  const gezeigteBerichte = $derived(berichte.slice(0, Math.max(shownReports, unseenFloor)))
   const moreCount = $derived(Math.min(PAGE, berichte.length - gezeigteBerichte.length))
 
   /* The files a report wrote, read from its text the way its file cards
@@ -272,10 +274,7 @@
 
   $effect(() => {
     if (!etwasLaeuft && !offene.size) return
-    const uhr = setInterval(() => {
-      for (const id of offene) schritteLaden(id)
-    }, 3000)
-    return () => clearInterval(uhr)
+    return pollWithoutOverlap(() => Promise.all([...offene].map((id) => schritteLaden(id))), 3000)
   })
 
   /* A row picked elsewhere — the agents sheet, the start window — lands
@@ -349,7 +348,7 @@
   }
   function kettenwort(auftrag) {
     const eltern = elternteil(auftrag)
-    return t('jobs.gestartet_von', { agent: eltern ? agentName(eltern.agent) : '—' })
+    return t('jobs.gestartet_von', { agent: eltern ? agentName(eltern.agent) : '-' })
   }
 
   /* An agent's name in its own colour, wherever this panel writes one.
@@ -371,7 +370,20 @@
            A fresh report takes the top of the list. -->
       <div class="karte zeilen">
         {#each gezeigteBerichte as auftrag (auftrag.id)}
-          <div class="bzeile">
+          {@const unseen = isRedRun(auftrag)}
+          <div class="bzeile" class:unseen>
+            <!-- Every failure nobody has looked at yet carries a red bar the
+                 height of its row and a strong title, until it has been
+                 looked at: opening the report or closing its notice clears
+                 it. -->
+            {#if unseen}
+              <span
+                class="unseen-bar"
+                role="img"
+                aria-label={t('jobs.zustand.' + auftrag.state)}
+                title={t('jobs.zustand.' + auftrag.state)}
+              ></span>
+            {/if}
             <div class="bwas">
               <button class="btext" onclick={() => berichtOeffnen(auftrag)}>
                 <span class="beins">{auftrag.task}</span>
@@ -400,16 +412,16 @@
           </div>
         {/each}
       </div>
-      {#if moreCount > 0 || gezeigteBerichte.length > PAGE}
+      {#if moreCount > 0 || gezeigteBerichte.length > unseenFloor}
         <!-- More and less side by side, the same size; each only while it
              does something. -->
         <div class="knopfreihe">
           {#if moreCount > 0}
-            <button class="breitknopf" onclick={() => (shownReports += PAGE)}>
+            <button class="breitknopf" onclick={() => (shownReports = gezeigteBerichte.length + PAGE)}>
               {t('agenten.weitere', { n: moreCount })}
             </button>
           {/if}
-          {#if gezeigteBerichte.length > PAGE}
+          {#if gezeigteBerichte.length > unseenFloor}
             <button class="breitknopf" onclick={() => (shownReports = PAGE)}>
               {t('agenten.weniger')}
             </button>
@@ -484,7 +496,7 @@
       {t('jobs.starten')}
     </button>
   </div>
-  <Modulabschnitte abschnitte={ABSCHNITTE} {inhalt} zweispaltig={flaeche.zweispaltig} />
+  <Modulabschnitte abschnitte={ABSCHNITTE} {inhalt} />
 </div>
 
 <style>
@@ -644,6 +656,7 @@
     overflow: hidden;
   }
   .bzeile {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -657,9 +670,28 @@
     flex: 1;
     min-width: 0;
   }
+  /* Drawn at the left edge of the row, not part of its flow: the row and its
+     text stand where they stand whether the bar is there or not, so a row
+     does not jump when its bar goes. */
+  .unseen-bar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--rot);
+  }
+  /* The hairline above a row belongs to the row: the bar reaches up to it. */
+  .bzeile + .bzeile .unseen-bar {
+    top: -1px;
+  }
+  /* `stretch` is said, not left to the default: the shell's browser gives a
+     button `align-items: flex-start`, and then the first line is as wide as
+     its text and the ellipsis never comes. */
   .btext {
     display: flex;
     flex-direction: column;
+    align-items: stretch;
     width: 100%;
     padding: 0;
     border: none;
@@ -677,6 +709,9 @@
   .beins {
     font-size: 13px;
     color: var(--text);
+  }
+  .bzeile.unseen .beins {
+    font-weight: 600;
   }
   .bzwei {
     font-size: 11.5px;
@@ -721,7 +756,7 @@
   .bweg:focus-visible {
     opacity: 1;
   }
-  @media (hover: none) {
+  @media (hover: none), (any-pointer: coarse) {
     .bweg { opacity: 1; }
   }
   .bweg:hover {

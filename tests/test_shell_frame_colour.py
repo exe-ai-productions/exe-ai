@@ -39,6 +39,7 @@ SHEET = ROOT / "frontend" / "src" / "stil" / "global.css"
 
 MOUNE = "#cfe0bf"
 PEARL = "#d9cfba"
+SNOW = "#e2e2e2"
 DARK = "#151514"
 
 # What the channel must turn away: no colour at all, a short or a long hex,
@@ -74,6 +75,8 @@ def _file_pieces() -> str:
         # The frame's scheme shares the file; writing the geometry reads it.
         _piece(SHELL, r"\nconst FRAME_SCHEMES = [^\n]+\n", "FRAME_SCHEMES"),
         _piece(SHELL, r"\nfunction frameSchemeRead\(\) \{\n.*?\n\}\n", "frameSchemeRead"),
+        # The folded sidebar shares the file too; writing the geometry reads it.
+        _piece(SHELL, r"\nfunction sidebarFoldedRead\(\) \{\n.*?\n\}\n", "sidebarFoldedRead"),
     ])
 
 
@@ -84,6 +87,9 @@ def _channel_piece() -> str:
 def _window_pieces() -> str:
     return "\n".join([
         _piece(SHELL, r"\nfunction menuBarOptions\(\) \{\n.*?\n\}\n", "menuBarOptions"),
+        _piece(SHELL, r"\nconst AUTO_GROUND_DARK = [^\n]+\n", "AUTO_GROUND_DARK"),
+        _piece(SHELL, r"\nconst AUTO_GROUND_LIGHT = [^\n]+\n", "AUTO_GROUND_LIGHT"),
+        _piece(SHELL, r"\nfunction autoGround\(\) \{\n.*?\n\}\n", "autoGround"),
         _piece(SHELL, r"\nfunction fensterBauen\(\) \{\n.*?\n\}\n", "fensterBauen"),
     ])
 
@@ -243,14 +249,17 @@ def test_the_channel_keeps_nothing_without_a_main_window(tmp_path, window):
 # --- the window is built on the colour --------------------------------------
 
 
-def _window(kept: str | None) -> Any:
+def _window(kept: str | None, *, dark: bool = False) -> Any:
     script = f"""
 const path = require('path')
+const topbar = require({json.dumps(str(SHELL.parent / 'topbar.js'))})
+const nativeTheme = {{ shouldUseDarkColors: {json.dumps(dark)} }}
 const BREITE = 1280, HOEHE = 820, MIN_BREITE = 720, MIN_HOEHE = 480
 function geometrieLesen() {{ return null }}
 function geometrieSchreiben() {{}}
 function frameColourRead() {{ return {json.dumps(kept)} }}
 function frameSchemeRead() {{ return null }}
+function sidebarFoldedRead() {{ return false }}
 function frameSchemeApply() {{ return false }}
 let dienstFehlgeschlagen = false
 function fehlstartSchreiben() {{}}
@@ -275,22 +284,57 @@ print(JSON.stringify({{ options: built[0], loaded, logged }}))
     return _run(script)
 
 
+def _the_ground_is_named(out: Any, colour: str) -> None:
+    """The first line of the log names the ground, the second the top bar the
+    window was built with (the options themselves: tests/test_top_bar.py)."""
+    first, second = out["logged"]
+    assert first == f"Window ground: {colour}"
+    assert second.startswith("Window top bar: {")
+
+
 @pytest.mark.parametrize("colour", [MOUNE, PEARL, DARK])
 def test_the_window_and_the_splash_start_on_the_kept_colour(colour):
     """And the shell's log names the ground it opened on."""
     out = _window(colour)
     assert out["options"]["backgroundColor"] == colour
     assert out["loaded"] == [["index.html", {"query": {"ground": colour}}]]
-    assert out["logged"] == [f"Window ground: {colour}"]
+    _the_ground_is_named(out, colour)
 
 
-def test_without_a_kept_colour_the_window_is_built_as_before():
-    """The silence check: no ground option at all, the splash is loaded by
-    its bare address, and the log says nothing."""
-    out = _window(None)
-    assert "backgroundColor" not in out["options"]
-    assert out["loaded"] == [["index.html", None]]
-    assert out["logged"] == []
+def test_without_a_kept_colour_the_window_opens_on_the_colour_of_auto():
+    """The first start: the ground of window and splash is the frame tone of
+    the look Auto — Exe where the system is dark, Snow where it is light."""
+    for dark, colour in ((True, DARK), (False, SNOW)):
+        out = _window(None, dark=dark)
+        assert out["options"]["backgroundColor"] == colour
+        assert out["loaded"] == [["index.html", {"query": {"ground": colour}}]]
+        _the_ground_is_named(out, colour)
+
+
+def test_a_kept_colour_wins_over_the_system_and_the_system_only_decides_without_one():
+    """Silence check: the kept colour is the ground whichever way the system
+    leans, so a chosen look is not painted over by Auto."""
+    for dark in (True, False):
+        assert _window(MOUNE, dark=dark)["options"]["backgroundColor"] == MOUNE
+
+
+def test_the_two_grounds_of_auto_are_the_frame_tones_of_exe_and_snow():
+    """The shell's two constants and the stylesheet's solid frame tones are
+    one pair of colours: Auto shows Snow on a light device (the root rule)
+    and Exe on a dark one (the media query)."""
+    shell = SHELL.read_text(encoding="utf-8")
+    sheet = SHEET.read_text(encoding="utf-8")
+    dark = re.search(r"^const AUTO_GROUND_DARK = '(#[0-9a-f]{6})'$", shell, re.M)
+    light = re.search(r"^const AUTO_GROUND_LIGHT = '(#[0-9a-f]{6})'$", shell, re.M)
+    assert dark and light
+    assert dark.group(1) == DARK
+    assert light.group(1) == SNOW
+    # Snow's tone is the one the root rule without a chosen look carries.
+    snow_block = re.search(r":root\[data-modus='snow'\],\s*:root:not\(\[data-modus\]\) \{(.*?)\n\}", sheet, re.S)
+    assert snow_block and f"--bg-seite: {SNOW}" in snow_block.group(1)
+    # Exe's tone is the one the dark-device media query hands to Auto.
+    dark_block = re.search(r"@media \(prefers-color-scheme: dark\) \{\s*:root:not\([^{]*\{(.*?)\n  \}", sheet, re.S)
+    assert dark_block and f"--bg-seite: {DARK}" in dark_block.group(1)
 
 
 # --- the bridge --------------------------------------------------------------

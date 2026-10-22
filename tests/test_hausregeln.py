@@ -25,6 +25,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from tests.fensterquelle import BAR_SOURCE, WINDOW_SOURCE
 
 WURZEL = Path(__file__).resolve().parent.parent
 # The whole of frontend/, not just frontend/src/: the build configuration in
@@ -124,7 +125,7 @@ def test_die_anzeigeschleife_reicht_keine_ungepruefte_liste_weiter():
     the chat it belongs to. A helper inside that loop handed the raw
     ``zustand.nachrichten`` instead would read another chat's messages in the
     moment between a chat switch and its load."""
-    text = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    text = WINDOW_SOURCE.read_text(encoding="utf-8")
     start = text.index("{#each nachrichtenAnzeige() as nachricht")
     # The loop's own nested blocks close with {/each} too; take the whole
     # stretch up to the matching close by counting.
@@ -433,7 +434,7 @@ def test_das_wachsende_werkzeug_argument_wird_gesagt_und_gezaehlt():
     growing argument no longer has a reading to feed (Nachricht.svelte,
     the foot under the answer).
     """
-    app = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    app = WINDOW_SOURCE.read_text(encoding="utf-8")
     zweig = _zweig(app, "tool_call_laeuft")
 
     # Half one: the notice carries the count, not only the name.
@@ -514,14 +515,14 @@ def test_bildlauf_kachel_bricht_ueber_die_textspalte_aus():
     together with no overflow) was checked by hand against the service,
     not here.
     """
-    quelle = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
 
     # The NUMBER is what was signed off, not the spelling around it. The
-    # tile size is the user's now (the layout mode); 700 is its factory
+    # tile size is the user's now (the layout mode); 512 is its factory
     # value, and App.svelte reads it from the state.
     layout = (WURZEL / "frontend/src/lib/chatlayout.js").read_text(encoding="utf-8")
-    assert re.search(r"id:\s*'bildkachel'[^}]*standard:\s*700\b", layout), (
-        "the picture tile's factory value is no longer 700 -- the accepted number is missing"
+    assert re.search(r"id:\s*'bildkachel'[^}]*standard:\s*512\b", layout), (
+        "the picture tile's factory value is no longer 512 -- the accepted number is missing"
     )
     assert re.search(r"BILDLAUF_KACHEL\s*=\s*\$derived\(zustand\.chatlayout\.bildkachel\)", quelle), (
         "BILDLAUF_KACHEL no longer follows the chat layout"
@@ -579,7 +580,7 @@ def test_a_generated_picture_frame_is_as_wide_as_its_picture():
     geometry. The measured sizes (frame = picture + 2 at three window
     widths, two tiles side by side) were taken against the running service.
     """
-    app = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    app = WINDOW_SOURCE.read_text(encoding="utf-8")
     card = (WURZEL / "frontend/src/teile/Nachricht.svelte").read_text(encoding="utf-8")
 
     frame = re.search(r"\n  \.erzeugt \{.*?\n  \}", card, re.S)
@@ -639,7 +640,7 @@ def test_frage_neu_senden_ruehrt_kein_bild_an():
     replacing its own answer as before) was checked by hand against the
     service, not here.
     """
-    quelle = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
     funktion = re.search(r"async function frageNeuSenden\(\) \{.*?\n  \}", quelle, re.S)
     assert funktion, "frageNeuSenden not found"
     assert re.search(r"!traegtBild\(letzte\)", funktion.group(0)), (
@@ -683,7 +684,7 @@ def test_frage_neu_senden_verschont_alle_fuenf_nachbarn():
     reimplemented — a rewrite that keeps the same shapes working by a
     different route would still pass a hand-written copy of today's
     expression."""
-    quelle = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
     bild_dateien = re.search(r"function bildDateien\(nachricht\) \{.*?\n  \}", quelle, re.S)
     assert bild_dateien, "bildDateien not found"
     traegt_bild = re.search(r"function traegtBild\(nachricht\) \{.*?\n  \}", quelle, re.S)
@@ -757,7 +758,7 @@ def test_traegt_bild_erkennt_beide_bildformen():
     truthiness would pass a source-text test and still fail every one of
     the cases below.
     """
-    quelle = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
     bild_dateien = re.search(r"function bildDateien\(nachricht\) \{.*?\n  \}", quelle, re.S)
     assert bild_dateien, "bildDateien not found"
     funktion = re.search(r"function traegtBild\(nachricht\) \{.*?\n  \}", quelle, re.S)
@@ -792,7 +793,7 @@ def test_weg_b_gruppierung_ist_ersatzlos_weg():
     nothing left to group. Their absence is the point of this step, not
     an oversight — kept as a named regression guard so a later change
     does not quietly bring the old grouping back beside the new one."""
-    quelle = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
     # Measured baseline, not assumed: none of the four appear even in a
     # comment today (unlike `eigeneFrage`, named in prose above) — an
     # exact zero, not "at most one somewhere explaining it is gone".
@@ -822,7 +823,7 @@ def test_bildlauf_kachel_traegt_nie_den_neu_erzeugen_pfeil():
     behavior (a real run of four where no tile carries the arrow, and an
     ordinary single picture plus the last text answer still do) was
     checked by hand against the service, not here."""
-    quelle = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
     kachelzweig = re.search(r"\{#if kacheln\}.*?\{:else\}", quelle, re.S)
     assert kachelzweig, "the tile branch ({#if kacheln}) was not found"
     rumpf = kachelzweig.group(0)
@@ -850,7 +851,7 @@ def test_bild_kacheln_baut_eine_kachel_je_echtem_bild():
     checked with a REAL neighbour present (`["", "b.png"]`), the
     acceptance case named for this, not the lone `[""]` a weaker guard
     could still pass by accident."""
-    quelle = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
     funktion = re.search(r"function bildKacheln\(nachricht\) \{.*?\n  \}", quelle, re.S)
     assert funktion, "bildKacheln not found"
 
@@ -926,7 +927,7 @@ def test_teilausfall_hat_keinen_deckel_mehr():
     shortfall for a picture that is genuinely there. Fixed by asking
     `bildDateien`, the same place `traegtBild` now asks too, instead of
     reading `n.bilder` directly."""
-    quelle = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
     bild_dateien = re.search(r"function bildDateien\(nachricht\) \{.*?\n  \}", quelle, re.S)
     assert bild_dateien, "bildDateien not found"
     lauf_kennung = re.search(r"function laufKennung\(nachricht\) \{.*?\n  \}", quelle, re.S)
@@ -1034,7 +1035,7 @@ def test_kachelwand_liest_die_laufkennung_aus_der_spalte():
     both, and old and new runs standing in one chat must read alike. That
     they did not is what made the defect look like a display glitch rather
     than a field that had moved."""
-    quelle = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
     teile = []
     for name, muster in (
         ("laufKennung", r"function laufKennung\(nachricht\) \{.*?\n  \}"),
@@ -1185,7 +1186,7 @@ def test_der_laufzustand_wird_wieder_abgeraeumt():
     grep for the assignment IS the guarantee — and its absence is invisible
     in any test that does not run a real reload against a real service.
     """
-    quelle = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
 
     uebernahme = re.search(r"if \(uebernehmen\) \{.*?\n    \}", quelle, re.S)
     assert uebernahme, "the adoption block was not found"
@@ -1237,7 +1238,7 @@ def test_die_kennung_der_laufenden_zeile_kommt_beim_wiederanhang_an():
     it is nailed here: the record goes through whole, and the reader at the
     far end still asks for the field.
     """
-    quelle = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
 
     aufruf = re.search(r"antwortWiederAnhaengen\((.*?)\)\n", quelle)
     assert aufruf, "the call of antwortWiederAnhaengen was not found"
@@ -1293,7 +1294,7 @@ P662_WARTESCHLANGE = P662_FRONTEND / "src/lib/warteschlange.svelte.js"
 def _p662_quelle() -> str:
     """The component as it stands. Its own function, so a check of this test
     can hand it a different revision without touching the working tree."""
-    return (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    return WINDOW_SOURCE.read_text(encoding="utf-8")
 
 
 def _p662_stueck(quelle: str, muster: str, name: str) -> str:
@@ -1319,7 +1320,7 @@ def _p662_stueck(quelle: str, muster: str, name: str) -> str:
 #               is a run the next fetch can bring back. Whether it does is
 #               exactly what the ordering decides.
 P662_FAHRER = """
-import { anhalten, ausreihen, einreihen, haelt, fuerChat, zurueckEinreihen } from './p662.warteschlange.mjs'
+import { ausreihen, einreihen, fuerChat, hasInterrupted, markInterrupted, takeAllOut, unmarkInterrupted, zurueckEinreihen } from './p662.warteschlange.mjs'
 import { untrack, flushSync } from 'svelte'
 
 const zustand = $state({
@@ -1345,6 +1346,10 @@ const chatFehlerGesehen = () => protokoll.push('chatFehlerGesehen')
 // A drawing call's working tile going with the run (App.svelte).
 const drawingDone = () => protokoll.push('drawingDone')
 const ownRunsReattached = new Set()
+// The chats whose run was stopped for a waiting message (App.svelte).
+const stoppedForQueued = new Set()
+// The chats whose run the person stopped by hand (App.svelte).
+const stoppedByHand = new Set()
 const protokoll = []
 const dienst = []
 // The input bar, as far as the queue touches it: a message the queue
@@ -1353,6 +1358,8 @@ const dienst = []
 const eingabe = {
   vergessen: () => protokoll.push('eingabe.vergessen'),
   zurueckgeben: (...args) => protokoll.push(['zurueckgegeben', ...args]),
+  // What a stop by hand gives back: the chat and the words, in line order.
+  takeBackAll: (eintraege, chatId) => protokoll.push(['zurueckgegebenAlle', chatId, eintraege.map((e) => e.inhalt)]),
 }
 const chatOeffnen = async (chatId) => { protokoll.push(['chatOeffnen', chatId]) }
 // The claims the stop button can cut short, by chat (App.svelte).
@@ -1516,7 +1523,9 @@ def _p662_lauf(quelle: str, szenario: str) -> dict:
         quelle, r"\n  const HALTEPRUEFUNG_MS = [0-9_]+\n", "the claim check interval"
     )
     # The claim question the end of the run asks, with its two helpers.
-    fragen = _p662_stueck(quelle, _WITH_DEADLINE, "claimOutcome")
+    fragen = _p662_stueck(quelle, _WITH_DEADLINE, "claimOutcome") + _p662_stueck(
+        quelle, r"\n  function giveBackQueued\(chatId\) \{.*?\n  \}\n", "giveBackQueued"
+    )
     # The stop button's own two functions: the wait for a claim is cut by it.
     stopp = _p662_stueck(
         quelle,
@@ -1696,35 +1705,123 @@ def test_two_queued_messages_keep_their_order_when_the_first_is_turned_away():
 
 
 @p662_braucht_node
-def test_a_message_turned_away_twice_in_a_row_goes_back_to_the_field():
-    """Silence probe for the loop guard: refused again before one check of
-    the claim's clock has passed, it is no claim that ends — the words go
-    back to the field and nothing is sent in a circle."""
+def test_a_message_turned_away_again_and_again_stays_in_line_and_never_goes_to_the_field():
+    """Turned away round after round, the message goes back in line every
+    time and out again — on the clock of the claim check and no faster, never
+    into the field, with no count of tries."""
     bericht = _p662_lauf(
         _p662_quelle(),
         P662_AUFBAU
         + """
     const eintrag = ausreihen('A')
-    eintrag.abgewiesenUm = Date.now()            // refused a moment ago already
+    const begonnen = Date.now()
+    for (let runde = 0; runde < 3; runde++) {
+      await laufEnde({
+        zielChat: 'A', abgebrochen: false, gescheitert: false, belegt: true,
+        platzhalter: { id: 'platzhalter-A', role: 'assistant', content: '' },
+        inhalt: 'zwei', nachrichtId: 'x', ausReihe: eintrag, begun: false,
+        lauf: { generationId: null },
+      })
+    }
+    return {
+      protokoll, dauer: Date.now() - begonnen,
+      gesendet: protokoll.filter((p) => p === 'senden').length,
+      wartet: fuerChat('A').length,
+    }
+        """,
+    )
+    assert not any(isinstance(p, list) and p[0] == "zurueckgegeben" for p in bericht["protokoll"]), (
+        f"the message was handed back to the field: {bericht['protokoll']}"
+    )
+    assert bericht["gesendet"] == 3, bericht["protokoll"]
+    assert bericht["dauer"] >= 1400, f"round after round without the clock: {bericht['dauer']} ms"
+
+
+@p662_braucht_node
+def test_every_end_of_a_run_stopped_for_a_waiting_message_is_that_stops_and_the_message_stays():
+    """The stop made for a waiting message lets the window's run end; the send
+    that follows is turned away while the service is still on the same run,
+    the window attaches to it again, and that run ends a second time. This
+    second end is not the person's stop: the message stays in line and goes
+    out."""
+    bericht = _p662_lauf(
+        _p662_quelle(),
+        P662_AUFBAU
+        + """
+    markInterrupted('A')                         // the stop was made for 'zwei'
     await laufEnde({
+      zielChat: 'A', abgebrochen: true, gescheitert: false,
+      platzhalter: p1, verdichtetZu: 'naht',
+    })
+    await new Promise((frei) => setTimeout(frei, 5))
+    return { protokoll, gesendet: protokoll.filter((p) => p === 'senden').length }
+        """,
+    )
+    assert not any(isinstance(p, list) and p[0] == "zurueckgegebenAlle" for p in bericht["protokoll"]), (
+        f"the message was given back to the field: {bericht['protokoll']}"
+    )
+    assert bericht["gesendet"] == 1, bericht["protokoll"]
+
+
+@p662_braucht_node
+def test_silence_a_run_stopped_with_no_stop_made_for_a_message_gives_the_line_back():
+    """Silence probe: nothing was marked, so the stop is not the message's — it
+    comes back to the field as before."""
+    bericht = _p662_lauf(
+        _p662_quelle(),
+        P662_AUFBAU
+        + """
+    await laufEnde({
+      zielChat: 'A', abgebrochen: true, gescheitert: false,
+      platzhalter: p1, verdichtetZu: 'naht',
+    })
+    return { protokoll, gesendet: protokoll.filter((p) => p === 'senden').length }
+        """,
+    )
+    assert ["zurueckgegebenAlle", "A", ["zwei"]] in bericht["protokoll"], bericht["protokoll"]
+    assert bericht["gesendet"] == 0
+
+
+@p662_braucht_node
+def test_a_stop_by_hand_while_a_turned_away_message_waits_gives_it_to_the_field():
+    """Silence probe: the one way out of the line is the person's stop. It
+    cuts the pause short and hands the message back, in line order."""
+    bericht = _p662_lauf(
+        _p662_quelle(),
+        P662_AUFBAU
+        + """
+    const eintrag = ausreihen('A')
+    const begonnen = Date.now()
+    const ende = laufEnde({
       zielChat: 'A', abgebrochen: false, gescheitert: false, belegt: true,
       platzhalter: { id: 'platzhalter-A', role: 'assistant', content: '' },
       inhalt: 'zwei', nachrichtId: 'x', ausReihe: eintrag, begun: false,
       lauf: { generationId: null },
     })
-    return { protokoll, wartet: fuerChat('A').length }
+    await new Promise((frei) => setTimeout(frei, 50))
+    const wartetVorStopp = anspruchWarten.has('A')
+    await abbrechen()
+    await ende
+    return {
+      protokoll, wartetVorStopp, dauer: Date.now() - begonnen,
+      gesendet: protokoll.filter((p) => p === 'senden').length,
+      inReihe: fuerChat('A').map((e) => e.inhalt),
+    }
         """,
     )
-    assert ["zurueckgegeben", "zwei", "A", "x"] in bericht["protokoll"], bericht["protokoll"]
-    assert bericht["wartet"] == 0
-    assert "senden" not in bericht["protokoll"]
+    assert bericht["wartetVorStopp"] is True
+    assert ["zurueckgegebenAlle", "A", ["zwei"]] in bericht["protokoll"], bericht["protokoll"]
+    assert bericht["dauer"] < 400, f"the pause outlived the stop: {bericht['dauer']} ms"
+    assert bericht["gesendet"] == 0
+    assert bericht["inReihe"] == []
 
 
 @p662_braucht_node
-def test_stop_cuts_the_wait_for_a_foreign_claim_short_and_the_line_holds():
+def test_stop_cuts_the_wait_for_a_foreign_claim_short_and_gives_the_line_back():
     """The end of an answer waits for another window's claim on the chat.
     The stop button reaches the claim through the chat's id, the wait ends at
-    once — long before the check interval — and the queue does not send."""
+    once — long before the check interval — and the waiting message comes
+    back to the person instead of being sent."""
     bericht = _p662_lauf(
         _p662_quelle(),
         P662_AUFBAU
@@ -1742,7 +1839,7 @@ def test_stop_cuts_the_wait_for_a_foreign_claim_short_and_the_line_holds():
     return {
       protokoll, wartetVorStopp, dauer: Date.now() - begonnen,
       wartetNachStopp: anspruchWarten.has('A'),
-      haelt: fuerChat('A').map((e) => e.haelt),
+      inReihe: fuerChat('A').map((e) => e.inhalt),
       gesendet: protokoll.filter((p) => p === 'senden').length,
       gehalten: Boolean(zustand.sendet.A),
     }
@@ -1752,7 +1849,8 @@ def test_stop_cuts_the_wait_for_a_foreign_claim_short_and_the_line_holds():
     assert ["stop", None, "A"] in bericht["protokoll"], bericht["protokoll"]
     assert bericht["dauer"] < 400, f"the wait outlived the stop: {bericht['dauer']} ms"
     assert bericht["wartetNachStopp"] is False
-    assert bericht["haelt"] == [True], "the queue does not hold after the stop"
+    assert bericht["inReihe"] == [], "the waiting message stays in line after the stop"
+    assert ["zurueckgegebenAlle", "A", ["zwei"]] in bericht["protokoll"], bericht["protokoll"]
     assert bericht["gesendet"] == 0
     assert bericht["gehalten"] is False
 
@@ -1991,15 +2089,15 @@ def test_a_run_the_service_still_runs_is_attached_again():
       lauf: { generationId: 'eigen' },
     })
     await new Promise((frei) => setTimeout(frei, 5))
-    return { protokoll, laeuft: Boolean(zustand.laeuft.A), haelt: haelt('A') }
+    return { protokoll, laeuft: Boolean(zustand.laeuft.A), inReihe: fuerChat('A').map((e) => e.inhalt) }
         """,
     )
     assert ["wiederanhaengen", "eigen", "a1"] in bericht["protokoll"], bericht["protokoll"]
     assert bericht["laeuft"], "the live row was left with no stream behind it"
     assert "senden" not in bericht["protokoll"], bericht["protokoll"]
-    # A refused line, not a failed run: the queue does not hold for it, and
-    # the failure mark goes.
-    assert not bericht["haelt"], "the queue holds behind a run that goes on"
+    # A refused line, not a failed run: nothing is given back, and the
+    # failure mark goes.
+    assert bericht["inReihe"] == ["zwei"], "the waiting message was taken for a run that goes on"
     assert "chatFehlerGesehen" in bericht["protokoll"], bericht["protokoll"]
 
 
@@ -2023,13 +2121,14 @@ def test_a_refused_reattach_of_the_own_run_is_not_attached_a_third_time():
     })
     await new Promise((frei) => setTimeout(frei, 5))
     return {
-      protokoll, haelt: haelt('A'),
+      protokoll, inReihe: fuerChat('A').map((e) => e.inhalt),
       zeile: zustand.nachrichten.find((n) => n.id === 'a1')?.zustand ?? null,
     }
         """,
     )
     assert not [z for z in bericht["protokoll"] if z[0] == "wiederanhaengen"], bericht["protokoll"]
-    assert bericht["haelt"]
+    # a failed end holds nothing: the waiting message goes on by itself
+    assert "senden" in bericht["protokoll"] and bericht["inReihe"] == [], bericht
     assert bericht["zeile"] is None, "the row stands as running with no stream behind it"
 
 
@@ -2053,13 +2152,14 @@ def test_a_run_stopped_here_that_the_service_still_names_is_not_attached():
     return {
       protokoll,
       zeile: zustand.nachrichten.find((n) => n.id === 'a1')?.zustand ?? null,
-      haelt: haelt('A'),
+      inReihe: fuerChat('A').map((e) => e.inhalt),
     }
         """,
     )
     assert not [z for z in bericht["protokoll"] if z[0] == "wiederanhaengen"], bericht["protokoll"]
     assert bericht["zeile"] == "abgebrochen"
-    assert bericht["haelt"]
+    assert ["zurueckgegebenAlle", "A", ["zwei"]] in bericht["protokoll"], bericht["protokoll"]
+    assert bericht["inReihe"] == []
 
 
 def _stopped_by_service(abgebrochen: bool) -> dict:
@@ -2090,7 +2190,7 @@ def _stopped_by_service(abgebrochen: bool) -> dict:
       platzhalter: p1, verdichtetZu, schlussZustand,
     }})
     await new Promise((frei) => setTimeout(frei, 5))
-    return {{ protokoll, zustand: p1.zustand, haelt: haelt('A') }}
+    return {{ protokoll, zustand: p1.zustand, inReihe: fuerChat('A').map((e) => e.inhalt) }}
         """,
     )
 
@@ -2099,12 +2199,14 @@ def _stopped_by_service(abgebrochen: bool) -> dict:
 def test_a_run_stopped_on_the_service_is_no_finished_answer():
     """A `done` that says the run was stopped (another window, or before it
     began) and no stop of this window's own: no green dot, no red one, the
-    bubble says stopped, and the queue holds as after any stop."""
+    bubble says stopped, and the waiting message comes back as after any
+    stop by hand."""
     bericht = _stopped_by_service(abgebrochen=True)
     assert "chatFertigMerken" not in bericht["protokoll"], bericht["protokoll"]
     assert "chatFehlerMerken" not in bericht["protokoll"], bericht["protokoll"]
     assert bericht["zustand"] == "abgebrochen"
-    assert bericht["haelt"]
+    assert ["zurueckgegebenAlle", "A", ["zwei"]] in bericht["protokoll"], bericht["protokoll"]
+    assert bericht["inReihe"] == []
     assert "senden" not in bericht["protokoll"]
 
 
@@ -2115,7 +2217,8 @@ def test_a_finished_run_in_the_background_still_gets_its_dot():
     bericht = _stopped_by_service(abgebrochen=False)
     assert "chatFertigMerken" in bericht["protokoll"], bericht["protokoll"]
     assert bericht["zustand"] == "fertig"
-    assert not bericht["haelt"]
+    assert not [z for z in bericht["protokoll"] if z[0] == "zurueckgegebenAlle"], bericht["protokoll"]
+    assert "senden" in bericht["protokoll"]
 
 
 @p662_braucht_node
@@ -2255,15 +2358,12 @@ def test_die_nachgeladene_zeile_traegt_keine_fremde_wartemarke():
 
 
 @p662_braucht_node
-def test_ein_gestoppter_lauf_haelt_die_schlange_bevor_er_sie_freigibt():
-    """The second defect at the same place, and an older one. `anhalten`
-    stood BELOW the release, past two awaits — so a run that failed or was
-    stopped by hand let the line go on its way out and only afterwards said
-    it should have held. The waiting message was already gone by then, fired
-    into exactly the state that had just gone wrong.
-
-    `warteschlange.svelte.js` opens with that promise in as many words, and
-    it was the one thing the queue could not keep.
+def test_a_stopped_run_gives_back_the_line_before_it_releases_it():
+    """The second defect at the same place, and an older one. The give-back
+    of a stop by hand stood BELOW the release, past two awaits — so a run
+    stopped by hand let the line go on its way out and only afterwards took
+    the waiting message back. It was already gone by then, sent although the
+    person had asked for the stop.
     """
     bericht = _p662_lauf(
         _p662_quelle(),
@@ -2276,15 +2376,77 @@ def test_ein_gestoppter_lauf_haelt_die_schlange_bevor_er_sie_freigibt():
     return {
       losgeschickt: protokoll.includes('senden'),
       rest: fuerChat('A').map((e) => e.inhalt),
-      haelt: haelt('A'),
+      protokoll,
     }
         """,
     )
     assert not bericht["losgeschickt"], (
         "the stopped run sent the waiting message anyway"
     )
-    assert bericht["rest"] == ["zwei"], f"the message is no longer queued: {bericht['rest']}"
-    assert bericht["haelt"], "the bubble does not carry the hold mark"
+    assert bericht["rest"] == [], f"the message is still queued: {bericht['rest']}"
+    assert ["zurueckgegebenAlle", "A", ["zwei"]] in bericht["protokoll"], bericht["protokoll"]
+
+
+@p662_braucht_node
+def test_a_failed_run_holds_nothing_the_next_goes_out_by_itself():
+    """A failed run ends like any other: the waiting message is sent, nothing
+    is given back and nothing is held."""
+    bericht = _p662_lauf(
+        _p662_quelle(),
+        P662_AUFBAU
+        + """
+    await laufEnde({
+      zielChat: 'A', abgebrochen: false, gescheitert: true,
+      platzhalter: p1, verdichtetZu: null,
+    })
+    return { protokoll, rest: fuerChat('A').map((e) => e.inhalt) }
+        """,
+    )
+    assert "senden" in bericht["protokoll"], bericht["protokoll"]
+    assert bericht["rest"] == []
+    assert not [z for z in bericht["protokoll"] if z[0] == "zurueckgegebenAlle"], bericht["protokoll"]
+
+
+@p662_braucht_node
+def test_ein_stopp_von_hand_gilt_auch_wenn_zugleich_ein_stopp_fuer_die_nachricht_landet():
+    """The person presses stop while the stop made for the waiting message is
+    landing: the press counts, the message comes back instead of going out."""
+    bericht = _p662_lauf(
+        _p662_quelle(),
+        P662_AUFBAU
+        + """
+    stoppedForQueued.add('A')
+    stoppedByHand.add('A')
+    await laufEnde({
+      zielChat: 'A', abgebrochen: true, gescheitert: false,
+      platzhalter: p1, verdichtetZu: null,
+    })
+    return { protokoll, rest: fuerChat('A').map((e) => e.inhalt) }
+        """,
+    )
+    assert "senden" not in bericht["protokoll"], bericht["protokoll"]
+    assert ["zurueckgegebenAlle", "A", ["zwei"]] in bericht["protokoll"], bericht["protokoll"]
+    assert bericht["rest"] == []
+
+
+@p662_braucht_node
+def test_ein_stopp_fuer_die_nachricht_gibt_nichts_zurueck_die_nachricht_geht_los():
+    """Silence probe: the stop that was made FOR the waiting message is no
+    stop by hand — the message goes out, it is not handed back."""
+    bericht = _p662_lauf(
+        _p662_quelle(),
+        P662_AUFBAU
+        + """
+    stoppedForQueued.add('A')
+    await laufEnde({
+      zielChat: 'A', abgebrochen: true, gescheitert: false,
+      platzhalter: p1, verdichtetZu: null,
+    })
+    return { protokoll, rest: fuerChat('A').map((e) => e.inhalt) }
+        """,
+    )
+    assert "senden" in bericht["protokoll"], bericht["protokoll"]
+    assert not [z for z in bericht["protokoll"] if z[0] == "zurueckgegebenAlle"], bericht["protokoll"]
 
 
 # --- An owed reattachment must not outlive the run it names ---------------
@@ -2374,7 +2536,7 @@ globalThis.document = { documentElement: {
 # entry, %s the scenario.
 P666_FAHRER = """
 import { zustand, chatOeffnen, laufVon } from './zustand.mjs'
-import { taetigkeitSetzen } from './taetigkeit.mjs'
+import { taetigkeitSetzen, taetigkeitUnbekannt } from './taetigkeit.mjs'
 import { flushSync } from 'svelte'
 
 globalThis.__protokoll = []
@@ -2529,10 +2691,10 @@ def _p666_zustand() -> str:
 
 
 def _p666_lauf(zustand_quelle: str, szenario: str) -> dict:
-    """Compile the real state module against stubs of its eight imports,
-    build a driver out of the two shipped App.svelte stretches, run the
+    """Compile the real state module against stubs of most of its imports
+    (three of them run as shipped), build a driver out of the two shipped App.svelte stretches, run the
     scenario in node and hand back what it reports."""
-    app_quelle = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    app_quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
     effekt = _p662_stueck(
         app_quelle,
         r"  \$effect\(\(\) => \{\n    const chatId = zustand\.aktiverChat\n.*?\n  \}\)",
@@ -2574,6 +2736,13 @@ def _p666_lauf(zustand_quelle: str, szenario: str) -> dict:
             (WURZEL / "frontend/src/lib/chatlayout.js").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
+        # The preview of an answer for the finished-chat card: no imports of
+        # its own, the real one runs here as shipped.
+        vorschau = (WURZEL / "frontend/src/lib/answerPreview.js").read_text(encoding="utf-8")
+        assert "\nimport " not in "\n" + vorschau, (
+            "answerPreview.js gained an import: copy that file here too, or stub it"
+        )
+        (ordner / "answerPreview.js").write_text(vorschau, encoding="utf-8")
         (ordner / "zustand.svelte.js").write_text(
             zustand_quelle
             .replace("./agentenfarbe.svelte.js", "./agentenfarbe.mjs")
@@ -2975,7 +3144,7 @@ def test_das_fenster_hat_nur_die_leiste_links_und_keine_kopfleiste():
 
     Source-text guard: it catches the pieces, not what lands on screen.
     """
-    app = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    app = WINDOW_SOURCE.read_text(encoding="utf-8")
     seitenleiste = (WURZEL / "frontend/src/teile/Seitenleiste.svelte").read_text(encoding="utf-8")
     spalte = (WURZEL / "frontend/src/teile/Arbeitsleiste.svelte").read_text(encoding="utf-8")
     rand = (WURZEL / "frontend/src/teile/ToolSigns.svelte").read_text(encoding="utf-8")
@@ -3007,9 +3176,9 @@ def test_the_folders_live_only_in_the_bar_chip():
     """The folder chip in the input bar's row is the one place the folders
     are shown and changed: no pills in the chat's head, no entry in the plus
     menu, and the chip itself opens the mask that adds one."""
-    eingabe = (WURZEL / "frontend/src/teile/Eingabeleiste.svelte").read_text(encoding="utf-8")
+    eingabe = BAR_SOURCE.read_text(encoding="utf-8")
     chip = (WURZEL / "frontend/src/teile/FolderChip.svelte").read_text(encoding="utf-8")
-    app = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    app = WINDOW_SOURCE.read_text(encoding="utf-8")
 
     assert "<FolderChip" in eingabe, "the chip is gone from the bar"
     assert "Ordnerpillen" not in app, "the pills are back in the head"
@@ -3025,7 +3194,7 @@ def test_frage_neu_senden_loescht_nur_die_antwort_auf_die_letzte_frage():
     question before them, and "send again" under the picture prompt would
     have deleted that older answer. The guard is the answer's position
     against the last question's, and it is executed here, not matched."""
-    quelle = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    quelle = WINDOW_SOURCE.read_text(encoding="utf-8")
     funktion = re.search(r"async function frageNeuSenden\(\) \{.*?\n  \}", quelle, re.S)
     assert funktion, "frageNeuSenden not found"
     assert "antwortAufLetzteFrage(zustand.nachrichten, letzte, letzteFrage)" in funktion.group(0), (
@@ -3081,7 +3250,7 @@ def test_das_nachladen_am_laufende_ist_zeitlich_begrenzt():
     Source-text only: it catches the bound being dropped again, not every
     way the release could stall.
     """
-    fenster = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    fenster = WINDOW_SOURCE.read_text(encoding="utf-8")
     nachladen = re.search(
         r"const frisch = await api\.nachrichten\(zielChat, \{[^}]*\}\)", fenster, re.S
     )
@@ -3212,8 +3381,8 @@ def test_jedes_modul_unter_api_v1_haengt_an_einem_router():
 # sends (App.svelte), and where a send whose line broke before the stream's
 # `start` goes looking for its answer (App.svelte, `nachholen`).
 
-EINGABELEISTE = WURZEL / "frontend/src/teile/Eingabeleiste.svelte"
-APP = WURZEL / "frontend/src/App.svelte"
+EINGABELEISTE = BAR_SOURCE
+APP = WINDOW_SOURCE
 
 
 def _stueck(datei: Path, muster: str, name: str) -> str:
@@ -3284,7 +3453,7 @@ def _leiste(fall: str) -> dict:
     """The bar with `zurueckgeben` and `anhangSetzen` as they really stand."""
     zurueckgeben = _stueck(
         EINGABELEISTE,
-        r"\n  export function zurueckgeben\(inhalt, chat = entwurfChat, messageId = null\) \{.*?\n  \}\n",
+        r"\n  (?:export )?function zurueckgeben\(inhalt, chat = entwurfChat, messageId = null\) \{.*?\n  \}\n",
         "zurueckgeben",
     )
     anhang_setzen = _stueck(
@@ -3477,7 +3646,7 @@ const HALTEPRUEFUNG_MS = 1
 const laufVon = () => (laeuft ? lauf : null)
 const anspruchWarten = new Map()
 const compactSince = {{}}
-const anhalten = () => {{ throw new Error('the queue is not held by a stop of a run') }}
+const giveBackQueued = () => {{ throw new Error('nothing waits to be given back by a stop of a run') }}
 const zustand = {{ aktiverChat: 'A' }}
 {funktionen}
 for (let i = 0; i < {presses}; i += 1) await abbrechen()
@@ -3514,7 +3683,7 @@ const api = { abbrechen: async () => { throw new Error('no stop expected') } }
 const laufVon = () => null
 const anspruchWarten = new Map()
 const compactSince = {}
-const anhalten = () => { throw new Error('nothing to hold') }
+const giveBackQueued = () => { throw new Error('nothing to give back') }
 const zustand = { aktiverChat: 'A' }
 const HALTEPRUEFUNG_MS = 1
 FUNKTIONEN
@@ -4233,7 +4402,7 @@ def test_the_product_is_named_exe_ai_where_the_user_reads_it():
         "frontend/index.html": "<title>Exe AI</title>",
         "app/cronmeldung.py": 'TITEL = "Exe AI"\n',
         "app/api/v1/meta.py": 'name="Exe AI",\n',
-        "app/api/v1/werkzeuge.py": "<title>{titel} — Exe AI</title>",
+        "app/api/v1/werkzeuge.py": "<title>{titel} - Exe AI</title>",
         "app/tools/mcp_auth.py": 'CLIENT_NAME = "Exe AI"\n',
         "config.example.yaml": "# Exe AI — configuration\n",
         "static/index.html": "<title>Exe AI</title>",
@@ -4266,7 +4435,7 @@ def test_the_product_is_named_exe_ai_where_the_user_reads_it():
         for language in ("de", "en")
     }
     assert {language: catalogue["erststart"]["satz"] for language, catalogue in texts.items()} == {
-        "de": "Drei Einstellungen, mit denen du Exe AI auf dich abstimmst.",
+        "de": "Drei Einstellungen, um Exe AI anzupassen.",
         "en": "Three choices to make Exe AI your own.",
     }
 
@@ -4376,14 +4545,14 @@ def test_what_the_service_delivers_from_static_is_still_there(client):
     """The silence probe: the page under "/", the help and the icons stay
     where the service takes them from, and the service still hands the two
     pages out — only the page that left is not answered any more."""
-    for path in ("static/index.html", "static/hilfe", "static/icons", "static/klaenge", "deploy/exe-ai-terminal.spec"):
+    for path in ("static/index.html", "static/help", "static/icons", "static/klaenge", "deploy/exe-ai-terminal.spec"):
         assert (WURZEL / path).exists(), path
     assert client.get("/").status_code == 200
-    assert client.get("/hilfe/").status_code == 200
+    assert client.get("/help/").status_code == 200
     assert client.get("/zeichen/").status_code == 404
 
 
-@pytest.mark.parametrize("page", ("static/hilfe/index.html", "static/hilfe/de/index.html"))
+@pytest.mark.parametrize("page", ("static/help/index.html", "static/help/de/index.html"))
 def test_no_section_the_manual_moves_the_focus_onto_draws_a_focus_ring(page):
     """The manual puts the focus on the section it shows, the overview or a
     chapter, so that a screen reader starts there. Such a section is no
@@ -4428,10 +4597,14 @@ def test_the_readme_and_the_patch_notes_name_windows_and_the_updater():
 
 
 def test_every_address_the_readme_lists_is_a_route_of_the_service(client):
-    """The silence probe for the README: its table of routes names only
-    addresses the service answers on."""
+    """The silence probe for the README: whatever addresses it names in
+    code, the service answers on every one. It may name none at all (the
+    manual of the interface lives on the website)."""
+    pattern = r"<code>(/[^<]*)</code>"
     readme = (WURZEL / "README.md").read_text(encoding="utf-8")
-    listed = set(re.findall(r"<code>(/[^<]*)</code>", readme))
-    assert len(listed) > 30, "the measurement lost its table"
     routes = {route.path for route in client.app.routes}
+    listed = set(re.findall(pattern, readme))
     assert not listed - routes, sorted(listed - routes)
+    # The same check on a text with an address no route answers on does find it.
+    invented = set(re.findall(pattern, readme + "\n<code>/api/v1/does-not-exist</code>"))
+    assert invented - routes == {"/api/v1/does-not-exist"}

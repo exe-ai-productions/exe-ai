@@ -16,19 +16,27 @@
   import { t } from '../lib/texte.svelte.js'
   import { melde } from '../lib/zustand.svelte.js'
   import { imageSwitches, loadImageSwitches } from '../lib/imageSwitches.svelte.js'
+  import { IDLE_MINUTEN_MAX } from '../lib/feineinstellungen.js'
   import Serverabschnitt from './Serverabschnitt.svelte'
+  import Hauszeichen from './Hauszeichen.svelte'
   import Auswahlfeld from './Auswahlfeld.svelte'
   import Zahlenfeld from './Zahlenfeld.svelte'
   import Schalter from './Schalter.svelte'
   import InfoMark from './InfoMark.svelte'
   import ImageSwitchRows from './ImageSwitchRows.svelte'
 
+  /* `onklappe` hands two pieces to the page, which draws them in its sd.cpp
+     section and under it: the rows of the further switches (`schalter`) and
+     the "Advanced" card with the idle time (`erweitert`). Their values and
+     their saving stay here with the rest of this card's. */
+  let { onklappe = null } = $props()
+
   const SCHLUESSEL = 'bildgeraete'
   // The split's own choice for "one mode per module", beside the two modes.
   const JE_MODUL = 'modul'
 
   // The fields that are one value each; the switches are a set of their own.
-  const FIELDS = ['vram_limit', 'offload_to_cpu', 'threads', 'split_mode', 'backend', 'zeitgrenze']
+  const FIELDS = ['vram_limit', 'offload_to_cpu', 'threads', 'split_mode', 'backend', 'zeitgrenze', 'idle_minutes']
 
   /* A field as the page holds it, read from what the service keeps: the
      same reading at the page's opening and after every write, so the window
@@ -41,6 +49,7 @@
       case 'split_mode': return v.split_mode ?? ''
       case 'backend': return v.backend ?? ''
       case 'zeitgrenze': return Number.isInteger(v.zeitgrenze) && v.zeitgrenze > 0 ? v.zeitgrenze : null
+      case 'idle_minutes': return Number.isInteger(v.idle_minutes) && v.idle_minutes > 0 ? v.idle_minutes : null
       default: return undefined
     }
   }
@@ -48,6 +57,7 @@
   let w = $state(null)
   let devices = $state([])
   let schalterOffen = $state(false)
+  let erweitertOffen = $state(true)
   let vramFokus = $state(false)
   let zeitFokus = $state(false)
   let splitFocus = $state(false)
@@ -253,9 +263,14 @@
   }
 
   const schalterZahl = $derived(imageSwitches.list.filter((row) => row.group === 'memory').length)
+
+  $effect(() => {
+    onklappe?.({ schalter, erweitert })
+    return () => onklappe?.(null)
+  })
 </script>
 
-<Serverabschnitt zeichen="server" titel={t('bild.gruppe_speicher')}>
+<Serverabschnitt zeichen="chip_bolt" titel={t('bild.gruppe_speicher')}>
   {#if w}
     <div class="zeile">
       <span class="name mitmarke">{t('bild.vram_limit')}<InfoMark text={t('bild.info_vram_limit')} /></span>
@@ -283,7 +298,9 @@
     <div class="zeile">
       <span class="name">{t('mcp.zeitgrenze')}</span>
       <input class="eingabe kurz" inputmode="numeric" aria-label={t('mcp.zeitgrenze')}
-             autocomplete="off" spellcheck="false" value={w.zeitgrenze ?? ''}
+             class:wort={!zeitFokus && w.zeitgrenze == null}
+             autocomplete="off" spellcheck="false"
+             value={zeitFokus || w.zeitgrenze != null ? (w.zeitgrenze ?? '') : '-'}
              onfocus={() => (zeitFokus = true)}
              onblur={() => {
                zeitFokus = false
@@ -319,13 +336,17 @@
     </div>
     <div class="zeile">
       <span class="name mitmarke">{t('bild.backend')}<InfoMark text={t('bild.info_backend')} /></span>
-      <input class="eingabe" aria-label={t('bild.backend')} autocomplete="off" spellcheck="false"
-             bind:value={w.backend}
-             onfocus={() => (backendFocus = true)}
-             onblur={() => {
-               backendFocus = false
-               if (!ausstehend) w.backend = gesendet.backend
-             }} />
+      <div class="wahl">
+        <input class="eingabe" class:wort={!backendFocus && !w.backend}
+               aria-label={t('bild.backend')} autocomplete="off" spellcheck="false"
+               value={backendFocus || w.backend ? w.backend : '-'}
+               oninput={(e) => (w.backend = e.currentTarget.value)}
+               onfocus={() => (backendFocus = true)}
+               onblur={() => {
+                 backendFocus = false
+                 if (!ausstehend) w.backend = gesendet.backend
+               }} />
+      </div>
     </div>
     {#if devices.length}
       <div class="zeile liste">
@@ -336,13 +357,18 @@
         {/each}
       </div>
     {/if}
+  {/if}
+</Serverabschnitt>
+
+<!-- The generator's further switches stand at the foot of the sd.cpp section
+     of the page (Bildserver.svelte): they apply to the whole server. Their
+     values, their count and their saving stay here, with the rest of what
+     this card keeps, and the page draws the rows. -->
+{#snippet schalter()}
+  {#if w}
     <div class="zeile liste">
       <button class="klappe" aria-expanded={schalterOffen} onclick={() => (schalterOffen = !schalterOffen)}>
-        <svg class="winkel" class:auf={schalterOffen} width="11" height="11" viewBox="0 0 11 11" fill="none"
-             stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"
-             aria-hidden="true">
-          <path d="M4.125 2.75L6.875 5.5L4.125 8.25" />
-        </svg>
+        <span class="winkel" class:auf={schalterOffen}><Hauszeichen zeichen="chevron_right" groesse={14} /></span>
         <span class="name">{t('bildserver.sdcpp_schalter')}</span>
         <span class="still">{schalterZahl}</span>
       </button>
@@ -353,7 +379,23 @@
       </div>
     {/if}
   {/if}
-</Serverabschnitt>
+{/snippet}
+
+<!-- The idle time of the picture server: after this long without a picture the
+     program ends it, and the next picture starts it again; empty is never. -->
+{#snippet erweitert()}
+  {#if w}
+    <Serverabschnitt klappbar bind:offen={erweitertOffen} titel={t('modell.gruppe_erweitert')} gewicht={1}>
+      <div class="zeile niedrig">
+        <label class="zahlname" for="bg-idle">{t('modell.feld_idle_ttl')}</label>
+        <div class="zahlplatz">
+          <Zahlenfeld id="bg-idle" bind:wert={w.idle_minutes}
+                      min={0} max={IDLE_MINUTEN_MAX} ganzzahlig nullwort="-" />
+        </div>
+      </div>
+    </Serverabschnitt>
+  {/if}
+{/snippet}
 
 <style>
   /* The rows and their parts are Serverabschnitt.svelte's; here only what
@@ -387,7 +429,14 @@
     width: 84px;
     text-align: center;
   }
-  /* "Auto" stands in an empty budget like the number fields' own word. */
+  /* A field in the place of a picker takes that place's width, which grows
+     with the row where the field stands under its name. */
+  .wahl > .eingabe {
+    display: block;
+    width: 100%;
+  }
+  /* "Auto" stands in an empty budget like the number fields' own word, and a
+     dash in a field with no value. */
   .eingabe.wort {
     color: var(--text-leise);
   }
@@ -418,6 +467,7 @@
   }
   .winkel {
     flex: none;
+    display: inline-flex;
     color: var(--text-still);
     transition: transform 0.15s;
   }

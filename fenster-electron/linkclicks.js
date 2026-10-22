@@ -6,7 +6,7 @@
 // a foreign page is stopped here and the shell is asked to open it, and the
 // shell checks the address with the same rule before anything starts.
 //
-// Loaded into every page of the program's session (`setPreloads`, main.js),
+// Loaded into every page of the program's session (`registerPreloadScript`, main.js),
 // so the manual, a document and the developer tools carry it as well as the
 // main window. A preload that is sandboxed may require nothing but electron,
 // which is why this file stands alone and does not read adressregel.js: the

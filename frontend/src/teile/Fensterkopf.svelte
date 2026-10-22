@@ -2,30 +2,27 @@
   /* The head of a window body: a sign on its tile, the name, a short state
      beside the name, and the state pill at the right end. 36 px tall.
 
-     The server windows and the cloud pages share it, so a provider reads
-     as one more room of the same house as a server. The tile carries either
-     a house sign (`zeichen`) or a maker's mark (`marke`, a key of
-     lib/logos.js) — the mark wins where there is one. */
+     The head stands before the name as either a maker's mark (`marke`, an
+     embedded mark: its view box and its markup) on its own, 30 px, or — where
+     none is known — a house sign (`zeichen`) on its tile. Never both: the
+     mark wins where there is one. */
   import Hauszeichen from './Hauszeichen.svelte'
   import Standpille from './Standpille.svelte'
-  import { LOGOS } from '../lib/logos.js'
 
   let {
     zeichen = '',
-    marke = '',
+    marke = null,
     titel = '',
     unter = '',
     standfarbe = 'still',
     standtext = '',
   } = $props()
-
-  const logo = $derived(marke ? LOGOS[marke] : null)
 </script>
 
 <div class="kopf">
-  {#if logo}
-    <span class="kachel">
-      <svg viewBox={logo.vb} width="24" height="24" aria-hidden="true">{@html logo.html}</svg>
+  {#if marke}
+    <span class="marke" aria-hidden="true">
+      <svg viewBox={marke.vb} width="30" height="30">{@html marke.html}</svg>
     </span>
   {:else if zeichen}
     <span class="kachel"><Hauszeichen {zeichen} groesse="mittel" /></span>
@@ -56,6 +53,15 @@
     place-items: center;
     border-radius: 9px;
     background: var(--bg-erhoben);
+    color: var(--text);
+  }
+  .marke {
+    flex: none;
+    width: 30px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: var(--text);
   }
   .name {

@@ -23,6 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import bildrunner, bildspeicher, bildwahlen, model_convert
+from tests import upscaler_file
 from app.api.v1.bild import MAX_KANTE, MIN_KANTE, RASTER, _erwartete_paesse, _kante
 from app.bildrunner import Auftrag, BildFehler, Bildrunner, LoRA
 from app.bildturbo import Bildturbo
@@ -266,7 +267,10 @@ def test_a_sqlite_file_under_a_checkpoint_extension_is_in_no_list(daten: Path):
     for folder in kinds:
         (daten / folder).mkdir()
         (daten / folder / "x_f16.ckpt").write_bytes(_SQLITE_HEAD)
-        (daten / folder / "real.safetensors").write_bytes(b"x")
+        if folder == "upscaler":
+            upscaler_file.write(daten / folder / "real.safetensors")
+        else:
+            (daten / folder / "real.safetensors").write_bytes(b"x")
     for folder, listing in kinds.items():
         assert listing(daten) == ["real.safetensors"], folder
 
@@ -444,20 +448,35 @@ def test_der_zustand_einer_anwendung_wird_gelesen():
 # --- The quality companions (block D) -------------------------------------
 
 
-def test_flash_attention_ist_an_seit_gemessen(daten: Path, monkeypatch):
-    """On by default now that it is measured on the shipped build: the highres
-    fix's second pass drops from ~30 s to ~3.5 s per step with it. It can still
-    be switched off explicitly for a swapped-in binary that does not know the
-    flag."""
+def test_the_command_line_has_no_fixed_flash_attention_and_one_flag_when_the_switch_is_set(
+    daten: Path, monkeypatch
+):
+    """The generator's own flash attention switch decides, as a value of the
+    request (the machine's start value reaches it from the settings): the
+    line carries no fixed flag of the earlier builds, nothing while the switch
+    is unset, and exactly one ``--flash-attn <value>`` when it is set."""
     monkeypatch.setattr(bildrunner.shutil, "which", lambda _: "/irgendwo/sd-cli")
-    an = Bildrunner(daten).befehl(
+    ungesetzt = Bildrunner(daten).befehl(
         Auftrag(modell=daten / "klein.gguf", prompt="x"), daten / "a.png"
     )
-    assert "--diffusion-fa" in an
-    aus = Bildrunner(daten).befehl(
-        Auftrag(modell=daten / "klein.gguf", prompt="x", diffusion_fa=False), daten / "a.png"
+    for weg in ("--diffusion-fa", "--fa", "--flash-attn", "--diffusion-conv-direct", "--vae-conv-direct"):
+        assert weg not in ungesetzt
+    gesetzt = Bildrunner(daten).befehl(
+        Auftrag(modell=daten / "klein.gguf", prompt="x", switches={"flash_attn": "off,diffusion=on"}),
+        daten / "a.png",
     )
-    assert "--diffusion-fa" not in aus
+    assert gesetzt.count("--flash-attn") == 1
+    assert gesetzt[gesetzt.index("--flash-attn") + 1] == "off,diffusion=on"
+    assert "--diffusion-fa" not in gesetzt
+
+
+def test_an_error_line_of_build_948_and_later_is_told_to_the_user(daten: Path):
+    """From build 948 the generator writes ``[E] file.cpp:12 - ...`` with a
+    bare level tag; the lines of the older, padded tag still count."""
+    assert bildrunner._ERROR_TAG.search("[E] bar.cpp:12 - no space left")
+    assert bildrunner._ERROR_TAG.search("[ERROR  ] bar.cpp:12 - no space left")
+    assert not bildrunner._ERROR_TAG.search("[INFO ] bar.cpp:12 - fine")
+    assert not bildrunner._ERROR_TAG.search("[EXTRA] bar.cpp:12")
 
 
 def test_die_begleiter_fallen_weg_wenn_ungesetzt(daten: Path, monkeypatch):
@@ -1344,15 +1363,17 @@ def test_an_overlong_last_raw_line_after_a_crash_note(daten: Path, monkeypatch):
 
 
 _REDRAWN_BAR = "|#  | 1/4 - 1it/s\r|## | 2/4 - 1it/s\r|###| 3/4 - 1it/s"
+# The same redrawing for a line that is words: only its last drawing stands.
+_REDRAWN_WORDS = "reading 1/4\rreading 2/4\rreading 3/4"
 
 
 def test_a_progress_bar_redrawn_in_place_keeps_what_stood_last(daten: Path, monkeypatch):
     """Carriage returns redraw the bar on the same line: the line keeps the
     last drawing, and a "\r\n" ending is no redraw."""
     error = _failed_run(
-        daten, monkeypatch, "loading\r\n" + _REDRAWN_BAR + "\n", 1,
+        daten, monkeypatch, "loading\r\n" + _REDRAWN_WORDS + "\n", 1,
     )
-    assert _log_part(error).split("\n") == ["loading", "|###| 3/4 - 1it/s"]
+    assert _log_part(error).split("\n") == ["loading", "reading 3/4"]
 
 
 def test_a_real_painter_redrawing_its_bar_is_read_as_one_line(daten: Path, monkeypatch):
@@ -1360,7 +1381,7 @@ def test_a_real_painter_redrawing_its_bar_is_read_as_one_line(daten: Path, monke
     without newline translation."""
     script = (
         "import sys\n"
-        f"sys.stdout.write({('loading' + chr(10) + _REDRAWN_BAR + chr(10))!r})\n"
+        f"sys.stdout.write({('loading' + chr(10) + _REDRAWN_WORDS + chr(10))!r})\n"
         "sys.exit(1)\n"
     )
     monkeypatch.setattr(
@@ -1370,7 +1391,61 @@ def test_a_real_painter_redrawing_its_bar_is_read_as_one_line(daten: Path, monke
         Bildrunner(daten).erzeugen(
             Auftrag(modell=daten / "small.gguf", prompt="x"), daten / "out.png",
         )
-    assert _log_part(raised.value).split("\n") == ["loading", "|###| 3/4 - 1it/s"]
+    assert _log_part(raised.value).split("\n") == ["loading", "reading 3/4"]
+
+
+_BAR_LINE = "|" + "#" * 40 + "| 598/626 - 325.55MB/s \x1b[K"
+_STEP_BAR_LINE = "|===>      | 3/20 - 1.50s/it\x1b[K"
+_BAR_THEN_WORDS = (
+    "|" + "#" * 40 + "| 626/626 - 331.15MB/s \x1b[K[I] loading tensors completed, taking 21.39s"
+)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the child ends by a POSIX signal")
+def test_the_raw_tail_after_a_crash_carries_no_progress_bar_and_no_control_sequence(
+    daten: Path, monkeypatch
+):
+    """A crash with no error line: the signal leads, the loading bars and the
+    step bars are left out, and the words that stood behind a bar keep their
+    place without the sequence that erased the line."""
+    out = "[I] loading\n" + _BAR_LINE + "\n" + _BAR_THEN_WORDS + "\n" + _STEP_BAR_LINE + "\n" + _BAR_LINE + "\n"
+    error = _failed_run(daten, monkeypatch, out, -6)
+    assert _log_part(error).split("\n") == [
+        "[Exe AI] Command terminated by signal 6: SIGABRT (Abort trap)",
+        "[I] loading",
+        "[I] loading tensors completed, taking 21.39s",
+    ]
+    assert "\x1b" not in _log_part(error) and "[K" not in _log_part(error)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the child ends by a POSIX signal")
+def test_with_nothing_but_bars_in_the_log_only_the_signal_stands(daten: Path, monkeypatch):
+    error = _failed_run(daten, monkeypatch, _BAR_LINE + "\n" + _STEP_BAR_LINE + "\n", -6)
+    assert _log_part(error) == "[Exe AI] Command terminated by signal 6: SIGABRT (Abort trap)"
+
+
+def test_silence_the_choice_of_the_telling_lines_and_the_ordinary_lines_stay_as_they_were(
+    daten: Path, monkeypatch
+):
+    """A GGML_ASSERT line is chosen as before; a plain last line stays in the
+    raw tail; a line that only looks like a bar but carries no counts stays a
+    line."""
+    chosen = _failed_run(daten, monkeypatch, "GGML_ASSERT(false) failed\nbacktrace 0x1\n", -6)
+    assert _log_part(chosen).split("\n")[1:] == ["GGML_ASSERT(false) failed"]
+    plain = _failed_run(daten, monkeypatch, "[INFO ] starting\n[INFO ] last\n", 1)
+    assert _log_part(plain).split("\n") == ["[INFO ] starting", "[INFO ] last"]
+    odd = _failed_run(daten, monkeypatch, "|not a bar| at all\n", 1)
+    assert _log_part(odd) == "|not a bar| at all"
+
+
+def test_a_line_of_words_keeps_its_words_without_its_colours(daten: Path, monkeypatch):
+    chosen = _failed_run(
+        daten, monkeypatch,
+        "\x1b[31mGGML_ASSERT(false) failed\x1b[0m\n" + _BAR_LINE + "\nbacktrace 0x1\n", -6,
+    )
+    assert _log_part(chosen).split("\n")[1:] == ["GGML_ASSERT(false) failed"]
+    plain = _failed_run(daten, monkeypatch, "[INFO ] starting\n\x1b[32mdone\x1b[0m here\n", 1)
+    assert _log_part(plain).split("\n") == ["[INFO ] starting", "done here"]
 
 
 def test_an_unknown_signal_number_is_still_named_by_number(daten: Path, monkeypatch):
@@ -1430,7 +1505,7 @@ def test_a_windows_crash_status_is_named(monkeypatch, status, name, meaning, sig
     signed spelling (-1073741819) names the same status."""
     code = status - 0x100000000 if signed else status
     monkeypatch.setattr(bildrunner.sys, "platform", "win32")
-    assert bildrunner._crash_note(code) == bildrunner.CrashNote(
+    assert bildrunner.crash_note(code) == bildrunner.CrashNote(
         name, f"[Exe AI] Command terminated with {name}: {meaning}",
     )
 
@@ -1438,7 +1513,7 @@ def test_a_windows_crash_status_is_named(monkeypatch, status, name, meaning, sig
 @pytest.mark.parametrize("code", [0xC0000135, 0xC0000135 - 0x100000000])
 def test_an_unknown_windows_error_status_is_named_by_its_hex_value(monkeypatch, code):
     monkeypatch.setattr(bildrunner.sys, "platform", "win32")
-    assert bildrunner._crash_note(code) == (
+    assert bildrunner.crash_note(code) == (
         "NTSTATUS 0xC0000135", "[Exe AI] Command terminated with NTSTATUS 0xC0000135",
     )
 
@@ -1448,13 +1523,13 @@ def test_an_ordinary_windows_exit_gets_no_note(monkeypatch, code):
     """No signals on Windows: exit(-1) and every code below the error range
     are the program's own word."""
     monkeypatch.setattr(bildrunner.sys, "platform", "win32")
-    assert bildrunner._crash_note(code) is None
+    assert bildrunner.crash_note(code) is None
 
 
 @pytest.mark.parametrize("platform", ["darwin", "linux"])
 def test_signals_are_read_on_mac_and_linux(monkeypatch, platform):
     monkeypatch.setattr(bildrunner.sys, "platform", platform)
-    note = bildrunner._crash_note(-11)
+    note = bildrunner.crash_note(-11)
     assert note.name == "SIGSEGV"
     assert note.line.startswith(_SEGFAULT_NOTE)
 
@@ -1465,7 +1540,7 @@ def test_no_ntstatus_reading_off_windows(monkeypatch, platform, code):
     """A positive code is an exit status off Windows, even in the NTSTATUS
     range."""
     monkeypatch.setattr(bildrunner.sys, "platform", platform)
-    assert bildrunner._crash_note(code) is None
+    assert bildrunner.crash_note(code) is None
 
 
 def test_a_positive_code_in_the_ntstatus_range_gets_no_note_off_windows(
@@ -2049,7 +2124,7 @@ def test_a_stop_ends_a_running_conversion_and_frees_the_lock(converting, client,
         thread.join(timeout=20)
     assert not thread.is_alive()
     assert answers[0].status_code == 499
-    assert answers[0].json()["detail"] in ("Bilderzeugung abgebrochen", "Image generation cancelled")
+    assert answers[0].json()["detail"] in ("Bilderzeugung abgebrochen", "Image generation canceled")
     assert not out.exists()
     assert "Converting m.safetensors to q8_0 was stopped" in caplog.text
     assert not runner.laeuft()
@@ -2091,6 +2166,95 @@ def test_a_stray_byte_the_converter_prints_does_not_cost_the_answer(daten: Path)
     assert code == 3
     assert text.startswith("before ") and text.rstrip().endswith(" after")
     assert runner._prozess is None
+
+
+_BAR_SCRIPT = (
+    "import sys, time\n"
+    "for n in (1, 2, 3):\n"
+    "    sys.stdout.write('\\r\\033[K|' + '#' * n + ' ' * (4 - n) + '| %d/4 - 120.00MB/s' % n)\n"
+    "    sys.stdout.flush()\n"
+    "    time.sleep(0.3)\n"
+    "sys.stdout.write('\\n')\n"
+    "sys.stdout.flush()\n"
+    "time.sleep(1.5)\n"
+)
+
+
+def test_the_bar_of_a_conversion_is_the_share_it_reports(daten: Path):
+    """The redrawn bar of the converter, read while it runs, is the honest
+    share; once it ends nothing is reported."""
+    runner = Bildrunner(daten)
+    runner.reservieren()
+    seen: list[dict] = []
+    outcome: list = []
+    thread = threading.Thread(
+        target=lambda: outcome.append(runner.run_tool([sys.executable, "-c", _BAR_SCRIPT], timeout=20)),
+        daemon=True,
+    )
+    thread.start()
+    deadline = time.monotonic() + 10
+    while thread.is_alive() and time.monotonic() < deadline:
+        state = runner.fortschritt()
+        if state and state["gesamt"] and state not in seen:
+            seen.append(state)
+        time.sleep(0.05)
+    thread.join(timeout=20)
+    runner.freigeben()
+    assert outcome and outcome[0][0] == 0
+    assert seen, "no share was ever reported"
+    assert all(state["gesamt"] == 4 for state in seen)
+    assert [state["schritt"] for state in seen] == sorted(state["schritt"] for state in seen)
+    assert seen[-1]["schritt"] >= 3
+    assert seen[-1]["anteil"] == pytest.approx(seen[-1]["schritt"] / 4)
+    assert runner.fortschritt() is None
+
+
+def test_a_tool_without_a_bar_reports_no_share(daten: Path):
+    """Silence: a tool that prints no bar never claims a share of its own."""
+    runner = Bildrunner(daten)
+    runner.reservieren()
+    script = "import time\nprint('working')\ntime.sleep(1)\n"
+    thread = threading.Thread(
+        target=lambda: runner.run_tool([sys.executable, "-c", script], timeout=20), daemon=True,
+    )
+    thread.start()
+    time.sleep(0.5)
+    state = runner.fortschritt()
+    thread.join(timeout=20)
+    runner.freigeben()
+    assert state is None or state["gesamt"] == 0
+
+
+def test_a_stopped_tool_reports_the_stop_and_clears_its_share(daten: Path):
+    runner = Bildrunner(daten)
+    runner.reservieren()
+    errors: list = []
+
+    def run() -> None:
+        try:
+            runner.run_tool([sys.executable, "-c", _BAR_SCRIPT], timeout=20)
+        except BildFehler as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    assert _reached(lambda: (runner.fortschritt() or {}).get("gesamt") == 4, 10)
+    assert runner.stoppen() is True
+    thread.join(timeout=20)
+    runner.freigeben()
+    assert errors and "abgebrochen" in str(errors[0])
+    assert runner.fortschritt() is None
+
+
+def test_the_type_of_a_converted_file_is_read_from_its_name():
+    kind = model_convert.converted_type
+    assert kind(Path("base.q8_0.gguf")) == "q8_0"
+    assert kind(Path("base.q4_K.GGUF")) == "q4_K"
+    assert kind(Path("base.Q4_K.gguf")) is None
+    assert kind(Path("base.gguf")) is None
+    assert kind(Path("base.v2.gguf")) is None
+    assert kind(Path("base.q8_0.safetensors")) is None
+    assert kind(Path("base.q8_0.gguf.bak")) is None
 
 
 def test_a_conversion_past_its_time_is_ended(converting, client, monkeypatch):

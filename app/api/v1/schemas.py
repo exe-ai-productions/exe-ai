@@ -188,6 +188,10 @@ class NachrichtAntwort(BaseModel):
     # `anhaenge` carries file names, `dokumente` meta cards like `dokument`.
     anhaenge: list[str] | None = None
     dokumente: list[dict[str, Any]] | None = None
+    # Width and height of the attached pictures by file name, so the window
+    # holds their room before they load (app/attachment_sizes.py). Only the
+    # list of messages fills it; a name without an entry is shown as before.
+    attachment_sizes: dict[str, dict[str, int]] | None = None
     # What this row IS, beyond who said it: `nachricht`, `werkzeugmeldung`,
     # `bild` or `bildlauf`. The window needs it to draw a tool report as a
     # tool report — and, more importantly, to stop treating every empty
@@ -334,6 +338,10 @@ class ModellAntwort(BaseModel):
     dialekt: str = "openai"
     reasoning_format: str
     erreichbar: bool
+    # Why the provider refuses the check, in its own words — only for a
+    # provider that is not reachable and said one; the windows show the
+    # sentence beside the state.
+    grund: str | None = None
     # The server behind this model in one word — active, idle or offline
     # (app/server_state.py): the same word the live line announces, carried
     # here so a client has it before the first announcement.
@@ -565,6 +573,9 @@ class AgentAntwort(BaseModel):
     # a stated wish for no thinking, not an absent value — see
     # app/auftragdenklaengewahl.py.
     reasoning_budget: int | None = None
+    # The thinking stage its runs ask for (app/denkstufen.py). None: no
+    # thinking field goes out, as before this field.
+    reasoning_effort: str | None = None
     # None means the cascade (app/befehlszeitwahl.py) decides. Set means
     # this overrides it outright, with no ceiling of its own.
     max_command_seconds: int | None = None
@@ -587,6 +598,7 @@ class AgentAntwort(BaseModel):
             max_minutes=agent.minuten,
             max_tokens=agent.max_tokens,
             reasoning_budget=agent.denklaenge,
+            reasoning_effort=agent.thinking_stage,
             max_command_seconds=agent.befehlssekunden,
             color=agent.farbe,
             description=agent.description,
@@ -631,6 +643,7 @@ class AgentFelderSchreiben(BaseModel):
     max_minutes: float | None = None
     max_tokens: int | None = None
     reasoning_budget: int | None = None
+    reasoning_effort: str | None = None
     max_command_seconds: int | None = None
     color: str | None = None
     description: str | None = None

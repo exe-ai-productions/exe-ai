@@ -173,12 +173,27 @@ class VoiceService:
 
     # --- ending ----------------------------------------------------------------
 
-    def stop(self) -> None:
-        """The service is ending."""
+    def stop(self, wait: float | None = None) -> None:
+        """The service is ending.
+
+        ``wait`` is how long to wait for the work that holds the voice (a
+        load takes minutes): when it is not over by then, the process is ended
+        from outside, which ends the work too, as its pipe closes. ``None`` is
+        the unlimited wait of before, for every caller that is not a shutdown.
+        """
         with self._state:
             self._until = 0.0
-        with self._work:
-            self._stop_process()
+        if wait is None:
+            self._work.acquire()
+        elif not self._work.acquire(timeout=wait):
+            process = self._process
+            if process is not None and process.poll() is None:
+                process.kill()
+            return
+        try:
+            self._stop_process(5 if wait is None else wait)
+        finally:
+            self._work.release()
 
     # --- inside ------------------------------------------------------------------
 
@@ -274,8 +289,9 @@ class VoiceService:
         except (OSError, ValueError):
             pass
 
-    def _stop_process(self) -> None:
-        """Under ``_work``: asks the process to end, and ends it if it does not."""
+    def _stop_process(self, wait: float = 5) -> None:
+        """Under ``_work``: asks the process to end, and ends it if it does not;
+        ``wait`` seconds for the polite end, and as many for the hard one."""
         process, self._process, self._loaded = self._process, None, None
         if process is None:
             return
@@ -287,11 +303,11 @@ class VoiceService:
         except (OSError, ValueError):
             pass
         try:
-            process.wait(timeout=5)
+            process.wait(timeout=wait)
         except subprocess.TimeoutExpired:
             process.kill()
             try:
-                process.wait(timeout=5)
+                process.wait(timeout=wait)
             except subprocess.TimeoutExpired:
                 log.warning("Voice process did not end")
 

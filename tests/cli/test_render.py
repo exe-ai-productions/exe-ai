@@ -401,6 +401,42 @@ def test_a_long_argument_is_cut_and_the_duration_still_stands_at_the_edge(render
     assert len(head) == WIDTH and head.endswith(f"{sign('more')} 0:03 {sign('ok')}")
 
 
+WRITTEN_FIRST = [
+    ("write_file", {"content": "A good question", "path": "notes\\paragraph1.txt"}, "notes/paragraph1.txt"),
+    ("edit_file", {"new_text": "The new text", "old_text": "The old", "path": "src/a.py"}, "src/a.py"),
+    ("read_file", {"limit": 200, "path": "C:\\Users\\me\\a.txt"}, "C:/Users/me/a.txt"),
+    ("read_file", {"limit": 200, "file_path": "/Users/me/a\\b.txt"}, "/Users/me/a\\b.txt"),
+    ("run_command", {"timeout": 30, "command": "ls -la"}, "ls -la"),
+]
+
+
+@pytest.mark.parametrize("name,arguments,shown", WRITTEN_FIRST)
+def test_a_tool_line_names_what_the_call_touches_and_not_the_field_written_first(
+    renderer, stage, name, arguments, shown
+):
+    renderer.start({})
+    renderer.tool_call({"name": name, "argumente": arguments, "aufruf_id": "a1"})
+    assert stage.beside_the_spinner().splitlines()[1] == shown
+    renderer.tool_result({"name": name, "aufruf_id": "a1", "dauer_sekunden": 1})
+    (head,) = stage.lines()
+    assert f"  {shown}" in head
+    assert str(next(iter(arguments.values()))) not in head.replace(shown, "")
+
+
+def test_silence_a_call_without_a_name_for_its_place_shows_its_first_text_then_its_first_field(
+    renderer, stage
+):
+    renderer.start({})
+    renderer.tool_call({"name": "a", "argumente": {"limit": 5, "mode": "fast"}, "aufruf_id": "a1"})
+    renderer.tool_call({"name": "b", "argumente": {"limit": 5, "deep": True}, "aufruf_id": "a2"})
+    renderer.tool_call({"name": "c", "argumente": {}, "aufruf_id": "a3"})
+    for number in (1, 2, 3):
+        renderer.tool_result({"name": "x", "aufruf_id": f"a{number}", "dauer_sekunden": 1})
+    first, second, third = stage.lines()
+    assert "  fast" in first and "  5" in second and "true" not in second
+    assert third.split()[-3] == "c"
+
+
 def test_a_result_is_cut_to_its_first_three_lines_and_says_how_many_there_were(renderer, stage):
     renderer.start({})
     renderer.tool_call(CALL)
@@ -559,6 +595,7 @@ def test_numbers_that_say_nothing_write_nothing(renderer, stage):
         ({"kontextfenster_voll": True}, ["nachricht.kontextfenster_voll"]),
         ({"anbietergrenze": True}, ["nachricht.anbietergrenze"]),
         ({"abgeschnitten": True}, ["nachricht.abgeschnitten"]),
+        ({"abgelehnt": True}, ["nachricht.abgelehnt"]),
         ({"antwortlaenge_zu_gross": True}, ["nachricht.antwortlaenge_zu_gross"]),
         (
             {"denken_aufgebraucht": "denken_aufgebraucht_eigene_grenze"},
@@ -587,6 +624,24 @@ def test_the_marks_of_an_answer_are_written_out(renderer, stage, marks, sentence
         else:
             marks_written[-1] += " " + line.strip()
     assert marks_written == [f"{sign('warning')} {WORDS.t(key)}" for key in sentences]
+
+
+def test_a_refusal_names_its_reason_quietly_under_its_sentence(renderer, stage):
+    renderer.start({})
+    renderer.stats({"dauer_sekunden": 3.0, "abgelehnt": True, "ablehnung_erklaerung": "Because of the topic."})
+    lines = stage.lines()
+    assert lines[0] == "  0:03"
+    assert lines[1].startswith(f"{sign('warning')} {WORDS.t('nachricht.abgelehnt')[:20]}")
+    assert lines[-1] == "  Because of the topic."
+    assert not lines[-1].startswith(sign("warning"))
+
+
+def test_silence_a_refusal_without_a_reason_writes_only_its_sentence(renderer, stage):
+    renderer.start({})
+    renderer.stats({"dauer_sekunden": 3.0, "abgelehnt": True})
+    assert len([line for line in stage.lines() if line.startswith(sign("warning"))]) == 1
+    renderer.stats({"dauer_sekunden": 3.0, "ablehnung_erklaerung": "Stray reason."})
+    assert "Stray reason." not in "\n".join(stage.lines())
 
 
 def test_a_stopped_answer_says_so_once(renderer, stage):
@@ -683,22 +738,69 @@ def test_at_one_hundred_and_twenty_columns_the_head_is_the_letters_the_standing_
     assert f"{colour_code('muted')}m{standing()}" in stage.sent()
 
 
-def test_at_sixty_columns_the_letters_still_stand_and_below_that_the_name_takes_their_place(
+def name_letters() -> list[str]:
+    """The letters of the name alone, with their two columns of margin."""
+    return [(" " * render.WORDMARK_MARGIN + line).rstrip() for line in wordmark.WORDMARK_NAME]
+
+
+def test_at_sixty_columns_the_whole_mark_still_stands_and_below_that_the_name_alone_takes_its_place(
     head_service, tmp_path
 ):
     stage = Stage(width=render.WORDMARK_FROM)
     build(stage, head_service, tmp_path).header("9.8.7", "http://service.test")
     assert stage.lines()[: len(letters()) + 2] == ["", *letters(), ""]
-    # One column less: the name in one line, in bold, where the letters stood.
+    # One column less: the letters of the name without the prompt sign.
     stage = Stage(width=render.WORDMARK_FROM - 1)
     build(stage, head_service, tmp_path).header("9.8.7", "http://service.test")
     lines = stage.lines()
+    assert lines[: len(name_letters()) + 2] == ["", *name_letters(), ""]
+    assert lines[len(name_letters()) + 2].startswith(
+        f"{WORDS.t('cli.titel')} 9.8.7 {sign('separator')} http://service.test"
+    )
+    assert wordmark.WORDMARK_PLAIN not in lines
+
+
+def test_the_head_of_the_tab_at_its_narrowest_shows_the_name_in_block_letters_in_the_marks_colour(
+    head_service, tmp_path
+):
+    """The tab of the client in the app is 42 columns wide at the narrowest
+    width of the side bar."""
+    stage = Stage(width=42)
+    build(stage, head_service, tmp_path).header("9.8.7", "http://service.test")
+    lines = stage.lines()
+    assert lines[:8] == ["", *name_letters(), ""]
+    assert len(name_letters()) == wordmark.HEIGHT
+    assert wordmark.WORDMARK_PLAIN not in lines
+    margin = " " * render.WORDMARK_MARGIN
+    assert f"{mark_code()}m{margin}{wordmark.WORDMARK_NAME[0]}" in stage.sent()
+
+
+def test_silence_an_output_without_utf8_keeps_the_name_in_one_line_at_the_narrow_width_too(
+    head_service, tmp_path, monkeypatch
+):
+    class Ascii:
+        encoding = "ascii"
+
+    monkeypatch.setattr(sys, "stdout", Ascii())
+    stage = Stage(width=42)
+    build(stage, head_service, tmp_path).header("9.8.7", "http://service.test")
+    assert stage.lines()[:3] == ["", wordmark.WORDMARK_PLAIN, ""]
+
+
+def test_the_narrow_letters_end_at_forty_one_columns_and_below_that_the_name_is_one_line(
+    head_service, tmp_path
+):
+    stage = Stage(width=render.WORDMARK_NAME_FROM)
+    assert render.WORDMARK_NAME_FROM == 41
+    build(stage, head_service, tmp_path).header("9.8.7", "http://service.test")
+    assert stage.lines()[:8] == ["", *name_letters(), ""]
+    stage = Stage(width=render.WORDMARK_NAME_FROM - 1)
+    build(stage, head_service, tmp_path).header("9.8.7", "http://service.test")
+    lines = stage.lines()
     assert lines[:3] == ["", wordmark.WORDMARK_PLAIN, ""]
-    assert lines[3].startswith(f"{WORDS.t('cli.titel')} 9.8.7 {sign('separator')} http://service.test")
     assert f"\x1b[1;{mark_code()}m{wordmark.WORDMARK_PLAIN}" in stage.sent()
-    assert not any(wordmark.WORDMARK[0].strip() in line for line in lines)
-    # The chats and the tips stand below it as they do under the letters.
-    assert lines[5:] == [*recent(), *tips()]
+    assert lines[3].startswith(f"{WORDS.t('cli.titel')} 9.8.7")
+    assert not any(wordmark.WORDMARK_NAME[0].strip() in line for line in lines)
 
 
 def test_a_tip_wider_than_the_window_ends_at_its_edge_and_the_head_keeps_three_tip_lines(

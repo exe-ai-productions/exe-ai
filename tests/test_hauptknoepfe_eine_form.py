@@ -91,8 +91,11 @@ def test_jeder_wichtig_knopf_traegt_dieselbe_groesse():
     # of the shared model page (Modelldetail.svelte).
     # Six since the foot buttons of the settings, the server mask and the
     # provider mask became the house button of the global stylesheet, which
-    # the test below measures.
-    assert len(gepruefte) >= 6, f"only {len(gepruefte)} files with .wichtig found: {gepruefte}"
+    # the test below measures. Five since the skill form's foot became two
+    # signs. Three since the model page and the cards of the catalogue carry
+    # sign buttons only (download, cancel), measured in
+    # tests/test_hauptknoepfe_glas.py.
+    assert len(gepruefte) >= 3, f"only {len(gepruefte)} files with .wichtig found: {gepruefte}"
 
 
 def test_the_house_button_carries_the_same_size():

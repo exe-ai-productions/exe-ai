@@ -16,7 +16,7 @@
   into none of the three, according to the settings.
 
   WHAT IT DOES NOT BUILD. All four displays already existed and are used as
-  they are: the toasts, the sounds (`klingen()` in klaenge.svelte.js, three
+  they are: the toasts, the sounds (`klingen()` in klaenge.svelte.js, four
   files), the dots on the rail (agentenampel/cronjobampel/laufampel) and the
   dot per chat row (chatringe.svelte.js). This module wires them; it does
   not replace them.
@@ -35,12 +35,12 @@
   sits, not who may call it — and the dependency runs one way.
 
   WHERE THE SETTINGS LIVE. In two keys, not one. The sounds already had
-  `klaenge` with values stored in it — switch, volume, and now the three
+  `klaenge` with values stored in it — switch, volume, and now the four
   per-sound switches and "only in the background" — and moving those would
   have meant carrying old values over for nothing. What did not exist
   before is under `meldewesen` (app/meldewahl.py): how long a notice
-  stands, and which of the four dots may pulse. The settings page reads
-  both and shows them as one block.
+  stands, the popup switch of each occurrence and which of the four dots may
+  pulse. The settings page reads both and shows them side by side.
 
 */
 
@@ -50,15 +50,20 @@ import { teile } from './texte.svelte.js'
 
 export const SCHLUESSEL = 'meldewesen'
 
-/* What happened, in the four words the rest of the program reports in.
-   `warnung` has no sound of its own — there are three sound files, and a
+/* What happened, in the five words the rest of the program reports in.
+   `agent_cronjob` is the run of an agent or a cronjob that ended well.
+   `warnung` has no sound of its own — there are four sound files, and a
    caution is the one that asks to be read rather than heard. */
-export const VORFAELLE = ['fertig', 'wartet', 'fehler', 'warnung']
+export const VORFAELLE = ['fertig', 'wartet', 'fehler', 'agent_cronjob', 'warnung']
 
-/* Which of the three sounds an occurrence rings, and which kind of toast
+/* Which of the four sounds an occurrence rings, and which kind of toast
    it wears. The toast kinds are the ones Meldungen.svelte already draws. */
-const TON = { fertig: 'fertig', wartet: 'wartet', fehler: 'fehler', warnung: '' }
-const SORTE = { fertig: 'erfolg', wartet: 'hinweis', fehler: 'fehler', warnung: 'warnung' }
+const TON = {
+  fertig: 'fertig', wartet: 'wartet', fehler: 'fehler', agent_cronjob: 'agent_cronjob', warnung: '',
+}
+const SORTE = {
+  fertig: 'erfolg', wartet: 'hinweis', fehler: 'fehler', agent_cronjob: 'erfolg', warnung: 'warnung',
+}
 
 /* The stored names, once — the interface says `agenten`, the stored object
    says `punkt_agenten` (app/meldewahl.py). */
@@ -69,19 +74,26 @@ const FELDER = {
   chat: 'punkt_chat',
 }
 
-/* The same for the three occurrences that can be switched off entirely. */
-const MELDERFELDER = { fertig: 'melde_fertig', wartet: 'melde_wartet', fehler: 'melde_fehler' }
+/* The same for the four occurrences whose popup can be switched off. */
+const MELDERFELDER = {
+  fertig: 'melde_fertig',
+  wartet: 'melde_wartet',
+  fehler: 'melde_fehler',
+  agent_cronjob: 'melde_agent_cronjob',
+}
 
 export const meldewesen = $state({
   /* Seconds a notice stands. 0 is the field's `nullwort` — "Auto" — and
      means: a notice about a job stands until that job has been looked at,
      and everything else keeps the house duration for its kind. */
   popupSekunden: 0,
-  /* Which of the three is reported at all. Off means the WHOLE notice
-     stays away — no text, no sound. One meaning, one switch: a switch
-     called "Failed" that silenced a knock while its message still appeared
-     would be two answers to one question. */
-  melder: { fertig: true, wartet: true, fehler: true },
+  /* No notice card is drawn at all while this is on. It stops the display
+     only: sounds and dots follow their own switches. Shipped off. */
+  popupsAus: false,
+  /* The popup of each of the four: off means its card stays away. Whether
+     it is also heard is the sound switch of the same occurrence
+     (klaenge.svelte.js) — two questions, two switches. */
+  melder: { fertig: true, wartet: true, fehler: true, agent_cronjob: true },
   /* Which dots may pulse. Shipped switched on, like everything else that
      can announce itself. */
   punkte: { agenten: true, cronjob: true, terminal: true, chat: true },
@@ -190,23 +202,30 @@ export function melde(
        — and such a notice reads exactly as it always did. */
     schluessel = '',
     werte = null,
+    /* The first line of a notice that has two: the name of what it is about
+       (a chat), set above the sentence. Empty for every other notice. */
+    heading = '',
   } = {},
 ) {
-  /* A failure is one of the three the settings switch, and it is one
+  /* `stumm` is `melden()` saying it has already rung. Without it a failure
+     would be judged twice — once as an occurrence and once as a toast kind
+     — and two tables would have to agree forever. The sound is asked of
+     `klingen` first and on its own: its switch is not the popup's. */
+  if (!stumm && TON_ZUR_SORTE[art]) klingen(TON_ZUR_SORTE[art])
+  /* A failure is one of the occurrences the settings switch, and it is one
      wherever it comes from — through `melden()` or straight from whoever
      could not save. The other kinds have no switch of their own: a
      confirmation of something the hand just did is not a report about
      something that happened elsewhere. */
   if (art === 'fehler' && !gemeldetWird('fehler')) return 0
-  /* `stumm` is `melden()` saying it has already rung. Without it a failure
-     would be judged twice — once as an occurrence and once as a toast kind
-     — and two tables would have to agree forever. */
-  if (!stumm && TON_ZUR_SORTE[art]) klingen(TON_ZUR_SORTE[art])
+  /* The one place a card enters the list: with the popups switched off none
+     does. The caller gets 0, the same answer a switched-off occurrence gives. */
+  if (meldewesen.popupsAus) return 0
   const id = ++naechsteMeldung
   /* `auftragId` is what lets a notice about a run be closed when that run
      is looked at, rather than by a clock. Empty for everything that is
      about no run in particular. */
-  meldungen.liste.push({ id, text, art, werkzeug, server, auftragId, agent, schluessel, werte })
+  meldungen.liste.push({ id, text, art, werkzeug, server, auftragId, agent, schluessel, werte, heading })
   if (meldungen.liste.length > 3) schliesseMeldung(meldungen.liste[0].id)
   if (!dauerhaft) _uhrStellen(id, dauer || DAUER[art] || 3200)
   return id
@@ -232,6 +251,12 @@ export function aktualisiereMeldung(
      "there was nothing left to change", or its notice silently stops
      appearing for the rest of the run. */
   if (!meldung) return false
+  /* With the popups switched off a card that was already standing is closed
+     at its next rewrite instead of going on with its commentary. */
+  if (meldewesen.popupsAus) {
+    schliesseMeldung(id)
+    return true
+  }
   /* Off means the whole notice stays away, the same rule `melde()` applies
      to a brand-new one — applied here too, because a rewrite into a
      failure is a failure just the same. Closing it rather than leaving the
@@ -265,6 +290,7 @@ export function aktualisiereMeldung(
   if (dauerhaft) {
     clearTimeout(uhren.get(id))
     uhren.delete(id)
+    durations.delete(id)
   } else {
     /* `dauer` beats the kind's own, the same way it does in `melde` — one
        option, one meaning, so a caller that needs its own clock does not
@@ -274,14 +300,37 @@ export function aktualisiereMeldung(
   return true
 }
 
+/* The time each running clock was set to, and the notices whose clock is held
+   while the pointer lies on them: the clock starts anew from its full time
+   when the pointer leaves. */
+const durations = new Map()
+const held = new Set()
+
 function _uhrStellen(id, dauer) {
   clearTimeout(uhren.get(id))
+  uhren.delete(id)
+  durations.set(id, dauer)
+  if (held.has(id)) return
   uhren.set(id, setTimeout(() => schliesseMeldung(id), dauer))
+}
+
+/** The pointer is on the notice: its clock stops until the pointer leaves. */
+export function holdNotice(id) {
+  held.add(id)
+  clearTimeout(uhren.get(id))
+  uhren.delete(id)
+}
+
+/** The pointer has left: a notice that had a clock gets its time again. */
+export function releaseNotice(id) {
+  if (held.delete(id) && durations.has(id)) _uhrStellen(id, durations.get(id))
 }
 
 export function schliesseMeldung(id) {
   clearTimeout(uhren.get(id))
   uhren.delete(id)
+  durations.delete(id)
+  held.delete(id)
   const stelle = meldungen.liste.findIndex((m) => m.id === id)
   if (stelle !== -1) meldungen.liste.splice(stelle, 1)
 }
@@ -290,21 +339,23 @@ export function schliesseMeldung(id) {
 
 /**
  * The one way in. `was` is what happened, `von` who it happened to, `text`
- * the sentence to show, `auftragId` the run it belongs to if there is one.
+ * the sentence to show, `auftragId` the run it belongs to if there is one,
+ * `heading` the name set above the sentence when the notice has two lines.
  *
  * Returns the notice's id, so a caller that wants to rewrite its own
  * notice later can — the same id `melde()` has always returned.
  */
 export function melden({
-  was = 'fertig', von = '', text = '', auftragId = '', agent = '',
+  was = 'fertig', von = '', text = '', auftragId = '', agent = '', heading = '',
 } = {}) {
-  /* Switched off means nothing happens at all — not a quieter version of
-     it. This is the only place that asks, and it asks before anything is
-     drawn or played. */
-  if (!gemeldetWird(was)) return 0
+  /* The sound and the card are two questions with a switch each. The sound
+     is asked first and decides for itself; the popup switch of the same
+     occurrence decides whether a card is drawn at all. */
   if (TON[was]) klingen(TON[was])
-  if (!text) return 0
+  if (!gemeldetWird(was)) return 0
+  if (!text && !heading) return 0
   return melde(text, SORTE[was] ?? 'hinweis', {
+    heading,
     /* The sound is already out; the notice must not ring a second time. */
     stumm: true,
     /* "Auto" with a job behind it means the notice waits for that job to
@@ -398,6 +449,7 @@ export async function meldewesenLaden() {
   const stand = await api.einstellungAufgeloest(SCHLUESSEL).catch(() => null)
   const wert = stand?.wert
   if (wert && typeof wert === 'object') {
+    if (typeof wert.popups_aus === 'boolean') meldewesen.popupsAus = wert.popups_aus
     if (typeof wert.popup_sekunden === 'number') {
       meldewesen.popupSekunden = popupSekundenKlemmen(wert.popup_sekunden)
     }
@@ -415,6 +467,7 @@ function sichern() {
   return api
     .einstellungSetzen('global', SCHLUESSEL, {
       popup_sekunden: meldewesen.popupSekunden,
+      popups_aus: meldewesen.popupsAus,
       ...Object.fromEntries(
         Object.entries(FELDER).map(([name, schluessel]) => [schluessel, meldewesen.punkte[name]]),
       ),
@@ -430,10 +483,19 @@ export async function punktSchalten(welcher, an) {
   await sichern()
 }
 
-/** One of the three occurrences on its own — notice and sound together. */
+/** The popup of one occurrence on its own. */
 export async function melderSchalten(was, an) {
   if (!(was in MELDERFELDER)) return
   meldewesen.melder[was] = an
+  await sichern()
+}
+
+/** The popups switched off or on: no card is drawn while they are off. */
+export async function popupsAusSchalten(an) {
+  meldewesen.popupsAus = an
+  /* Cards that were standing when the switch went on go with it: some of
+     them wait for a run to be looked at and would never leave by themselves. */
+  if (an) for (const meldung of [...meldungen.liste]) schliesseMeldung(meldung.id)
   await sichern()
 }
 

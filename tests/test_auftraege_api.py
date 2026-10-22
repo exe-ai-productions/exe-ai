@@ -2588,13 +2588,13 @@ async def test_ein_gescheiterter_cronjob_meldet_sich_genau_einmal(
     beendet = await _lauf(kette.id)
 
     assert beendet.zustand == "gescheitert"
-    # And it says WHY. The notification used to be "Failed — Water the
+    # And it says WHY. The notification used to be "Failed - Water the
     # plants" and nothing more: the reason existed, in the run's `ende` step,
     # in a step log that only opens for a run still going — so it was written
     # in the same breath it became unreachable. It rides in this same
     # notification now (app/cronmeldung.mit_grund), which is what keeps it at
     # one message rather than two.
-    assert aufrufe == ["Water the plants — Modell antwortet nicht mehr"]
+    assert aufrufe == ["Water the plants - Modell antwortet nicht mehr"]
     assert erfolge == [False]
 
     # --- And once at the failure limit too, which this did not reach -----
@@ -2631,7 +2631,7 @@ async def test_ein_gescheiterter_cronjob_meldet_sich_genau_einmal(
     # does not — this schedule has stopped and will not run again by itself.
     # What the other one carried stands behind it: why the run failed.
     assert aufrufe == [
-        "Post holen — nach 1 fehlgeschlagenen Durchläufen gestoppt — Modell antwortet nicht mehr"
+        "Post holen - nach 1 fehlgeschlagenen Lauf gestoppt - Modell antwortet nicht mehr"
     ]
     assert erfolge == [False]
 
@@ -2777,7 +2777,7 @@ def test_fehlende_berichtsdatei_wird_gemeldet(config, mcp_client_echt, tmp_path)
 
     assert daten["state"] == "fertig"
     status_schritte = [s["inhalt"] for s in daten["schritte"] if s["typ"] == "status"]
-    assert any("Dieser Durchlauf hat keine Datei geschrieben" in s for s in status_schritte)
+    assert any("Dieser Lauf hat keine Datei geschrieben" in s for s in status_schritte)
 
 
 def test_geschriebene_berichtsdatei_wird_nicht_gemeldet(config, mcp_client_echt, tmp_path):
@@ -2808,7 +2808,7 @@ def test_geschriebene_berichtsdatei_wird_nicht_gemeldet(config, mcp_client_echt,
 
     assert daten["state"] == "fertig"
     status_schritte = [s["inhalt"] for s in daten["schritte"] if s["typ"] == "status"]
-    assert not any("Dieser Durchlauf hat keine Datei geschrieben" in s for s in status_schritte)
+    assert not any("Dieser Lauf hat keine Datei geschrieben" in s for s in status_schritte)
 
 
 def test_ohne_schreibwerkzeug_wird_nichts_gemeldet(config, mcp_client_echt, tmp_path):
@@ -2829,7 +2829,7 @@ def test_ohne_schreibwerkzeug_wird_nichts_gemeldet(config, mcp_client_echt, tmp_
 
     assert daten["state"] == "fertig"
     status_schritte = [s["inhalt"] for s in daten["schritte"] if s["typ"] == "status"]
-    assert not any("Dieser Durchlauf hat keine Datei geschrieben" in s for s in status_schritte)
+    assert not any("Dieser Lauf hat keine Datei geschrieben" in s for s in status_schritte)
 
 
 def test_auftrag_ohne_einstellung_bekommt_auto(config, client):

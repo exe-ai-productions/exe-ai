@@ -215,6 +215,25 @@ def isolierte_berechtigungsdatei(tmp_path, monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def no_system_voices(monkeypatch):
+    """No test starts a program of the machine to list or speak its voices.
+
+    The voices of the system come from ``say`` or PowerShell
+    (``app/system_voice.py``); a start of a program from that module fails
+    (the list of voices then stands empty, a piece spoken raises) until a test
+    puts its own runner in."""
+    from app import system_voice
+
+    def refused(*args, **kwargs):
+        raise AssertionError("a test started a program of the system's voices")
+
+    monkeypatch.setattr(system_voice, "programm_laufen", refused)
+    system_voice.forget_voices()
+    yield
+    system_voice.forget_voices()
+
+
 @pytest.fixture
 def db() -> Iterator[Database]:
     """The in-memory database this test writes into — the fixture's own
@@ -313,7 +332,8 @@ def client(config: Config) -> TestClient:
     from app.main import app_erstellen
 
     app = app_erstellen(config)
-    with TestClient(app) as testclient:
+    # The page of the interface goes only to a request that names this machine.
+    with TestClient(app, base_url="http://127.0.0.1") as testclient:
         # Every /api/v1 call needs this run's own session key —
         # carried as a default header so the hundreds of existing tests
         # calling the API directly do not each have to attach it by hand.

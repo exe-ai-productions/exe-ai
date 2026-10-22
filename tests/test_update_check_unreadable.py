@@ -49,11 +49,11 @@ def test_the_skip_layers_field_carries_the_name_of_the_option():
     """The footer names the control that sends a picture to sd-cli by the
     field's label; "Layers" alone said nothing without the field."""
     assert _text("en", "bild.skip_layers") == "Skip layers"
-    assert _text("de", "bild.skip_layers") == "Übersprungene Ebenen"
+    assert _text("de", "bild.skip_layers") == "Übersprungene Schichten"
     # The footer says the field's own label, so the two cannot drift apart.
     assert _text("en", "studio.bildserver_pausiert").format(
         control=_text("en", "bild.skip_layers")
     ) == "Image server pauses for Skip layers"
     assert _text("de", "studio.bildserver_pausiert").format(
         control=_text("de", "bild.skip_layers")
-    ) == "Bild-Server pausiert für Übersprungene Ebenen"
+    ) == "Bild-Server pausiert für Übersprungene Schichten"

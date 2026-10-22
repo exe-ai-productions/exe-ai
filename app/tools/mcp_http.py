@@ -15,9 +15,10 @@ request/response only. An open connection would be needed for a server to
 report changes to its tool list on its own — but the list is captured at
 connect time, so a report would go nowhere.
 
-At this build stage, authentication uses a fixed key from the .env
-(``api_key_env`` on the server entry) as ``Authorization: Bearer``. The
-browser sign-in (OAuth) is the next build step and docks on here.
+A server is reached without a sign-in, with headers of the entry's own
+(a key from the .env goes into any header, ``Authorization: Bearer`` among
+them), or with the access of a browser sign-in (OAuth), which docks on here
+as ``api_key``.
 """
 
 from __future__ import annotations
@@ -36,12 +37,21 @@ from app.tools.mcp_client import (
     PROTOKOLL_VERSION,
     START_TIMEOUT,
     ergebnis_zu_text,
+    start_time_limit_sentence,
     werkzeuge_aus_antwort,
     time_limit_sentence,
 )
 from app.tools.mcp_logo import logo_of
 
 log = logging.getLogger(__name__)
+
+
+def put_header(headers: dict[str, str], name: str, value: str) -> None:
+    """Sets a header, replacing one of the same name in any case: a request
+    carries one header of a name, never two."""
+    for existing in [k for k in headers if k.lower() == name.lower()]:
+        del headers[existing]
+    headers[name] = value
 
 
 class _SitzungVerfallen(Exception):
@@ -64,6 +74,7 @@ class MCPHttpClient:
         name: str,
         url: str,
         api_key: str | None = None,
+        headers: dict[str, str] | None = None,
         timeout: float = CALL_TIMEOUT,
         transport: httpx.AsyncBaseTransport | None = None,
         token_erneuern=None,
@@ -71,6 +82,9 @@ class MCPHttpClient:
         self.name = name
         self.url = url
         self.api_key = api_key
+        # Headers of the entry's own, with every request: where a server
+        # wants its key (``X-Goog-Api-Key``) or sets its own Bearer.
+        self.headers = headers or {}
         # What one tool call may take, as a whole. The start keeps
         # ``START_TIMEOUT``.
         self.timeout = timeout
@@ -105,7 +119,12 @@ class MCPHttpClient:
         self._client = httpx.AsyncClient(
             timeout=START_TIMEOUT, transport=self._transport
         )
-        antwort = await self._initialisieren()
+        try:
+            antwort = await self._initialisieren()
+        except (asyncio.TimeoutError, httpx.TimeoutException):
+            raise MCPFehler(
+                start_time_limit_sentence(self.name, "initialize", START_TIMEOUT)
+            ) from None
         log.info(
             "MCP server '%s' connected (http): %s",
             self.name,
@@ -119,6 +138,11 @@ class MCPHttpClient:
         )
         try:
             self.werkzeuge = await self._werkzeuge_holen()
+        except (asyncio.TimeoutError, httpx.TimeoutException):
+            logo.cancel()
+            raise MCPFehler(
+                start_time_limit_sentence(self.name, "tools/list", START_TIMEOUT)
+            ) from None
         except BaseException:
             logo.cancel()
             raise
@@ -164,16 +188,16 @@ class MCPHttpClient:
     # --- JSON-RPC over HTTP ----------------------------------------------
 
     def _koepfe(self) -> dict[str, str]:
-        koepfe = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-        }
+        # The protocol's own headers win over the entry's.
+        koepfe = dict(self.headers)
+        put_header(koepfe, "Content-Type", "application/json")
+        put_header(koepfe, "Accept", "application/json, text/event-stream")
         if self._protokoll:
-            koepfe["MCP-Protocol-Version"] = self._protokoll
+            put_header(koepfe, "MCP-Protocol-Version", self._protokoll)
         if self._sitzung:
-            koepfe["Mcp-Session-Id"] = self._sitzung
+            put_header(koepfe, "Mcp-Session-Id", self._sitzung)
         if self.api_key:
-            koepfe["Authorization"] = f"Bearer {self.api_key}"
+            put_header(koepfe, "Authorization", f"Bearer {self.api_key}")
         return koepfe
 
     def _anmeldefehler(self, status: int) -> MCPFehler:

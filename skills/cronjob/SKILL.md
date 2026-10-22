@@ -1,5 +1,5 @@
 ---
-description: Schedules future actions: one-off reminders ("remind me in 10 minutes", "Friday at nine"), recurring jobs, scheduled scripts, or monitoring that reports only when the specified event occurs.
+description: 'Schedules future actions: one-off reminders ("remind me in 10 minutes", "Friday at nine"), recurring jobs, scheduled scripts, or monitoring that reports only when the specified event occurs.'
 auto: true
 ---
 

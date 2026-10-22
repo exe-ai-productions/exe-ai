@@ -26,7 +26,7 @@ MODEL = "model-of-this-test"
 def ctx(client: TestClient, tmp_path: Path) -> Context:
     """The commands, talking to the service of this test through its own
     test client."""
-    service = ServiceClient("http://testserver", "en", http=client)
+    service = ServiceClient("http://127.0.0.1", "en", http=client)
     service.connect()
     ctx = Context(client=service, texts=Texts("en"), prefs_path=tmp_path / "cli.json")
     ctx.screen = Shown(ctx)

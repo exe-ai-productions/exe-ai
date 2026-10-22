@@ -188,7 +188,8 @@ Header = tuple[dict[bytes, int | float | bool | str], list[tuple[bytes, list[int
 
 
 def _walk_header(
-    datei, types: dict[int, int] | None = None, end: int | None = None
+    datei, types: dict[int, int] | None = None, end: int | None = None,
+    with_template: bool = False,
 ) -> Header | None:
     """The whole header: every metadata key and every tensor entry, never
     the tensor data behind it — the way llama.cpp itself reads one before it
@@ -204,6 +205,8 @@ def _walk_header(
     collects how many weights each ggml type holds. ``end`` is the file's
     size when ``datei`` holds only the front of a file that lives elsewhere
     (``bildinhalt.header_from_bytes``); otherwise it is read from the file.
+    ``with_template`` also keeps the chat template, which is long text and
+    read only by the one question that asks for it (``chat_template``).
     """
     end = _file_end(datei) if end is None else end
     counts = _header_counts(datei)
@@ -220,7 +223,11 @@ def _walk_header(
             return None
         seen.add(key)
         kind = _u32(datei)
-        if _wanted(key):
+        if with_template and key == CHAT_TEMPLATE_SCHLUESSEL and kind == _ZEICHENKETTE:
+            # Text a person edits, but stored with no encoding check: a byte
+            # that is not UTF-8 must not make the whole header unreadable.
+            values[key] = _raw_string(datei, end).decode("utf-8", errors="replace")
+        elif _wanted(key):
             values[key] = _wert_lesen(datei, kind, end)
         else:
             _wert_ueberspringen(datei, kind, end)
@@ -352,7 +359,27 @@ ARCHITEKTUR_SCHLUESSEL = b"general.architecture"
 # The flag a vision projector file (mmproj) carries: the weights of a
 # vision encoder, which a text encoder of the same architecture lacks.
 SEHTEIL_SCHLUESSEL = b"clip.has_vision_encoder"
+# The Jinja chat template a model file carries, as text.
+CHAT_TEMPLATE_SCHLUESSEL = b"tokenizer.chat_template"
 _FIRST_LAYER_TENSOR = b"blk.0.attn_norm.weight"
+
+
+def chat_template(pfad: Path) -> str | None:
+    """The chat template the GGUF file at ``pfad`` carries, or None when it
+    has none or is not a whole, sane GGUF header. A file that cannot be read
+    right now raises ``OSError``."""
+    with open(pfad, "rb") as datei:
+        try:
+            header = _walk_header(datei, with_template=True)
+        except OSError:
+            raise
+        except Exception:
+            return None
+    if header is None:
+        return None
+    vorlage = header[0].get(CHAT_TEMPLATE_SCHLUESSEL)
+    return vorlage if isinstance(vorlage, str) and vorlage.strip() else None
+
 
 def dateiart(pfad: Path) -> str | None:
     """BEIFAHRER, MODELL, or None when the header does not say.

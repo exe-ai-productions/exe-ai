@@ -2,8 +2,10 @@
 
 The same three questions the model server answers — what is there, is it
 running, start and stop it — and deliberately nothing more. It is a small
-service with one job, so it needs no context size, no layer count, no draft
-model, no projector.
+service with one job, so it needs no draft model and no projector; how it
+runs (the window, the batch size, the pooling kind, the layers, the threads,
+the memory lock and the parallel requests) is stored with the file and the
+port and travels with the start.
 
 Its own route rather than a mode of the runner route next door: the two
 servers must be startable independently, and a shared route is exactly how
@@ -23,7 +25,7 @@ from app.db import Repositories
 from app.api.v1.runner import Modelldatei, ProgramState, _fehler, program_state
 from app.config import Config
 from app.einbettung import modelle as einbettungsmodelle
-from app.einbettungsserver import STAPEL
+from app.einbettungsserver import start_flags
 from app.i18n import t
 from app.modellrunner import RunnerFehler
 from app.ordner_oeffnen import OeffnenNichtMoeglich, ordner_oeffnen
@@ -36,6 +38,9 @@ class Auskunft(ProgramState):
     modelle: list[Modelldatei]
     laeuft: bool
     modell: str | None = None
+    # What a start would load: the stored choice, apart from `modell`, which
+    # stays the file that runs. None where nothing is chosen.
+    selected_model: str | None = None
     port: int | None = None
     # Live resident memory of the running server, for the machine head's sum
     # — the same measurement the runner already keeps for itself.
@@ -43,6 +48,19 @@ class Auskunft(ProgramState):
     # The architecture the last start failed on because the server's build
     # does not know it.
     unknown_architecture: str | None = None
+    # How the next start runs, as stored (or as shipped): the window, the
+    # batch size, the pooling kind ("" is the model's own), the layers (None:
+    # the engine's auto), the CPU threads (0: the engine decides), the memory
+    # lock, the parallel requests (None: auto) and the idle time in minutes
+    # (None: never).
+    context: int
+    batch: int
+    pooling: str
+    layers: int | None = None
+    threads: int
+    mlock: bool
+    parallel: int | None = None
+    idle_minutes: int | None = None
 
 
 class Start(BaseModel):
@@ -58,7 +76,6 @@ def _runner(request: Request):
 
 def _auskunft(request: Request, config: Config) -> Auskunft:
     runner = _runner(request)
-    lauf = runner.lauf()
     # The same list, in the same order, the folder's own reader answers
     # with (app/einbettung.py `modell_finden`): the picker's first entry is
     # the file the in-process path would reach for. Every size is read from
@@ -76,16 +93,27 @@ def _auskunft(request: Request, config: Config) -> Auskunft:
     # Idle, the window shows what is stored for the next start (the file,
     # while it is still in the folder, and the port); running, what runs.
     gespeichert = embedding_start_choice.wahl(request.app.state.repositories)
+    idle_port = gespeichert["port"] or runner.port_vorgabe
+    lauf = runner.shown_run(idle_port)
     gewaehlt = gespeichert["model"] if gespeichert["model"] in {m.name for m in modelle} else None
     return Auskunft(
         **program_state(runner, request.app.state.config),
         ordner=str(ordner),
         modelle=modelle,
-        laeuft=runner.laeuft(),
+        laeuft=lauf is not None,
         modell=lauf.modell if lauf else gewaehlt,
-        port=lauf.port if lauf else (gespeichert["port"] or runner.port_vorgabe),
+        selected_model=gewaehlt or (modelle[0].name if modelle else None),
+        port=lauf.port if lauf else idle_port,
         belegt_gb=runner.belegt_gb(),
         unknown_architecture=runner.unknown_architecture(),
+        context=gespeichert["context"],
+        batch=gespeichert["batch"],
+        pooling=gespeichert["pooling"],
+        layers=gespeichert["layers"],
+        threads=gespeichert["threads"],
+        mlock=gespeichert["mlock"],
+        parallel=gespeichert["parallel"],
+        idle_minutes=gespeichert["idle_minutes"],
     )
 
 
@@ -109,12 +137,22 @@ def starten(
 ) -> Auskunft:
     # The request's port, else the one stored with the file choice
     # (app/embedding_start_choice.py), else the server's own.
-    port = daten.port or embedding_start_choice.wahl(repositories)["port"]
+    werte = embedding_start_choice.startwerte(repositories)
+    port = daten.port or werte["port"]
     try:
         # The window travels as a start value, not as an extra flag — one
         # `--ctx-size` on the command line, written by the one place that
-        # writes command lines.
-        _runner(request).starten(daten.modell, port=port, kontext=STAPEL)
+        # writes command lines. The batch size and the pooling kind are the
+        # words of this start alone; threads, memory lock and parallel
+        # requests go the way the model server's levers go.
+        _runner(request).starten(
+            daten.modell,
+            port=port,
+            kontext=werte["kontext"],
+            schichten=werte["schichten"],
+            fein=werte["fein"],
+            extra_flags=start_flags(werte["batch"], werte["pooling"]),
+        )
     except RunnerFehler as fehler:
         raise _fehler(fehler.grund, sprache) from None
     # Deliberately NOT registered with the discovery: this server answers
@@ -124,7 +162,15 @@ def starten(
 
 
 @router.post("/stop", response_model=Auskunft, summary="Stop the embedding server")
-def stoppen(request: Request, config: Config = Depends(hole_config)) -> Auskunft:
+def stoppen(
+    request: Request,
+    config: Config = Depends(hole_config),
+    sprache: str = Depends(hole_sprache),
+) -> Auskunft:
+    try:
+        _runner(request).refuse_stop_when_shared()
+    except RunnerFehler as fehler:
+        raise _fehler(fehler.grund, sprache) from None
     _runner(request).stoppen()
     return _auskunft(request, config)
 

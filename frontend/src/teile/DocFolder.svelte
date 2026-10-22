@@ -22,8 +22,9 @@
      beside its name in the reader.
 
      Every tile shows its file: a picture itself, a text file its first
-     lines as text (in the browser as in the app), everything else the
-     preview the app shell draws (a PDF's first page) or, where there is
+     lines as text (in the browser as in the app), a PDF its first page
+     (drawn by the page itself with pdf.js, in the app as in the browser),
+     everything else the preview the app shell draws or, where there is
      none, the page sign with the folded corner.
 
      A file dropped on the folder goes onto the dock — in a chat into that
@@ -32,15 +33,18 @@
      its file in the reader (Bildschau.svelte). */
   import { untrack } from 'svelte'
   import { api } from '../lib/api.js'
+  import { pollWithoutOverlap } from '../lib/pollWithoutOverlap.js'
   import { docFolderFilters as filters, ORIGINS } from '../lib/docFolderFilters.svelte.js'
   import { neuigkeit } from '../lib/ereignisstrom.svelte.js'
   import { shellPreview, shellPreviews } from '../lib/thumbnails.js'
+  import { pdfFirstPage } from '../lib/pdfDocument.js'
   import { agentName } from '../lib/agentmarke.js'
   import { t } from '../lib/texte.svelte.js'
   import { frage, laufVon, melde, zustand } from '../lib/zustand.svelte.js'
   import { bildZeigen, showPage } from '../lib/bildschau.svelte.js'
   import { dateiart } from '../lib/dateiarten.js'
   import { fileStart } from '../lib/fileStart.js'
+  import { breakPoints } from '../lib/breakPoints.js'
   import Agentenmarke from './Agentenmarke.svelte'
   import Hauszeichen from './Hauszeichen.svelte'
   import Speicherortzeile from './Speicherortzeile.svelte'
@@ -101,14 +105,36 @@
      for the previous one is still on its way must not let that answer land
      last and show the other chat's files. */
   let asked = 0
+  /* Which question the wall below has an answer to, and which one failed: the
+     wall says "empty" only for a question that was answered empty, and shows
+     the tiles of no other. Until the answer for the open chat and the choices
+     is in, it says it is loading; a refused question leaves it without a
+     sentence, as the red notice says why. */
+  const questionKey = $derived(chat ? `chat:${chat}` : `list:${project}|${origin}`)
+  let answeredKey = $state('')
+  let failedKey = $state('')
+  const wallState = $derived(
+    answeredKey === questionKey ? 'answered' : failedKey === questionKey ? 'failed' : 'loading',
+  )
   async function load(quiet = false) {
     const ask = ++asked
+    const key = untrack(() => questionKey)
     try {
       const answer = await api.docFolder(chat ? { chat } : { project, origin })
-      if (ask === asked) files = answer
+      if (ask === asked) {
+        files = answer
+        answeredKey = key
+      }
     } catch (error) {
-      if (quiet || ask !== asked) return
+      if (ask !== asked) return
+      // A quiet question that fails says nothing — but a wall that has no
+      // answer yet must not go on saying "loading" for ever.
+      if (quiet) {
+        if (answeredKey !== key) failedKey = key
+        return
+      }
       files = []
+      failedKey = key
       melde(error.message, 'fehler')
     }
   }
@@ -144,8 +170,7 @@
   )
   $effect(() => {
     if (!running) return
-    const clock = setInterval(() => load(true), 3000)
-    return () => clearInterval(clock)
+    return pollWithoutOverlap(() => load(true), 3000)
   })
 
   /* And once more when the chat's answer is over. A job's ending comes down
@@ -164,22 +189,30 @@
     return (file.type || '').startsWith('image/')
   }
 
-  /* The one type the reader shows in a frame: the browser's own viewer
-     draws its pages, as for the card in a chat. */
+  /* The one type the reader draws page by page (pdf.js, as in the card of a
+     chat). */
   function isPdf(file) {
     return (file.type || '').toLowerCase() === 'application/pdf'
   }
 
-  /* The shell's preview for everything the page cannot draw itself
+  /* A PDF's tile is its first page, drawn by the page itself with pdf.js
+     (lib/pdfDocument.js), in the app and in a browser alike. The shell's
+     preview serves everything else the page cannot draw itself
      (lib/thumbnails.js keeps them for the session and asks a few at a
      time); an answer of nothing leaves the page sign. */
   async function preview(file, size) {
     const key = `${file.path}|${size.width}`
-    if (!shellPreviews() || !file.path || isPicture(file) || isText(file) || key in previews) return
+    if (!file.path || isPicture(file) || key in previews) return
+    // The library and the shell take a whole address, never a path of the page's own.
+    const address = () => new URL(api.docFolderAddress(file.path), location.href).href
+    if (isPdf(file)) {
+      previews = { ...previews, [key]: '' }
+      previews = { ...previews, [key]: await pdfFirstPage(key, address(), size.width) }
+      return
+    }
+    if (!shellPreviews() || isText(file)) return
     previews = { ...previews, [key]: '' }
-    // The shell takes a whole address, never a path of the page's own.
-    const address = new URL(api.docFolderAddress(file.path), location.href).href
-    const image = await shellPreview(key, address, file.name, size)
+    const image = await shellPreview(key, address(), file.name, size)
     previews = { ...previews, [key]: image }
   }
 
@@ -229,7 +262,7 @@
   function originOf(file) {
     return file.origin === 'user'
       ? t('docfolder.by_you')
-      : t('docfolder.by_agent', { agent: agentName(file.agent) || '—' })
+      : t('docfolder.by_agent', { agent: agentName(file.agent) || '-' })
   }
   function originLine(file) {
     const who = originOf(file)
@@ -252,8 +285,8 @@
   /* --- opening -------------------------------------------------------- */
 
   /* What the reader can set as text: a text type, or a kind of file the
-     program knows how to show. The rest — a PDF, an office file — is shown
-     as the shell's picture of it, or the page sign. */
+     program knows how to show. The rest — an office file — is shown as the
+     shell's picture of it, or the page sign; a PDF is drawn page by page. */
   const TEXT_TYPES = /^(text\/|application\/(json|xml|yaml|x-yaml))/
   const TEXT_ENDINGS = new Set(['txt', 'log', 'ini', 'toml', 'py', 'js', 'ts', 'sh', 'css'])
   function endingOf(file) {
@@ -474,7 +507,11 @@
   {/if}
 
   <div class="rollen">
-    {#if files.length}
+    {#if wallState === 'loading'}
+      <div class="tilewall"><p class="leer">{t('bilder.laedt')}</p></div>
+    {:else if wallState === 'failed'}
+      <div class="tilewall"></div>
+    {:else if files.length}
       <div class="tilewall">
         {#each files as file, n (file.source + file.id)}
           <div class="karte">
@@ -523,7 +560,7 @@
                 aria-label={t('agenten.ablage_weg')}
               >✕</button>
             {/if}
-            <span class="name" title={file.name}>{file.name}</span>
+            <span class="name" title={file.name}><span>{#each breakPoints(file.name) as part}{part}<wbr />{/each}</span></span>
           </div>
         {/each}
       </div>
@@ -730,7 +767,7 @@
     height: 28px;
     color: var(--text);
   }
-  /* The shell's picture of a file's first page is the tile's face, not a
+  /* The picture of a file's first page is the tile's face, not a
      picture of its own: it takes no pointer, so a right click on it lands on
      the tile and the menu offers no "save image" for what is a page of a
      document. The tile of a real picture keeps its image as it was. */
@@ -791,7 +828,7 @@
      invisible control that deletes the file, and a touch screen has no
      hover at all — the same two rules the job rows carry (ModulAgenten). */
   .weg:focus-visible { opacity: 1; }
-  @media (hover: none) {
+  @media (hover: none), (any-pointer: coarse) {
     .weg { opacity: 1; }
   }
   .weg:hover { color: var(--rot); }

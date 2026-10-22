@@ -1,186 +1,176 @@
 <p align="center">
-  <img src="docs/site/wordmark.svg" width="601" alt="Exe AI — AI systems reimagined.">
+  <a href="https://exe-hq.net">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/site/hero-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/site/hero-light.svg">
+    <img src="docs/site/hero-light.svg" width="480" alt="Exe AI: AI systems reimagined.">
+  </picture>
+  </a>
 </p>
+
 <p align="center"><b>Your models. Your machine.</b></p>
+
 <p align="center">
-  An AI workspace that brings your entire workflow into one window.<br>
-  Work with text, documents, images and voice in a thoughtfully designed app<br>
-  that stores your data locally.
+  A local-first AI workspace for macOS and Windows. Chat with local or cloud models,<br>
+  generate images and let agents work on a schedule, while your data stays on your own computer.
 </p>
-<p align="center"><b>This is Exe AI.</b></p>
+
 <p align="center">
-  <a href="https://github.com/exe-ai-productions/exe-ai/releases/latest"><b>Download for macOS and Windows</b></a>
+  <a href="https://exe-hq.net"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/site/download-macos-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/site/download-macos-light.svg"><img src="docs/site/download-macos-light.svg" height="36" alt="Download for macOS"></picture></a>
+  &nbsp;
+  <a href="https://exe-hq.net"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/site/download-windows-dark.svg"><source media="(prefers-color-scheme: light)" srcset="docs/site/download-windows-light.svg"><img src="docs/site/download-windows-light.svg" height="36" alt="Download for Windows"></picture></a>
 </p>
+
 <p align="center">
-  <a href="https://github.com/exe-ai-productions/exe-ai/releases/latest"><img src="https://img.shields.io/github/v/release/exe-ai-productions/exe-ai?style=flat-square&amp;label=release&amp;labelColor=1a1a18&amp;color=7d6cba" alt="Latest release"></a>
-   <img src="https://img.shields.io/badge/macOS-available-b1a687?style=flat-square&amp;labelColor=1a1a18" alt="macOS: available">
-   <img src="https://img.shields.io/badge/Windows-available-b1a687?style=flat-square&amp;labelColor=1a1a18" alt="Windows: available">
-   <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-PolyForm%20NC%201.0.0-8f8e86?style=flat-square&amp;labelColor=1a1a18" alt="License: PolyForm Noncommercial 1.0.0"></a>
+  <a href="https://exe-hq.net">Website</a>
+  &nbsp;·&nbsp;
+  <a href="https://exe-hq.net/help/">Help</a>
+  &nbsp;·&nbsp;
+  <a href="https://exe-hq.net/docs/">Docs</a>
 </p>
-<p align="center"><img src="docs/site/trenner.svg" width="100%" alt=""></p>
+
 <p align="center">
-  Download a model, start a chat, give your agents tools and schedule their work —<br>
-  all without a terminal or configuration files. Local models are the default.<br>
-  Connect a cloud provider with an API key whenever you choose.
+  <a href="https://github.com/exe-ai-productions/exe-ai/releases/latest"><img src="https://img.shields.io/github/v/release/exe-ai-productions/exe-ai?style=flat-square&amp;label=release&amp;labelColor=1a1a18&amp;color=8f8e86" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/macOS-available-2ea043?style=flat-square&amp;labelColor=1a1a18" alt="macOS: available">
+  <img src="https://img.shields.io/badge/Windows-available-2ea043?style=flat-square&amp;labelColor=1a1a18" alt="Windows: available">
+  <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-PolyForm%20NC%201.0.0-8f8e86?style=flat-square&amp;labelColor=1a1a18" alt="License: PolyForm Noncommercial 1.0.0"></a>
 </p>
-<p align="center"><img src="docs/site/trenner.svg" width="100%" alt=""></p>
 
-<h2><img src="docs/site/h-what-it-does.svg" height="36" alt="What it does"></h2>
+<p align="center">
+  <img src="docs/screens/chat.webp" width="100%" alt="The Exe AI window with the thinking menu open and the CLI tab beside the chat">
+</p>
 
-<table>
-  <tbody><tr>
-    <td width="50%" valign="top">
-      <p><b>Local models, end to end</b></p>
-      <p>Browse a curated GGUF catalogue matched to your computer's memory, or search Hugging Face. Download a model with one click and run it with the built-in <code>llama-server</code>. Download, start, chat — no shell or scripts required.</p>
-    </td>
-    <td width="50%" valign="top">
-      <p><b>Images and video, generated locally</b></p>
-      <p>Create images, edit existing pictures and generate video in the image workspace with compatible local models, powered by stable-diffusion.cpp. Adjust generation settings, combine LoRAs, work with masks and keep your results in the gallery. Available workflows depend on the selected model. Video generation is still experimental.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <p><b>Context compression — in development</b></p>
-      <p>Exe AI uses its own approach to context compression: it first reduces older tool output, then summarises the middle of the conversation when needed, keeping the opening and recent messages. The original chat remains readable. This feature is still in development.</p>
-    </td>
-    <td width="50%" valign="top">
-      <p><b>A memory that grows with you</b></p>
-      <p>Keep rules and facts for future conversations in an editable local memory file. Memory is enabled by default for the models Exe AI runs itself and is shared with other servers and cloud models only if you enable that option.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <p><b>Agents, jobs and schedules</b></p>
-      <p>Define reusable agents in Markdown files with front matter. Run them from a chat or on a schedule, with progress updates and reports. Schedule agents, scripts or reminders, and view past runs and upcoming work in a calendar.</p>
-    </td>
-    <td width="50%" valign="top">
-      <p><b>Tools with adjustable permissions</b></p>
-      <p>Use built-in tools or connect MCP servers. Choose Auto, Manual or Restricted to control approval requests. Allow a tool to run once, or save a permission that applies across chats and agent runs.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <p><b>It knows who it works for</b></p>
-      <p>On first launch, enter your name, choose your language and select a look for the app. New chats then greet you by name. A single switch turns name-based personalisation off throughout the app.</p>
-    </td>
-    <td width="50%" valign="top">
-      <p><b>Two languages, original logos</b></p>
-      <p>Switch between English and German while using the app. The interface and error messages use your selected language. Model catalogue cards display original vector logos from the model providers.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <p><b>Dictation, with live text</b></p>
-      <p>Dictate into the chat and see a provisional transcript as you speak. Optional text clean-up runs through a small clean-up model or a model you choose. Send the result yourself, or enable automatic sending when dictation ends.</p>
-    </td>
-    <td width="50%" valign="top">
-      <p><b>A voice assistant you can talk to</b></p>
-      <p>Have a spoken conversation with automatic pause detection. With speech output enabled, hear replies sentence by sentence as they are generated. Speech recognition and speech output run locally; the conversation uses your chosen chat model.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <p><b>Projects that keep your work together</b></p>
-      <p>Group chats into projects and share working folders across their conversations. Archive individual chats or entire projects when you are done.</p>
-    </td>
-    <td width="50%" valign="top">
-      <p><b>Your files, together</b></p>
-      <p>Find uploaded documents and files delivered by agents in one place. View the current chat’s files, browse across projects from the start page and drag documents into a conversation.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <p><b>Reusable skills</b></p>
-      <p>Run a skill with a slash command, let the assistant select eligible skills automatically, or create and edit your own instructions in the app.</p>
-    </td>
-    <td width="50%" valign="top">
-      <p><b>Helpers for individual tasks</b></p>
-      <p>Let the assistant delegate a task to a helper without creating an agent file first. Follow its progress and receive its report in the conversation.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <p><b>See the work as it happens</b></p>
-      <p>Follow live command output and tool activity beside the chat. Preview generated HTML and SVG, inspect tables and download results without leaving the conversation.</p>
-    </td>
-    <td width="50%" valign="top">
-      <p><b>Documents with clear context limits</b></p>
-      <p>Attach PDFs, text files or source files. Documents are included in full when they fit the available document budget. Larger files stay available for targeted reading through tools, and the interface shows when they are too large for the context.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <p><b>Updates itself</b></p>
-      <p>At startup, the app checks for a newer release, shows what is new and installs it with a click.</p>
-    </td>
-    <td width="50%" valign="top">
-      <p><b>One app, two systems</b></p>
-      <p>The same app with the same features is available for macOS (Apple Silicon) and Windows (x64); keyboard shortcut labels match your operating system.</p>
-    </td>
-  </tr>
-</tbody></table>
-<p align="center"><img src="docs/site/trenner.svg" width="100%" alt=""></p>
+<p align="center">
+  <a href="#at-a-glance">At a glance</a>
+  &nbsp;·&nbsp;
+  <a href="#features">Features</a>
+  &nbsp;·&nbsp;
+  <a href="#quick-start">Quick start</a>
+  &nbsp;·&nbsp;
+  <a href="#terminal-client">Terminal client</a>
+  &nbsp;·&nbsp;
+  <a href="#privacy">Privacy</a>
+  &nbsp;·&nbsp;
+  <a href="#help-and-community">Help and community</a>
+  &nbsp;·&nbsp;
+  <a href="#license">License</a>
+</p>
 
-<h2><img src="docs/site/h-five-worlds.svg" height="36" alt="One program, five worlds"></h2>
+## At a glance
 
-Choose one of five skins — **Exe**, **Pearl**, **Dark Matter**, **Heaven** or **Moune** — to change the look of the entire interface, including the frame, lines, chat bubbles and code blocks.
+- **Local models, end to end.** Download a model from a curated catalog or from Hugging Face and run it with the built-in `llama-server`. No shell, no scripts, no configuration files.
+- **Cloud when you choose.** Connect Anthropic, OpenAI or an OpenAI-compatible endpoint with an API key.
+- **Images and video, generated locally** with stable-diffusion.cpp.
+- **Agents and schedules** that run from a chat or on their own.
+- **Tools under your control**, including MCP servers, with three permission modes.
+- **On your phone and in your terminal**, through the same local service as the app.
 
-Choose a code colour scheme — Exe, Tokyo Night, One Light, GitHub, GitHub Dark, Dracula, Nord, Solarized Light or Solarized Dark — and customise your chat bubble colour. The text automatically switches between light and dark to stay readable. You can also customise the frame gradient.
+## Features
 
-<p align="center"><img src="docs/site/trenner.svg" width="100%" alt=""></p>
+### Exe AI on your phone
 
-<h2><img src="docs/site/h-models.svg" height="36" alt="Models"></h2>
+On a phone or tablet, or in a window narrower than 600 pixels, Exe AI switches to a view designed for touch. Chat with attachments from the camera, your photos or your files, start and stop servers, search the catalog, track downloads, work in the Images area, and change settings and schedules. The phone view uses the Exe, Pearl or Snow design. [Set it up](https://exe-hq.net/docs/#docs/network) in a few steps and add it to your home screen.
 
-The curated catalogue brings together models from the open model ecosystem. Before being added, each model was tested for startup, tool use and, where supported, image input. Use the built-in llama.cpp runner for full compatibility.
+<p align="center">
+  <img src="docs/screens/phone.png" width="300" alt="The agents page of Exe AI on a phone">
+</p>
 
-Already running a model server? Connections to **oMLX** and **LM Studio** have been tested. You can also connect to Anthropic, OpenAI or an OpenAI-compatible endpoint using an API key.
+### Exe AI in the menu bar
 
-The speech catalogue includes **Qwen3-ASR** and **Voxtral** for local speech recognition, plus **Qwen3-TTS** for speech output. Recognition runs through `llama-server`; speech output uses `llama-tts`, with optional voice samples.
+When you close the window, Exe AI keeps running with an icon in the menu bar, or in the notification area on Windows. The icon shows whether the service is responding, and its menu opens the window, stops the service or quits the app. With the window closed, press Cmd+Shift+M (Ctrl+Shift+M on Windows) to open a new one and start dictating right away.
 
-<p align="center"><img src="docs/site/trenner.svg" width="100%" alt=""></p>
+### A chat client for the terminal
 
-<h2><img src="docs/site/h-tools.svg" height="36" alt="Tools with adjustable permissions"></h2>
+The `exe` command brings your chats, models, servers, agents and schedules to the terminal and uses the same service as the app. A CLI tab in the right-hand column runs it inside the window. The terminal client is still in development; its [commands](https://exe-hq.net/docs/#cli/cli-commands) are on our website.
 
-Share your own working folders or let the chat use its own workspace. Choose how tools can act:
+<p align="center">
+  <img src="docs/screens/terminal.png" width="100%" alt="The CLI tab in the right-hand column of the window">
+</p>
 
-- **Auto** — tools run without routine approval prompts, including access outside the working folders.
-- **Manual** — file and command tools can work within the working folders without asking. Access outside them and other tool calls generally require approval.
-- **Restricted** — approval is also required for file and command operations within the working folders.
+### Agents, jobs and schedules
 
-A fresh installation starts in Manual mode but asks for approval only for file and command access outside the working folders; other tools run without asking until you choose a mode yourself.
+Define reusable agents in Markdown files with front matter. Run them from a chat or on a schedule, with progress updates and reports. Schedule agents, scripts or reminders, and see past runs and upcoming work in a calendar. For a one-off task, the assistant can hand the work to a helper that needs no agent file and report back in the conversation.
 
-These are the mode defaults. Explicit tool rules and MCP confirmation settings can change when approval is required. The middle mode is labelled **Sandboxed** in the agent settings.
+Unattended agents refuse actions that require approval. Agents started from a chat can send approval requests back to that conversation.
 
-Choose **Always allow** to save a permission for the entire tool across all chats and agent runs, not just the current file or command. You can revoke saved permissions. Commands matching the built-in blocked shell patterns remain blocked in every mode.
+<p align="center">
+  <img src="docs/screens/agents.webp" width="49%" alt="The agents window">
+  <img src="docs/screens/schedules.webp" width="49%" alt="Schedules in the calendar view">
+</p>
 
-Unattended agents refuse actions that require approval. Agents running from a chat can send approval requests back to that conversation.
+### Tools and MCP
 
-Connect additional tools through **MCP**: Notion, GitHub, Figma, Gmail, Recraft, Hugging Face or your own server. Tool output is treated as **data, not instructions**, including content retrieved from web pages.
+Use the built-in tools or connect MCP servers such as Notion, GitHub, Figma, Gmail, Recraft, Hugging Face or your own. A single sheet covers every way to connect: an API key in a header, a sign-in through the browser, or your own app, with its redirect URL ready to copy. Tool output, including content retrieved from web pages, is treated as data, not as instructions.
 
-<p align="center"><img src="docs/site/trenner.svg" width="100%" alt=""></p>
+Share your working folders, or let a chat use a workspace of its own. Then choose how much the tools may do without asking:
 
-<h2><img src="docs/site/h-privacy.svg" height="36" alt="Built for privacy"></h2>
+- **Auto**: tools run without routine approval prompts, including access outside the working folders.
+- **Manual**: file and command tools work within the working folders without asking. Access outside them and other tool calls generally require approval.
+- **Restricted**: file and command operations within the working folders require approval as well.
 
-- The service listens on **127.0.0.1**. Chats, settings, keys and models are stored locally, in files and a SQLite database.
-- API keys are stored in a local file with restricted permissions and are never displayed again. The interface receives only a status indicating *whether* a key has been set.
-- Saved memories are shared with cloud providers only if you enable that option. Your name is sent with each conversation, including to cloud providers, as long as name-based personalisation is on.
-- Models are downloaded directly from huggingface.co. Model searches go through the local service, so your browser does not contact Hugging Face directly for search requests.
-- The model server receives a new key each time it starts. The app also protects its API with a key generated for each session and rejects cross-origin write requests from web pages.
+How approvals, saved permissions and blocked commands work is described under [Permissions](https://exe-hq.net/docs/#docs/permissions).
 
-<p align="center"><img src="docs/site/trenner.svg" width="100%" alt=""></p>
 
-<h2><img src="docs/site/h-quick-start.svg" height="36" alt="Quick start"></h2>
+### Local models
+
+Browse a curated GGUF catalog matched to your computer's memory, or search Hugging Face. Every model in the catalog has been tested for startup, tool use and, where supported, image input. Its card shows the provider's original logo. Download a model with one click and run it with the built-in llama.cpp runner. Each server page shows its speed in tokens per second, and an overview lists every local server with its state, port, model and memory.
+
+Already running a model server? Connections to **oMLX** and **LM Studio** have been tested. The speech catalog adds **Qwen3-ASR** and **Voxtral** for local speech recognition and **Qwen3-TTS** for speech output, with optional voice samples. Out of the box, Exe AI speaks with a voice of your system, and any voice model in GGUF format works as well.
+
+<p align="center">
+  <img src="docs/screens/catalog.webp" width="100%" alt="The model catalog">
+</p>
+
+### Images and video
+
+Create and edit images and generate video with compatible local models, powered by stable-diffusion.cpp. Adjust the generation settings, combine LoRAs, paint masks and keep your results in the gallery. The Images area keeps its own picture, mask and model, separate from your chats. The available workflows depend on the selected model, and video generation is still experimental. Video models have their own tab in the catalog.
+
+<p align="center">
+  <img src="docs/screens/images.webp" width="100%" alt="The Images area drawing a lighthouse">
+</p>
+
+### Also in the app
+
+- **Change course mid-answer.** Send a new message while an answer is being generated: the answer stops, keeps the text it has so far, and your message goes out at once. If a tool is running, Exe AI waits for its result first. When you stop an answer yourself, any queued messages return to the input field.
+- **Chats side by side.** Several chats can answer at the same time.
+- **Memory.** Keep rules and facts for future conversations in an editable local memory file. Memory is on by default for the models Exe AI runs itself, and it is shared with other servers and cloud models only if you enable that option.
+- **Dictation.** Dictate into the chat and watch a provisional transcript appear as you speak. Optional clean-up uses a small dedicated model or a model of your choice. Send the result yourself, or have it sent automatically when dictation ends. Press Cmd+Shift+M (Ctrl+Shift+M on Windows) to start dictating while another app is in front.
+- **Voice conversations.** Talk to the assistant with automatic pause detection and, with speech output enabled, hear each reply sentence by sentence as it is generated. Speech recognition and speech output run locally; the conversation itself uses your chosen chat model.
+- **Projects and files.** Group chats into projects that share working folders, and archive chats or whole projects when you are done. Uploaded documents and files delivered by agents are collected in one place.
+- **Skills.** Run a skill with a slash command, let the assistant pick eligible skills automatically, or write and edit your own in the app.
+- **Live work view.** Follow command output and tool activity beside the chat. Preview every kind of file without leaving the conversation: code with line numbers, text, pictures, SVG, video and audio, PDF pages, and Word, Excel and PowerPoint files.
+- **Notification sounds.** Four soft sounds tell you that an answer has finished, that Exe AI is waiting for you, that an error has occurred, or that an agent or schedule has finished. Each has its own switch for sound and pop-up, and the background service follows the same switches.
+- **Documents with clear limits.** Attach PDFs, text files or source files. A document that fits the available context budget is included in full; a larger one stays available for targeted reading through tools, and the interface tells you when it is too large for the context.
+- **Context compression** (in development). Older tool output is reduced first; if that is not enough, the middle of the conversation is summarized while the opening and the most recent messages are kept. The original chat remains readable.
+- **Six designs.** Exe, Snow, Pearl, Dark Matter, Heaven and Moune restyle the entire interface, from the frame to the code blocks; Auto shows Exe when your system is dark and Snow when it is light. You can also choose one of nine code color schemes and set your own bubble color and frame gradient. [More about designs](https://exe-hq.net/docs/#docs/themes)
+- **Personal, in two languages.** Enter your name on first launch and new chats greet you by name; a single switch turns this off. The interface and its error messages are available in English and German.
+- **Updates itself.** At startup, the app checks for a newer release, shows what is new and installs it with one click.
+
+## Quick start
+
+### System requirements
+
+- **macOS** on Apple Silicon.
+- **Windows** on x64.
+- **Local models** need enough memory. The catalog shows which models fit your computer.
+- **Phone or tablet**: a current browser, with Tailscale on the phone and on the computer.
 
 ### Download the app
 
-Download the app for your operating system from the [latest release](https://github.com/exe-ai-productions/exe-ai/releases/latest). No account is needed.
+Download the app for your operating system from [exe-hq.net](https://exe-hq.net) or from the [latest release](https://github.com/exe-ai-productions/exe-ai/releases/latest). No account is needed.
 
-- **macOS (Apple Silicon)** — open the `.dmg` and drag the app into your Applications folder. The app is signed and has been notarised by Apple.
-- **Windows (x64)** — run the installer. It is not code-signed yet, so Windows SmartScreen may show "Windows protected your PC": choose *More info*, then *Run anyway*.
+- **macOS (Apple Silicon)**: open the `.dmg` and drag the app into your Applications folder. The app is signed and notarized by Apple.
+- **Windows (x64)**: run the installer. It is not code-signed yet, so Windows SmartScreen may show "Windows protected your PC". Choose *More info*, then *Run anyway*.
 
-The app checks for a newer release when it starts and displays it in a card, where you can download and install it with a click. *Check for updates* is available in the settings.
+Closing the window does not end Exe AI: it stays in the menu bar, and the service keeps running for the terminal client. *Quit Exe AI* in the icon's menu closes the app but leaves the service running; *Stop Service* ends the service and its model server.
 
-### From source
+To use Exe AI on your phone, follow [Web App & network](https://exe-hq.net/docs/#docs/network). For a first tour of the app, see [Getting started](https://exe-hq.net/help/#erste-schritte).
+
+
+<details>
+<summary><b>Run from source</b></summary>
+
+<br>
 
 You need Python 3.11 or 3.12 and Node.js 22.
 
@@ -193,59 +183,55 @@ cd frontend && npm ci && npm run build && cd ..
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8090
 ```
 
-Then open `http://127.0.0.1:8090/app/` in your browser. If the Exe AI app is running, quit it first — it uses the same port. To run local models, install [llama.cpp](https://github.com/ggml-org/llama.cpp) or let the Local view download `llama-server`, just as it does in the packaged app. Run the test suite with `.venv/bin/pytest`.
+Then open `http://127.0.0.1:8090/app/` in your browser. If the Exe AI app is running, first choose *Stop Service* from its menu bar icon: the app uses the same port, and its service keeps running after the window closes.
 
-<p align="center"><img src="docs/site/trenner.svg" width="100%" alt=""></p>
+Start the terminal client from source with `.venv/bin/python start.py --cli`. To run local models, install [llama.cpp](https://github.com/ggml-org/llama.cpp) or let the Local view download `llama-server`, as the packaged app does. Run the test suite with `.venv/bin/pytest`.
 
-<h2><img src="docs/site/h-http-api.svg" height="36" alt="HTTP API"></h2>
+</details>
 
-The app uses a local HTTP API. Requests to the routes listed below that begin with `/api/v1` require the current session key in the `X-Sitzungsschluessel` header. The table lists selected routes and route families.
+## Terminal client
 
-<table>
-<thead><tr><th>Method</th><th>Address</th><th>Purpose</th></tr></thead>
-<tbody>
-<tr><td>GET</td><td><code>/health</code></td><td>Service and database status</td></tr>
-<tr><td>GET</td><td><code>/api/v1/meta</code></td><td>Features, languages and version</td></tr>
-<tr><td>GET</td><td><code>/api/v1/models</code></td><td>Connected model endpoints and their reported model names</td></tr>
-<tr><td>GET, POST</td><td><code>/api/v1/chats</code></td><td>List and create chats; individual chat routes handle updates and deletion</td></tr>
-<tr><td>POST</td><td><code>/api/v1/chat/completions</code></td><td>Generate a response through Server-Sent Events</td></tr>
-<tr><td>POST</td><td><code>/api/v1/chat/confirm</code></td><td>Answer a pending tool approval request</td></tr>
-<tr><td>GET</td><td><code>/api/v1/tools</code></td><td>List connected tools</td></tr>
-<tr><td>GET</td><td><code>/api/v1/agents</code><br><code>/api/v1/jobs</code></td><td>List reusable agents and their jobs</td></tr>
-<tr><td>GET, POST</td><td><code>/api/v1/projects</code></td><td>List and create projects</td></tr>
-<tr><td>GET, POST</td><td><code>/api/v1/cronjobs</code></td><td>List and create scheduled work</td></tr>
-<tr><td>GET</td><td><code>/api/v1/cronjobs/calendar</code></td><td>Scheduled occurrences within a calendar range</td></tr>
-<tr><td>GET, PUT</td><td><code>/api/v1/memory</code><br><code>/api/v1/system-prompt</code></td><td>Read and edit memory and the system prompt</td></tr>
-<tr><td>GET, POST</td><td><code>/api/v1/skills</code></td><td>List and create skills; individual skill routes support editing</td></tr>
-<tr><td>POST</td><td><code>/api/v1/documents</code></td><td>Upload a document and extract its text</td></tr>
-<tr><td>GET, DELETE</td><td><code>/api/v1/documents/{dokument_id}</code></td><td>Inspect or remove a document</td></tr>
-<tr><td>GET</td><td><code>/api/v1/runner</code></td><td>Local language model server status</td></tr>
-<tr><td>POST</td><td><code>/api/v1/runner/start</code><br><code>/api/v1/runner/stop</code></td><td>Start or stop the local language model server</td></tr>
-<tr><td>GET</td><td><code>/api/v1/models/search</code><br><code>/api/v1/models/files</code></td><td>Search models and inspect repository files</td></tr>
-<tr><td>GET, POST, DELETE</td><td><code>/api/v1/runner/download</code></td><td>Monitor, start or cancel a model download</td></tr>
-<tr><td>POST</td><td><code>/api/v1/bild</code></td><td>Start image or video generation with a compatible model</td></tr>
-<tr><td>GET</td><td><code>/api/v1/bild/fortschritt</code></td><td>Image and video generation progress</td></tr>
-<tr><td>POST</td><td><code>/api/v1/bild/stop</code></td><td>Cancel image or video generation</td></tr>
-<tr><td>GET</td><td><code>/api/v1/sprachserver</code></td><td>Speech models and server status</td></tr>
-<tr><td>POST</td><td><code>/api/v1/sprachserver/start</code><br><code>/api/v1/sprachserver/stop</code></td><td>Start or stop the local speech recognition server</td></tr>
-<tr><td>POST</td><td><code>/api/v1/sprachserver/transkribieren</code></td><td>Transcribe WAV audio, with optional text clean-up</td></tr>
-<tr><td>POST</td><td><code>/api/v1/sprachserver/sprechen</code></td><td>Convert text to speech and return WAV audio</td></tr>
-<tr><td>GET</td><td><code>/api/v1/einbettungsserver</code></td><td>Embedding models and server status</td></tr>
-<tr><td>POST</td><td><code>/api/v1/einbettungsserver/start</code><br><code>/api/v1/einbettungsserver/stop</code></td><td>Start or stop the local embedding server</td></tr>
-<tr><td>GET</td><td><code>/api/v1/events/stream</code></td><td>Receive application events through Server-Sent Events</td></tr>
-</tbody>
-</table>
-<p align="center"><img src="docs/site/trenner.svg" width="100%" alt=""></p>
+The `exe` command is a chat client for the terminal and is still in development. Its [introduction](https://exe-hq.net/docs/#cli/cli-intro), [slash commands](https://exe-hq.net/docs/#cli/cli-commands), [print mode](https://exe-hq.net/docs/#cli/cli-print) and [settings and themes](https://exe-hq.net/docs/#cli/cli-settings) are documented on our website.
 
-<h2><img src="docs/site/h-license.svg" height="36" alt="License"></h2>
+## Privacy
 
-[PolyForm Noncommercial 1.0.0](LICENSE.md) — in plain language: use, modify and share it for personal, educational or other noncommercial purposes. Commercial use — such as use within a company or for paid work — requires a commercial license. Contact **[dev@exe-hq.net](mailto:dev@exe-hq.net)**.
+- By default, the service listens only on **127.0.0.1**. Chats, settings, keys and models are stored locally, in files and a SQLite database.
+- The Web App reaches your computer only through your own Tailscale network, over HTTPS, and every request that comes that way must carry the password.
+- API keys are stored in a local file with restricted permissions and are never displayed again. The interface only learns *whether* a key has been set.
+- Saved memories are shared with cloud providers only if you enable that option. While name-based personalization is on, your name is sent with each conversation, including to cloud providers.
+- Models are downloaded directly from huggingface.co. Model searches go through the local service, so your browser does not contact Hugging Face for them.
+- The model server receives a new key each time it starts. The app also protects its API with a key generated for each session and rejects cross-origin write requests from web pages.
 
-<p align="center"><img src="docs/site/trenner.svg" width="100%" alt=""></p>
+<!-- Working title and address of the developer page are placeholders until they are decided. -->
+The local HTTP API that the app uses is documented on the [API documentation](https://exe-hq.net/docs/) page.
+
+## Help and community
+
+- **Questions and ideas**: ask in [Discussions](https://github.com/exe-ai-productions/exe-ai/discussions).
+- **Bugs**: open an [issue](https://github.com/exe-ai-productions/exe-ai/issues) with your version of Exe AI and the steps that lead to the problem.
+- **Something not working?** Start with [Troubleshooting](https://exe-hq.net/help/#hakt) in the manual.
+- **Everything else**: write to [dev@exe-hq.net](mailto:dev@exe-hq.net).
+
+## License
+
+Exe AI is released under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). In plain terms: you may use, modify and share it for personal, educational or other noncommercial purposes. Commercial use, such as use within a company or for paid work, requires a commercial license. Contact [dev@exe-hq.net](mailto:dev@exe-hq.net).
+
+<br>
+
 <p align="center">
-  <img src="docs/site/mark-grey.svg" width="80" alt="">
+  <img src="docs/site/mark-grey.svg" width="56" alt="">
 </p>
 <p align="center">
+  <a href="https://exe-hq.net">exe-hq.net</a>
+  &nbsp;·&nbsp;
   <a href="https://github.com/exe-ai-productions/exe-ai/releases">Releases</a>
+  &nbsp;·&nbsp;
+  <a href="PATCHNOTES.md">Patch notes</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/exe-ai-productions/exe-ai/issues">Issues</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/exe-ai-productions/exe-ai/discussions">Discussions</a>
+  &nbsp;·&nbsp;
+  <a href="THIRD_PARTY_NOTICES.md">Third-party notices</a>
 </p>
 <p align="center"><sub>© 2026 Exe AI Productions</sub></p>

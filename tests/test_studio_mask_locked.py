@@ -102,7 +102,7 @@ def test_the_bar_with_the_switch_still_stands_while_the_brush_is_picked_and_the_
     stands whatever the switch says: a locked tool would leave no way to turn
     the mask on."""
     assert "const malt = $derived(werkzeug === 'pinsel' || werkzeug === 'radierer')" in CANVAS
-    assert "{#if malt}\n    <div class=\"oben\">" in CANVAS
+    assert "{#if malt}\n    <div class=\"oben\" class:zeile={brushRow}>" in CANVAS
     assert re.search(r"<Schalter an=\{surface\.maskOn\} onschalten=\{\(an\) => \(surface\.maskOn = an\)\}", CANVAS)
 
 

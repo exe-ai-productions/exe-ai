@@ -23,7 +23,7 @@ def test_client_id_and_secret_have_their_name_as_label_above_the_field():
     for bind, key in (("kennung", "verbindungen.kennung"), ("geheimnis", "verbindungen.geheimnis")):
         block = _block(bind)
         assert f"{{t('{key}')}}" in block
-        assert block.index("tafelkopf") < block.index("<input")
+        assert block.index("class=\"label\"") < block.index("<input")
 
 
 def test_no_field_of_the_mask_puts_its_name_in_a_placeholder():

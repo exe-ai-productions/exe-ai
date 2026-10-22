@@ -30,19 +30,20 @@ def run_command(ctx: Context, argument: str) -> None:
         sentence = (typed or "").strip()
     if not sentence:
         return
+    listed = servers.image_listing(ctx)
+    # Without a default model there is nothing to draw with: the program is
+    # not offered and nothing goes to the service.
+    if "standardmodell" in listed and not listed["standardmodell"]:
+        ctx.renderer.notice(texts.t("cli.no_image_model"))
+        return
     # The program first: where it is not there it is offered and fetched, as
     # `/server image` does, and the picture is drawn afterwards.
-    if _program_missing(ctx):
+    if "programm_da" in listed and not listed["programm_da"]:
         with servers.waiting(ctx) as cancel:
             if not servers.fetch_image_program(ctx, cancel):
                 return
     chat_id = str(chat.service_chat(ctx)["id"])
     _draw(ctx, sentence, chat_id)
-
-
-def _program_missing(ctx: Context) -> bool:
-    listed = ctx.client.get("/bild/modelle")
-    return isinstance(listed, dict) and "programm_da" in listed and not listed["programm_da"]
 
 
 def _draw(ctx: Context, sentence: str, chat_id: str) -> None:

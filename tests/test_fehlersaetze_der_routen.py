@@ -45,7 +45,7 @@ def test_keine_feste_zeichenkette_in_http_exception():
     """Guard: every refusal in the routers of ROUTEN is built through `t(…)`.
 
     A sentence written here would be one the catalogue never sees — and the
-    catalogue is the one place the interface's texts live (Repo-CLAUDE.md).
+    catalogue is the one place the interface's texts live.
     every argument after the status counts, keyword ones included:
     `detail="…"` is the form the neighbouring routers use. `str(fehler)`
     stays allowed — it is no sentence written here; the German sentences of

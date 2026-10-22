@@ -15,14 +15,16 @@ every firing. This says what is there and whether it could run at all.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from datetime import datetime, timezone
 
 from app import ordnerinhalt
-from app.api.abhaengigkeiten import hole_config
+from app.api.abhaengigkeiten import hole_config, hole_sprache
 from app.config import Config
+from app.i18n import t
 
 router = APIRouter(prefix="/skripte", tags=["skripte"])
 
@@ -68,3 +70,32 @@ def liste(config: Config = Depends(hole_config)) -> list[SkriptEintrag]:
             )
         )
     return eintraege
+
+
+@router.get("/text", summary="The text of one script in the folder")
+def script_text(
+    name: str,
+    config: Config = Depends(hole_config),
+    sprache: str = Depends(hole_sprache),
+) -> FileResponse:
+    """The file itself as plain text, for the tile that shows its first lines.
+
+    Only a plain file name in the scripts folder is answered: a name that
+    spells out a path, or a file that is not there, is refused like any other
+    file that is not in the folder. The answer carries no file name, so it is shown
+    in place and never saved, and never run — running goes through ``app/skriptlauf.py``.
+    """
+    from app import skriptlauf
+
+    try:
+        rein = skriptlauf._kein_pfad(name)
+    except skriptlauf.SkriptVerboten as fehler:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, t(fehler.schluessel, sprache, **fehler.werte)
+        ) from fehler
+    # A link lying in the folder and leading out of it is refused like a file
+    # that is not there.
+    pfad = ordnerinhalt.sicherer_pfad(skriptlauf.ordner(config), rein)
+    if pfad is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, t("fehler.datei_nicht_vorhanden", sprache))
+    return FileResponse(pfad, media_type="text/plain; charset=utf-8")

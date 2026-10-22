@@ -46,21 +46,26 @@ MODULE = (
 # either side: no sign of the row ever has to shrink.
 LEISTE_MIN = 364
 LEISTE_MAX = 900
+# The width a fresh installation opens the column at: the narrowest at which
+# the CLI tab counts 60 columns and draws its whole wordmark (measured at 13 px
+# type, 511 px counts 59, 512 px counts 60). The same number stands in
+# lib/anzeige.js as `PANEL_DEFAULT_WIDTH`.
+PANEL_DEFAULT_WIDTH = 512
 
-# Six 40 px buttons of the sidebar's window row, five 10 px gaps and 12 px
-# either side.
-SEITE_MIN = 314
+# Five 40 px signs of the sidebar's window row, spread with 12 px either side:
+# at this width they stand a little over 15 px apart, and none has to shrink.
+SEITE_MIN = 285
 SEITE_MAX = 400
 
-# What stands where nothing is stored: a fresh installation opens in its
-# basic state, both panels folded to their bars of signs. The route hands out
+# What stands where nothing is stored: the left panel folded to its bar of
+# signs, the right one open on the CLI tab. The route hands out
 # only what is stored, so the copy the interface holds (`VORGABE_LAYOUT` in
 # lib/anzeige.js) is the one a fresh installation draws from; a test keeps the
 # two equal.
 VORGABE: dict[str, Any] = {
-    "leiste_offen": False,
-    "leiste_modul": "terminal",
-    "leiste_breite": LEISTE_MIN,
+    "leiste_offen": True,
+    "leiste_modul": "cli",
+    "leiste_breite": PANEL_DEFAULT_WIDTH,
     "seitenleiste_zu": True,
     "seitenleiste_breite": SEITE_MIN,
 }

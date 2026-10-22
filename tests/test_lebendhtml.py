@@ -73,6 +73,32 @@ meldung.attribut = {
   codeNeu: !markiert(kasten.firstChild.firstChild),
 }
 
+// A tick on a live button: the class the page set is no difference, so the
+// button stays the same node with its class and its timer while the text
+// after the block grows. Any other difference still replaces it.
+const frame = (attributes, tail) => `<div class="codeblock"><button class="code-kopieren"${attributes}>x</button></div><p>${tail}</p>`
+htmlAngleichen(kasten, frame('', 'one'))
+const tickButton = mark(kasten.querySelector('button'))
+tickButton.classList.add('copied')
+tickButton.tickTimer = 7
+htmlAngleichen(kasten, frame('', 'one two'))
+meldung.liveTick = {
+  same: markiert(kasten.querySelector('button')),
+  copied: kasten.querySelector('button').classList.contains('copied'),
+  timer: kasten.querySelector('button').tickTimer,
+  text: kasten.querySelector('p').textContent,
+}
+htmlAngleichen(kasten, frame(' title="t"', 'one two'))
+meldung.liveTickOtherAttribute = {
+  replaced: !markiert(kasten.querySelector('button')),
+  copied: kasten.querySelector('button').classList.contains('copied'),
+}
+htmlAngleichen(kasten, frame('', 'one two'))
+const otherButton = mark(kasten.querySelector('button'))
+otherButton.classList.add('copied', 'other')
+htmlAngleichen(kasten, frame('', 'one two three'))
+meldung.liveTickOtherClass = { replaced: !markiert(kasten.querySelector('button')) }
+
 // Empty and missing input clear the box.
 htmlAngleichen(kasten, '')
 meldung.leer = kasten.innerHTML
@@ -221,6 +247,15 @@ def test_ein_geaendertes_attribut_ersetzt_nur_dieses_element(meldung):
         "preBleibt": True,
         "codeNeu": True,
     }
+
+
+def test_a_tick_on_a_live_button_survives_the_next_chunk(meldung):
+    assert meldung["liveTick"] == {"same": True, "copied": True, "timer": 7, "text": "one two"}
+
+
+def test_a_live_button_that_differs_in_another_attribute_or_class_is_replaced(meldung):
+    assert meldung["liveTickOtherAttribute"] == {"replaced": True, "copied": False}
+    assert meldung["liveTickOtherClass"] == {"replaced": True}
 
 
 def test_leer_und_fehlend_raeumen_die_box(meldung):

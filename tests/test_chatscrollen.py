@@ -29,6 +29,7 @@ def _funktionen() -> str:
     for name in (
         "scrollGeprueft", "gescrollt", "radGedreht", "tasteHoch",
         "beruehrungBeginnt", "beruehrungZieht", "beruehrungEndet", "runter", "gleiteZumBoden",
+        "checkScrolledAway", "backToFloor",
     ):
         treffer = re.search(rf"\n  function {name}\(.*?\n  \}}\n", quelle, re.S)
         assert treffer, f"{name}() not found"
@@ -36,9 +37,9 @@ def _funktionen() -> str:
     treffer = re.search(r"\n  const AM_BODEN = (\d+)\n", quelle)
     assert treffer, "AM_BODEN not found"
     stuecke.insert(0, f"const AM_BODEN = {treffer.group(1)};\n")
-    fang = re.search(r"\n  const fangweite = \(\) => verlauf\.clientHeight / 2\n", quelle)
-    assert fang, "fangweite not found"
-    stuecke.insert(1, "const fangweite = () => verlauf.clientHeight / 2;\n")
+    fang = re.search(r"\n  const NEAR_FLOOR_PX = (\d+)\n", quelle)
+    assert fang, "NEAR_FLOOR_PX not found"
+    stuecke.insert(1, f"const NEAR_FLOOR_PX = {fang.group(1)};\nlet scrolledAway = false;\nconst eingabe = null;\n")
     treffer = re.search(r"\n  const FANG_WEG = (\d+)\n", quelle)
     assert treffer, "FANG_WEG not found"
     stuecke.insert(2, f"const FANG_WEG = {treffer.group(1)};\nlet fangSumme = 0;\nlet fangZuletzt = 0;\nlet hochSumme = 0;\nlet runterSumme = 0;\n")
@@ -122,7 +123,7 @@ let setTimeout = (f, ms) => {{
 let clearTimeout = (t) => {{ if (t && typeof t === 'object') t.tot = true }};
 {_funktionen()}
 {schritte}
-console.log(JSON.stringify({{ folgtMit, abstand: abstand(), scrollTop: verlauf.scrollTop, wege: globalThis.wege, bewegt: globalThis.bewegt }}));
+console.log(JSON.stringify({{ folgtMit, scrolledAway, abstand: abstand(), scrollTop: verlauf.scrollTop, wege: globalThis.wege, bewegt: globalThis.bewegt }}));
 """
     lauf = subprocess.run(["node", "-e", skript], capture_output=True, text=True)
     assert lauf.returncode == 0, f"{lauf.stderr}\n{lauf.stdout}"
@@ -291,7 +292,7 @@ def test_der_boden_haelt_wenn_box_oder_inhalt_ihre_groesse_aendern():
     both the box and its track, calling runter()."""
     quelle = QUELLE.read_text()
     stelle = re.search(
-        r"new ResizeObserver\(\(\) => \{\n\s+stelleNachsetzen\(\)\n\s+runter\(\)\n\s+\}\)\n\s+beobachter\.observe\(verlauf\)\n"
+        r"new ResizeObserver\(\(\) => \{\n\s+stelleNachsetzen\(\)\n\s+runter\(\)\n\s+checkScrolledAway\(\)\n\s+\}\)\n\s+beobachter\.observe\(verlauf\)\n"
         r"\s+const spur = verlauf\.querySelector\('\.spur'\)\n\s+if \(spur\) beobachter\.observe\(spur\)",
         quelle,
     )
@@ -302,16 +303,49 @@ def test_der_boden_haelt_wenn_box_oder_inhalt_ihre_groesse_aendern():
 def test_rad_nach_unten_in_bodennaehe_haengt_wieder_ein():
     """The floor of a streaming answer runs away faster than a wheel can
     chase it, so "resume at the floor" alone never resumed. Turning the
-    wheel down near the floor means "take me back", and does."""
+    wheel down within 70 pixels of the floor means "take me back", and does."""
     stand = _lauf("""
         radGedreht({ deltaY: -200 });                              // reader leaves
-        scrolleAuf(verlauf.scrollTop - 150);
-        verlauf.scrollHeight = 3100;                               // the answer keeps growing
+        scrolleAuf(verlauf.scrollTop - 40);
+        verlauf.scrollHeight = 3020;                               // the answer keeps growing
         radGedreht({ deltaY: 120 });                               // reader turns back down
         runter();
     """)
     assert stand["folgtMit"] is True, "the wheel downwards did not latch on again"
     assert stand["abstand"] == 0
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_rad_nach_unten_ueber_siebzig_pixeln_haengt_nicht_ein():
+    """The case that fails without the narrower band: 100 pixels above the
+    floor — in the lower half of the window, where the old band caught the
+    reader and pulled them to the end, finished chat or not."""
+    stand = _lauf("""
+        radGedreht({ deltaY: -200 });                              // reader leaves
+        scrolleAuf(verlauf.scrollTop - 100);
+        radGedreht({ deltaY: 120 });                               // a turn down, still 100 px up
+        runter();
+    """)
+    assert stand["folgtMit"] is False, "the wheel pulled the reader to the end from 100 px"
+    assert stand["abstand"] == 100
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_der_knopf_nach_unten_steht_nur_fuer_einen_leser_der_den_boden_verlassen_hat():
+    """The round button: not at the floor while the view follows, there once
+    the reader scrolled up, and a click takes them back — button gone."""
+    stand = _lauf("""
+        const vorher = scrolledAway;                               // at the floor, following
+        radGedreht({ deltaY: -200 });
+        scrolleAuf(verlauf.scrollTop - 300);
+        globalThis.bewegt = [vorher, scrolledAway];
+        backToFloor();
+        globalThis.wege = [scrolledAway];
+    """)
+    assert stand["bewegt"] == [False, True]
+    assert stand["wege"] == [False]
+    assert stand["folgtMit"] is True and stand["abstand"] == 0
+    assert stand["scrolledAway"] is False
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
@@ -363,7 +397,7 @@ def test_ein_fingerzug_nach_unten_haengt_beim_loslassen_wieder_ein():
     back. Mid-drag nothing snaps."""
     stand = _lauf("""
         radGedreht({ deltaY: -200 });
-        scrolleAuf(verlauf.scrollTop - 150);
+        scrolleAuf(verlauf.scrollTop - 60);
         beruehrungBeginnt({ touches: [{ clientY: 300 }] });
         beruehrungZieht({ touches: [{ clientY: 250 }] });   // finger up = heading down
         beruehrungEndet();
@@ -422,7 +456,7 @@ def test_zittern_im_fangzug_setzt_die_fangsumme_nicht_zurueck():
     stand = _lauf("""
         beruehrungBeginnt({ touches: [{ clientY: 300 }] });
         beruehrungZieht({ touches: [{ clientY: 340 }] });   // 40 down = looking up, parks
-        scrolleAuf(verlauf.scrollTop - 100);
+        scrolleAuf(verlauf.scrollTop - 60);
         let y = 340;
         for (let i = 0; i < 20; i++) {
           y -= 5; beruehrungZieht({ touches: [{ clientY: y }] });   // heading down
@@ -487,6 +521,8 @@ def test_die_verdrahtung_der_leser_hoerer_steht_im_markup():
         'ontouchmove={beruehrungZieht}',
         'ontouchend={beruehrungEndet}',
         '<svelte:window onkeydown={tastatur}',
+        '{#if scrolledAway && !nochLeer}',
+        'onclick={backToFloor}',
     ):
         assert bindung in quelle, f"wiring missing: {bindung}"
     assert re.search(r"if \(tasteHoch\(ereignis\)\) \{\s+folgtMit = false", quelle), (
@@ -755,3 +791,145 @@ def test_nach_dem_hochscrollen_bewegt_eine_neue_zeile_die_ansicht_nicht():
     )
     assert stand["folgtMit"] is False
     assert stand["bewegt"] == 0, "the view moved under a reader who scrolled away"
+
+
+def _growth(steps: str, follows: bool = True) -> dict:
+    """The REAL spring of the growing text (`lib/glide.js`, imported) and the
+    REAL `holdFloor` lifted out of the component, against stand-ins for the
+    entry, the scroll box and the frame clock. The entry's height is what the
+    spring has let out; the scroll box is as high as the entry plus 2000 px
+    above it. `tick()` runs one frame of 16 ms."""
+    source = QUELLE.read_text()
+    found = re.search(r"\n  function holdFloor\(.*?\n  \}\n", source, re.S)
+    assert found, "holdFloor() not found"
+    script = f"""
+import {{ glideHeight }} from {json.dumps(FEDER.as_uri())}
+let clock = 1000
+const pending = []
+Object.defineProperty(globalThis, 'performance', {{ value: {{ now: () => clock }}, configurable: true }})
+globalThis.document = {{ hidden: false }}
+globalThis.requestAnimationFrame = (f) => {{ const e = {{ f }}; pending.push(e); return e }}
+globalThis.cancelAnimationFrame = (e) => {{ if (e) e.dead = true }}
+let observerCallback = null
+globalThis.ResizeObserver = class {{
+  constructor(f) {{ observerCallback = f }}
+  observe() {{}}
+  disconnect() {{}}
+}}
+const tick = (n = 1) => {{
+  for (let k = 0; k < n; k += 1) {{
+    clock += 16
+    for (const e of pending.splice(0)) if (!e.dead) e.f(clock)
+  }}
+}}
+let folgtMit = {json.dumps(follows)}
+const content = {{ height: 100, getBoundingClientRect() {{ return {{ height: this.height }} }} }}
+const entry = {{
+  style: {{}},
+  heard: [],
+  querySelector: () => content,
+  dispatchEvent(e) {{ this.heard.push(e.type + (e.bubbles ? ':bubbles' : '')); holdFloor() }},
+}}
+const verlauf = {{
+  clientHeight: 500,
+  get scrollHeight() {{ return 2000 + (parseFloat(entry.style.height) || content.height) }},
+  _top: 0,
+  get scrollTop() {{ return this._top }},
+  set scrollTop(v) {{ this._top = Math.max(0, Math.min(this.scrollHeight - this.clientHeight, v)) }},
+}}
+const distance = () => verlauf.scrollHeight - verlauf.scrollTop - verlauf.clientHeight
+{found.group(0)}
+verlauf.scrollTop = verlauf.scrollHeight
+const glide = glideHeight(entry, true)
+const grow = (px) => {{ content.height += px; observerCallback() }}
+{steps}
+console.log(JSON.stringify({{ distance: distance(), heard: entry.heard.slice(0, 3), frames: globalThis.frames, oben: verlauf.scrollTop, extra: globalThis.extra }}))
+"""
+    run = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True)
+    assert run.returncode == 0, f"{run.stderr}\n{run.stdout}"
+    return json.loads(run.stdout)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_the_reader_stands_at_the_floor_in_every_frame_while_the_text_grows():
+    """The text of a running answer lets its room out on the spring of
+    `glideHeight`; a reader who stands at the floor stays at the floor in
+    EVERY one of those frames (before: the view followed a frame later, on a
+    second spring, and the end of the answer dipped about 11 px at every new
+    line and sprang back)."""
+    state = _growth(
+        """
+        const frames = []
+        for (let line = 0; line < 4; line += 1) {
+          grow(26)                         // a new line of text
+          for (let k = 0; k < 12; k += 1) {
+            tick()
+            frames.push(distance())
+          }
+        }
+        globalThis.frames = frames
+        """
+    )
+    assert state["heard"] and state["heard"][0] == "glidegrow:bubbles", state
+    assert max(state["frames"]) <= 1, state["frames"]
+    assert state["distance"] <= 1
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_a_reader_who_scrolled_away_is_not_held():
+    """Silence probe: the hold at the floor is for the reader who follows. A
+    reader who scrolled away stays where they are while the text grows."""
+    away = _growth(
+        """
+        verlauf.scrollTop = 1200       // the reader scrolled up
+        const read = verlauf.scrollTop
+        grow(26)
+        tick(12)
+        globalThis.frames = [verlauf.scrollTop - read]
+        """,
+        follows=False,
+    )
+    assert away["frames"] == [0], away
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no Node on this machine")
+def test_only_frames_that_let_room_out_announce_it():
+    """Pinning the height when the text starts to flow, the first look of the
+    size observer at a mount, letting go of the height and leaving all change
+    nothing on screen and say nothing: they must not pull the view to the
+    floor (a chat that is being opened would snap the floor of the chat
+    before it just ahead of its own place being put back). A frame that does
+    grow the room says it, also the last one of a run."""
+    quiet = _growth(
+        """
+        observerCallback()                    // the observer's first look: nothing changed
+        tick(5)
+        const mounted = entry.heard.length
+        glide.update(false)                   // the run ends, nothing grew
+        tick(30)
+        const ended = entry.heard.length
+        glide.destroy()
+        globalThis.extra = { mounted, ended, destroyed: entry.heard.length }
+        """
+    )
+    assert quiet["extra"] == {"mounted": 0, "ended": 0, "destroyed": 0}, quiet
+    last = _growth(
+        """
+        grow(26)
+        tick(2)
+        glide.update(false)                   // the run ends while the room is still on its way
+        const during = entry.heard.length
+        tick(30)
+        globalThis.extra = { more: entry.heard.length - during, distance: distance() }
+        """
+    )
+    assert last["extra"]["more"] >= 1 and last["extra"]["distance"] <= 1, last
+
+
+def test_the_floor_is_held_through_the_event_of_the_growing_text():
+    """Source-text guard: the scroll box itself listens to the entry's growth
+    (not a child), and the spring says it in every frame it lets room out."""
+    assert re.search(r'<div class="verlauf"[^>]*onglidegrow=\{holdFloor\}', QUELLE.read_text(), re.S), (
+        "wiring missing: the hold at the floor"
+    )
+    assert "'glidegrow'" in FEDER.read_text(), "the spring no longer says that the room grew"

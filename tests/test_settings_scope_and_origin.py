@@ -25,8 +25,8 @@ def _rule_file(config):
 # --- The permission mode: global only ----------------------------------------
 
 
-def test_the_settings_that_exist_once_are_the_two_permission_modes():
-    assert GLOBAL_ONLY == frozenset(MODE_KEYS)
+def test_the_settings_that_exist_once_are_the_two_permission_modes_and_the_snapshot_switch():
+    assert GLOBAL_ONLY == frozenset({*MODE_KEYS, "checkpoints"})
 
 
 @pytest.mark.parametrize("scope", ["chat:c1", "modell:m1"])

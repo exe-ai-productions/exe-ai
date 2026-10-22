@@ -42,7 +42,8 @@ const DEFAULT_ROWS = 24
  * The program to run and how: packaged, the command the package carries;
  * from source the virtual environment's Python with the client as a
  * module, in the source tree. EXE_AI_CLI names another program for a trial
- * run, as EXE_AI_DIENST does for the service.
+ * run, as EXE_AI_DIENST does for the service; it is marked `foreign`, so the
+ * page does not hold what is typed back for a screen that program has not.
  *
  * Where the package carries the command, counted from its resources folder:
  * on macOS the small script the link on the path points at, in a bin folder
@@ -59,7 +60,7 @@ function clientCommand({
   platform = process.platform,
 } = {}) {
   const own = String(env.EXE_AI_CLI || '').trim()
-  if (own) return { file: own, args: [], cwd: os.homedir() }
+  if (own) return { file: own, args: [], cwd: os.homedir(), foreign: true }
   if (packaged) {
     const file = platform === 'win32'
       ? path.join(resourcesPath, 'exe-ai-terminal', 'exe.exe')
@@ -115,11 +116,14 @@ function clientEnvironment(env = process.env) {
  * answer names the file.
  *
  * Wired to `ipcMain` under five names: `terminal-start` (invoke, answers
- * `{ pid }` or `{ error }`), `terminal-write`, `terminal-resize`,
+ * `{ pid }` or `{ error }`; a program other than the client is named by
+ * `foreign: true` beside the pid), `terminal-write`, `terminal-resize`,
  * `terminal-stop`; the page hears `terminal-data` and `terminal-exit`.
  */
 function createTerminals({ ipcMain, pty, address, command, log = console.log, exists = fs.existsSync }) {
   const sessions = new Map()
+  // The clients that were told a size since they started.
+  const resizedOnce = new WeakSet()
   // The pages whose end is already listened for: one listener per page,
   // however often it asks for a client.
   const watched = new Set()
@@ -163,8 +167,10 @@ function createTerminals({ ipcMain, pty, address, command, log = console.log, ex
       sessions.delete(contents.id)
       if (!contents.isDestroyed()) contents.send('terminal-exit', exitCode)
     })
-    log(`Terminal: ${command.file} started in the window against ${address} (pid ${term.pid})`)
-    return { pid: term.pid }
+    log(`Terminal: ${command.file} started in the window against ${address} (pid ${term.pid}, ${wish.cols}x${wish.rows})`)
+    // A program that is not the client has no screen to wait for: the page is told,
+    // so it hands on what is typed at once.
+    return command.foreign ? { pid: term.pid, foreign: true } : { pid: term.pid }
   }
 
   function stop(id) {
@@ -199,7 +205,15 @@ function createTerminals({ ipcMain, pty, address, command, log = console.log, ex
   })
   ipcMain.on('terminal-resize', (event, cols, rows) => {
     const term = sessions.get(event.sender.id)
-    if (term) term.resize(size(cols, DEFAULT_COLS), size(rows, DEFAULT_ROWS))
+    if (!term) return
+    const next = { cols: size(cols, DEFAULT_COLS), rows: size(rows, DEFAULT_ROWS) }
+    // Only the first size told after a start is logged: it is the one that
+    // shows whether the client began with the size the window really had.
+    if (!resizedOnce.has(term)) {
+      resizedOnce.add(term)
+      log(`Terminal: first resize after the start: ${next.cols}x${next.rows}`)
+    }
+    term.resize(next.cols, next.rows)
   })
   ipcMain.on('terminal-stop', (event) => stop(event.sender.id))
 

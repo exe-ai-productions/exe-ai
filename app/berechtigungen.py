@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from app.berechtigungsregeln import Antwort, GUELTIGE_ANTWORTEN, Regeldatei, laden
-from app.tools import dateiwerkzeuge, grenzen, shell, uhr
+from app.tools import dateiwerkzeuge, grenzen, memory, shell, uhr
 
 if TYPE_CHECKING:
     from app.agenten import Agent
@@ -74,6 +74,17 @@ _BEKANNTE_DATEIWERKZEUGE = frozenset({shell.WERKZEUG_NAME, *dateiwerkzeuge.NAMEN
 # after this — both are somebody's deliberate word, not a mode.
 READS_ONLY: frozenset[str] = frozenset({uhr.WERKZEUG_NAME})
 
+# The tool the mode has no say over: what the model keeps in the memory. It
+# saves, changes and deletes without a question in every mode and in a job
+# alike — a prompt that came with every second answer would be clicked away
+# unread, and the memory is one file the user sees and can edit, so looking
+# at it does after the fact what a prompt would do in the way
+# (app/tools/memory.py).
+#
+# Like READS_ONLY, only the MODE is skipped: an explicit per-tool rule above
+# still wins, and so does an agent's own ``permissions:`` after this.
+NEVER_ASKED: frozenset[str] = frozenset({memory.WERKZEUG_NAME})
+
 
 def _dateiwerkzeug_aussenpfad(name: str, argumente: dict, ordner: list[str]) -> str | None:
     if name == shell.WERKZEUG_NAME:
@@ -111,6 +122,13 @@ def _niemals_treffer(name: str, argumente: dict, regeln: Regeldatei) -> str | No
         if muster in befehl:
             return muster
     return None
+
+
+def _cli_grund(pfad: str) -> str:
+    return (
+        f"'{pfad}' starts Exe AI's own command line, which this run may not use.\n"
+        "Ask the user to do it."
+    )
 
 
 def _ausserhalb_grund(pfad: str, ordner: list[str]) -> str:
@@ -251,6 +269,13 @@ def _kern_urteil(
             return _abschliessen(regeln.innerhalb_der_ordner.get(rules_of, "ja"), rules_of, name)
         antwort = regeln.ausserhalb_der_ordner.get(rules_of, "fragen")
         if antwort == "nein" or (antwort == "fragen" and rules_of == "agent"):
+            # The command line client is no folder: its refusal says what it
+            # is, and is not about a path (``about_path``).
+            if (
+                name == shell.WERKZEUG_NAME
+                and shell.grundschluessel(argumente, ordner) == shell.GRUND_SCHLUESSEL_CLI
+            ):
+                return Urteil("nein", _cli_grund(aussen))
             return Urteil("nein", _ausserhalb_grund(aussen, ordner), about_path=True)
         return Urteil(antwort)
 
@@ -262,11 +287,12 @@ def _kern_urteil(
     if statisch_bestaetigen:
         return _abschliessen("fragen", rules_of, name)
 
-    # Read-only tools never reach the mode at all (``READS_ONLY`` above).
-    # They come after the per-tool rules and after the path branch, because
-    # both of those are stronger statements than a mode and neither can have
-    # anything to say about a tool with no path and no effect.
-    if name in READS_ONLY:
+    # Read-only tools and the memory tool never reach the mode at all
+    # (``READS_ONLY`` and ``NEVER_ASKED`` above). They come after the
+    # per-tool rules and after the path branch, because both of those are
+    # stronger statements than a mode and neither can have anything to say
+    # about a tool with no path and no effect.
+    if name in READS_ONLY or name in NEVER_ASKED:
         return Urteil("ja")
 
     return _abschliessen(regeln.standard.get(rules_of, "ja"), rules_of, name)

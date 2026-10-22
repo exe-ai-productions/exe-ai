@@ -74,7 +74,7 @@ STYLE_NAMES = (
     "dialog",
 )
 
-# The colours every look carries. The first eleven are the look itself; the
+# The colours every look carries. The first ten are the look itself; the
 # last six colour a block of code, which the window also gives colours of
 # its own rather than borrowing the ones that say how something stands.
 COLOUR_NAMES = (
@@ -83,7 +83,6 @@ COLOUR_NAMES = (
     "muted",
     "line",
     "accent",
-    "tool",
     "green",
     "yellow",
     "red",
@@ -188,7 +187,9 @@ class Theme:
             # The look's line colour as it stands.
             "line": self._paint("line"),
             "accent": self._paint("accent"),
-            "tool": self._paint("tool"),
+            # A tool stands in the text colour: no look has a tone of its own
+            # for tools.
+            "tool": self._paint("text"),
             "green": self._paint("green"),
             "yellow": self._paint("yellow"),
             "red": self._paint("red"),
@@ -345,8 +346,54 @@ def _mixed(colour: str, other: str, share: float) -> str:
     return "#" + "".join(f"{channel:02x}" for channel in channels)
 
 
+# The least contrast a text colour has against the ground in a light look
+# (WCAG 1.4.3, normal text), and how finely the share of the text colour that
+# gets a tone there is searched for.
+READABLE_CONTRAST = 4.5
+_READABLE_STEPS = 256
+
+# What a light look leaves as it is: the ground is no text, and the line is
+# drawn as a character that is only to show, not to be read.
+_NOT_READ = ("ground", "line")
+
+
+def _luminance(colour: str) -> float:
+    """The relative luminance of a colour, as WCAG defines it."""
+
+    def linear(channel: int) -> float:
+        share = channel / 255
+        return share / 12.92 if share <= 0.03928 else ((share + 0.055) / 1.055) ** 2.4
+
+    red, green, blue = (linear(channel) for channel in Color.parse(colour).get_truecolor())
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def contrast(colour: str, ground: str) -> float:
+    """The contrast ratio of two colours, from 1 for the same one to 21."""
+    lighter, darker = sorted((_luminance(colour), _luminance(ground)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _readable(colour: str, text: str, ground: str) -> str:
+    """The colour itself where it reads against the ground, else with the
+    smallest share of the text colour in it that makes it read. The text
+    colour is the end of the search: a look whose text does not read has no
+    tone that does."""
+    for step in range(_READABLE_STEPS + 1):
+        mixed = colour if step == 0 else _mixed(text, colour, step / _READABLE_STEPS)
+        if contrast(mixed, ground) >= READABLE_CONTRAST:
+            return mixed
+    return text
+
+
 def _look(
-    name: str, ground: str, text: str, line: str, accent: str | None, *values: str
+    name: str,
+    ground: str,
+    text: str,
+    line: str,
+    accent: str | None,
+    *values: str,
+    readable: bool = False,
 ) -> Theme:
     # The quiet tone is not a colour of its own: like the window's reading
     # beside a name, it is the text colour taken back towards the ground. A
@@ -354,13 +401,26 @@ def _look(
     # terminal, where no surface sets the two apart.
     muted = _mixed(text, ground, _QUIET_SHARE)
     # A look that names no accent sets things apart in its text colour.
-    colours = (ground, text, muted, line, accent or text, *values)
-    return Theme(name, dict(zip(COLOUR_NAMES, colours, strict=True)))
+    named = (ground, text, muted, line, accent or text, *values)
+    colours = dict(zip(COLOUR_NAMES, named, strict=True))
+    if readable:
+        # A light look puts its tones on a ground that is nearly as bright as
+        # they are: each one that falls short is taken towards the text.
+        colours = {
+            colour_name: colour
+            if colour_name in _NOT_READ
+            else _readable(colour, text, ground)
+            for colour_name, colour in colours.items()
+        }
+    return Theme(name, colours)
 
 
 # The five looks, in the colours the window's stylesheet gives each of them:
-# ground, text, line, accent, tool, green, yellow, red, blue, violet, then
-# the six of a block of code. As text the four state colours stand in the
+# ground, text, line, accent, green, yellow, red, blue, violet, then
+# the six of a block of code. A light look marked ``readable`` draws each of
+# these tones, and the quiet one, in the least of its text colour that makes
+# it read against the ground: the table holds the colours of the stylesheet,
+# the look the ones that are drawn. As text the four state colours stand in the
 # form the stylesheet keeps for text; the line is its stronger one, the only
 # one that still shows when it is drawn as a character; the accent is the
 # colour the look draws the edge of its chat or of its fields in. The first
@@ -371,33 +431,43 @@ _THEMES: dict[str, Theme] = {
     for theme in (
         _look(
             "exe",
-            "#1c1c1a", "#ecebe6", "#3b3a36", None, "#cdaf96",
+            "#1c1c1a", "#ecebe6", "#3b3a36", None,
             "#6b8e6f", "#c9a227", "#bb655d", "#5b8dbe", "#9b8ac4",
             "#dedbd3", "#d9a05b", "#8fc099", "#8a877c", "#c1a3d8", "#8ab4d8",
         ),
         _look(
             "darkmatter",
-            "#0b0817", "#e9e6f7", "#443a76", "#b18cff", "#c1a1a0",
+            "#0b0817", "#e9e6f7", "#443a76", "#b18cff",
             "#7ea885", "#d6b13f", "#e0687e", "#8bb8ff", "#b18cff",
             "#e3def5", "#e0a86a", "#8fd6a8", "#8781a8", "#c9a3f0", "#8ab8f5",
         ),
         _look(
             "moune",
-            "#e0e7d6", "#1f2d22", "#b1a687", "#688a57", "#7a674b",
+            "#e0e7d6", "#1f2d22", "#b1a687", "#688a57",
             "#4f7d57", "#725c16", "#95453f", "#3e6183", "#8d78bd",
             "#2a2620", "#8a5a2b", "#3f6b4a", "#7d7a71", "#7a5c8f", "#2f5d80",
+            readable=True,
         ),
         _look(
             "heaven",
-            "#e8eef8", "#22304a", "#a2b7d8", "#517bba", "#76615b",
+            "#e8eef8", "#22304a", "#a2b7d8", "#517bba",
             "#4f7357", "#81681e", "#ac5048", "#3f6da5", "#7f68b8",
             "#253248", "#8a5a2b", "#3f6b4a", "#78809a", "#7a5c8f", "#2f5d80",
+            readable=True,
         ),
         _look(
             "pearl",
-            "#e0d7c3", "#201c14", "#b1a687", "#928057", "#7f6045",
+            "#e0d7c3", "#201c14", "#b1a687", "#928057",
             "#4b644e", "#725c16", "#95453f", "#3e6183", "#846db8",
             "#2a2620", "#8a5a2b", "#3f6b4a", "#7d7a71", "#7a5c8f", "#2f5d80",
+            readable=True,
+        ),
+        _look(
+            "snow",
+            "#eaeaea", "#1c1c1c", "#b8b8b8", "#828282",
+            "#4b644e", "#725c16", "#95453f", "#3e6183", "#846db8",
+            "#272727", "#8a5a2b", "#3f6b4a", "#7a7a7a", "#7a5c8f", "#2f5d80",
+            readable=True,
         ),
     )
 }
@@ -407,7 +477,7 @@ _THEMES: dict[str, Theme] = {
 # the machine is set to dark, the light one where it is set to light.
 AUTO_LOOK = "auto"
 _AUTO_DARK = replace(_THEMES["exe"], name=AUTO_LOOK)
-_AUTO_LIGHT = replace(_THEMES["pearl"], name=AUTO_LOOK)
+_AUTO_LIGHT = replace(_THEMES["snow"], name=AUTO_LOOK)
 
 # The look in use. One screen per process, so one look is all there is to
 # hold. Held as the look itself: which of its two the one that follows the

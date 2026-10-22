@@ -184,7 +184,17 @@ class Wecker:
 
         # Imported here, not at the top — cronablauf in turn imports from
         # this module, and at the top that would be a cycle.
-        from app import cronablauf
+        from app import cronablauf, job_watchdog
+
+        # The runs a chat sent off that went silent, before the table: a pass
+        # of the cron table that fails must not leave them hanging, and this
+        # one must not hold the table back.
+        generierungen = getattr(self.app.state, "generierungen", None)
+        if generierungen is not None:
+            try:
+                job_watchdog.check(self.app.state.repositories, generierungen)
+            except Exception:  # noqa: BLE001 - one broken pass must not stop the tick
+                log.exception("Watchdog pass failed")
 
         await cronablauf.einmal_pruefen(self.app, jetzt)
 

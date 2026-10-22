@@ -1,181 +1,141 @@
 <script>
-  /* The picture server's model files, as rows of the model card under
-     "Local" (app/api/v1/image_tools.py): each file with its family, its
-     size, a "···" for the rare jobs — converting it to a smaller GGUF where
-     a copy would be smaller, collecting an importance matrix — and an arrow
-     that opens the values the model starts with and its kit
-     (Bildmodellwerte.svelte). The devices stand in the memory section
-     (BildGeraete.svelte). */
-  import { api } from '../lib/api.js'
-  import { t } from '../lib/texte.svelte.js'
-  import { meldeText } from '../lib/meldewesen.svelte.js'
-  import { melde } from '../lib/zustand.svelte.js'
-  import { familyOf, loadImageFamilies } from '../lib/imageFamilies.svelte.js'
-  import Auswahlfeld from './Auswahlfeld.svelte'
-  import PictureMenu from './PictureMenu.svelte'
-  import Bildmodellwerte from './Bildmodellwerte.svelte'
+  /* The picture server's model files, as a folding row "Image models in this
+     folder" (app/api/v1/image_tools.py), closed to begin with: each file with
+     its family's mark, its family, its size and its state — the chips
+     "Analyzing imatrix" while pictures add to its importance matrix, and one
+     "GGUF <type>" for each GGUF copy beside it. The values a model starts
+     with stand at the top of the page (Bildmodellwerte.svelte); the devices
+     stand in the memory section (BildGeraete.svelte), converting in the block
+     above (ImageConvert.svelte). */
+  import { t, texte } from '../lib/texte.svelte.js'
+  import { formatGb } from '../lib/numberDisplay.js'
+  import { familyOf, familyMark, loadImageFamilies } from '../lib/imageFamilies.svelte.js'
+  import { imageFiles } from '../lib/imageModelFiles.svelte.js'
+  import Serverabschnitt from './Serverabschnitt.svelte'
+  import MakerMark from './MakerMark.svelte'
 
-  /* Each new answer of the panel reads the list again; `familien` maps a
-     file name to its family (GET /bild/modelle, `families`). */
-  let { reload = null, familien = {} } = $props()
+  /* `familien` maps a file name to its family (`families` of GET
+     /bild/modelle). The list of the files is read by the panel
+     (Bildserver.svelte) after each new answer. */
+  let { familien = {} } = $props()
 
-  let files = $state([])
-  // The file a conversion is being set up for, its type, and whether it runs.
-  let converting = $state(null)
-  let weightType = $state('')
-  let running = $state(false)
-  // The one model whose values stand open, or none.
-  let offen = $state('')
-  /* The family the open values last read for their model (GET
-     /bild/vorgaben): newer than the list's where the reading of the family
-     was just switched for it. A new list is the newest word again. */
-  let read = $state({})
-  $effect(() => {
-    if (familien) read = {}
-  })
-
-  function load() {
-    api.imageModelFiles().then((list) => (files = list)).catch(() => {})
-  }
-  $effect(() => {
-    if (reload !== undefined) load()
-  })
   loadImageFamilies()
 
-  /* Only the types a copy gets smaller in, as the service reads them off
-     the file; the first of them stands chosen. */
-  function convertStart(file) {
-    converting = file.name
-    weightType = file.convert_types[0]
-  }
-
-  const familie = (name) => familyOf(read[name] ?? familien[name])?.label ?? t('bild.familie_keine')
-  const size = (bytes) => `${(bytes / 1e9).toLocaleString(undefined, { maximumFractionDigits: 1 })} GB`
-
-  async function startConverting() {
-    if (!converting || running) return
-    running = true
-    try {
-      const answer = await api.convertModel(converting, weightType)
-      meldeText('bildserver.umgewandelt', { datei: answer.file }, 'erfolg')
-      converting = null
-      load()
-    } catch (error) {
-      /* Stopped on request is no failure, as with a stopped picture: nothing
-         is told, and the row stands as it did before the start. */
-      if (error.status !== 499) melde(String(error.message || error), 'fehler')
-    } finally {
-      running = false
-    }
-  }
-
-  async function toggleImatrix(file) {
-    try {
-      await api.collectImatrix(file.name, !file.collecting_imatrix)
-      load()
-    } catch (error) {
-      melde(String(error.message || error), 'fehler')
-    }
-  }
+  const familie = (name) => familyOf(familien[name])?.label ?? t('bild.familie_keine')
+  const size = (bytes) => t('modell.gb', { zahl: formatGb(bytes / 1e9, texte.sprache) })
 </script>
 
-{#each files as file (file.name)}
-  <div class="zeile liste datei">
-    <span class="name" title={file.name}>{file.name}</span>
-    <span class="familie">{familie(file.name)}</span>
-    <span class="groesse">{size(file.size)}</span>
-    <PictureMenu zeile entries={[
-      ...(file.convert_types?.length
-        ? [{ text: t('bildserver.umwandeln'), action: () => convertStart(file) }]
-        : []),
-      { text: t('bildserver.wichtigkeitsmatrix'), action: () => toggleImatrix(file),
-        value: file.collecting_imatrix ? t('bild.offload_an') : t('bild.offload_aus') },
-    ]} />
-    <button class="auf" class:offen={offen === file.name} aria-expanded={offen === file.name}
-            aria-label={t('bildserver.werte_auf')} title={t('bildserver.werte_auf')}
-            onclick={() => (offen = offen === file.name ? '' : file.name)}>
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
-           stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M3.5 5.25L7 8.75L10.5 5.25" />
-      </svg>
-    </button>
-  </div>
-  {#if offen === file.name}
-    <Bildmodellwerte modell={file.name} listen={reload}
-                     onfamily={(family) => (read[file.name] = family)} />
-  {/if}
-  {#if converting === file.name}
-    <div class="zeile liste">
-      <div class="gewicht">
-        <Auswahlfeld bind:wert={weightType} beschriftung={t('bild.weight_type')}
-                     eintraege={file.convert_types.map((w) => ({ wert: w, text: w }))}
-                     gesperrt={running} />
-      </div>
-      <button class="feldknopf" disabled={running} onclick={startConverting}>
-        {running ? t('bildserver.umwandeln_laeuft') : t('bildserver.umwandeln')}
-      </button>
+{#if imageFiles.list.length}
+  <Serverabschnitt klappbar offen={false} titel={t('bildserver.bildmodelle_im_ordner')}>
+    <div class="zeile tabellenkopf">
+      <span class="datei">{t('bildserver.datei')}</span>
+      <span class="familie">{t('bild.familie')}</span>
+      <span class="groesse">{t('bildserver.groesse')}</span>
+      <span class="stand">{t('bildserver.stand')}</span>
     </div>
-  {/if}
-{/each}
+    {#each imageFiles.list as file (file.name)}
+      <div class="zeile datei-zeile">
+        <span class="datei" title={file.name}>
+          <MakerMark mark={familyMark(familien[file.name])} name={file.name} />
+          <span class="dateiname">{file.name}</span>
+        </span>
+        <span class="familie wert">{familie(file.name)}</span>
+        <span class="groesse wert">{size(file.size)}</span>
+        <span class="stand">
+          {#if file.collecting_imatrix}
+            <span class="chip imatrix">{t('bildserver.imatrix_laeuft')}</span>
+          {/if}
+          {#if file.gguf_type}
+            <span class="chip gguf">{t('bildserver.gguf_typ', { typ: file.gguf_type })}</span>
+          {/if}
+        </span>
+      </div>
+    {/each}
+  </Serverabschnitt>
+{/if}
 
 <style>
-  /* The rows are Serverabschnitt.svelte's; here only their parts. A file
-     row is the positioned box its menu hangs from. */
+  /* The rows are Serverabschnitt.svelte's; here only their columns: the file
+     takes what is left, with its family's mark before the name; the others
+     stand 150, 110 and 230 wide. */
   .datei {
-    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
-  /* The family as a small pill on the field ground. */
+  .dateiname {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .familie {
     flex: none;
-    padding: 2px 9px;
-    border-radius: 9px;
-    background: var(--bg-hoch);
-    font-size: 12px;
-    line-height: 16px;
-    color: var(--text-still);
-    white-space: nowrap;
+    width: 150px;
   }
   .groesse {
     flex: none;
-    font-size: 12px;
-    line-height: 16px;
-    color: var(--text-still);
-    white-space: nowrap;
+    width: 110px;
     font-variant-numeric: tabular-nums;
   }
-  .gewicht {
-    flex: 1;
+  /* The column is 230 wide; three chips go on a second line. */
+  .stand {
+    flex: none;
+    width: 230px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 6px;
     min-width: 0;
   }
-  /* The arrow that opens a model's values: quiet like the "···" beside it,
-     turned up while they stand open. */
-  .auf {
-    flex: none;
-    width: 24px;
-    height: 24px;
-    margin-left: -4px;
-    padding: 0;
-    display: grid;
-    place-items: center;
-    border: none;
-    border-radius: 9px;
-    background: none;
-    color: var(--text-still);
-    cursor: pointer;
+  /* Two classes under the card, so the card's own row height
+     (Serverabschnitt.svelte) does not win. */
+  :global(.karte) > .zeile.tabellenkopf {
+    min-height: 40px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 15px;
+    color: var(--text-leise);
   }
-  .auf:hover {
-    background: var(--bg-hoch);
+  /* The head's file column starts where the names do, behind the mark's box
+     (22 px and its gap). */
+  .tabellenkopf .datei {
+    padding-left: 32px;
+  }
+  .datei-zeile {
+    position: relative;
+    font-size: 13px;
+    line-height: 18px;
     color: var(--text);
   }
-  .auf svg {
-    transition: transform 0.15s;
+  .datei-zeile .datei {
+    font-weight: 600;
   }
-  .auf.offen svg {
-    transform: rotate(180deg);
+  .datei-zeile .wert {
+    white-space: nowrap;
   }
-  @media (prefers-reduced-motion: reduce) {
-    .auf svg {
-      transition: none;
-    }
+  /* A state of the file in a few words: 19 tall, in the colour of what it
+     says — green for the matrix that is being collected, blue for a copy that
+     is there — on twelve parts in a hundred of the same colour. */
+  .chip {
+    flex: none;
+    height: 19px;
+    box-sizing: border-box;
+    padding: 2px 8px;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 15px;
+    white-space: nowrap;
+  }
+  .chip.imatrix {
+    color: var(--gruen-text);
+    background: color-mix(in srgb, var(--gruen) 12%, transparent);
+  }
+  .chip.gguf {
+    color: var(--text);
+    background: color-mix(in srgb, var(--text) 12%, transparent);
   }
 </style>

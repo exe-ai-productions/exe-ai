@@ -39,9 +39,14 @@ const ZAHLFELDER = [
   'stimmschichten', 'stimmfaeden',
   'putzkontext', 'putzschichten', 'putzfaeden',
   'speech_context', 'speech_gpu_layers', 'speech_threads', 'speech_port', 'cleanup_port',
-  'conversation_pause_seconds',
+  'speech_idle_minutes', 'cleanup_idle_minutes',
+  'conversation_pause_seconds', 'conversation_wait_seconds', 'conversation_silent_rounds',
   'putztemperatur', 'putztop_k', 'putztop_p', 'putzmin_p', 'putzstrafe',
 ]
+
+/* The five generation values of the voice may stand on "Auto": stored as the
+   word, and the program of the voice takes its own value for each. */
+const AUTOFELDER = ['stimmtemperatur', 'stimmtop_k', 'stimmtop_p', 'stimmmin_p', 'stimmstrafe']
 
 export const diktat = $state({
   sprache: 'auto',
@@ -62,7 +67,10 @@ export const diktat = $state({
   vorlesen: null,
   /* `null` for the same reason: a stored "off" is a real choice. */
   keep_model_in_memory: null,
-  stimme: '',
+  /* `null`: nothing stored, and the voice of the system this machine starts
+     with stands (the works answer of the speech report). An empty string is
+     the choice "-", stored on purpose. */
+  stimme: null,
   stimmprobe: '',
   stimmsprache: '',
   /* The speech server's file; its four numbers stand with the others below
@@ -86,8 +94,14 @@ export const diktat = $state({
   speech_threads: null,
   speech_port: null,
   cleanup_port: null,
+  // Minutes without a request after which each server frees its model; empty is never.
+  speech_idle_minutes: null,
+  cleanup_idle_minutes: null,
   /* `null`: nothing stored, and the works answer (3.0 seconds) stands. */
   conversation_pause_seconds: null,
+  /* Likewise: 15 seconds a round waits, 3 silent rounds end a conversation. */
+  conversation_wait_seconds: null,
+  conversation_silent_rounds: null,
   putztemperatur: null,
   putztop_k: null,
   putztop_p: null,
@@ -182,6 +196,7 @@ async function einlesen() {
   if (typeof w.automatik === 'boolean') diktat.automatik = w.automatik
   for (const name of ZAHLFELDER) {
     if (typeof w[name] === 'number') diktat[name] = w[name]
+    else if (w[name] === 'auto' && AUTOFELDER.includes(name)) diktat[name] = 'auto'
   }
   diktat.geladen = true
 }

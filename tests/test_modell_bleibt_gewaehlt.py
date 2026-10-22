@@ -78,6 +78,7 @@ export const api = {
 }
 export const melde = (text, kind) => log.push(['notice', text, kind])
 export const melden = () => {}
+export const answerPreview = () => ''
 // Handed on by the state module to the rest of the window.
 export const aktualisiereMeldung = () => {}
 export const meldungen = []
@@ -761,6 +762,7 @@ export const auftraegeStillLaden = () => {}
 export const chatOeffnen = async () => {}
 export const modelleLaden = () => {}
 export const auswahlLaden = () => {}
+export const loadRunApprovals = () => {}
 """
 
 # Compiles the event line, bends its imports, and sends events in through

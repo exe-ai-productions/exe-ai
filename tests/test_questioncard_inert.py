@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from tests.fensterquelle import BAR_SOURCE
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "src"
 APP = FRONTEND / "App.svelte"
-BAR = FRONTEND / "teile" / "Eingabeleiste.svelte"
+BAR = BAR_SOURCE
 CARD = FRONTEND / "teile" / "QuestionBox.svelte"
 
 
@@ -57,11 +58,18 @@ def test_the_veil_leaves_the_inert_parts_for_the_chat_column():
 
 
 def test_the_field_takes_the_focus_only_in_the_render_after_the_change():
-    bar = BAR.read_text(encoding="utf-8")
-    helper = re.search(r"function focusFieldAfterRender\(\) \{\n(.*?)\n  \}", bar, re.S)
-    assert helper and "tick().then(() => feld?.focus())" in helper.group(1)
+    # The helper and the four ways out are the store's, read from its own file.
+    store = (FRONTEND / "lib" / "fragekarte.svelte.js").read_text(encoding="utf-8")
+    helper = re.search(r"function focusFieldAfterRender\(\) \{\n(.*?)\n  \}", store, re.S)
+    assert helper and "tick().then(() => fokus())" in helper.group(1)
     for name in ("answerTool", "answerAsk", "later", "resume"):
-        body = re.search(r"  function %s\(.*?\n  \}\n" % name, bar, re.S)
+        body = re.search(r"  function %s\(.*?\n  \}\n" % name, store, re.S)
         assert body, name
         assert "focusFieldAfterRender()" in body.group(0), name
-        assert "feld?.focus()" not in body.group(0), name
+        assert "fokus()" not in body.group(0).replace("focusFieldAfterRender()", ""), name
+    # The desktop bar hands the store its field; the bar itself never focuses on an answer.
+    bar = BAR.read_text(encoding="utf-8")
+    assert "useFragekarte({ fokus: () => feld?.focus() })" in bar
+    # The phone page hands it nothing: an answer must not bring the keyboard up.
+    chat = (FRONTEND / "phone" / "ChatView.svelte").read_text(encoding="utf-8")
+    assert "useFragekarte({ showTranscript: false })" in chat

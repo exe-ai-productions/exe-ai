@@ -44,6 +44,7 @@ from app.providers.base import (
     WerkzeugFortschrittsDrossel,
     kontext_stueck,
     provider_error,
+    refusal_of,
     require_stream_end,
     zaehlung,
     zeitlimit,
@@ -214,15 +215,23 @@ class AnthropicProvider(Provider):
     # --- Sign of life and catalogue --------------------------------------
 
     async def erreichbar(self, timeout: float = 3.0) -> bool:
+        self.letzter_grund = None
         try:
             async with httpx.AsyncClient(timeout=timeout, headers=self._kopfzeilen) as client:
                 antwort = await client.get(f"{self.endpunkt.base_url}/models")
-            # 401 means the address answers and the key is wrong — worth
-            # distinguishing from a dead host, so it is logged, not swallowed.
-            if antwort.status_code == 401:
-                log.info("Anthropic answers, but the key is rejected")
+            if antwort.status_code >= 400:
+                # The address answers and refuses — a wrong key, a key that
+                # belongs to no workspace — which is not the same as a dead
+                # host. What Anthropic says about it is kept and logged.
+                grund = refusal_of(antwort, self._kopfzeilen.get("x-api-key", ""))
+                if grund is not None:
+                    self.letzter_grund = grund[1]
+                    self.ablehnung_melden(log, antwort.status_code, grund)
+                elif antwort.status_code == 401:
+                    log.info("Anthropic answers, but the key is rejected")
                 return False
-            return antwort.status_code < 400
+            self.ablehnung_vorbei()
+            return True
         except (httpx.HTTPError, OSError):
             return False
 
@@ -782,6 +791,10 @@ class AnthropicProvider(Provider):
         # for a silent OpenAI-compatible server.
         denken_gesehen = False
         ende_grund: str | None = None
+        # What Anthropic says about a refusal, beside the reason: the
+        # category and an explanation, either of them `null` or missing.
+        ablehnung_kategorie: str | None = None
+        ablehnung_erklaerung: str | None = None
         # Tool calls under construction, by block index: their arguments
         # arrive as a string in pieces and are only valid JSON at the end.
         offene: dict[int, dict[str, Any]] = {}
@@ -982,8 +995,20 @@ class AnthropicProvider(Provider):
                             ausgang = zaehlung(nutzung.get("output_tokens")) or ausgang
                             # Why it stopped travels in the same event, one
                             # level up from the usage.
-                            if wort := (daten.get("delta") or {}).get("stop_reason"):
+                            delta = daten.get("delta") or {}
+                            if wort := delta.get("stop_reason"):
                                 ende_grund = wort
+                            # The refusal's own words travel next to it; a
+                            # field that is `null`, missing or not text says
+                            # nothing and leaves what an earlier event gave.
+                            details = delta.get("stop_details")
+                            if isinstance(details, dict):
+                                kategorie = details.get("category")
+                                erklaerung = details.get("explanation")
+                                if isinstance(kategorie, str) and kategorie.strip():
+                                    ablehnung_kategorie = kategorie.strip()
+                                if isinstance(erklaerung, str) and erklaerung.strip():
+                                    ablehnung_erklaerung = erklaerung.strip()
 
                         elif typ == "error":
                             fehler = daten.get("error") or {}
@@ -1034,6 +1059,17 @@ class AnthropicProvider(Provider):
         # goodbye without a reason names none. Checked before any assembled
         # tool call is handed out and before the stats.
         require_stream_end(ende_grund, self.name)
+        ablehnung: dict[str, Any] = {}
+        if antwortende.abgelehnt(ende_grund):
+            log.warning(
+                "%s declined to answer (%s): %s",
+                display_model(reported_model or anfrage.modell),
+                ablehnung_kategorie or "no category",
+                ablehnung_erklaerung or "no explanation",
+            )
+            ablehnung["abgelehnt"] = True
+            if ablehnung_erklaerung:
+                ablehnung["ablehnung_erklaerung"] = ablehnung_erklaerung
 
         if fertige:
             yield Stueck(sorte="tool_call", werkzeugaufrufe=fertige)
@@ -1100,6 +1136,10 @@ class AnthropicProvider(Provider):
             "ende_grund": ende_grund,
             "abgeschnitten": antwortende.abgeschnitten(ende_grund),
             "kontextfenster_voll": antwortende.kontextfenster_voll(ende_grund),
+            # A refusal is its own reading, with the explanation Anthropic
+            # gave for it where it gave one: the window says that nothing
+            # is coming and why, instead of showing an empty answer.
+            **ablehnung,
             # The model that answered. A wire that names none leaves the one
             # this request asked for; neither is ever an empty name, and
             # neither is ever a path (``display_model``). Beside the endpoint

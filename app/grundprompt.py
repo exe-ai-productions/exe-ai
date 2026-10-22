@@ -54,6 +54,7 @@ import textwrap
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
+from app import speicherorte
 from app.own_folder_line import shared_folders, starts_in_own_folder
 from app.providers import ChatNachricht
 from app.schleifenwaechter import Schleifenwaechter
@@ -70,6 +71,7 @@ from app.tools import (
     datei_schreiben,
     datei_suchen,
     frage_werkzeug,
+    job_werkzeug,
     memory,
     ordner_lesen,
     shell,
@@ -89,6 +91,12 @@ from app.tools import (
 # last paragraph rather than the first because the sentence above it is
 # already about someone who does not know what to do next, which is exactly
 # who gets sent to a manual.
+# The second sentence about the manual has two forms. Where the skill help is
+# on offer to the run, it names that skill: a model that is only told to send
+# the user to the settings searches the folders for an answer instead, and
+# answers without the manual. Where the skill is not on offer — a run without
+# the tool that loads skills, or with the skill switched off — the sentence
+# stays as it is, because it would name something the model cannot reach.
 # THE NAME IS HERE AND NOWHERE ELSE, and it is deliberately not left to the
 # model. Whichever one answers underneath — a local Qwen, a Gemma, a cloud
 # model — the assistant the user talks to is one assistant, and swapping the
@@ -99,6 +107,17 @@ from app.tools import (
 # What it does NOT do is tell the model to lie: asked outright which model is
 # running, it may say so. WAHRHEIT below outranks a name, and a name that
 # forced a denial would be the first sentence in this file to ask for one.
+MANUAL_SEND_USER = "Send the user there for questions about the program itself."
+# Where a setting lives, as the settings window groups it: a model that does
+# not know the groups sends the user to pages that are not there. The page
+# names are the ones of the window's own list (frontend/src/lib/einstellungsliste.js).
+SETTINGS_GROUPS = (
+    "The settings window has five groups: Interface (Appearance, Language, Notifications, Shortcuts), "
+    "Behavior (Instructions, Memory, Skills, Cron jobs, Agents), Models (Local models, Cloud providers, "
+    "Catalog, Downloads), Servers and connections (Overview, the six servers, MCP Servers, Tools, Web App) "
+    "and System (Credentials, Configuration, Tools file, Help, Updates). When you send the user somewhere, "
+    "name the group and the page."
+)
 GRUNDLAGE = """\
 You are Exe, the assistant inside Exe AI, a program running on the user's
 own computer. Exe is your name whatever model is answering underneath —
@@ -116,7 +135,27 @@ When someone does not know what to do next, answer with the ONE step that gets
 them furthest, not with a tour of everything.
 
 Exe AI has a manual: the entry called Help at the bottom of the settings.
-Send the user there for questions about the program itself."""
+""" + MANUAL_SEND_USER + "\n" + SETTINGS_GROUPS
+
+# The name of the skill that holds the manual, and the sentence that replaces
+# the one above where that skill is on offer. The tool that loads it is named
+# by the module that owns it, never typed here.
+HELP_SKILL = "help"
+MANUAL_WITH_HELP = (
+    "For a question about the program itself — where a setting is, what a "
+    "control or sign means, why it behaves as it does — load the {skill} "
+    "skill with `{load}` first and answer from it. Do not search files for "
+    "it, and do not guess."
+)
+
+# Only where the program runs on Windows: the model's answers show paths the
+# way the interface does, with forward slashes (a backslash in running text is
+# also an escape in Markdown). A command for the shell is the one place the
+# other form stays, because cmd reads a slash as a switch.
+WINDOWS_PATHS = """\
+Write paths in your answers with forward slashes, for example
+C:/Users/name/notes.txt. Inside a command for the shell, keep the backslashes
+it needs."""
 
 # Which model is answering and through which endpoint — two plain lines,
 # "Model: …" and "Provider: …". GRUNDLAGE lets the model say which engine runs
@@ -135,11 +174,11 @@ TASK_COMPLETION_GUIDANCE = (
     "When the user asks you to build, run, or verify something, the deliverable is a working artifact backed by real "
     "tool output — not a description of one. Do not stop after writing a stub, a plan, or a single command. Keep "
     "working until you have actually exercised the code or produced the requested result, then report what real "
-    "execution returned.\n"
-    "If a tool, install, or network call fails and blocks the real path, say so directly and try an alternative "
-    "(different package manager, different approach, ask the user). NEVER substitute plausible-looking fabricated "
-    "output (made-up data, invented file contents, synthesised API responses) for results you couldn't actually "
-    "produce. Reporting a blocker honestly is always better than inventing a result."
+    "execution returned. Finishing means finishing what was asked — not adding files, code or steps nobody asked "
+    "for.\n"
+    "If a tool, install or network call fails and blocks the real path, report the actual error first. Try a "
+    "genuinely different approach only when it stays within what the user asked for; never retry the same call "
+    "with small variations, and never fabricate output."
 )
 
 # Goes to every model but Claude, which does not show the failure it is
@@ -156,20 +195,28 @@ TOOL_USE_ENFORCEMENT_GUIDANCE = (
     "user. Responses that only describe intentions without acting are not acceptable."
 )
 
+# The end of that block where the run can hand work to a job: a hand-off is
+# an action, and a model that does not know it goes on working on what it
+# handed away.
+HANDOFF_COUNTS = (
+    f"Handing work to a job with {auftrag_werkzeug.WERKZEUG_NAME} counts as acting; after it, tell the user what "
+    "was handed off and end your turn."
+)
+
 # The execution guidance, cut into its lines so each can go with the tool it
 # names — a line about web search makes no sense where there is no web
 # search. The tool names are this program's (``WERKZEUG_NAME``); a line
-# whose tool, or whose memory, is not in this run is left out, and nothing
-# else is changed. Each entry is (text, what it needs): a tool name, the
-# word "memory", a web search ("web"), or nothing. ``{lookup}`` is filled with
+# whose tool is not in this run is left out, and nothing else is changed.
+# Each entry is (text, what it needs): a tool name, a web search ("web"), or
+# nothing. ``{lookup}`` is filled with
 # the lookup tools this run has, ``{lookup_or}`` with the same as "a, b, or c".
 EXECUTION_HEAD = "# Execution discipline"
 EXECUTION_SECTIONS: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
     ("<tool_persistence>", "</tool_persistence>", (
         ("- Use tools whenever they improve correctness, completeness, or grounding.", ""),
         ("- Do not stop early when another tool call would materially improve the result.", ""),
-        ("- If a tool returns empty, partial, or suspiciously narrow results, retry with a broader or different "
-         "query or strategy before concluding.", ""),
+        ("- If a search or lookup returns empty, partial, or suspiciously narrow results, retry with a broader or "
+         "different query or strategy before concluding.", ""),
         ("- Keep calling tools until: (1) the task is complete, AND (2) you have verified the result.", ""),
     )),
     ("<mandatory_tool_use>\nNEVER answer these from memory or mental computation — ALWAYS use a tool:",
@@ -184,8 +231,6 @@ EXECUTION_SECTIONS: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
         ("- File contents, sizes, line counts → use {lookup_or}", "lookup"),
         (f"- Git history, branches, diffs → use {shell.WERKZEUG_NAME}", shell.WERKZEUG_NAME),
         ("- Current facts (weather, news, versions) → use a web search tool", "web"),
-        ("Your memory describes the USER, not the system you are running on. The execution "
-         "environment may differ from what the memory says about their personal setup.", "memory"),
     )),
     ("<act_dont_ask>\nWhen a question has an obvious default interpretation, act on it immediately instead of "
      "asking for clarification. Examples:", "</act_dont_ask>", (
@@ -245,10 +290,10 @@ LOOKUP_TOOLS = (
 )
 
 
-def execution_discipline(tool_names: Iterable[str], memory_travels: bool) -> str:
+def execution_discipline(tool_names: Iterable[str]) -> str:
     """``OPENAI_MODEL_EXECUTION_GUIDANCE`` for exactly this run's tools: a
-    line whose tool, or whose memory, is not here is dropped, and a section
-    left with no line is dropped with it."""
+    line whose tool is not here is dropped, and a section left with no line
+    is dropped with it."""
     names = set(tool_names)
     lookup = [n for n in LOOKUP_TOOLS if n in names]
     # "a", "a or b", "a, b, or c" — the guidance text's own spelling of the three.
@@ -267,8 +312,6 @@ def execution_discipline(tool_names: Iterable[str], memory_travels: bool) -> str
             return bool(lookup)
         if need == "web":
             return web
-        if need == "memory":
-            return memory_travels
         return need in names
 
     sections = [EXECUTION_HEAD]
@@ -345,6 +388,7 @@ FAEHIGKEIT_JE_WERKZEUG: tuple[tuple[str, str], ...] = (
     (bild_werkzeug.WERKZEUG_NAME, "generate images with the image model on this machine"),
     (video_tool.WERKZEUG_NAME, "create short videos with the video model on this machine"),
     (auftrag_werkzeug.WERKZEUG_NAME, "delegate lengthy tasks to an agent that reports back"),
+    (job_werkzeug.WERKZEUG_NAME, "see and stop the jobs you started"),
     (cronjob.WERKZEUG_NAME, "schedule a job"),
     (cron_notiz.WERKZEUG_NAME, "retain a note between scheduled runs"),
     (ziel_werkzeug.WERKZEUG_NAME, "report that a given goal has been reached"),
@@ -491,8 +535,41 @@ into a chat from there.
 An agent may stop and ask a question of its own; the user sees it above the
 input of this chat, and the agent waits until they answer. A helper never asks:
 when it needs something from the user, its report says so, and you ask them.
-When the work is done, its report comes back into this chat and you sum it up
-for the user."""
+When the work is done, its report comes back into this chat by itself and you
+sum it up for the user. Until then the work is the run's: do not look in
+folders, do not wait with commands and do not do it yourself."""
+
+# How a model sets up an agent for the user: an agent is one Markdown file in
+# the agents folder, and the fields are the ones the loader knows
+# (app/agenten.py, ``BEKANNTE_FELDER``). Only where the file can be written,
+# and with the folder as this machine has it.
+AGENT_SETUP = (
+    "You can set up an agent for the user. An agent is one Markdown file in {agents_dir}, named after the agent, "
+    "with a front matter (description, tools, folders, max_rounds, max_minutes, max_tokens, reasoning_budget, "
+    "reasoning_effort, max_command_seconds) and its instructions below it. Write it with " + datei_schreiben.WERKZEUG_NAME + "; "
+    "the user confirms the write. Then ask the user to check that it appears under Settings \u2192 Behavior "
+    "\u2192 Agents."
+)
+
+# What a schedule may start: only a file in the scripts folder, and it has to
+# be executable. Only where a schedule can be made.
+SCRIPT_SCHEDULE = (
+    "A schedule can only start a script that lies in the scripts folder ({scripts_dir}). Write the script there, "
+    "make it executable with chmod +x, and then create the schedule with " + cronjob.WERKZEUG_NAME + " and "
+    "script."
+)
+
+# What the two drawing tools do not take: they use the default model of the
+# image server page, and the rest is the studio's. Only where one of them is
+# offered — a model that is not told promises a LoRA or a mask, or rebuilds the
+# studio with shell commands.
+PICTURE_TOOL_LIMITS = (
+    f"{bild_werkzeug.WERKZEUG_NAME} and {video_tool.WERKZEUG_NAME} always use the default model chosen on the image "
+    "server page (Servers and connections \u2192 Image server). You cannot choose another model, a LoRA, a mask, "
+    "several reference images, upscaling or face tools, and for video not even size or length. When the user "
+    "wants any of these, do what the tool allows and send them to the Images studio for the rest; never imitate "
+    "the studio with shell commands."
+)
 
 # Only when skill_save is offered. It was the one tool in the whole registry
 # with no sentence anywhere: a model that is never told a way of working can
@@ -574,7 +651,7 @@ The user has shared these working folders with you:
 # files are kept — not a folder the user shared, and no place for an exe.md.
 # Named apart for the same reason as the chat's own folder, and last, so a
 # relative path still resolves against a folder the user shared.
-DOCK_FOLDER = """The dock folder holds finished files delivered to the user{finds}. It belongs to the program, rather than the folders
+DOCK_FOLDER = """The Doc folder holds finished files delivered to the user{finds}. It belongs to the program, rather than the folders
 shared by the user. Do not create an `exe.md` file in it:
 
 - {ordner}"""
@@ -640,6 +717,32 @@ setting at work, not an error."""
 ORDNER_FEHLT = """No working folder has been shared with you. Commands and file tools
 are unavailable until the user shares one. A refusal reflects this restriction,
 not an error. If file work is needed, explain that a shared folder is required."""
+
+# The command line client, named only where the run can use it (the caller
+# decides, app/command_line_client.py ``for_prompt``). The command is spelled
+# out in full: the service often has no ``/usr/local/bin`` on its path, and a
+# bare ``exe`` would not be found. A key and a sign-in are the user's to give,
+# and the client says so itself, so the model only passes that on. Two rules
+# close the block: the model does not stop the server or the service it
+# answers through (the answer would never arrive), and a setting is named to
+# the user, with its value, before the client changes it.
+MCP_KEY_GUIDE = (
+    "If an MCP server needs a key or a sign-in, guide the user step by step: Settings \u2192 Servers and "
+    "connections \u2192 MCP Servers \u2192 choose the service's tile, or Custom server \u2192 enter its URL (type "
+    "http) or its start command (type stdio) \u2192 choose an API key or Sign in through the browser \u2192 Apply. "
+    "Before you name an address, look up the service's official MCP address with the web search and read the "
+    "source page. Never ask the user to paste a key into the chat."
+)
+
+COMMAND_LINE = f"""\
+Exe AI has a command line client; run it with {shell.WERKZEUG_NAME} to do things in
+Exe AI for the user. Its command on this machine is "{{command}}"; "{{command}}"
+--help lists what it can do. Every command of its chat also runs from outside,
+without the slash: "{{command}}" mcp add https://example.com/mcp sets up the MCP
+server at that address. {MCP_KEY_GUIDE}
+Never stop the model server or the service you answer through unless the user
+asks for exactly that. Before "{{command}}" settings changes a setting, tell
+the user which setting and which value."""
 
 # What the user wrote down about a folder — its exe.md (app/ordnerwissen.py).
 # Directly after the folder list it talks about, and before the memory, so
@@ -738,10 +841,10 @@ True in both: the memory. In doubt: the memory."""
 # local models this program is built for. Both events are visible in what the
 # user just wrote, so nothing has to be inferred.
 #
-# The last sentence, replacing a contradicting entry, only where the memory
-# travels to this model: replacing needs the entries in sight, and where the
-# memory stays off this model's side it sees none of them
-# (MEMORY_REPLACE).
+# The last sentences, replacing a contradicting entry and deleting a
+# forgotten one, only where the memory travels to this model: both need the
+# entries in sight, and where the memory stays off this model's side it sees
+# none of them (MEMORY_REPLACE).
 #
 # NOT in here: that a wrong entry "costs one click to delete". It does not.
 # The memory is one text file, edited whole in the settings window and saved
@@ -766,7 +869,8 @@ conversation only."""
 
 MEMORY_REPLACE = """\
 If an entry contradicts what you are about to save,
-replace it instead of adding a second one beside it."""
+replace it instead of adding a second one beside it. If the user asks you to
+forget something, delete its entry."""
 
 # Names and one line each, never the instructions themselves. The whole point
 # of the catalogue is that the long text stays on disk until it is needed;
@@ -1022,6 +1126,24 @@ def faehigkeiten(angeboten: Iterable[str], in_chat: bool = False) -> list[str]:
     return phrases
 
 
+def setup_folders(config) -> tuple[str, str]:
+    """The agents folder and the scripts folder as this machine has them now
+    — what the sentences about setting up an agent and a script name. The
+    scripts folder is one the user can move, so a caller that keeps a built
+    message puts both into what decides whether it is built again."""
+    return (
+        str(config.pfad(config.app.agenten_verzeichnis)),
+        str(speicherorte.ort(config, "scripts")),
+    )
+
+
+def runs_on_windows() -> bool:
+    """Whether this machine is a Windows one — the same reading
+    ``shell_environment`` takes its choice from. A function so a test can
+    ask about the other machine."""
+    return os.name == "nt"
+
+
 def shell_environment(
     os_name: str | None = None,
     system: str | None = None,
@@ -1172,6 +1294,10 @@ def bauen(
     provider_name: str = "",
     tool_names: Iterable[str] = (),
     memory_travels: bool = False,
+    storage: str = "",
+    command_line: str | None = None,
+    agents_dir: str = "",
+    scripts_dir: str = "",
 ) -> str:
     """The shipped prompt for exactly this situation.
 
@@ -1231,12 +1357,32 @@ def bauen(
 
     ``model_name`` and ``provider_name`` give the two lines naming the model
     and the endpoint it answers through. ``tool_names`` is this run's tool
-    list and ``memory_travels`` whether the memory goes out with it: the
-    three guidance sections need both — the guidance only ships
-    with tools, the execution lines each name a tool, and one of them speaks
-    of the memory.
+    list: the execution lines each name a tool, the hand-off sentence needs
+    the tool that hands work to a job, and the picture sentence one of the
+    two that draw. ``memory_travels`` is whether the memory goes out with
+    the request, which decides whether an entry can be replaced.
+
+    ``storage`` is the finished paragraph naming the folders Exe AI keeps its
+    files in (app/storage_prompt.py); every run gets it, with tools or
+    without. ``command_line`` is the command of the command line client, set
+    only where the run may use it (app/command_line_client.py) — the
+    paragraph about it is left out otherwise, like any other.
+
+    ``agents_dir`` and ``scripts_dir`` are the folder of the agent files and
+    the folder a schedule may start scripts from, as this machine has them:
+    the sentence about setting up an agent needs the first and a file tool
+    that writes, the one about scripts the second and the tool that makes a
+    schedule.
     """
+    names = set(tool_names)
     teile = [GRUNDLAGE]
+    if any(name == HELP_SKILL for name, _ in skills):
+        teile[0] = GRUNDLAGE.replace(
+            MANUAL_SEND_USER,
+            MANUAL_WITH_HELP.format(skill=HELP_SKILL, load=skill.LADEN),
+        )
+    if runs_on_windows():
+        teile.append(WINDOWS_PATHS)
     if model_name or provider_name:
         teile.append(
             MODELL.format(model=model_name or "unknown", provider=provider_name or "unknown")
@@ -1257,8 +1403,12 @@ def bauen(
         # two to every model but Claude.
         teile.append(TASK_COMPLETION_GUIDANCE)
         if not is_claude(model_name):
-            teile.append(TOOL_USE_ENFORCEMENT_GUIDANCE)
-            teile.append(execution_discipline(tool_names, memory_travels))
+            teile.append(
+                f"{TOOL_USE_ENFORCEMENT_GUIDANCE}\n{HANDOFF_COUNTS}"
+                if auftrag_werkzeug.WERKZEUG_NAME in names
+                else TOOL_USE_ENFORCEMENT_GUIDANCE
+            )
+            teile.append(execution_discipline(names))
     if befehle:
         system, shell_name, python = shell_environment()
         teile.append(BEFEHLE.format(system=system, shell=shell_name, python=python))
@@ -1285,8 +1435,14 @@ def bauen(
         teile.append(ANHAENGE)
     if bilder:
         teile.append(BILDER)
+    if bild_werkzeug.WERKZEUG_NAME in names or video_tool.WERKZEUG_NAME in names:
+        teile.append(PICTURE_TOOL_LIMITS)
     if agenten:
         teile.append(AGENTEN)
+    if agents_dir and datei_schreiben.WERKZEUG_NAME in dateiwerkzeuge:
+        teile.append(AGENT_SETUP.format(agents_dir=agents_dir))
+    if scripts_dir and cronjob.WERKZEUG_NAME in names:
+        teile.append(SCRIPT_SCHEDULE.format(scripts_dir=scripts_dir))
     if ordner:
         # ``zugriff`` is (inside, outside) as the rules answer them — "ja",
         # "fragen" or "nein" (app/berechtigungen.py, zugriffslage). Without
@@ -1333,6 +1489,10 @@ def bauen(
         )
     elif befehle or dateiwerkzeuge:
         teile.append(ORDNER_FEHLT)
+    if storage:
+        teile.append(storage)
+    if command_line:
+        teile.append(COMMAND_LINE.format(command=command_line))
     if ordnerwissen:
         teile.append(
             EXEMD.format(

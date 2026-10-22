@@ -53,6 +53,12 @@ class StummerRunner:
     def lauf(self):
         return self._lauf
 
+    def shown_run(self, port=None):
+        return self._lauf
+
+    def refuse_stop_when_shared(self):
+        return None
+
     def belegt_gb(self):
         return None
 
@@ -196,6 +202,8 @@ def test_die_auskunft_nennt_die_vorgaben(client):
         # Shipped on, so an installation that has never seen the tick box
         # preloads exactly as it did before the box existed.
         "vorladen": True,
+        # May a run the program places itself land on this server? Shipped on.
+        "use_for_runs": runnermodellwahl.VORGABE["use_for_runs"],
     }
 
 
@@ -1134,11 +1142,12 @@ def test_windows_lists_the_four_variants_and_names_the_one_that_was_fetched(
             {"variante": "rocm", "groesse": 256_958_369},
         ],
         "installiert": "cuda12",
+        "unavailable": [],
     }
 
 
 def test_the_other_systems_list_no_variant(client, tmp_path, monkeypatch):
-    """Silence probe: on a Mac the list is empty and nothing is named."""
+    """On a Mac the choice is empty and nothing is named installed."""
     # The test sets the system itself, like its neighbours: run on Windows it
     # would otherwise list the four variants of that system.
     monkeypatch.setattr(serverdownload, "sys", SimpleNamespace(platform="darwin"))
@@ -1146,7 +1155,17 @@ def test_the_other_systems_list_no_variant(client, tmp_path, monkeypatch):
     _program(client, monkeypatch, tmp_path, _lay_build(tmp_path, BUILD))
     answer = client.get("/api/v1/runner/programm/varianten")
     assert answer.status_code == 200
-    assert answer.json() == {"varianten": [], "installiert": None}
+    # A Mac lists nothing to choose from and names the four builds it cannot run.
+    assert answer.json() == {
+        "varianten": [],
+        "installiert": None,
+        "unavailable": [
+            {"variante": "cpu", "groesse": 19_398_918},
+            {"variante": "cuda12", "groesse": 264_478_423 + 391_443_627},
+            {"variante": "vulkan", "groesse": 33_337_769},
+            {"variante": "rocm", "groesse": 256_958_369},
+        ],
+    }
 
 
 def test_a_variant_that_is_asked_for_goes_to_the_fetch(client, tmp_path, monkeypatch):

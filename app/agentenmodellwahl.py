@@ -63,7 +63,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app import modellkennung
+from app import modellkennung, modellwahl, runnermodellwahl
 from app.db.repositories.einstellungen import GLOBAL, WriteRefused
 from app.feineinstellungen import Feineinstellungen
 
@@ -125,6 +125,11 @@ VORGABE: dict[str, Any] = {
     # a model was chosen, and defaulting this off would silently take that
     # away from every installation that has it today.
     "vorladen": True,
+    # Whether a run the program places itself may land on the agent server
+    # (``lauf_kennung``). Off takes it out of the order; a run pointed at it
+    # by hand, or through this field naming a file, still goes there. Shipped
+    # ON, like the main server's (app/runnermodellwahl.py ``use_for_runs``).
+    "use_for_runs": True,
 }
 
 # The two kinds of answer the value can be. "slot" means the value is a
@@ -220,6 +225,8 @@ def wahl_pruefen(wert: Any) -> dict[str, Any]:
         ).als_daten()
     if "vorladen" in wert:
         sauber["vorladen"] = bool(wert["vorladen"])
+    if "use_for_runs" in wert:
+        sauber["use_for_runs"] = bool(wert["use_for_runs"])
     return sauber
 
 
@@ -342,6 +349,14 @@ def hauptmodell_gewaehlt(repositories) -> bool:
     return stand.get("sorte") == SORTE_KENNUNG and ist_hauptmodell(wert)
 
 
+def _main_model_named(repositories) -> bool:
+    """Whether the field itself names the main server, as a choice — which
+    is not the same as an empty field, where the main server is only what
+    the order starts with."""
+    wert = str(wahl(repositories).get("wert") or "").strip()
+    return bool(wert) and ist_hauptmodell(wert)
+
+
 def hauptmodell_ist_das_ziel(repositories, discovery, *, slot_id: str) -> bool:
     """Whether a run without a hand pick would end on the MAIN server.
 
@@ -370,7 +385,16 @@ def hauptmodell_ist_das_ziel(repositories, discovery, *, slot_id: str) -> bool:
     """
     if not hauptmodell_gewaehlt(repositories):
         return False
-    antwort = lauf_kennung(repositories, discovery, slot_id=slot_id, werkzeuge=True)
+    # A main server that is not approved for runs is not where one lands, so
+    # nothing is loaded for it — unless the field names it, which is a choice.
+    if not (_main_model_named(repositories) or runnermodellwahl.use_for_runs(repositories)):
+        return False
+    # Without the cloud: an approved cloud model that would take the run in
+    # the meantime is no reason to leave the server unloaded — the preload
+    # is for the moment the main server is the one that answers.
+    antwort = lauf_kennung(
+        repositories, discovery, slot_id=slot_id, werkzeuge=True, cloud=False
+    )
     if antwort is None:
         return True
     return ist_hauptmodell(antwort)
@@ -418,7 +442,13 @@ def _antwort(discovery, endpunkt_id: str, *, werkzeuge: bool) -> str | None:
     return zustand.endpunkt.id
 
 
-def rueckfall(discovery, *, slot_id: str, werkzeuge: bool = False) -> str | None:
+def rueckfall(
+    discovery,
+    *,
+    slot_id: str,
+    werkzeuge: bool = False,
+    approved: frozenset[str] | None = None,
+) -> str | None:
     """The next of OUR TWO servers that answers — the agent server first.
 
     The one place that knows this order, and the order has exactly two
@@ -426,28 +456,74 @@ def rueckfall(discovery, *, slot_id: str, werkzeuge: bool = False) -> str | None
     server. Both are llama.cpp servers this program starts itself, and both
     exist for exactly this — a run belongs on them and nowhere else.
 
-    An endpoint from the configuration is never taken, not even as the only
-    one answering and not even when it describes a machine on this desk:
-    this program did not start it, it does not know what is
-    loaded there, and a cloud provider would cost money and send the run off
-    the machine — none of which is a decision a missing main server may make.
+    ``approved`` names the ones approved for runs (``use_for_runs``); a server
+    that is not in it is skipped. ``None`` means both, for a caller that has
+    no approval to ask.
+
+    An endpoint from the configuration is never taken here, not even as the
+    only one answering and not even when it describes a machine on this desk:
+    this program did not start it and does not know what is loaded there.
     What used to be taken here was ``endpunkt.group == "local"``, and that
     reading is what made a handwritten ``group: local`` on an embedding
-    server reachable for an agent.
+    server reachable for an agent. A cloud model comes after both and only
+    with the user's tick (``cloud_fallback``).
 
     ``werkzeuge`` asks for ``kann("tool_calls")`` on top — a run that USES
     tools must not land silently on a model that cannot call them (the case
     the old loop over every endpoint let through).
 
-    ``None`` means neither of the two is there — the refusal stands in that
-    case. Start (app/api/v1/auftraege.py) and cron pre-check
-    (app/cronablauf.py) have to agree on all three cases, and they do,
-    because they ask this one function through ``lauf_kennung``.
+    ``None`` means neither of the two is there. Start (app/api/v1/auftraege.py)
+    and cron pre-check (app/cronablauf.py) have to agree on all three cases,
+    and they do, because they ask this one function through ``lauf_kennung``.
     """
     for endpunkt_id in (slot_id, HAUPTMODELL):
+        if approved is not None and endpunkt_id not in approved:
+            continue
         antwort = _antwort(discovery, endpunkt_id, werkzeuge=werkzeuge)
         if antwort:
             return antwort
+    return None
+
+
+def cloud_fallback(repositories, discovery, *, werkzeuge: bool = False) -> str | None:
+    """The first cloud model the user ticked for runs that answers — or
+    ``None``.
+
+    Asked only after both local servers had their turn, so a run never
+    leaves the machine while one of them can take it. The order is the one of
+    the model list (the providers as configured, a provider's models as it
+    names them), not the order the ticks were made in, so what the window
+    shows is what is tried. Local servers are never read here: this is about
+    providers, and a local server's approval is its own switch.
+
+    ``werkzeuge`` asks for ``kann("tool_calls")``, as ``_antwort`` does for
+    the two servers.
+    """
+    approved = modellwahl.runs_check(
+        repositories.einstellungen.holen(GLOBAL, modellwahl.KEY_RUNS)
+    )
+    if not approved:
+        return None
+    picked = modellwahl.wahl_pruefen(
+        repositories.einstellungen.holen(GLOBAL, modellwahl.SCHLUESSEL_WAHL)
+    )
+    for zustand, modell in discovery.aufgefaechert(discovery.alle()):
+        if zustand.endpunkt.group == "local" or not zustand.erreichbar:
+            continue
+        kennung = modellkennung.bauen(zustand.endpunkt.id, modell)
+        if kennung not in approved:
+            continue
+        # A model of a catalogue counts only while it is picked there (or
+        # named by the configuration): the window shows the approval on
+        # picked models only, so one that was unpicked must not keep working
+        # out of sight.
+        if modell and modell != zustand.endpunkt.modell and modell not in picked.get(
+            zustand.endpunkt.id, []
+        ):
+            continue
+        if werkzeuge and not zustand.kann("tool_calls"):
+            continue
+        return kennung
     return None
 
 
@@ -458,6 +534,7 @@ def lauf_kennung(
     slot_id: str,
     endpoint_id: str | None = None,
     werkzeuge: bool = False,
+    cloud: bool = True,
 ) -> str | None:
     """The model one run resolves to — the whole order, in one place.
 
@@ -478,6 +555,15 @@ def lauf_kennung(
     3. For both of those, when nothing is chosen or the main model is: the
        main server's model, and where that is not there, the next of our two
        servers that answers — the agent server first (``rueckfall``).
+    4. Only where 3 ends on nothing: the first cloud model the user ticked
+       for runs (``cloud_fallback``).
+
+    The two servers of 3 take part only while they are approved for runs
+    (``use_for_runs`` in their keys). The approval counts where the program
+    looks for a place by itself: a run somebody pointed at a server — by hand
+    or through the field — goes there whatever its switch says. ``cloud=False``
+    leaves 4 out, for the one caller that asks where a run would land on a
+    local server (``hauptmodell_ist_das_ziel``).
 
     A choice that is neither empty nor the main model stands as it was made
     — a slot file and a foreign id are asked for as they are, and a missing
@@ -493,10 +579,13 @@ def lauf_kennung(
 
     The one pick that is not exempt is the agent server's own id, and only as
     a PICK: it is not a choice of one server but the name of the first entry
-    in 3, so it is read there — when the agent server does not answer, the run
-    goes to the main model rather than being refused (the start window
-    preselects the agent server, and a preselection nobody made must
-    not be what stops a run).
+    in 3, so it is read through the field. A model of its own in the field —
+    a cloud model, another endpoint — is what that entry means, and the run
+    goes there as a start from a chat does, tool rule included, with the agent
+    server running or not. With nothing else in the field the entry means the
+    agent server, and when that does not answer the run goes to the main model
+    rather than being refused (the start window preselects the agent server,
+    and a preselection nobody made must not be what stops a run).
 
     A slot FILE in the field is the other thing that answers with this id, and
     it is deliberately not the same: the field says "this program holds this
@@ -511,20 +600,31 @@ def lauf_kennung(
     # An empty string is not a pick: it is what a request without a pick looks
     # like after a query string kept its key (``?endpoint_id=``).
     hand = bool(endpoint_id)
-    gewaehlt = endpoint_id or kennung(repositories, slot_id=slot_id)
-    if (
-        hand
-        and gewaehlt == slot_id
-        and _antwort(discovery, slot_id, werkzeuge=werkzeuge) is None
-    ):
-        gewaehlt = None
+    feld = kennung(repositories, slot_id=slot_id)
+    gewaehlt = endpoint_id or feld
+    if hand and gewaehlt == slot_id:
+        if feld and feld != slot_id and not ist_hauptmodell(feld):
+            # The pick names the first entry of the start window, and with a
+            # model of its own in the field that entry means this model: the
+            # run walks the way a start from a chat does, tool rule included.
+            gewaehlt = feld
+            hand = False
+        elif _antwort(discovery, slot_id, werkzeuge=werkzeuge) is None:
+            gewaehlt = None
     if gewaehlt and not ist_hauptmodell(gewaehlt):
         if hand or not werkzeuge:
             return gewaehlt
         gefunden = discovery.aufloesen(gewaehlt)
         if gefunden is None or gefunden[0].kann("tool_calls"):
             return gewaehlt
-    antwort = _antwort(discovery, HAUPTMODELL, werkzeuge=werkzeuge)
+    # The main server is in the order as itself only where somebody did not
+    # name it: a choice of it (hand or field) runs whatever its switch says.
+    named = gewaehlt is not None and ist_hauptmodell(gewaehlt)
+    antwort = (
+        _antwort(discovery, HAUPTMODELL, werkzeuge=werkzeuge)
+        if named or runnermodellwahl.use_for_runs(repositories)
+        else None
+    )
     if antwort:
         # A chosen model name stays: `runner:B` is a choice of B, and writing
         # the reported name over it would start A — the model the server
@@ -532,10 +632,21 @@ def lauf_kennung(
         # main server's own ids: a foreign id with a model part reached this
         # line by FAILING the tool check above, and handing it the run anyway
         # is the very case that check exists for.
-        if gewaehlt and ist_hauptmodell(gewaehlt) and modellkennung.zerlegen(gewaehlt)[1]:
+        if gewaehlt is not None and named and modellkennung.zerlegen(gewaehlt)[1]:
             return gewaehlt
         return antwort
-    return rueckfall(discovery, slot_id=slot_id, werkzeuge=werkzeuge)
+    approved = frozenset(
+        endpunkt
+        for endpunkt, allowed in (
+            (slot_id, use_for_runs(repositories)),
+            (HAUPTMODELL, runnermodellwahl.use_for_runs(repositories)),
+        )
+        if allowed
+    )
+    local_run = rueckfall(discovery, slot_id=slot_id, werkzeuge=werkzeuge, approved=approved)
+    if local_run or not cloud:
+        return local_run
+    return cloud_fallback(repositories, discovery, werkzeuge=werkzeuge)
 
 
 def slot_datei(repositories) -> str | None:
@@ -639,6 +750,13 @@ def remember_file(repositories, datei: str) -> None:
         GLOBAL, SCHLUESSEL,
         {"sorte": SORTE_SLOT, "wert": datei[:WERT_HOECHSTLAENGE]},
     )
+
+
+def use_for_runs(repositories) -> bool:
+    """Whether a run the program places itself may land on the agent server —
+    the counterpart of ``runnermodellwahl.use_for_runs``. Read on every
+    question, never remembered."""
+    return bool(wahl(repositories).get("use_for_runs", VORGABE["use_for_runs"]))
 
 
 def vorladen_erlaubt(repositories) -> bool:

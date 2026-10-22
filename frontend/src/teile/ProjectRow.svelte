@@ -7,6 +7,7 @@
      chat, not for a file or anything else being dragged across. */
   import Hauszeichen from './Hauszeichen.svelte'
   import { CHAT_DRAG_TYPE } from './Chatzeile.svelte'
+  import { t } from '../lib/texte.svelte.js'
 
   let { project, open = false, onToggle, menu, onDropChat } = $props()
 
@@ -58,6 +59,8 @@
     class="more"
     role="button"
     tabindex="0"
+    title={t('app.mehr')}
+    aria-label={t('app.mehr')}
     onclick={more}
     onkeydown={(e) => {
       if (e.key === 'Enter' || e.key === ' ') {
@@ -145,7 +148,7 @@
   .project:hover .more {
     color: var(--text-still);
   }
-  @media (hover: none) {
+  @media (hover: none), (any-pointer: coarse) {
     .more {
       opacity: 1;
     }

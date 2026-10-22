@@ -40,6 +40,7 @@ outage until somebody opened the model window.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from app import agentenmodellwahl, runnerzustand
 from app.config import EndpointConfig
@@ -114,7 +115,9 @@ def endpunkt_bauen(port: int | None = None) -> EndpointConfig:
     )
 
 
-def runner_bauen(modellordner, programm: str | None, port: int | None = None) -> Modellrunner:
+def runner_bauen(
+    modellordner, programm: str | None, port: int | None = None, shared_with: Callable[[], int | None] | None = None
+) -> Modellrunner:
     """The slot's runner — the same class as the others, another kind."""
     return Modellrunner(
         modellordner,
@@ -127,6 +130,7 @@ def runner_bauen(modellordner, programm: str | None, port: int | None = None) ->
         # model family applies, the tool template does not matter.
         sampling_flags=True,
         zustand_callback=runnerzustand.melder(runnerzustand.AGENT),
+        shared_with=shared_with,
     )
 
 

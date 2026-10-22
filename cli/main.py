@@ -43,7 +43,13 @@ from cli import (
     themes,
 )
 from cli.app import CliApp, LeaveAsked
-from cli.client import CONNECT_SECONDS, ServiceClient, ServiceError, ServiceUnreachable
+from cli.client import (
+    CONNECT_SECONDS,
+    InterfaceMissing,
+    ServiceClient,
+    ServiceError,
+    ServiceUnreachable,
+)
 from cli.interfaces import Context
 from cli.texts import Texts, available_languages, resolve_language
 
@@ -311,6 +317,13 @@ def main(
                 language=language,
                 look=look,
             )
+        if not outside.has_terminal():
+            # The chat fills the terminal and waits for somebody to type:
+            # started from a command, a pipe or a program with no terminal
+            # at all, it would only hang until its caller gave up. Said
+            # at once instead, like a command that needs a selection.
+            print(texts.t("cli.needs_terminal", program=PROGRAM), file=sys.stderr)
+            return 2
         return _run(args, client, texts, prefs_path, language=language, look=look)
     finally:
         # A client handed in belongs to whoever handed it in.
@@ -400,6 +413,11 @@ def _service_start(client: ServiceClient, texts: Texts, password_file: Path | No
     except KeyboardInterrupt:
         # The wait was ended, and the service that was started with it.
         return 1
+    except InterfaceMissing as error:
+        # The service that was started says its page is not built; it was
+        # ended, and its own sentence goes before the one for the start.
+        print(error.detail, file=sys.stderr)
+        started = False
     if not started:
         print(texts.t("cli.service_start_failed", address=client.address), file=sys.stderr)
         return 1
@@ -597,6 +615,8 @@ def _reach(
             return True
     except KeyboardInterrupt:
         return False
+    except InterfaceMissing as error:
+        print(error.detail, file=sys.stderr)
     print(texts.t("cli.service_start_failed", address=client.address), file=sys.stderr)
     return False
 
@@ -741,13 +761,10 @@ def _run(
             else:
                 chat.show_history(ctx, wanted)
             if code == 0 and setup_steps.needed(ctx):
-                if outside.has_terminal():
-                    # Nothing is set up: the first thing the chat does is
-                    # ask whether to set it up.
-                    app.queue(lambda: setup_steps.ask_first_start(ctx))
-                else:
-                    print(texts.t("cli.setup_hint"), file=sys.stderr)
-                    code = 2
+                # Nothing is set up: the first thing the chat does is ask
+                # whether to set it up. A start with no terminal ended
+                # before it got here (``main``).
+                app.queue(lambda: setup_steps.ask_first_start(ctx))
             if code == 0:
                 ctx.events.start()
                 app.run()
@@ -778,6 +795,9 @@ def _run(
             restore()
         try:
             try:
+                # A start that ended before the screen came: what it said is
+                # written to the terminal.
+                app.show_unseen()
                 # Leaving: nothing more is asked of the service, and whoever
                 # still reads one of its streams sees it end.
                 client.hang_up()

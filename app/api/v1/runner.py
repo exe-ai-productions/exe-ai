@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from app import kit_bond, modellzuordnung, paketierung, runnermodellwahl, serverdownload
 from app.feineinstellungen import context_per_request
 from app.api.abhaengigkeiten import hole_config, hole_sprache
+from app import chat_template_doors
 from app.config import Config, EndpointConfig
 from app.i18n import t
 from app.modelldownload import BILD_ENDUNGEN, DownloadFehler, Modelldownload, place_for
@@ -112,6 +113,9 @@ class Auskunft(ProgramState):
     belegt_gb: float | None = None
     laeuft: bool
     modell: str | None = None
+    # What a start would load: the stored choice, apart from `modell`, which
+    # stays the file that runs. None where nothing is chosen.
+    selected_model: str | None = None
     kontext: int | None = None
     schichten: int | None = None
     # The context one request gets while the slots do not share the cache
@@ -210,6 +214,7 @@ def _fehler(grund: str, sprache: str) -> HTTPException:
     lage = {
         "laeuft_schon": status.HTTP_409_CONFLICT,
         "port_belegt": status.HTTP_409_CONFLICT,
+        "server_geteilt": status.HTTP_409_CONFLICT,
         "kein_programm": status.HTTP_412_PRECONDITION_FAILED,
         "kein_modell": status.HTTP_404_NOT_FOUND,
     }.get(grund, status.HTTP_400_BAD_REQUEST)
@@ -266,9 +271,10 @@ def _program(runner: Modellrunner, config: Config | None) -> _Program:
 
 @router.get("", response_model=Auskunft, summary="Model server — status")
 def server_status(
+    request: Request,
     runner: Modellrunner = Depends(hole_runner), config: Config = Depends(hole_config)
 ) -> Auskunft:
-    return auskunft(runner, config)
+    return auskunft(runner, config, request.app.state.repositories)
 
 
 def program_state(runner: Modellrunner, config: Config | None = None) -> dict[str, str | bool | None]:
@@ -289,21 +295,28 @@ def program_state(runner: Modellrunner, config: Config | None = None) -> dict[st
     }
 
 
-def auskunft(runner: Modellrunner, config: Config | None = None) -> Auskunft:
-    """What the window shows about the server."""
-    lauf = runner.lauf()
+def auskunft(runner: Modellrunner, config: Config | None = None, repositories=None) -> Auskunft:
+    """What the window shows about the server. Without `repositories` the
+    stored choice is not asked and `selected_model` stays empty."""
+    lauf = runner.shown_run()
+    files = runner.modelle()
     return Auskunft(
         **program_state(runner, config),
         ordner=str(runner.ordner),
-        modelle=[Modelldatei(name=m.name, groesse_gb=m.groesse_gb) for m in runner.modelle()],
+        modelle=[Modelldatei(name=m.name, groesse_gb=m.groesse_gb) for m in files],
         mmproj=runner.mmproj(),
         projector_size_gb=runner.projector_sizes(),
         mtp=[Modelldatei(name=m.name, groesse_gb=m.groesse_gb) for m in runner.mtp()],
         speicher_gb=gesamt_gb(),
         kerne=os.cpu_count(),
         belegt_gb=runner.belegt_gb(),
-        laeuft=runner.laeuft(),
+        laeuft=lauf is not None,
         modell=lauf.modell if lauf else None,
+        selected_model=(
+            runnermodellwahl.selected_file(repositories, [m.name for m in files])
+            if repositories is not None
+            else None
+        ),
         kontext=lauf.kontext if lauf else None,
         schichten=lauf.schichten if lauf else None,
         kontext_je_anfrage=(
@@ -368,16 +381,22 @@ async def starten(
             lauf.port if lauf else (werte.get("port") or runner.port_vorgabe)
         )
     )
-    return auskunft(runner, request.app.state.config)
+    return auskunft(runner, request.app.state.config, request.app.state.repositories)
 
 
 @router.post("/stop", response_model=Auskunft, summary="Stop the model server")
 async def stoppen(
-    request: Request, runner: Modellrunner = Depends(hole_runner)
+    request: Request,
+    runner: Modellrunner = Depends(hole_runner),
+    sprache: str = Depends(hole_sprache),
 ) -> Auskunft:
+    try:
+        runner.refuse_stop_when_shared()
+    except RunnerFehler as fehler:
+        raise _fehler(fehler.grund, sprache) from None
     runner.stoppen()
     await request.app.state.discovery.abmelden(RUNNER_ID)
-    return auskunft(runner, request.app.state.config)
+    return auskunft(runner, request.app.state.config, request.app.state.repositories)
 
 
 # --- Fetching a model -----------------------------------------------------
@@ -398,7 +417,8 @@ class Holen(BaseModel):
     # not in the folder manifest.
     gehoert_zu: str | None = Field(None, min_length=1, max_length=200)
     rolle: Literal[
-        "mmproj", "mtp", "vae", "llm", "llm_vision", "t5xxl", "clip_l", "clip_g"
+        "mmproj", "mtp", "vae", "llm", "llm_vision", "t5xxl", "clip_l", "clip_g", "tokenizer",
+        "audio_vae", "audio_encoder", "embeddings_connectors", "clip_vision",
     ] | None = None
     # Which kind of model this is — one of the catalogue's tabs. It decides
     # the destination folder, because each server reads only its own folder:
@@ -598,6 +618,9 @@ class ServerVariante(BaseModel):
 class ServerVarianten(BaseModel):
     varianten: list[ServerVariante]
     installiert: str | None = None
+    # Builds this machine cannot run, listed so that they are seen (a Mac
+    # names the four of Windows); nothing can be fetched from this list.
+    unavailable: list[ServerVariante] = []
 
 
 @router.get(
@@ -607,13 +630,18 @@ class ServerVarianten(BaseModel):
 )
 def server_varianten() -> ServerVarianten:
     """The variants of the server this machine could fetch — empty
-    everywhere but Windows on x64 — and the one that was fetched."""
+    everywhere but Windows on x64 — and the one that was fetched, and the
+    builds it cannot run, which only a Mac names."""
     return ServerVarianten(
         varianten=[
             ServerVariante(variante=variante, groesse=groesse)
             for variante, groesse in serverdownload.waehlbare_varianten()
         ],
         installiert=serverdownload.installed_variant(paketierung.daten()),
+        unavailable=[
+            ServerVariante(variante=variante, groesse=groesse)
+            for variante, groesse in serverdownload.unavailable_variants()
+        ],
     )
 
 
@@ -760,6 +788,28 @@ def ordner_zeigen(
             status.HTTP_501_NOT_IMPLEMENTED, t("fehler.ordner_oeffnen", sprache)
         ) from None
     return True
+
+
+@router.post("/chat-template/edit", response_model=chat_template_doors.TemplatePath,
+             summary="Copy the model's chat template out and open it in the text editor")
+def edit_chat_template(
+    daten: chat_template_doors.TemplateRequest,
+    request: Request,
+    runner: Modellrunner = Depends(hole_runner),
+    sprache: str = Depends(hole_sprache),
+) -> chat_template_doors.TemplatePath:
+    return chat_template_doors.edit(request, runner, daten.modell, sprache)
+
+
+@router.post("/chat-template/reveal", response_model=bool,
+             summary="Show the chat template file in the file manager")
+def reveal_chat_template(
+    daten: chat_template_doors.TemplateRequest,
+    request: Request,
+    runner: Modellrunner = Depends(hole_runner),
+    sprache: str = Depends(hole_sprache),
+) -> bool:
+    return chat_template_doors.reveal(request, runner, daten.modell, sprache)
 
 
 @router.post("/begleiter-folder/{unterordner}", response_model=bool,

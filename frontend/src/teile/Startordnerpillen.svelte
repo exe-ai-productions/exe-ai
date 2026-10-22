@@ -12,6 +12,7 @@
   import Hauszeichen from './Hauszeichen.svelte'
   import { t } from '../lib/texte.svelte.js'
   import { api } from '../lib/api.js'
+  import { displayPath } from '../lib/paths.js'
   import { melde } from '../lib/zustand.svelte.js'
   import {
     ordnerName, ordnerZustand, dialogPruefen,
@@ -75,7 +76,7 @@
         <!-- No open-in-file-manager here: there is no chat yet whose share the
              service could check the path against. The chip only names the
              folder and lets it go again. -->
-        <span class="flaeche" title={pfad}>
+        <span class="flaeche" title={displayPath(pfad)}>
           <svg class="zeichen" width="14" height="14" viewBox="0 0 64 64" fill="none"
                stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
                aria-hidden="true">
@@ -85,7 +86,9 @@
           <span class="name">{ordnerName(pfad)}</span>
         </span>
         <button class="x" onclick={() => loesen(pfad)}
-                aria-label={t('arbeitsordner.loesen')} title={t('arbeitsordner.loesen')}>✕</button>
+                aria-label={t('arbeitsordner.loesen')} title={t('arbeitsordner.loesen')}>
+          <Hauszeichen zeichen="trash" groesse={14} />
+        </button>
       </div>
     {/each}
 
@@ -118,8 +121,7 @@
            Drawn by the house component, not by a path copied in here: the
            same folder is traced by hand in half a dozen files, and the
            moment one of them is changed they stop being the same sign. -->
-      <Hauszeichen zeichen="ordner" groesse="klein" />
-      <span class="mehrwort">{t('arbeitsordner.hinzufuegen')}</span>
+      <Hauszeichen zeichen="ordner" groesse={16} />
     </button>
     {/if}
 </div>
@@ -168,11 +170,11 @@
     min-width: 0;
   }
   .x {
+    display: inline-flex;
+    align-items: center;
     border: none;
     background: none;
     color: var(--text-still);
-    font: inherit;
-    font-size: 12px;
     padding: 2px 4px;
     border-radius: 9px;
     cursor: pointer;
@@ -187,14 +189,10 @@
      ground. It was a 28-pixel circle at radius 99, the one round control in a
      row of square-cornered ones, and the only radius in this file that was
      not 9. */
-  .mehrwort {
-    font-size: 12px;
-    white-space: nowrap;
-  }
   .mehr {
+    width: 28px;
     height: 28px;
-    padding: 0 8px 0 6px;
-    gap: 5px;
+    padding: 0;
     box-sizing: border-box;
     flex: none;
     border: 1px solid var(--linie-stark);

@@ -79,7 +79,11 @@
           <Schieberegler bind:wert={werte[r.id]} min={r.von} max={r.bis}
                          beschriftung={t(r.text)} mit_zahl={false} fuellung />
         </div>
-        <output class="zahl">{werte[r.id]}{r.einheit ? ' ' + r.einheit : ''}</output>
+        <div class="zahlfeld">
+          <Zahlenfeld bind:wert={werte[r.id]} min={r.von} max={r.bis} ganzzahlig
+                      beschriftung={t(r.text)} />
+          {#if r.einheit}<span class="unit">{r.einheit}</span>{/if}
+        </div>
       </div>
     </div>
   {/each}
@@ -131,6 +135,7 @@
     color: var(--text-leise);
   }
   .zahlfeld {
+    position: relative;
     flex: none;
     width: 80px;
   }
@@ -153,21 +158,16 @@
     flex: 1;
     min-width: 0;
   }
-  .zahl {
-    flex: none;
-    box-sizing: border-box;
-    width: 80px;
-    height: 36px;
-    padding: 0 12px;
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    border-radius: 9px;
-    background: var(--bg-hoch);
-    box-shadow: inset 0 0 0 1px var(--feldstrich);
-    font-size: 14px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text);
+  /* The unit stands right of the field, in the room the window's padding
+     leaves, so every field of the window ends on the same edge. */
+  .unit {
+    position: absolute;
+    left: 100%;
+    top: 50%;
+    margin-left: 3px;
+    transform: translateY(-50%);
+    font-size: 13px;
+    color: var(--text-leise);
   }
   .fuss {
     display: flex;

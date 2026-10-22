@@ -58,6 +58,8 @@ export const chatOeffnen = async (id) => protokoll.push(['chatOeffnen', id])
 export const auftraegeStillLaden = () => protokoll.push(['auftraege'])
 export const modelleLaden = () => protokoll.push(['modelle'])
 export const auswahlLaden = () => protokoll.push(['auswahl'])
+// The approvals for runs are read beside the choice of models; the sequences pinned here are the others.
+export const loadRunApprovals = () => {}
 export const standLaden = () => protokoll.push(['cronstand'])
 export const laden = () => protokoll.push(['serverzustand'])
 export const serverzustand = { geladen: true }

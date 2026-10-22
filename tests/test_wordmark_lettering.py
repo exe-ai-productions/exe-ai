@@ -191,6 +191,13 @@ def test_the_images_carry_the_size_of_the_drawing() -> None:
     for part in ("Erststart.svelte", "Updatekarte.svelte"):
         source = (ROOT / "frontend" / "src" / "teile" / part).read_text(encoding="utf-8")
         assert f'src={{wordmark}} width="{width}" height="{height}"' in source, part
-    width = ET.parse(FILES["readme"]).getroot().get("viewBox", "").split()[2]
+    # The README shows the heading drawing at a width of its own; a width alone keeps the proportions
+    # of the drawing, a height beside it could squeeze it.
+    hero = ROOT / "docs" / "site" / "hero-light.svg"
+    width = float(ET.parse(hero).getroot().get("viewBox", "").split()[2])
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert f'<img src="docs/site/wordmark.svg" width="{width}"' in readme
+    tag = re.search(r'<img src="docs/site/hero-light\.svg"[^>]*>', readme)
+    assert tag, "the README no longer shows the heading drawing"
+    assert "height=" not in tag.group(0), tag.group(0)
+    shown = re.search(r'\bwidth="(\d+)"', tag.group(0))
+    assert shown and 0 < int(shown.group(1)) <= width, tag.group(0)

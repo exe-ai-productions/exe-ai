@@ -110,6 +110,51 @@ def test_fehlender_schluessel_zeigt_rot(client, monkeypatch):
     assert eintrag["schluessel_gesetzt"] is False
 
 
+def test_the_names_of_the_missing_keys_come_with_the_list(client, monkeypatch):
+    """The card says WHICH variable is missing — its name, never a value."""
+    monkeypatch.delenv("GALERIE_TEST_TOKEN", raising=False)
+    monkeypatch.delenv("GALERIE_TEST_HEADER", raising=False)
+    client.put(
+        "/api/v1/tools/servers/github",
+        json={"type": "http", "url": "https://beispiel.invalid/mcp",
+              "api_key_env": "GALERIE_TEST_TOKEN",
+              "headers": {"X-Test-Key": "${GALERIE_TEST_HEADER}"}},
+    )
+    (eintrag,) = client.get("/api/v1/tools/servers").json()
+    assert eintrag["missing_keys"] == ["GALERIE_TEST_TOKEN", "GALERIE_TEST_HEADER"]
+
+
+def test_silence_a_set_key_names_nothing_and_an_entry_without_a_key_says_null(client, monkeypatch):
+    monkeypatch.setenv("GALERIE_TEST_TOKEN", "da")
+    client.put(
+        "/api/v1/tools/servers/mit-schluessel",
+        json={"type": "http", "url": "https://beispiel.invalid/mcp",
+              "api_key_env": "GALERIE_TEST_TOKEN"},
+    )
+    client.put(
+        "/api/v1/tools/servers/ohne-schluessel",
+        json={"type": "http", "url": "https://beispiel.invalid/mcp"},
+    )
+    zeilen = {z["name"]: z for z in client.get("/api/v1/tools/servers").json()}
+    assert zeilen["mit-schluessel"]["missing_keys"] == []
+    assert zeilen["ohne-schluessel"]["missing_keys"] is None
+    # The value of a key is never in the answer.
+    assert "da" not in json.dumps(zeilen["mit-schluessel"]["missing_keys"])
+
+
+def test_a_half_set_pair_names_only_the_one_that_is_missing(client, monkeypatch):
+    monkeypatch.setenv("GALERIE_TEST_TOKEN", "da")
+    monkeypatch.delenv("GALERIE_TEST_HEADER", raising=False)
+    client.put(
+        "/api/v1/tools/servers/halb",
+        json={"type": "http", "url": "https://beispiel.invalid/mcp",
+              "api_key_env": "GALERIE_TEST_TOKEN",
+              "headers": {"X-Test-Key": "${GALERIE_TEST_HEADER}"}},
+    )
+    (eintrag,) = client.get("/api/v1/tools/servers").json()
+    assert eintrag["missing_keys"] == ["GALERIE_TEST_HEADER"]
+
+
 def test_entfernen_samt_zugang(client, config):
     client.put(
         "/api/v1/tools/servers/recraft",
@@ -158,6 +203,72 @@ def test_api_key_ohne_umgebungsnamen_wird_nicht_geschrieben(client, eigener_ordn
         json={"type": "http", "url": "https://beispiel.invalid/mcp", "api_key": "geheim"},
     )
     assert not (eigener_ordner / ".env").exists()
+
+
+def test_a_key_in_a_header_goes_to_the_env_not_the_file(
+    client, config, eigener_ordner, monkeypatch
+):
+    """The key of a header stands as `${NAME}` in the file and as a value in
+    the .env; the list says whether it is set."""
+    monkeypatch.delenv("MAPS_TEST_KEY", raising=False)
+    antwort = client.put(
+        "/api/v1/tools/servers/maps",
+        json={
+            "type": "http", "url": "https://beispiel.invalid/mcp", "enabled": True,
+            "auth": None, "headers": {"X-Goog-Api-Key": "${MAPS_TEST_KEY}"},
+            "api_key": "maps_geheim",
+        },
+    )
+    assert antwort.status_code == 200
+    eintrag = _datei(config)["mcpServers"]["maps"]
+    assert eintrag["headers"] == {"X-Goog-Api-Key": "${MAPS_TEST_KEY}"}
+    assert "maps_geheim" not in json.dumps(eintrag)
+    assert "MAPS_TEST_KEY=maps_geheim" in (eigener_ordner / ".env").read_text()
+
+    (zeile,) = client.get("/api/v1/tools/servers").json()
+    assert zeile["headers"] == {"X-Goog-Api-Key": "${MAPS_TEST_KEY}"}
+    assert zeile["schluessel_gesetzt"] is True
+    assert zeile["auth"] is None
+
+
+def test_a_header_without_a_set_key_shows_red(client, monkeypatch):
+    monkeypatch.delenv("MAPS_TEST_KEY", raising=False)
+    client.put(
+        "/api/v1/tools/servers/maps",
+        json={"type": "http", "url": "https://beispiel.invalid/mcp",
+              "headers": {"X-Goog-Api-Key": "${MAPS_TEST_KEY}"}},
+    )
+    (zeile,) = client.get("/api/v1/tools/servers").json()
+    assert zeile["schluessel_gesetzt"] is False
+
+
+def test_an_own_authorization_header_replaces_the_old_key_in_the_lamp_too(
+    client, monkeypatch
+):
+    monkeypatch.delenv("ALT_TEST_KEY", raising=False)
+    monkeypatch.setenv("NEU_TEST_KEY", "da")
+    client.put(
+        "/api/v1/tools/servers/gemischt",
+        json={"type": "http", "url": "https://beispiel.invalid/mcp",
+              "api_key_env": "ALT_TEST_KEY",
+              "headers": {"Authorization": "Bearer ${NEU_TEST_KEY}"}},
+    )
+    (zeile,) = client.get("/api/v1/tools/servers").json()
+    assert zeile["schluessel_gesetzt"] is True
+
+
+def test_auth_oauth_is_written_and_read(client, config):
+    client.put(
+        "/api/v1/tools/servers/notion",
+        json={"type": "http", "url": "https://beispiel.invalid/mcp", "auth": "oauth"},
+    )
+    assert _datei(config)["mcpServers"]["notion"]["auth"] == "oauth"
+    (zeile,) = client.get("/api/v1/tools/servers").json()
+    assert zeile["auth"] == "oauth"
+    # An unknown way of signing in is refused, not saved.
+    antwort = client.put("/api/v1/tools/servers/notion", json={"auth": "browser"})
+    assert antwort.status_code == 400
+    assert _datei(config)["mcpServers"]["notion"]["auth"] == "oauth"
 
 
 @pytest.mark.parametrize("name", ["FOO\nEVIL_VAR", "FOO BAR", "1FOO", "FOO=BAR"])

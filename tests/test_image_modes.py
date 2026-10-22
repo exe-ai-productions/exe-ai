@@ -65,7 +65,9 @@ def test_the_importance_matrix_is_collected_and_continued(runner, tmp_path):
     assert "--imat-in" not in befehl
     matrix.write_bytes(b"M")
     assert "--imat-in" in runner.befehl(auftrag, tmp_path / "o.png")
-    assert bildapi._cli_only_reason(auftrag, False)
+    # Collecting is no reason to leave the running picture server: it simply
+    # collects nothing for a picture the server draws.
+    assert bildapi._cli_only_reason(auftrag, False) is None
 
 
 def test_converting_calls_convert_with_source_and_target(tmp_path):

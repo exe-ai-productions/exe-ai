@@ -1,7 +1,7 @@
 """What the user picked among the models — checked before it is stored.
 
 The settings table holds JSON and cannot check anything by itself, so every
-key that may be written needs someone who vouches for its shape. Two keys
+key that may be written needs someone who vouches for its shape. These keys
 belong to the models, and they mean different things:
 
 ``modelle_aus``
@@ -15,6 +15,14 @@ belong to the models, and they mean different things:
     reports 124 models, most for speech, images or embeddings, and nobody
     asked for a list they did not order.
 
+``models_for_runs``
+    Which cloud models a run may be sent to when none of the two local
+    servers can take it. The positive, like the catalogue picks: a model
+    that newly appears must not be able to take a schedule's run before
+    somebody ticks it, so nothing is on until then. The ids are the public
+    ones (``provider:model``, app/modellkennung.py), in no order of their
+    own — the order a run tries them in is the one of the model list.
+
 ``modell_zuletzt``
     Which model was last in use — what a new chat starts on. It sat in
     browser storage, so a second window on the same service opened on
@@ -22,7 +30,7 @@ belong to the models, and they mean different things:
     with. The name it went by is kept beside its id: a model is named by
     its server, and a server that does not answer names nothing.
 
-Both are checked, not trusted. Names are ids that go into a URL and into a
+All are checked, not trusted. Names are ids that go into a URL and into a
 request to a model server; anything that is not a non-empty string has no
 business in there.
 """
@@ -35,6 +43,18 @@ from typing import Any
 # anything real — this is a stop against a runaway value, not a rule about
 # names.
 MAX_LAENGE = 400
+
+
+def name_kuerzen(name: str) -> str:
+    """A model name as it may be kept: trimmed and no longer than the limit.
+
+    The list of models cuts its names with this, the same way the stored
+    choice would refuse a longer one. A name above the limit would otherwise
+    be dropped from the stored choice, and every client that follows the name
+    in the list would find the stored one "different" and write it again at
+    every start.
+    """
+    return name.strip()[:MAX_LAENGE].strip()
 
 
 def _namen(werte: Any) -> list[str]:
@@ -53,6 +73,15 @@ def _namen(werte: Any) -> list[str]:
 
 def aus_pruefen(werte: Any) -> list[str]:
     """``modelle_aus``: a flat list of model ids."""
+    return _namen(werte)
+
+
+SCHLUESSEL_WAHL = "katalog_wahl"
+KEY_RUNS = "models_for_runs"
+
+
+def runs_check(werte: Any) -> list[str]:
+    """``models_for_runs``: a flat list of model ids."""
     return _namen(werte)
 
 

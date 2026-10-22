@@ -12,7 +12,7 @@ import pytest
 from prompt_toolkit.utils import get_cwidth
 from rich.console import RenderableType
 
-from cli import events, status
+from cli import events, outside, status
 from cli.client import ServiceClient
 from cli.interfaces import Context, Renderer, Screen
 from cli.texts import Texts
@@ -54,6 +54,14 @@ class RecordingRenderer(Renderer):
 
     def error(self, text: str) -> None:
         self.errors.append(text)
+
+
+@pytest.fixture(autouse=True)
+def a_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The chat only starts at a terminal. A test drives it through a pipe
+    and a screen of its own, which stands in for one; a test about the
+    absence of a terminal says so itself."""
+    monkeypatch.setattr(outside, "has_terminal", lambda: True)
 
 
 @pytest.fixture

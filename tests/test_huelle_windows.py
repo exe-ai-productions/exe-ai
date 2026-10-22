@@ -78,6 +78,9 @@ def _menu_piece() -> str:
 def _window_pieces() -> str:
     return "\n".join([
         _piece(r"\nfunction menuBarOptions\(\) \{\n.*?\n\}\n", "menuBarOptions"),
+        _piece(r"\nconst AUTO_GROUND_DARK = [^\n]+\n", "AUTO_GROUND_DARK"),
+        _piece(r"\nconst AUTO_GROUND_LIGHT = [^\n]+\n", "AUTO_GROUND_LIGHT"),
+        _piece(r"\nfunction autoGround\(\) \{\n.*?\n\}\n", "autoGround"),
         _piece(r"\nfunction istHauptfenster\(inhalt\) \{\n.*?\n\}\n", "istHauptfenster"),
         _piece(r"\nfunction fensterweiche\(\{ url \}, inhalt\) \{\n.*?\n\}\n", "fensterweiche"),
         _piece(r"\nfunction fensterBauen\(\) \{\n.*?\n\}\n", "fensterBauen"),
@@ -179,11 +182,14 @@ def _windows(platform: str) -> dict:
     script = f"""
 {_platform(platform)}
 const path = require('path')
+const topbar = require({json.dumps(str(SHELL.parent / 'topbar.js'))})
+const nativeTheme = {{ shouldUseDarkColors: true }}
 const BREITE = 1280, HOEHE = 820, MIN_BREITE = 720, MIN_HOEHE = 480
 function geometrieLesen() {{ return null }}
 function geometrieSchreiben() {{}}
 function frameColourRead() {{ return null }}
 function frameSchemeRead() {{ return null }}
+function sidebarFoldedRead() {{ return false }}
 function frameSchemeApply() {{ return false }}
 let dienstFehlgeschlagen = false
 function fehlstartSchreiben() {{}}
@@ -197,11 +203,11 @@ class BrowserWindow {{
   on() {{}}
 }}
 function istEigeneSeite() {{ return true }}
-function istHandbuch(address) {{ return address.includes('/hilfe/') }}
+function istHandbuch(address) {{ return address.includes('/help/') }}
 function nachDraussen() {{}}
 {_window_pieces()}
 fensterBauen()
-const manual = fensterweiche({{ url: 'http://127.0.0.1:8090/hilfe/' }})
+const manual = fensterweiche({{ url: 'http://127.0.0.1:8090/help/' }})
 const doc = fensterweiche({{ url: 'http://127.0.0.1:8090/api/v1/ablage/x.pdf' }})
 console.log(JSON.stringify({{
   main: built[0],

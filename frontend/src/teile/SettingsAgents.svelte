@@ -15,9 +15,12 @@
      SystemPrompt.svelte); binding to them saves exactly as before. */
   import { api } from '../lib/api.js'
   import { t } from '../lib/texte.svelte.js'
+  import { serverLogo } from '../lib/serverlogo.svelte.js'
   import Agentenmarke from './Agentenmarke.svelte'
+  import Hauszeichen from './Hauszeichen.svelte'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import Standpille from './Standpille.svelte'
+  import Werkzeugzeichen from './Werkzeugzeichen.svelte'
   import Zahlenfeld from './Zahlenfeld.svelte'
 
   let {
@@ -53,6 +56,23 @@
     gewaehlt = dateien[0]?.name ?? SUBAGENTEN
   })
 
+  /* The sentence under an agent's name in the list: what it is for. */
+  const purposes = $derived(new Map(agenten.map((a) => [a.name, a.description ?? ''])))
+  const purposeOf = (name) => purposes.get(name) ?? ''
+
+  /* Which server a tool belongs to and whether it is a built-in one, as the
+     tools list says it. The name alone cannot: a server's tool is named
+     `mcp__<server>__<tool>` with every odd character of the server's name
+     turned into an underscore. */
+  let toolInfo = $state(new Map())
+  $effect(() => {
+    api.werkzeuge()
+      .then((antwort) => {
+        toolInfo = new Map((antwort.werkzeuge ?? []).map((w) => [w.name, w]))
+      })
+      .catch(() => (toolInfo = new Map()))
+  })
+
   const datei = $derived(dateien.find((d) => d.name === gewaehlt) ?? null)
   const agent = $derived(agenten.find((a) => a.name === gewaehlt) ?? null)
 
@@ -85,17 +105,11 @@
   )
 </script>
 
+<div class="agents-page">
 <div class="zweispaltig">
   <div class="liste">
     <button class="zeile" class:gewaehlt={gewaehlt === SUBAGENTEN} onclick={() => (gewaehlt = SUBAGENTEN)}>
-      <span class="marke">
-        <!-- The branch sign of the house catalogue (static/zeichen), unchanged. -->
-        <svg viewBox="0 0 64 64" width="15" height="15" fill="none" stroke="currentColor"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M20 15 V49" stroke-width="5" /><path d="M20 32 H33 C39 32 44 27 44 21" stroke-width="4.5" />
-          <circle cx="44" cy="16" r="4.5" stroke-width="4.5" />
-        </svg>
-      </span>
+      <span class="marke"><Hauszeichen zeichen="branch" groesse={15} /></span>
       <span class="name">{t('agenten.subagenten')}</span>
       <span class="zahl">{helpersAtOnce.value ?? auto}</span>
     </button>
@@ -104,7 +118,12 @@
     {#each dateien as eintrag (eintrag.name)}
       <button class="zeile" class:gewaehlt={gewaehlt === eintrag.name} onclick={() => (gewaehlt = eintrag.name)}>
         <span class="marke"><Agentenmarke groesse={18} /></span>
-        <span class="name">{eintrag.name}</span>
+        <span class="mitte">
+          <span class="name">{eintrag.name}</span>
+          {#if purposeOf(eintrag.name)}
+            <span class="unter" title={purposeOf(eintrag.name)}>{purposeOf(eintrag.name)}</span>
+          {/if}
+        </span>
         {#if eintrag.kaputt}<span class="punkt" title={eintrag.kaputt}><Leuchtpunkt farbe="rot" groesse={9} /></span>{/if}
       </button>
     {/each}
@@ -113,13 +132,7 @@
   <div class="einzel">
     {#if gewaehlt === SUBAGENTEN}
       <div class="kopf">
-        <span class="kasten">
-          <svg viewBox="0 0 64 64" width="20" height="20" fill="none" stroke="currentColor"
-               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M20 15 V49" stroke-width="5" /><path d="M20 32 H33 C39 32 44 27 44 21" stroke-width="4.5" />
-            <circle cx="44" cy="16" r="4.5" stroke-width="4.5" />
-          </svg>
-        </span>
+        <span class="kasten"><Hauszeichen zeichen="branch" groesse={20} /></span>
         <div class="titel"><strong>{t('agenten.subagenten')}</strong></div>
       </div>
       <div class="karte">
@@ -144,17 +157,13 @@
           {#if agent?.description}<span class="unter" title={agent.description}>{agent.description}</span>{/if}
         </div>
         <div class="knoepfe">
-          <button class="knopf" onclick={() => onbearbeiten?.(agent ?? { name: datei.name })}>
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
-                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3l4 4L8 20l-5 1 1-5L17 3z" /></svg>
-            {t('skills.bearbeiten')}
+          <button class="signbutton" onclick={() => onbearbeiten?.(agent ?? { name: datei.name })}
+                  aria-label={t('agenten.bearbeiten')} title={t('agenten.bearbeiten')}>
+            <Hauszeichen zeichen="stift" groesse={16} />
           </button>
-          <button class="knopf gefahr" onclick={() => onloeschen?.(datei.name)}>
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
-                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 14h10l1-14" />
-            </svg>
-            {t('jobs.loeschen')}
+          <button class="signbutton danger" onclick={() => onloeschen?.(datei.name)}
+                  aria-label={t('agenten.loeschen')} title={t('agenten.loeschen')}>
+            <Hauszeichen zeichen="trash" groesse={16} />
           </button>
         </div>
       </div>
@@ -176,7 +185,14 @@
             <span class="leise">{t('agenten.keine_werkzeuge')}</span>
           {:else}
             {#each agent.tools as werkzeug (werkzeug)}
-              <Standpille farbe="werkzeug">{werkzeug}</Standpille>
+              <Standpille farbe="werkzeug">
+                {@const info = toolInfo.get(werkzeug)}
+                <span class="wzzeichen">
+                  <Werkzeugzeichen name={werkzeug} server={info?.server ?? ''} eingebaut={info?.builtin ?? null}
+                                   logo={info && !info.builtin ? serverLogo(info.server) : null} />
+                </span>
+                {werkzeug}
+              </Standpille>
             {/each}
           {/if}
         </div>
@@ -194,24 +210,48 @@
     {/if}
   </div>
 </div>
+</div>
 
 <style>
+  /* The page asks for its own width, not the window's: it stands beside a
+     bar whose width changes, so the window says little about the room it
+     has. It takes the room the page leaves, like the grid inside it. */
+  .agents-page {
+    container: agents-page / inline-size;
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
   /* Two columns: the list keeps its width, the chosen entry takes the rest. */
   .zweispaltig {
     display: grid;
     grid-template-columns: minmax(200px, 280px) 1fr;
     gap: 28px;
-    align-items: start;
+    align-items: stretch;
+    /* As tall as the page leaves room, the list and the chosen agent each
+       scrolling inside themselves: the page has no empty foot, and the
+       instruction grows down to it. */
+    flex: 1 1 auto;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
   }
-  @media (max-width: 860px) {
-    .zweispaltig {
-      grid-template-columns: 1fr;
-    }
+  :global(html[data-phone]) .kasten-text {
+    flex: none;
+    height: 320px;
+    min-height: 0;
+  }
+  /* A fingertip is taller than a pointer. */
+  :global(html[data-phone]) .signbutton {
+    width: 44px;
+    height: 44px;
   }
   .liste {
     display: flex;
     flex-direction: column;
     gap: 2px;
+    min-height: 0;
+    overflow-y: auto;
   }
   .zeile {
     display: flex;
@@ -252,6 +292,19 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* The name over what the agent is for, the second line quiet and cut at
+     the row's edge. */
+  .mitte {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .mitte .unter {
+    font-size: var(--schrift-hinweis);
+    font-weight: 400;
+  }
   .zahl {
     font-size: var(--schrift-hinweis);
     color: var(--text-still);
@@ -284,6 +337,10 @@
 
   .einzel {
     min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
   }
   .kopf {
     display: flex;
@@ -319,42 +376,44 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* Side by side, one size: the wider label sets the width of both. */
+  /* The pen and the bin: sign buttons of one size, the bin in the colour of
+     deleting and nowhere else. */
   .knoepfe {
     flex: none;
-    display: grid;
-    grid-auto-columns: 1fr;
-    grid-auto-flow: column;
-    gap: 12px;
+    display: flex;
+    gap: 8px;
   }
-  .knopf {
+  .signbutton {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    min-width: 140px;
+    width: 36px;
     height: 36px;
-    padding: 0 16px;
     border: none;
     border-radius: 9px;
-    background: var(--glass-card);
+    background: var(--glass-button);
+    box-shadow: inset 0 0 0 1px var(--feldstrich);
     color: var(--text);
-    font: 500 13px var(--schrift);
     cursor: pointer;
     transition: background 0.12s;
   }
-  .knopf:hover {
-    background: color-mix(in srgb, var(--text) 8%, var(--glass-card));
+  .signbutton:hover {
+    background: var(--glass-hover);
   }
-  .knopf.gefahr {
+  .signbutton.danger {
     color: var(--rot-text);
+    background: color-mix(in srgb, var(--rot) 12%, var(--glass-button));
+  }
+  .signbutton.danger:hover {
+    background: color-mix(in srgb, var(--rot) 18%, var(--glass-button));
   }
 
   /* The instruction is a block of its own height that scrolls inside
      itself, so a long prompt never stretches the page; the corner drags it
      taller. */
   .kasten-text {
-    height: 320px;
+    flex: 1 1 auto;
+    min-height: 320px;
     overflow-y: auto;
     resize: vertical;
     padding: 14px 16px;
@@ -369,6 +428,16 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+  }
+  /* Every mark of the pills in one box, whatever the mark draws. */
+  .wzzeichen {
+    --wz-groesse: 18px;
+    flex: none;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
   .leise {
     font-size: 13px;
@@ -423,5 +492,25 @@
     font-size: 12.5px;
     line-height: 1.5;
     padding: 8px 12px;
+  }
+  /* Narrow page: the chosen entry under the list. Written last, after the
+     rules it overrides, so source order does not undo it. */
+  @container agents-page (max-width: 640px) {
+    .zweispaltig {
+      grid-template-columns: 1fr;
+      grid-template-rows: none;
+      overflow-y: auto;
+    }
+    .liste,
+    .einzel {
+      overflow: visible;
+    }
+    /* Not tied to a page height any more: back to a box of its own height
+       that scrolls inside itself, so a long prompt never stretches the page. */
+    .kasten-text {
+      flex: none;
+      height: 320px;
+      min-height: 0;
+    }
   }
 </style>

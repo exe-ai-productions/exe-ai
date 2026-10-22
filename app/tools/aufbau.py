@@ -122,6 +122,7 @@ def registry_bauen(app, config: Config) -> WerkzeugRegistry:
         # Where a folder `create_folder` made is stored: with the chat, or its
         # project — the path the folder chip takes.
         folder_share=create_folder.ChatFolderShare(app.state.repositories, config.datenverzeichnis),
+        service_port=config.app.port,
         # A chat delivers into its own folder, and a job started from a chat
         # into that chat's, so the delivery goes with the chat; a job
         # without a chat onto the dock above.

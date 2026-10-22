@@ -20,11 +20,13 @@ from typing import Any
 
 SCHLUESSEL = "modus"
 
-MODI = ("auto", "hell", "dunkel", "darkmatter", "heaven", "moune", "eigen")
+MODI = ("auto", "hell", "dunkel", "darkmatter", "heaven", "moune", "snow", "eigen")
 
-# A fresh installation opens in Exe, the grey dark look: the house look is
-# the one somebody meets first, not whatever the device happens to report.
-VORGABE: dict[str, Any] = {"modus": "dunkel"}
+# A fresh installation follows the device: Snow where the system is light, Exe
+# where it is dark. The first picture of the interface (the stylesheet shows
+# Auto where nothing is stored) and this answer agree, so the look does not
+# change on the way up.
+VORGABE: dict[str, Any] = {"modus": "auto"}
 
 
 def wahl_pruefen(wert: Any) -> dict[str, Any] | None:

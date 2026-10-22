@@ -74,8 +74,32 @@ const FAMILIEN = [
   ['mimo', 'xiaomi', true],
   ['xiaomi', 'xiaomi'],
   ['exaone', 'lg'],
+  ['occamy', 'accio'],
   ['hermes', 'nous'],
   ['nous', 'nous', true],
+  // The picture and video makers: the owner's name on Hugging Face, as the
+  // hit's name or publisher says it.
+  ['stabilityai', 'stabilityai'],
+  ['black-forest-labs', 'black-forest-labs'],
+  ['krea', 'krea', true],
+  ['lightricks', 'lightricks'],
+  ['tencent', 'tencent'],
+  ['minimaxai', 'minimaxai'],
+  ['baidu', 'baidu'],
+  ['meituan-longcat', 'meituan-longcat'],
+  ['ideogram-ai', 'ideogram-ai'],
+  ['sensenova', 'sensenova'],
+  ['tongyi-mai', 'tongyi-mai'],
+  ['openmoss', 'openmoss-team'],
+  ['speridlabs', 'speridlabs'],
+  ['boogu', 'boogu', true],
+  ['pixart', 'pixart-alpha'],
+  ['robbyant', 'robbyant'],
+  ['purplesmartai', 'purplesmartai'],
+  ['stableyogi', 'stableyogi'],
+  ['rundiffusion', 'rundiffusion'],
+  ['wan-ai', 'wan-ai'],
+  ['aidc-ai', 'aidc-ai'],
 ]
 
 /* The first occurrence a strict word may count is one at a word start —
@@ -101,4 +125,52 @@ export function modellMarke(name, anbieter) {
     if (stelle >= 0 && (beste === null || stelle < beste.stelle)) beste = { stelle, marke }
   }
   return beste ? LOGOS[beste.marke] : null
+}
+
+/* Picture and video families whose maker their name does not say: Microsoft
+   publishes Lens and Mage-Flow, Stability AI the Stable Diffusion line.
+   Families without a vector of their maker are not listed and stay the
+   letter. Keyed by the family's own name
+   (app/image_families.py); a family not listed is matched by its label, like
+   a search hit. */
+const BILDFAMILIEN = {
+  lens: 'microsoft',
+  mage_flow: 'microsoft',
+  sd15: 'stabilityai',
+  sd2: 'stabilityai',
+  sdxl: 'stabilityai',
+  sd3: 'stabilityai',
+  sdxl_pix2pix: 'stabilityai',
+  flux: 'black-forest-labs',
+  flux2: 'black-forest-labs',
+  flux2_klein: 'black-forest-labs',
+  flux3_klein: 'black-forest-labs',
+  sdxs: 'xiaomi',
+  pid: 'nvidia',
+  moss_image: 'openmoss-team',
+  iris: 'speridlabs',
+  zimage: 'tongyi-mai',
+  krea2: 'krea',
+  sensenova_u1: 'sensenova',
+  longcat: 'meituan-longcat',
+  ernie: 'baidu',
+  boogu: 'boogu',
+  ideogram4: 'ideogram-ai',
+  pixart: 'pixart-alpha',
+  ltx: 'lightricks',
+  minimax_h3: 'minimaxai',
+  hunyuan_video: 'tencent',
+  lingbot_video: 'robbyant',
+  wan: 'wan-ai',
+  wan22_i2v: 'wan-ai',
+  wan22_ti2v: 'wan-ai',
+  wan22_s2v: 'wan-ai',
+  ovis: 'aidc-ai',
+}
+
+/** The embedded mark of a picture family, or null. The family's mark, never
+    the mark of whoever fine-tuned or uploaded a file of it. */
+export function bildFamilienMarke(name, label) {
+  const marke = BILDFAMILIEN[name]
+  return marke ? LOGOS[marke] : modellMarke(label, '')
 }

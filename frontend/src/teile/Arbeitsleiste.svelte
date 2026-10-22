@@ -32,6 +32,7 @@
   } from '../lib/arbeitsleiste.svelte.js'
   import { t } from '../lib/texte.svelte.js'
   import { eineSeiteOffen } from '../lib/zustand.svelte.js'
+  import { windowButtonsInPage } from '../lib/windowButtons.svelte.js'
   import { flaeche } from '../lib/flaeche.svelte.js'
   import { restoreFocus, hasTrigger } from '../lib/callSelection.svelte.js'
 
@@ -106,7 +107,7 @@
     {#if vektoren}
       <Vektorfeld art={vektoren} />
     {/if}
-    <div class="kopf">
+    <div class="kopf" class:grab={windowButtonsInPage}>
       {#if feinheitenAn}
         <span class="kopfzeichen"><Fensterzeichen name="feinheiten" groesse={24} /></span>
         <span class="modulname">{t('studio.feinheiten')}</span>
@@ -259,6 +260,15 @@
     padding: 14px 12px 12px 18px;
     font-size: 16px;
     color: var(--rahmen-text, var(--text-leise));
+  }
+  /* Where the window buttons stand in the page, the head of this column is a
+     place to grab the window by too; what is a button in it stays one. */
+  .kopf.grab {
+    -webkit-app-region: drag;
+  }
+  .kopf.grab :global(button),
+  .kopf.grab :global(input) {
+    -webkit-app-region: no-drag;
   }
   .kopfstrich {
     flex: none;

@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from app import agentenmodellwahl, grundprompt, verdichtung, verdichtungswahl, werkzeugbild
-from app.tools import uhr
+from app.tools import skill, uhr
 from app.own_folder_line import own_folder_line, with_own_folder_last
 from app.providers import MockProvider, mock_endpunkt
 from app.verlaufsbau import _verlauf_bauen
@@ -25,9 +25,12 @@ def test_ohne_alles_bleibt_das_noetigste():
     text = grundprompt.bauen()
     assert "inside Exe AI" in text
     assert "language the user writes in" in text
-    # Nothing about tools, folders or memory — none of it applies.
-    assert "tool" not in text.lower()
-    assert "folder" not in text.lower()
+    # Nothing about tools, folders or memory — none of it applies. The groups
+    # of the settings window are the one sentence that names pages with such
+    # words in them, and every run carries it.
+    bare = text.replace(grundprompt.SETTINGS_GROUPS, "")
+    assert "tool" not in bare.lower()
+    assert "folder" not in bare.lower()
     assert "Rules" not in text
 
 
@@ -574,6 +577,83 @@ def test_ohne_automatische_skills_steht_nichts_davon_drin():
     assert "skill_load" not in grundprompt.bauen(werkzeuge=True)
 
 
+def _command_line_block(text: str) -> str:
+    """The block about the command line client: from its first sentence to the
+    blank line that ends it."""
+    start = text.index("Exe AI has a command line client")
+    return text[start : text.index("\n\n", start)]
+
+
+def test_the_command_line_block_ends_with_the_service_and_settings_sentences():
+    text = grundprompt.bauen(werkzeuge=True, command_line="/opt/exe-ai/bin/exe")
+    block = _command_line_block(text)
+    key_and_sign_in = "Never ask the user to paste a key into the chat."
+    stop = (
+        "Never stop the model server or the service you answer through unless the user\n"
+        "asks for exactly that."
+    )
+    setting = (
+        'Before "/opt/exe-ai/bin/exe" settings changes a setting, tell\n'
+        "the user which setting and which value."
+    )
+    # Both stand behind the sentence about the key and the sign-in, in order,
+    # and the command of this machine stands in front of ``settings``.
+    assert block.index(key_and_sign_in) < block.index(stop) < block.index(setting)
+    assert block.endswith(setting)
+
+
+def test_silence_the_two_sentences_stand_nowhere_without_the_block_and_the_other_two_are_not_in():
+    without = grundprompt.bauen(werkzeuge=True)
+    assert "Never stop the model server" not in without
+    assert "which setting and which value" not in without
+    with_block = grundprompt.bauen(werkzeuge=True, command_line="/opt/exe-ai/bin/exe")
+    # The sentences about ``-p`` and about the client without a command stay out.
+    assert "-p" not in _command_line_block(with_block)
+    assert "without a command" not in with_block
+
+
+def _manual_part(text: str) -> str:
+    """The paragraph about the manual: from its first sentence to the end of
+    the base text."""
+    start = text.index("Exe AI has a manual")
+    return text[start : text.index("\n\n", start)] if "\n\n" in text[start:] else text[start:]
+
+
+def test_a_run_with_the_help_skill_is_sent_to_it_for_questions_about_the_program():
+    text = grundprompt.bauen(
+        werkzeuge=True, skills=[("help", "Answers questions about the program")]
+    )
+    manual = _manual_part(text)
+    assert manual.startswith(
+        "Exe AI has a manual: the entry called Help at the bottom of the settings.\n"
+    )
+    assert f"load the {grundprompt.HELP_SKILL} skill with `{skill.LADEN}` first" in manual
+    assert "do not guess" in manual.lower()
+    assert "Send the user there" not in text
+
+
+def test_the_name_of_the_tool_in_the_manual_sentence_is_the_one_the_skill_module_owns(monkeypatch):
+    monkeypatch.setattr(skill, "LADEN", "skill_open")
+    text = grundprompt.bauen(werkzeuge=True, skills=[("help", "x")])
+    assert "with `skill_open` first" in text
+
+
+def test_silence_without_the_help_skill_the_manual_sentence_stays_as_it_was():
+    """No skills, or other skills only: the base text word for word, and the
+    first sentence about the manual stands in every form."""
+    first = "Exe AI has a manual: the entry called Help at the bottom of the settings."
+    for text in (
+        grundprompt.bauen(),
+        grundprompt.bauen(werkzeuge=True, skills=[("cronjob", "Plans a job")]),
+    ):
+        assert text.startswith(grundprompt.GRUNDLAGE)
+        assert "Send the user there for questions about the program itself." in text
+        assert "load the skill help" not in text
+        assert "load the help skill" not in text
+    assert first in grundprompt.bauen(werkzeuge=True, skills=[("help", "x")])
+    assert first in grundprompt.GRUNDLAGE
+
+
 # --- The blocks that came with the new tools --------------------------------
 
 
@@ -700,7 +780,8 @@ def test_die_werkzeugnamen_im_ueberblick_sind_die_echten():
     from app.tools import (
         agentendock, auftrag_werkzeug, bild_werkzeug, create_folder, cron_notiz,
         cronjob, datei_aendern, datei_lesen, datei_schreiben, datei_suchen,
-        frage_werkzeug, memory, ordner_lesen, shell, skill, uhr, video_tool, ziel_werkzeug,
+        frage_werkzeug, job_werkzeug, memory, ordner_lesen, shell, skill, uhr, video_tool,
+        ziel_werkzeug,
     )
 
     namen = {name for name, _ in grundprompt.FAEHIGKEIT_JE_WERKZEUG}
@@ -718,6 +799,7 @@ def test_die_werkzeugnamen_im_ueberblick_sind_die_echten():
         bild_werkzeug.WERKZEUG_NAME,
         video_tool.WERKZEUG_NAME,
         auftrag_werkzeug.WERKZEUG_NAME,
+        job_werkzeug.WERKZEUG_NAME,
         cronjob.WERKZEUG_NAME,
         ziel_werkzeug.WERKZEUG_NAME,
         uhr.WERKZEUG_NAME,
@@ -725,6 +807,28 @@ def test_die_werkzeugnamen_im_ueberblick_sind_die_echten():
         skill.SCHREIBEN,
         memory.WERKZEUG_NAME,
     }
+
+
+def test_the_job_tool_has_a_phrase_of_its_own_and_names_no_server():
+    """``job`` is a tool of the program, not of a connected server: with it
+    the overview used to say "use additional tools from connected servers"
+    although no server was connected."""
+    from app.tools import auftrag_werkzeug, job_werkzeug
+
+    kann = grundprompt.faehigkeiten(
+        [auftrag_werkzeug.WERKZEUG_NAME, job_werkzeug.WERKZEUG_NAME], in_chat=True
+    )
+    assert "see and stop the jobs you started" in kann
+    assert grundprompt.ABILITY_SERVER_TOOLS not in kann
+
+
+def test_a_tool_of_a_connected_server_still_gets_the_phrase_for_servers():
+    from app.tools import job_werkzeug
+
+    kann = grundprompt.faehigkeiten([job_werkzeug.WERKZEUG_NAME, "docs_lookup"], in_chat=True)
+    assert "see and stop the jobs you started" in kann
+    assert grundprompt.ABILITY_SERVER_TOOLS in kann
+    assert "see and stop the jobs you started" not in grundprompt.faehigkeiten(["docs_lookup"])
 
 
 def test_auf_dieser_maschine_faellt_beim_anbieter_weg():
@@ -1014,7 +1118,7 @@ def test_the_dock_and_the_image_folder_stand_apart_last():
     )
     shared = text.split("The user has shared these working folders with you:\n\n")[1]
     assert shared.split("\n\n")[0] == "- /u/a"
-    assert text.index("The dock folder holds") < text.index("The image folder contains")
+    assert text.index("The Doc folder holds") < text.index("The image folder contains")
     assert "- /data/agent_dock" in text
     assert "- /data/images" in text
 
@@ -1027,7 +1131,7 @@ def _dock_paragraph(**extra) -> str:
         dateiwerkzeuge=["read_file"],
         **extra,
     )
-    start = text.index("The dock folder holds")
+    start = text.index("The Doc folder holds")
     return text[start:text.index("- /data/agent_dock", start)]
 
 
@@ -1036,9 +1140,9 @@ def test_a_chat_is_not_promised_that_the_user_finds_dock_files_in_the_doc_folder
     is not there to be found, and the sentence must not say it is."""
     paragraph = _dock_paragraph()
 
-    assert paragraph.startswith("The dock folder holds finished files delivered to the user. It belongs")
+    assert paragraph.startswith("The Doc folder holds finished files delivered to the user. It belongs")
     assert "who can find" not in paragraph
-    assert "Doc folder" not in paragraph
+    assert "them in the Doc folder" not in paragraph
     # The rest of the paragraph is as it was.
     assert "rather than the folders\nshared by the user. Do not create an `exe.md` file in it:" in paragraph
 
@@ -1047,7 +1151,7 @@ def test_silence_a_run_keeps_the_dock_paragraph_word_for_word():
     paragraph = _dock_paragraph(agentenlauf=grundprompt.Agentenlauf(runden=8, minuten=20))
 
     assert paragraph == (
-        "The dock folder holds finished files delivered to the user, who can find\n"
+        "The Doc folder holds finished files delivered to the user, who can find\n"
         "them in the Doc folder. It belongs to the program, rather than the folders\n"
         "shared by the user. Do not create an `exe.md` file in it:\n\n"
     )
@@ -1238,3 +1342,19 @@ def test_a_chat_prompt_names_the_dock_and_the_image_folder(client, chat_id):
     assert "The image folder contains" in system_text
     # Silence probe: the data folder above them is never named on its own.
     assert f"- {config.datenverzeichnis}\n" not in system_text
+
+
+def test_the_windows_sentence_stands_once_behind_the_basics_on_windows_only(monkeypatch):
+    monkeypatch.setattr(grundprompt, "runs_on_windows", lambda: True)
+    windows = grundprompt.bauen()
+    monkeypatch.setattr(grundprompt, "runs_on_windows", lambda: False)
+    other = grundprompt.bauen()
+
+    assert windows.count(grundprompt.WINDOWS_PATHS) == 1
+    assert windows.startswith(grundprompt.GRUNDLAGE + "\n\n" + grundprompt.WINDOWS_PATHS + "\n\n")
+    assert grundprompt.WINDOWS_PATHS not in other
+    # The prompt on any other system is the one it always was: the same text
+    # without that one block.
+    assert other.startswith(grundprompt.GRUNDLAGE + "\n\n")
+    assert windows.replace(grundprompt.WINDOWS_PATHS + "\n\n", "", 1) == other
+    assert "C:/Users/name/notes.txt" in windows

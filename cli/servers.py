@@ -219,7 +219,7 @@ def _fetch_program(
         elif stand is None and path != "/runner/programm":
             # The image program's state is empty once nothing is being
             # fetched: what is left to say is whether the program is there.
-            return bool(_image_listing(ctx).get("programm_da"))
+            return bool(image_listing(ctx).get("programm_da"))
         if cancel.wait(POLL_SECONDS):
             return False
         stand = ctx.client.get(path)
@@ -290,7 +290,7 @@ def _build_size(size: Any) -> str:
     return f"{round(size / (1024 * 1024))} MB" if _is_number(size) else ""
 
 
-def _image_listing(ctx: Context) -> dict[str, Any]:
+def image_listing(ctx: Context) -> dict[str, Any]:
     listed = ctx.client.get("/bild/modelle")
     return listed if isinstance(listed, dict) else {}
 
@@ -346,6 +346,9 @@ ACTIONS = (START, STOP, LOG)
 _CHECK = "check"
 _UPDATE = "update"
 _GET = "get"
+_DEFAULT = "default"
+# The setting that holds the image server's default model, the one the window writes.
+DEFAULT_IMAGE_MODEL_KEY = "bild_standardmodell"
 
 # What the image server says of itself while it can draw.
 _IMAGE_RUNNING = ("bereit", "zeichnet")
@@ -432,7 +435,7 @@ def _standing(
     if server.word == IMAGE:
         running = state.get("zustand") in _IMAGE_RUNNING
         model = state.get("modell")
-        listing = _image_listing(ctx) if files or program else {}
+        listing = image_listing(ctx) if files or program else {}
         return Standing(
             running=running,
             file=model if running and isinstance(model, str) else None,
@@ -556,6 +559,9 @@ def _menu(ctx: Context, server: Server, *, newer: bool = False) -> None:
         else (START, texts.t("modell.server_starten")),
         (LOG, texts.t("modell.protokoll")),
     ]
+    # Where the image server's picture is drawn from when nothing else says.
+    if server.word == IMAGE:
+        actions.append((_DEFAULT, texts.t("bildserver.standardmodell")))
     # The image server's program: fetched where it is not there, and where
     # the system offers more than one build, chosen from them.
     if server.word == IMAGE and (standing.program_missing or _image_builds(ctx)):
@@ -579,6 +585,8 @@ def _menu(ctx: Context, server: Server, *, newer: bool = False) -> None:
         _stop_server(ctx, server)
     elif action == LOG:
         _show_log(ctx, server)
+    elif action == _DEFAULT:
+        _choose_default_model(ctx)
     elif action == _GET:
         with waiting(ctx) as cancel:
             fetch_image_program(ctx, cancel)
@@ -587,6 +595,34 @@ def _menu(ctx: Context, server: Server, *, newer: bool = False) -> None:
         _check_program(ctx, server)
     else:
         _update_program(ctx, server)
+
+
+def _choose_default_model(ctx: Context) -> None:
+    """The models of the image server's folder, the default one marked; the
+    choice is written under the key the window writes it under. Where none
+    lies in the folder the sentence that says how to get one is said and
+    nothing is written; closed without a choice, nothing changes."""
+    texts = ctx.texts
+    listing = image_listing(ctx)
+    files = _image_files(listing)
+    if not files:
+        ctx.renderer.notice(texts.t("cli.no_model_in_folder"))
+        return
+    current = listing.get("standardmodell")
+    picked = ctx.asker.choose(
+        [
+            Entry(
+                cells=[("text", name), ("muted", size_text(texts, size))],
+                in_use=name == current,
+            )
+            for name, size in files
+        ]
+    )
+    if picked is None:
+        return
+    name = files[picked][0]
+    ctx.client.put(f"/settings/global/{DEFAULT_IMAGE_MODEL_KEY}", json={"wert": name})
+    ctx.renderer.notice(f"{texts.t('bildserver.standardmodell')}: {name}")
 
 
 def _start_server(ctx: Context, server: Server) -> None:
@@ -690,7 +726,8 @@ def overview(ctx: Context) -> tuple[str, list[Row]]:
     rows: list[Row] = []
     memory = ctx.client.get("/system/speicher")
     memory = memory if isinstance(memory, dict) else {}
-    used, total = memory.get("belegt_gb"), memory.get("gesamt_gb")
+    used: Any = memory.get("belegt_gb")
+    total: Any = memory.get("gesamt_gb")
     if _is_number(used) and _is_number(total):
         both = size_text(texts, f"{round(used)}/{round(total)}")
         rows.append([("muted", texts.t("kopf.speicher")), ("text", both)])
@@ -720,5 +757,5 @@ def _model_state(ctx: Context) -> tuple[str, str] | None:
         ACTIVE: ("blue", "kopf.server_active"),
         IDLE: ("green", "kopf.bereit"),
         OFFLINE: ("muted", "kopf.server_aus"),
-    }.get(state)
+    }.get(state or "")
     return None if found is None else (found[0], ctx.texts.t(found[1]))

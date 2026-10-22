@@ -22,11 +22,12 @@
   import { api } from '../lib/api.js'
   import { draussen } from '../lib/draussen.js'
   import { pictureProgress, watchPicturePreview, watchPictureProgress } from '../lib/pictureProgress.svelte.js'
-  import { startbildWaehlen, studioPictures, werte } from '../lib/studio.svelte.js'
+  import { startbildWaehlen, studioPictures, surface, werte } from '../lib/studio.svelte.js'
   import { rowPictures } from '../lib/studioRow.js'
   import { zeichnung } from '../lib/studiozeichnen.svelte.js'
   import { t } from '../lib/texte.svelte.js'
   import { zustand } from '../lib/zustand.svelte.js'
+  import { reportHeadBottom } from '../lib/noticeStart.js'
 
   let offen = $state(true)
 
@@ -71,6 +72,15 @@
     menue = null
   })
 
+  /* The notices begin under the studio's bars: the head of this row is the
+     lowest of them (the brush bar and the zoom stand above it, on a narrow
+     screen the brush bar in a row of its own, still above). */
+  let kopfKnoten = $state(null)
+  $effect(() => {
+    if (!kopfKnoten) return undefined
+    return reportHeadBottom(() => [kopfKnoten])
+  })
+
   // --- "···" on a picture --------------------------------------------
 
   /* The menu stands beside the rail, level with its tile — placed in the
@@ -87,8 +97,8 @@
   }
 </script>
 
-<div class="gallery" use:draussen={() => (menue = null)}>
-  <div class="kopf">
+<div class="gallery" class:unter={surface.brushRow} use:draussen={() => (menue = null)}>
+  <div class="kopf" bind:this={kopfKnoten}>
     <button class="step glas" onclick={() => (offen = !offen)}
             aria-label={offen ? t('studio.bilder_zu') : t('studio.bilder_auf')}
             title={offen ? t('studio.bilder_zu') : t('studio.bilder_auf')}>
@@ -176,6 +186,12 @@
     flex-direction: column;
     align-items: flex-end;
     gap: 6px;
+  }
+  /* Under the brush bar, which has a row of its own on a surface too
+     narrow for it between the tools and the zoom. */
+  .gallery.unter {
+    top: 96px;
+    max-height: calc(100% - 290px);
   }
   .kopf {
     flex: none;
@@ -269,6 +285,12 @@
   .kachel:hover .mehr,
   .kachel .mehr:focus-visible {
     opacity: 1;
+  }
+  /* A touch screen has no hover: the menu's button stays in sight. */
+  @media (hover: none), (any-pointer: coarse) {
+    .kachel .mehr {
+      opacity: 1;
+    }
   }
   .kachel.lauf {
     display: flex;

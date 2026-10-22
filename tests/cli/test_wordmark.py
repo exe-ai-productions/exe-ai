@@ -28,6 +28,20 @@ def test_the_letters_are_made_of_the_fonts_strokes_alone():
     assert any(line[-1] != " " for line in wordmark.WORDMARK)
 
 
+def test_the_letters_of_the_name_alone_are_cut_out_of_the_whole_mark():
+    """Six lines, 39 wide, each the whole mark's line from the column where
+    "Exe AI" starts: nothing of the prompt sign is in them, and they are not
+    a second drawing."""
+    assert len(wordmark.WORDMARK_NAME) == HEIGHT
+    assert {len(line) for line in wordmark.WORDMARK_NAME} == {39}
+    assert wordmark.NAME_WIDTH == 39
+    for whole, name in zip(wordmark.WORDMARK, wordmark.WORDMARK_NAME, strict=True):
+        assert name == whole[16:]
+    # The first column of the letters is used and the gap before them is empty.
+    assert any(line[0] != " " for line in wordmark.WORDMARK_NAME)
+    assert all(line[13:16].strip() == "" for line in wordmark.WORDMARK)
+
+
 def test_the_name_in_one_line_is_the_prompt_and_the_name():
     assert wordmark.WORDMARK_PLAIN == ">_ Exe AI"
 

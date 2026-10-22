@@ -16,9 +16,16 @@
     an / aus  Which of the models in the list appear in the quick picker.
               Here the reverse is stored — what is OFF — so a model that
               newly appears is visible instead of staying hidden until
-              somebody remembers to allow it.
+              somebody remembers to allow it. A cloud model out of a
+              catalogue has no such second state: ticked in its catalogue
+              is on, unticked is off (`tickOnly`).
 
-  Both are settings and therefore live in the cascade on the server: the same
+    useForRuns  Which cloud models a run may be sent to when none of the two
+              local servers can take it. The positive again: nothing is on
+              until somebody ticks it, so a schedule never spends money on a
+              model nobody chose for it.
+
+  All are settings and therefore live in the cascade on the server: the same
   on every device.
 */
 
@@ -34,9 +41,12 @@ const AGENT_SERVER_ID = 'agentenmodell'
 const SCHLUESSEL_AUS = 'modelle_aus'
 /* Which models of each catalogue provider were picked: { anbieter: [modell] }. */
 const SCHLUESSEL_WAHL = 'katalog_wahl'
+/* Which cloud models a run may fall back to: a flat list of model ids. */
+const KEY_RUNS = 'models_for_runs'
 
 export const modellwahl = $state({
   aus: [],
+  useForRuns: [],
   gewaehlt: {},
   geladen: false,
 })
@@ -72,6 +82,45 @@ export async function auswahlLaden() {
       wahl.wert && typeof wahl.wert === 'object' && !Array.isArray(wahl.wert) ? wahl.wert : {}
   }
   if (aus || wahl) modellwahl.geladen = true
+}
+
+/* The approvals for runs, read on their own: only the cloud window shows
+   them, and the quick picker's two switches above have no use for a third
+   read on every open. Same rule as there: the newest read writes, and one
+   that failed leaves what stands. */
+let runApprovalLoad = 0
+
+export async function loadRunApprovals() {
+  const meine = ++runApprovalLoad
+  const schaltStand = schaltungen
+  const runs = await api.einstellungAufgeloest(KEY_RUNS).catch(() => null)
+  if (meine !== runApprovalLoad || !runs) return
+  if (schaltStand !== schaltungen || offeneSchaltungen !== 0) return
+  modellwahl.useForRuns = Array.isArray(runs.wert) ? runs.wert : []
+}
+
+/** Whether a run may be sent to this cloud model when no local server can
+    take it. */
+export function isUsedForRuns(modellId) {
+  return modellwahl.useForRuns.includes(modellId)
+}
+
+export async function setUseForRuns(modellId, an) {
+  schaltungen += 1
+  offeneSchaltungen += 1
+  const vorher = modellwahl.useForRuns
+  const neu = an
+    ? [...new Set([...vorher, modellId])]
+    : vorher.filter((id) => id !== modellId)
+  modellwahl.useForRuns = neu
+  try {
+    await api.einstellungSetzen('global', KEY_RUNS, neu.length ? neu : null)
+  } catch {
+    modellwahl.useForRuns = vorher
+  } finally {
+    offeneSchaltungen -= 1
+    schaltungen += 1
+  }
 }
 
 /* ——— The catalogue: what is in the list at all ——— */
@@ -134,7 +183,26 @@ async function katalogSichern(neu, vorher) {
 
 /* ——— The quick picker: which of them are on ——— */
 
+/* A model by its id, from the chat's list or from the full one. */
+function modelById(modellId) {
+  return (
+    zustand.modelle.find((m) => m.id === modellId) ??
+    alleAnbieter.modelle.find((m) => m.id === modellId) ??
+    null
+  )
+}
+
+/* A cloud model out of a catalogue has one state only: whether it is ticked
+   in its catalogue. Ticked means on, unticked means off — the quick picker's
+   "off" list says nothing about it. The models that have no catalogue to tick
+   in (a local one, a provider's single model) keep the "off" list. */
+function tickOnly(modell) {
+  return Boolean(modell) && modell.group !== 'local' && ausKatalog(modell)
+}
+
 export function istAn(modellId) {
+  const modell = modelById(modellId)
+  if (tickOnly(modell)) return istGewaehlt(modell)
   return !modellwahl.aus.includes(modellId)
 }
 
@@ -148,6 +216,11 @@ export function chosenModelOff() {
 }
 
 export async function schalten(modellId, an) {
+  const modell = modelById(modellId)
+  if (tickOnly(modell)) {
+    await katalogSchalten(modell, an)
+    return
+  }
   schaltungen += 1
   offeneSchaltungen += 1
   const vorher = modellwahl.aus
@@ -220,6 +293,9 @@ function anbieterAus(modelle) {
         id: modell.anbieter,
         name: modell.anbieter_name || modell.anbieter,
         erreichbar: modell.erreichbar,
+        /* Why the provider refuses, in its own words: what the service
+           kept of its answer to the check. Null for silence. */
+        grund: modell.grund ?? null,
         schluessel_env: modell.schluessel_env,
         schluessel_gesetzt: modell.schluessel_gesetzt,
         key_goes_with_provider: Boolean(modell.key_goes_with_provider),

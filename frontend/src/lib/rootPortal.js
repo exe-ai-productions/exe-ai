@@ -17,7 +17,7 @@
 */
 export function toRoot(node) {
   const root = document.getElementById('wurzel')
-  if (!root) throw new Error('toRoot: #wurzel not found — every layer depends on it')
+  if (!root) throw new Error('toRoot: #wurzel not found - every layer depends on it')
   root.appendChild(node)
   return {
     destroy() {

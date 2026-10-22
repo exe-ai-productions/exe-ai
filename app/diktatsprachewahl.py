@@ -1,6 +1,6 @@
 """What happens between the microphone and the input field.
 
-Fourteen answers live here, and all fourteen are the user's rather than the code's:
+Sixteen answers live here, and all sixteen are the user's rather than the code's:
 
   * ``sprache``   which language is being spoken, or "automatic"
   * ``anweisung`` the instruction the speech model is given
@@ -12,6 +12,10 @@ Fourteen answers live here, and all fourteen are the user's rather than the code
     conversation lasts, so a piece is spoken without loading it again
   * ``conversation_pause_seconds`` how long the microphone must be silent
     before a spoken sentence of a conversation is sent
+  * ``conversation_wait_seconds`` how long a round of a conversation waits
+    for the user to start speaking
+  * ``conversation_silent_rounds`` how many rounds in a row may pass without
+    a spoken word before the conversation ends
   * ``stimme`` which file the voice speaks from
   * ``stimmprobe`` which file its voice sample is, if any
   * ``stimmsprache`` which language the voice speaks in, if chosen
@@ -53,10 +57,12 @@ from typing import Any
 
 # Under its own name: ``stimme`` is also this module's function for the
 # chosen voice file further down.
-from app.feineinstellungen import MAX_FAEDEN
+from app.feineinstellungen import MAX_FAEDEN, MAX_IDLE_MINUTES
 from app.parameter import pruefen as parameter_pruefen
 from app.runnermodellwahl import KONTEXT_MAX, KONTEXT_MIN, SCHICHTEN_MAX, SCHICHTEN_MIN
 from app.systemspeicher import gesamt_gb
+from app.system_voice import factory_voice
+from app.voice_worker import AUTO_SAMPLING
 from app.stimme import (
     MIN_P as STIMME_MIN_P,
     TEMPERATUR as STIMME_TEMPERATUR,
@@ -83,9 +89,10 @@ SPRACHEN: tuple[str, ...] = (
 
 # The languages llama-tts documents for Qwen3-TTS — a smaller, closed list
 # than the dictation one above, because the voice reads only what that one
-# engine can be asked to speak. Empty is "none chosen", not "automatic": a
-# voice does not guess its own language from the text the way a listening
-# model guesses the speaker's.
+# engine can be asked to speak. Empty is "none chosen" ("-" in the window):
+# the language flag is left out and the voice model takes its own. A voice
+# does not guess its language from the text the way a listening model
+# guesses the speaker's.
 STIMMSPRACHEN: tuple[str, ...] = (
     "zh", "en", "de", "it", "pt", "es", "ja", "ko", "fr", "ru",
 )
@@ -158,9 +165,13 @@ VORGABE: dict[str, Any] = {
     "keep_model_in_memory": True,
     # Seconds of silence that end a spoken sentence of a conversation.
     "conversation_pause_seconds": 3.0,
-    # Empty is "none chosen" for all three — the folder starts empty, the
-    # same as "putzmodell" above.
-    "stimme": "",
+    "conversation_wait_seconds": 15.0,
+    "conversation_silent_rounds": 3,
+    # The voice of the system a machine starts with (a Mac "Anna", Windows
+    # "Microsoft Katja", Linux none): somebody who chooses a voice model keeps
+    # it, and an empty choice stored on purpose ("-") stays empty. The sample
+    # and the language are empty — "none chosen" — as the folder starts empty.
+    "stimme": factory_voice(),
     "stimmprobe": "",
     "stimmsprache": "",
     # The model's own value until a measured one replaces it (app/stimme.py).
@@ -193,6 +204,11 @@ VORGABE: dict[str, Any] = {
     "speech_gpu_layers": None,
     "speech_threads": 0,
     "speech_port": None,
+    # Minutes without a request after which each of the two servers frees its
+    # model; None is never, no flag at all. The speech server leaves it out
+    # for as long as "keep_model_in_memory" is on (``sprachstart``).
+    "speech_idle_minutes": None,
+    "cleanup_idle_minutes": None,
     # The clean-up server's port, beside its memory numbers above.
     "cleanup_port": None,
     "putztemperatur": 0.0,
@@ -261,12 +277,16 @@ def _zahl(roh: Any, tief: int, hoch: int, ersatz: int | None) -> int | None:
     return max(tief, min(hoch, zahl))
 
 
-def _generation(roh: Any, name: str) -> float | int | None:
+def _generation(roh: Any, name: str, *, auto: bool = False) -> float | int | str | None:
     """One generation value, clamped into the house's own range for that
     knob (app/parameter.py) — the same numbers and steps the chat's
-    parameter panel offers. ``None`` stays out; only a set value travels."""
+    parameter panel offers. ``None`` stays out; only a set value travels.
+    Where ``auto`` is allowed (the voice), "Auto" is a value of its own: the
+    engine takes its own for it."""
     if roh is None:
         return None
+    if auto and roh == AUTO:
+        return AUTO
     sauber = parameter_pruefen({name: roh})
     return sauber.get(name)
 
@@ -329,6 +349,22 @@ def wahl_pruefen(wert: Any) -> dict[str, Any]:
             and roh > 0
         ):
             sauber["conversation_pause_seconds"] = float(roh)
+    if "conversation_wait_seconds" in wert:
+        # Same rule as the pause: a number above zero is the user's own.
+        roh = wert["conversation_wait_seconds"]
+        if (
+            isinstance(roh, (int, float))
+            and not isinstance(roh, bool)
+            and math.isfinite(roh)
+            and roh > 0
+        ):
+            sauber["conversation_wait_seconds"] = float(roh)
+    if "conversation_silent_rounds" in wert:
+        # A whole number of at least one round; a conversation that ends
+        # after no round at all could never begin.
+        roh = wert["conversation_silent_rounds"]
+        if isinstance(roh, int) and not isinstance(roh, bool) and roh >= 1:
+            sauber["conversation_silent_rounds"] = roh
     if "stimme" in wert:
         roh = wert["stimme"]
         sauber["stimme"] = "" if roh is None else str(roh).strip()[:NAME_HOECHSTLAENGE]
@@ -344,7 +380,9 @@ def wahl_pruefen(wert: Any) -> dict[str, Any]:
         # stored value is kept as typed — the slider finds the nearest
         # step, the number field shows exactly what was stored.
         roh = wert["stimmtemperatur"]
-        if (
+        if roh == AUTO:
+            sauber["stimmtemperatur"] = AUTO
+        elif (
             isinstance(roh, (int, float))
             and not isinstance(roh, bool)
             and TEMPERATUR_MIN <= roh <= TEMPERATUR_MAX
@@ -352,7 +390,7 @@ def wahl_pruefen(wert: Any) -> dict[str, Any]:
             sauber["stimmtemperatur"] = float(roh)
     for schluessel, knob in _VOICE_PARAMETER:
         if schluessel in wert:
-            sauber[schluessel] = _generation(wert[schluessel], knob)
+            sauber[schluessel] = _generation(wert[schluessel], knob, auto=True)
     for schluessel, knob in _PUTZ_PARAMETER:
         if schluessel in wert:
             sauber[schluessel] = _generation(wert[schluessel], knob)
@@ -375,6 +413,16 @@ def wahl_pruefen(wert: Any) -> dict[str, Any]:
         )
     if "speech_threads" in wert:
         sauber["speech_threads"] = _zahl(wert["speech_threads"], 0, MAX_FAEDEN, VORGABE["speech_threads"])
+    for schluessel in ("speech_idle_minutes", "cleanup_idle_minutes"):
+        if schluessel in wert:
+            # Empty and zero are "never"; a number is whole minutes inside
+            # the engine's range.
+            roh = wert[schluessel]
+            sauber[schluessel] = (
+                None
+                if roh in (None, "", 0)
+                else _zahl(roh, 1, MAX_IDLE_MINUTES, None)
+            )
     for schluessel in ("speech_port", "cleanup_port"):
         if schluessel in wert:
             # A port outside the unprivileged range is not stored; the
@@ -521,19 +569,21 @@ def automatik(repositories) -> bool:
 
 
 def stimmwerte(repositories, stand: dict[str, Any] | None = None) -> dict[str, float]:
-    """The voice's five generation values under the engine's own names, read
+    """The voice's generation values under the engine's own names, read
     fresh for every sentence — the works values stand in for anything not
     set, so the call reads exactly as before this setting existed. A caller
     that already read the setting hands its `stand` in instead of paying
     for a second read."""
     stand = wahl(repositories) if stand is None else stand
-    return {
-        "temperature": float(stand["stimmtemperatur"]),
-        "top_k": float(stand["stimmtop_k"]),
-        "top_p": float(stand["stimmtop_p"]),
-        "min_p": float(stand["stimmmin_p"]),
-        "repeat_penalty": float(stand["stimmstrafe"]),
-    }
+    names = (
+        ("temperature", "stimmtemperatur"),
+        ("top_k", "stimmtop_k"),
+        ("top_p", "stimmtop_p"),
+        ("min_p", "stimmmin_p"),
+        ("repeat_penalty", "stimmstrafe"),
+    )
+    # A value on "Auto" is left out: the engine takes its own.
+    return {name: float(stand[key]) for name, key in names if stand[key] != AUTO}
 
 
 def _optional_int(wert: Any) -> int | None:
@@ -581,18 +631,34 @@ def putzsampling(
     return werte or None
 
 
+def putzleerlauf(
+    repositories, stand: dict[str, Any] | None = None
+) -> int | None:
+    """The minutes without a request after which the tidy-up server frees
+    its model (None: never, no flag)."""
+    stand = wahl(repositories) if stand is None else stand
+    return _optional_int(stand["cleanup_idle_minutes"])
+
+
 def sprachstart(
     repositories, stand: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     """The speech server's stored start values for its next start: the file
-    ("" for none), context, GPU layers, threads, and the port (None for the
-    server's own)."""
+    ("" for none), context, GPU layers, threads, the idle time in minutes
+    and the port (None for the server's own).
+
+    The idle time is only named while the model is not kept in memory: with
+    "keep the model in memory" on, the server never frees it by itself, and
+    the idle time is a start value of the engine that cannot be turned off
+    afterwards."""
     stand = wahl(repositories) if stand is None else stand
+    kept = bool(stand["keep_model_in_memory"])
     return {
         "modell": stand["speech_model"],
         "kontext": int(stand["speech_context"]),
         "schichten": _optional_int(stand["speech_gpu_layers"]),
         "threads": int(stand["speech_threads"]),
+        "leerlauf": None if kept else _optional_int(stand["speech_idle_minutes"]),
         "port": stand["speech_port"],
     }
 
@@ -626,8 +692,21 @@ def vorgaben() -> dict[str, Any]:
     The instruction texts above all: the panel's "restore" button has to put
     back exactly what the service would use, and a second copy in the page
     would agree with this one only until somebody changed one of them.
+
+    ``stimmauto`` is where the voice's sliders rest while a value stands on
+    "Auto": the values the program of the voice takes for itself.
     """
-    return {**VORGABE, "keep_model_in_memory": keep_model_default()}
+    return {
+        **VORGABE,
+        "keep_model_in_memory": keep_model_default(),
+        "stimmauto": {
+            "stimmtemperatur": AUTO_SAMPLING["temperature"],
+            "stimmtop_k": AUTO_SAMPLING["top_k"],
+            "stimmtop_p": AUTO_SAMPLING["top_p"],
+            "stimmmin_p": AUTO_SAMPLING["min_p"],
+            "stimmstrafe": AUTO_SAMPLING["repeat_penalty"],
+        },
+    }
 
 
 __all__ = [
@@ -651,6 +730,7 @@ __all__ = [
     "gespraechsanweisung",
     "gespraechsvorsatz",
     "keep_model_in_memory",
+    "putzleerlauf",
     "putzmodell",
     "putzsampling",
     "putzspeicher",

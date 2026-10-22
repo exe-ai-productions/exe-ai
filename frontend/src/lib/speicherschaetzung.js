@@ -7,27 +7,29 @@
    is an estimate and is shown as one — the point is the order of
    magnitude, not the decimal.
 
-   Two things stand on top of it. With the 8-bit cache the same conversation
-   takes a bit more than half: measured at the engine's own start line, one
+   Two things stand on top of it. A smaller cache takes the share of the
+   16-bit one that its storage takes: ggml keeps 32 values in 64 bytes
+   (f16), 34 bytes (8 bit), 22 bytes (5 bit) and 18 bytes (4 bit) — and the
+   8-bit share is the one the engine itself reported at its start line, one
    model (28 layers) and one window (8192 tokens), once with the f16 cache
-   and once with 8-bit — 896 MiB against 476 MiB, so 476 / 896. And a vision
-   projector is a passenger like the draft: its file size, in full. */
-export const EIGHT_BIT_CACHE_SHARE = 476 / 896
+   and once with 8-bit: 896 MiB against 476 MiB, so 476 / 896, the same
+   34 / 64. And a vision projector is a passenger like the draft: its file
+   size, in full. */
+const KV_SHARE = { f16: 1, q8_0: 34 / 64, q5_0: 22 / 64, q4_0: 18 / 64 }
 
-/* Whether a stored cache type is the 8-bit step. The older, smaller step the
-   engine's levers once offered counts as it (app/feineinstellungen.py
-   `KV_ALT`): whoever stored it was saving memory on purpose. */
-export function isEightBitCache(kvCache) {
-  return kvCache === 'q8_0' || kvCache === 'q4_0'
+/* What a stored cache type takes of the 16-bit cache; anything unknown is
+   the 16-bit one, which is what such a value starts with. */
+export function kvShare(kvCache) {
+  return KV_SHARE[kvCache] ?? 1
 }
 
 export function speicherSchaetzung(
   modellGb,
   kontext,
   drafterGb = 0,
-  { eightBit = false, projectorGb = 0 } = {},
+  { kvShare = 1, projectorGb = 0 } = {},
 ) {
-  const kv = ((kontext * 8 * modellGb) / 1e6) * (eightBit ? EIGHT_BIT_CACHE_SHARE : 1)
+  const kv = ((kontext * 8 * modellGb) / 1e6) * kvShare
   return {
     modell: modellGb,
     drafter: drafterGb,
@@ -52,7 +54,7 @@ export function speicherSchaetzung(
 export function serverAnteil(
   dateien,
   module,
-  { modell, kontext, drafter, eightBit = false, vision = '', projectors = {} } = {},
+  { modell, kontext, drafter, kvShare = 1, vision = '', projectors = {} } = {},
 ) {
   const haupt = (dateien ?? []).find((m) => m.name === modell)
   if (!haupt || !kontext) return null
@@ -61,7 +63,7 @@ export function serverAnteil(
     ?? (module ?? []).find((m) => m.name === drafter)
   const projectorGb = vision ? (projectors?.[vision] ?? 0) : 0
   return speicherSchaetzung(haupt.groesse_gb, kontext, beifahrer?.groesse_gb ?? 0, {
-    eightBit,
+    kvShare,
     projectorGb,
   })
 }

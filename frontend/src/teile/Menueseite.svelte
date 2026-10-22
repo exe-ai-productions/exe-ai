@@ -19,6 +19,7 @@
      the page's to use, down to the margin the status strip leaves. */
   import { rollfade } from '../lib/rollfade.js'
   import { zustand } from '../lib/zustand.svelte.js'
+  import { reportHeadBottom } from '../lib/noticeStart.js'
 
   let {
     offen = true,
@@ -36,6 +37,14 @@
      scroll must survive a look away): the slot follows it. Pages that
      mount their frame inside `{#if offen}` need no prop — mounting is
      opening. */
+  /* The notices begin under this head, however tall it is — also where it
+     breaks into two lines in a narrow window. */
+  let kopfKnoten = $state(null)
+  $effect(() => {
+    if (!offen || !kopfKnoten) return undefined
+    return reportHeadBottom(() => [kopfKnoten])
+  })
+
   $effect(() => {
     if (offen) {
       zustand.menuSections = { snippet: liste, label: beschriftung }
@@ -55,7 +64,7 @@
 </script>
 
 <div class="rechts">
-  <header class="kopf">
+  <header class="kopf" bind:this={kopfKnoten}>
     {@render kopf?.()}
   </header>
   <div class="inhalt" use:rollfade>
@@ -78,9 +87,8 @@
   }
   .kopf,
   .breite {
+    /* The whole width of the frame, less the two side paddings. */
     width: 100%;
-    /* 1336 of content between the two side paddings. */
-    max-width: 1400px;
     margin: 0 auto;
     padding-left: 32px;
     padding-right: 32px;

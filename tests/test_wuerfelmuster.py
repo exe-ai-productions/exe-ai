@@ -19,7 +19,7 @@ DRAWING = ROOT / "frontend" / "src" / "stil" / "exe" / "01_wuerfel.svg"
 NET = ROOT / "frontend" / "src" / "stil" / "darkmatter" / "01_sternnetz.svg"
 
 EXE = ":root[data-eigen='dunkel'],\n:root[data-modus='dunkel']"
-AUTO = ":root:not([data-modus='hell'], [data-eigen='hell'])"
+AUTO = ":root:not([data-modus='hell'], [data-modus='snow'], [data-eigen='hell'])"
 DARK_MATTER = ":root[data-modus='darkmatter']"
 FRAME = "#353634"
 DARK_MATTER_FRAME = "#1a0b3a"

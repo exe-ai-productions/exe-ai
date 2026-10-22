@@ -4,32 +4,35 @@
   import { slideIfDrawn } from '../lib/slideIfDrawn.js'
   import { flip } from 'svelte/animate'
   import { t, texte } from '../lib/texte.svelte.js'
-  import { chatgruppen, gruppenDatum } from '../lib/chatgruppen.js'
+  import { gruppenDatum } from '../lib/chatgruppen.js'
+  import { chatListe } from '../lib/chatliste.js'
+  import { runAction, renameChat, removeChat, createProject, renameProject, removeProject } from '../lib/chataktionen.js'
   import Chatzeile from './Chatzeile.svelte'
   import ProjectRow from './ProjectRow.svelte'
   import ArchiveList from './ArchiveList.svelte'
   import Hauszeichen from './Hauszeichen.svelte'
   import Wortmarke from './Wortmarke.svelte'
   import Fensterzeichen from './Fensterzeichen.svelte'
+  import { system, keyNames } from '../lib/keyNames.js'
   import StudioBasics from './StudioBasics.svelte'
+  import { windowButtonsInPage, RAIL_WIDTH, MARK_LEFT, RAIL_TOP, GRAB_HEIGHT } from '../lib/windowButtons.svelte.js'
   import { studio, studioSichtbar, studioSchalten, studioSchliessen } from '../lib/studio.svelte.js'
   import {
-    zustand, chatsLaden, chatOeffnen, neuerChat, chatAendern, chatLoeschen,
-    melde, blattWechseln, seitenleisteSchalten,
-    frage, menueFensterOeffnen, sucheZeigen, seitenSchliessen, seiteOffenFuer, eineSeiteOffen,
+    zustand, chatsLaden, chatOeffnen, neuerChat, chatAendern,
+    blattWechseln, seitenleisteSchalten,
+    menueFensterOeffnen, sucheZeigen, seitenSchliessen, seiteOffenFuer, eineSeiteOffen,
     istSeitenleisteSchmal,
-    projectCreate, projectUpdate, projectDelete, chatMoveToProject, chatArchive,
+    projectUpdate, chatMoveToProject, chatArchive,
 } from '../lib/zustand.svelte.js'
 
-  /* The window row at the foot, and the same signs at the foot of the
-     folded icon bar. They are not tools: each opens a menu of its own —
-     the local models, the cloud providers, the catalogue — and the
-     settings, beside them, close the row. */
-  const FENSTER = [
-    ['lokal', 'menue.lokal'],
-    ['cloud', 'menue.cloud'],
-    ['katalog', 'menue.katalog'],
-  ]
+  /* The key of the chat search, as the system writes it. */
+  const sucheTaste = $derived(system === 'mac' ? '⌘K' : `${keyNames().Control}+K`)
+
+  /* Whether one of the menus of the settings stands open: the settings, the
+     local models, the cloud providers, the catalogue. They are one place now,
+     reached from the list of the settings, and the gear stands for all four. */
+  const einstellungenOffen = () =>
+    ['prompt', 'lokal', 'cloud', 'katalog'].some((name) => seiteOffenFuer(name))
 
   /* A chat clicked in the list is where the hand wants to be: the page over
      the main area gives way to it — and so it does for a new chat and for
@@ -93,21 +96,10 @@
     const uhr = setInterval(() => (jetzt = Date.now()), 60000)
     return () => clearInterval(uhr)
   })
-  /* Pinned chats stand under "Pinned" wherever they lie; a chat in a
-     project otherwise stands under its project and not in the days. While
-     searching, every hit stands in the days: one inside a folded project
-     would stay out of sight. So does a chat whose project this window does
-     not know (yet) — it has no row to stand under. */
   const searching = $derived(Boolean(zustand.suche.trim()))
-  const projectIds = $derived(new Set(zustand.projects.map((project) => project.id)))
-  const listed = $derived(
-    searching
-      ? zustand.chats
-      : zustand.chats.filter((chat) => chat.pinned || !projectIds.has(chat.project_id)),
-  )
-  const gruppen = $derived(chatgruppen(listed, jetzt))
-  const pinnedGroups = $derived(gruppen.filter((gruppe) => gruppe.schluessel === 'chat.angeheftet'))
-  const dayGroups = $derived(gruppen.filter((gruppe) => gruppe.schluessel !== 'chat.angeheftet'))
+  const liste = $derived(chatListe(zustand.chats, zustand.projects, searching, jetzt))
+  const pinnedGroups = $derived(liste.pinned)
+  const dayGroups = $derived(liste.days)
 
   /* Which projects stand open. Only for this window: nothing is lost when
      it forgets. */
@@ -121,19 +113,7 @@
   let foldedDays = $state({})
   const dayKey = (gruppe) => gruppe.schluessel ?? gruppe.datum.getTime()
 
-  /* Each project's chats in the order they were made, grouped once per
-     change of the list. */
-  const chatsByProject = $derived.by(() => {
-    const groups = {}
-    for (const chat of zustand.chats) {
-      if (chat.project_id && !chat.pinned) (groups[chat.project_id] ??= []).push(chat)
-    }
-    for (const group of Object.values(groups)) {
-      group.sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
-    }
-    return groups
-  })
-
+  const chatsByProject = $derived(liste.byProject)
 
   function suchen(wert) {
     zustand.suche = wert
@@ -159,16 +139,10 @@
     placeMenu(ereignis, 'project', project)
   }
 
-  /* Closes the menu and runs what was chosen; what fails is said. The
-     chat or project an action works on is handed in as an argument, read
-     at the click: read later from the menu, it would be gone with it. */
-  async function act(action) {
+  /* Closes the menu and runs what was chosen; what fails is said. */
+  function act(action) {
     menue = null
-    try {
-      await action()
-    } catch (error) {
-      melde(error.message || t('fehler.allgemein'), 'fehler')
-    }
+    return runAction(action)
   }
 
   async function anheften(chat) {
@@ -177,26 +151,11 @@
   }
   async function umbenennen(chat) {
     menue = null
-    const neu = await frage(t('chat.neuer_titel'), {
-      eingabe: chat.title, okSchluessel: 'app.sichern',
-    })
-    if (neu === null) return
-    await chatAendern(chat.id, { title: neu })
+    await renameChat(chat)
   }
   async function loeschen(chat) {
     menue = null
-    /* An agent this chat started stops with it; the question says which. */
-    const agent = zustand.auftraege.find(
-      (job) => job.chat_id === chat.id && (job.state === 'laeuft' || job.state === 'wartet'),
-    )?.agent
-    const question = agent
-      ? t('chat.delete_with_agent_question', { agent })
-      : t('chat.loeschen_frage')
-    if (!(await frage(question))) return
-    await act(async () => {
-      await chatLoeschen(chat.id)
-      melde(t('chat.geloescht'), 'erfolg')
-    })
+    await removeChat(chat)
   }
 
   function archiveChat(chat, archived) {
@@ -221,29 +180,17 @@
   /* A new project starts with an empty name field and opens at once, so
      the chats dragged in next have somewhere visible to land. */
   async function newProject() {
-    const name = await frage(t('project.name_question'), { eingabe: '', okSchluessel: 'app.sichern' })
-    if (!name?.trim()) return
-    await act(async () => {
-      const project = await projectCreate(name.trim())
-      openProjects[project.id] = true
-    })
-  }
-  async function renameProject(project) {
     menue = null
-    const name = await frage(t('project.name_question'), {
-      eingabe: project.name, okSchluessel: 'app.sichern',
-    })
-    if (!name?.trim()) return
-    await act(() => projectUpdate(project.id, { name: name.trim() }))
+    const project = await createProject()
+    if (project) openProjects[project.id] = true
   }
-  /* Deleting a project deletes its chats: the question says how many. */
+  async function renameProjectFromMenu(project) {
+    menue = null
+    await renameProject(project)
+  }
   async function deleteProject(project) {
     menue = null
-    const question = t('archive.delete_project_question', {
-      name: project.name, count: project.chat_count,
-    })
-    if (!(await frage(question))) return
-    await act(() => projectDelete(project.id))
+    await removeProject(project)
   }
 </script>
 
@@ -264,45 +211,37 @@
   ></div>
 {/if}
 
-{#snippet fensterknoepfe(mitChats = false)}
-  {#if mitChats}
-    <!-- The way back out of any menu and out of the studio: the chat list,
-         first of the six. -->
-    <button
-      class="zk"
-      class:aktiv={chatsAn()}
-      onclick={chatsZeigen}
-      title={t('jobs.bereich_chats')}
-      aria-label={t('jobs.bereich_chats')}
-    >
-      <Fensterzeichen name="chats" groesse={24} />
-    </button>
-  {/if}
-  {#each FENSTER as [name, beschriftung] (name)}
-    <button
-      class="zk"
-      class:aktiv={seiteOffenFuer(name)}
-      onclick={() => menueFensterOeffnen(name)}
-      title={t(beschriftung)}
-      aria-label={t(beschriftung)}
-    >
-      <Fensterzeichen {name} groesse={24} />
-    </button>
-  {/each}
-  <button class="zk" class:aktiv={seiteOffenFuer('prompt')} onclick={einstellungenOeffnen}
-          title={t('menue.settings')} aria-label={t('menue.settings')}>
-    <!-- The sun-wheel — the house Settings mark the sibling programs wear. -->
-    <svg viewBox="0 0 100 100" width="24" height="24" fill="none" stroke="currentColor"
-         stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <circle cx="50" cy="50" r="16" />
-      <path d="M50 22 V32 M50 68 V78 M22 50 H32 M68 50 H78 M30 30 l7 7 M63 63 l7 7 M70 30 l-7 7 M37 63 l-7 7" />
-    </svg>
+{#snippet fusszeichen()}
+  <!-- The five signs at the foot, spread evenly: the way back out of any menu
+       and out of the studio (the chat list), a new chat, a new project, the
+       pictures, and the settings last. -->
+  <button
+    class="zk"
+    class:aktiv={chatsAn()}
+    onclick={chatsZeigen}
+    title={t('jobs.bereich_chats')}
+    aria-label={t('jobs.bereich_chats')}
+  >
+    <Fensterzeichen name="chats" groesse={24} />
   </button>
-  <!-- The picture studio, last in the row: a view of its own rather than a
-       menu page — a second click closes it. -->
+  <button class="zk" onclick={neuerChatAusDerListe} title={t('chat.neu')} aria-label={t('chat.neu')}>
+    <Hauszeichen zeichen="plus" groesse={24} />
+  </button>
+  <button class="zk" onclick={newProject} title={t('project.new')} aria-label={t('project.new')}>
+    <!-- The open folder, with the plus of a new one, fills less of its box
+         than the other signs of the bar, so it is asked two larger — the same
+         step the right rail's folder takes. -->
+    <Hauszeichen zeichen="folder_plus" groesse={26} />
+  </button>
+  <!-- The picture studio: a view of its own rather than a menu page — a
+       second click closes it. -->
   <button class="zk" class:aktiv={studioSichtbar()} onclick={studioSchalten}
           title={t('studio.titel')} aria-label={t('studio.titel')}>
     <Fensterzeichen name="studio" groesse={24} />
+  </button>
+  <button class="zk" class:aktiv={einstellungenOffen()} onclick={einstellungenOeffnen}
+          title={t('menue.settings')} aria-label={t('menue.settings')}>
+    <Hauszeichen zeichen="gear" groesse={24} />
   </button>
 {/snippet}
 
@@ -318,11 +257,15 @@
 {/snippet}
 
 <!-- The folded sidebar: a narrow bar of signs that never goes away — the way
-     back in, a new chat, a new project and the search at the top, the
-     windows at the foot.
+     back in and the search at the top, the five signs of the foot below.
      On the desktop it stands while the sidebar is folded; below 760px it
      always stands, and the full sidebar opens over the chat from it. -->
-<nav class="zeichenleiste" class:zeigt={zustand.seitenleisteEingeklappt}>
+<nav class="zeichenleiste" class:zeigt={zustand.seitenleisteEingeklappt} style:--rail-width="{RAIL_WIDTH}px" style:--rail-top="{RAIL_TOP}px">
+  <!-- Where the window buttons stand over the bar: the strip from the top to
+       the first sign grabs the window. -->
+  {#if windowButtonsInPage}
+    <div class="grab-strip" style:height="{GRAB_HEIGHT}px" aria-hidden="true"></div>
+  {/if}
   <button
     class="zk"
     onclick={() => seitenleisteSchalten()}
@@ -331,18 +274,6 @@
   >
     {@render leistenzeichen()}
   </button>
-  <button class="zk" onclick={neuerChatAusDerListe} title={t('chat.neu')} aria-label={t('chat.neu')}>
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         stroke-width="2" stroke-linecap="round" aria-hidden="true">
-      <path d="M12 5v14M5 12h14" />
-    </svg>
-  </button>
-  <button class="zk" onclick={newProject} title={t('project.new')} aria-label={t('project.new')}>
-    <!-- The open folder fills less of its box than the other signs of the
-         bar, so it is asked two larger — the same step the right rail's
-         folder takes. -->
-    <Hauszeichen zeichen="ordner" groesse={26} />
-  </button>
   <button class="zk" onclick={sucheZeigen} title={t('chat.suchen')} aria-label={t('chat.suchen')}>
     <svg width="24" height="24" viewBox="0 0 64 64" fill="none" stroke="currentColor"
          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -350,7 +281,7 @@
     </svg>
   </button>
   <span class="frei"></span>
-  {@render fensterknoepfe(true)}
+  {@render fusszeichen()}
 </nav>
 
 <aside
@@ -363,7 +294,7 @@
   <!-- The mark and, beside it, the button that folds the sidebar to its
        icon bar. The window has no header any more: this is where the
        program says its name. -->
-  <div class="markenkopf">
+  <div class="markenkopf" class:grab={windowButtonsInPage} style:--mark-left="{MARK_LEFT}px">
     <Wortmarke hoehe={32} />
     <button
       class="zk"
@@ -382,7 +313,7 @@
   <!-- While a menu or the studio is open, the chat's own head gives way
        with the chat list; the menu sheet and the studio bring their own. -->
   {#if zustand.seitenblatt === 'chats' && !eineSeiteOffen() && !studio.offen}
-    <!-- Search first, then the two actions that add to the list. -->
+    <!-- The search: a new chat and a new project are signs at the foot. -->
     <div class="suchfeld">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" />
@@ -394,19 +325,8 @@
         value={zustand.suche}
         oninput={(e) => suchen(e.currentTarget.value)}
       />
+      <kbd class="taste">{sucheTaste}</kbd>
     </div>
-    <!-- The one action that adds to the list, across the full width. -->
-    <button class="neuerchat" onclick={neuerChatAusDerListe}>
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-           stroke-width="2" stroke-linecap="round" aria-hidden="true">
-        <path d="M12 5v14M5 12h14" />
-      </svg>
-      {t('chat.neu')}
-    </button>
-    <button class="neuerchat new-project" onclick={newProject}>
-      <Hauszeichen zeichen="ordner" groesse={17} />
-      {t('project.new')}
-    </button>
   {/if}
 
   {#if eineSeiteOffen()}
@@ -521,10 +441,9 @@
   </div>
   </div>
 
-  <!-- The windows: the chats, models, cloud, catalogue, the settings and
-       the picture studio. -->
+  <!-- The five signs of the foot. -->
   <div class="fensterzeile">
-    {@render fensterknoepfe(true)}
+    {@render fusszeichen()}
   </div>
 </aside>
 
@@ -533,14 +452,14 @@
     class="kontextmenue"
     role="menu"
     tabindex="-1"
-    style="left:{menue.x}px; top:{menue.y}px; max-height:calc(100vh - {menue.y + 8}px)"
+    style="left:{menue.x}px; top:{menue.y}px; max-height:calc(100vh - {menue.y + 8}px); max-width:calc(100vw - {menue.x + 8}px)"
     transition:fade={{ duration: 100 }}
     onclick={(e) => e.stopPropagation()}
     onkeydown={(e) => { if (e.key === 'Escape') menue = null }}
   >
     {#if menue.kind === 'chat' && menue.picking}
       {#each zustand.projects.filter((project) => project.id !== menue.item.project_id) as project (project.id)}
-        <button role="menuitem" onclick={() => moveToProject(menue.item, project)}>
+        <button role="menuitem" title={project.name} onclick={() => moveToProject(menue.item, project)}>
           <Hauszeichen zeichen="ordner" groesse={16} />
           <span class="wort">{project.name}</span>
         </button>
@@ -567,7 +486,7 @@
       </button>
     {:else if menue.kind === 'project'}
       {@const project = menue.item}
-      <button role="menuitem" onclick={() => renameProject(project)}>{t('chat.umbenennen')}</button>
+      <button role="menuitem" onclick={() => renameProjectFromMenu(project)}>{t('chat.umbenennen')}</button>
       <button role="menuitem" onclick={() => archiveProject(project, true)}>
         {t('archive.put_away')}
       </button>
@@ -625,11 +544,21 @@
   .zeichenleiste {
     display: none;
     flex: none;
-    width: 52px;
+    width: var(--rail-width, 52px);
     flex-direction: column;
     align-items: center;
     gap: 4px;
-    padding: 12px 0;
+    padding: var(--rail-top, 12px) 0 12px;
+    position: relative;
+  }
+  /* The strip over the first sign that grabs the window, where the window
+     buttons stand over the bar: they sit on it, so they take no drag. */
+  .grab-strip {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    -webkit-app-region: drag;
   }
   .zeichenleiste.zeigt {
     display: flex;
@@ -672,40 +601,17 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 14px 12px 12px 18px;
+    padding: 14px 12px 12px var(--mark-left, 18px);
   }
-  /* New chat, across the full width: a glass button with a fine edge. */
-  .neuerchat {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    margin: 0 12px 6px;
-    height: 34px;
-    padding: 0 12px;
-    border: none;
-    border-radius: 9px;
-    background: var(--glass-button);
-    box-shadow: inset 0 0 0 1px var(--glass-button-edge);
-    color: var(--text);
-    font: inherit;
-    font-size: var(--schrift-text);
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.12s;
+  /* The first row grabs the window where the window buttons stand in it; the
+     button that folds the sidebar stays a button. */
+  .markenkopf.grab {
+    -webkit-app-region: drag;
   }
-  .neuerchat:hover { background: color-mix(in srgb, var(--text) 6%, var(--glass-button)); }
-  .neuerchat svg { color: var(--text-leise); }
-  /* New project, right under it: the same row without the fill, so the
-     one filled button stays the chat. */
-  .neuerchat.new-project {
-    background: none;
-    box-shadow: none;
-    font-weight: 400;
-    color: var(--rahmen-text, var(--text-leise));
+  .markenkopf.grab :global(button) {
+    -webkit-app-region: no-drag;
   }
-  .neuerchat.new-project:hover { background: var(--glass-hover); color: var(--text); }
-  /* The windows, one row at the foot. */
+  /* The five signs of the foot, spread evenly over one row. */
   /* At the foot even when the list above it is folded away: the top margin
      takes whatever room is left. */
   .fensterzeile {
@@ -714,7 +620,10 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
+    /* No gap of its own: five 40 px signs and a gap of 10 px are wider than
+       the drawer's 224 px of room, and the last sign would reach out of the
+       drawer into the window it is hidden beside. */
+    gap: 0;
     padding: 4px 12px 12px;
   }
   @media (prefers-reduced-motion: reduce) {
@@ -752,6 +661,16 @@
   .suchfeld:hover input,
   .suchfeld:focus-within input {
     color: var(--text);
+  }
+  /* The key of the search, at the field's right end. */
+  .taste {
+    flex: none;
+    padding: 1px 6px;
+    border-radius: 6px;
+    background: var(--glass-button);
+    box-shadow: inset 0 0 0 1px var(--glass-button-edge);
+    color: var(--rahmen-text, var(--text-still));
+    font: 500 var(--schrift-hinweis) var(--schrift);
   }
   .suchfeld input {
     border: none;
@@ -807,7 +726,13 @@
     overflow-y: auto;
     flex: 1;
     min-height: 0;
+  }
+  .liste {
     padding: 0 12px;
+  }
+  /* The rows of a menu list stand 8 px from the sidebar's edge. */
+  .menueliste {
+    padding: 0 8px;
   }
   /* A menu's first heading starts flush under the hairline, at the same
      height as the chats' search and the first row of a menu without one. */

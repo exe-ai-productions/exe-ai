@@ -6,7 +6,7 @@ refused. The page can then be as compromised as you like: a script that
 cannot reach a foreign address cannot hand anything to one.
 
 The rule below is measured against the built interface, not guessed, and
-every widening carries the reason it is there. Two of them are wide enough
+every widening carries the reason it is there. Three of them are wide enough
 to say out loud:
 
 * ``'unsafe-inline'`` for scripts. The page learns this run's session key
@@ -18,6 +18,12 @@ to say out loud:
   thing that frame exists to allow.
 * ``'unsafe-inline'`` for styles. The built bundle writes style attributes
   straight into its markup.
+* ``'unsafe-eval'`` and ``'wasm-unsafe-eval'`` for scripts. The preview frame
+  inherits this policy and the stricter of the two wins, so a document the
+  model wrote could run neither ``eval``, nor a WebAssembly module, nor a
+  worker while this policy lacked them, whatever its own rule said. Against a
+  script that already runs in the page they protect nothing either way; the
+  way out stays closed by ``connect-src``.
 
 So this policy is not an answer to a script that already runs in the page.
 What it does close is the way OUT, and that was the measured hole: no
@@ -42,8 +48,9 @@ REGEL = "; ".join(
     (
         "default-src 'self'",
         # Own bundle, the stitched key script, and blob: for the recording
-        # worklet, which is handed to the audio engine as a blob URL.
-        "script-src 'self' 'unsafe-inline' blob:",
+        # worklet, which is handed to the audio engine as a blob URL; eval
+        # and WebAssembly for the documents in the preview frame (see above).
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:",
         "worker-src 'self' blob:",
         "style-src 'self' 'unsafe-inline'",
         # blob: for the preview of a picture the user just attached, data:

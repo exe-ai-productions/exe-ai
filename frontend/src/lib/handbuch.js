@@ -7,5 +7,5 @@
   another.
 */
 export function handbuchOeffnen() {
-  window.open('/hilfe/', '_blank')
+  window.open('/help/', '_blank')
 }

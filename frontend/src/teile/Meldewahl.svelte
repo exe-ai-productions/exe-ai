@@ -16,30 +16,25 @@
      The sounds live here now and no longer under the language: how loud
      the program is is not a question of which words it uses, and it is
      the same question as whether it may also flash and pulse. */
-  import Leuchtpunkt from './Leuchtpunkt.svelte'
+  import InfoMark from './InfoMark.svelte'
+  import Hauszeichen from './Hauszeichen.svelte'
   import Schalter from './Schalter.svelte'
   import Zahlenfeld from './Zahlenfeld.svelte'
   import { t } from '../lib/texte.svelte.js'
   import {
-    KLAENGE, klaengeSchalten, klangwahl, nurHintergrundSchalten, pegelSetzen,
-    probehoeren,
+    klaengeSchalten, klangwahl, nurHintergrundSchalten, pegelSetzen, probehoeren, setSound,
   } from '../lib/klaenge.svelte.js'
   import {
-    meldewesen, melderSchalten, popupSekundenSetzen, punktSchalten,
+    meldewesen, melderSchalten, popupSekundenSetzen, popupsAusSchalten, punktSchalten,
   } from '../lib/meldewesen.svelte.js'
-
-  /* Colour means state: done is green, waiting yellow, failed red — the
-     same three the rest of the house uses. */
-  const FARBEN = { fertig: 'gruen', wartet: 'gelb', fehler: 'rot' }
 
   /* The four dots, in the order they sit on the screen from the rail
      outwards. The key is the one the module stores under. */
   const PUNKTE = ['agenten', 'cronjob', 'terminal', 'chat']
 
-  /* The three things worth reporting. Written out rather than borrowed from
-     the sound file names: these switch the whole notice now, and a list
-     that happened to be the same length would be the wrong reason. */
-  const MELDER = ['fertig', 'wartet', 'fehler']
+  /* The four things worth reporting, one row each: a test button, the
+     switch of its sound and the switch of its popup. */
+  const MELDER = ['fertig', 'wartet', 'fehler', 'agent_cronjob']
 
   /* The slider's own position. It starts from the stored level and is
      handed on from here — the stored value never drives it back while it
@@ -83,7 +78,7 @@
     <div class="blocktitel tafelkopf">{t('meldewesen.gruppe_toene')}</div>
     <div class="kachelliste">
       <div class="einstellkachel">
-        <div class="zeilentext">{t('meldewesen.toene')}</div>
+        <div class="zeilentext mitmarke">{t('meldewesen.toene')}<InfoMark text={t('meldewesen.info_toene')} /></div>
         <Schalter
           an={!klangwahl.aus}
           beschriftung={t('meldewesen.toene')}
@@ -114,35 +109,12 @@
       </div>
 
       <div class="einstellkachel">
-        <div class="zeilentext">{t('meldewesen.nur_hintergrund')}</div>
+        <div class="zeilentext mitmarke">{t('meldewesen.nur_hintergrund')}<InfoMark text={t('meldewesen.info_nur_hintergrund')} /></div>
         <Schalter
           an={klangwahl.nurHintergrund}
           beschriftung={t('meldewesen.nur_hintergrund')}
           onschalten={(an) => nurHintergrundSchalten(an)}
         />
-      </div>
-
-      <!-- Kept from the sound panel this block absorbed: a sound that can
-           only be judged by provoking an error would never be judged at
-           all. One size for all three — the sound behind them differs, the
-           button does not.
-
-           They carry the same three names as the switches in the group
-           below, because they are about the same three things: there is
-           one sound per occurrence, so the key that names the switch names
-           its sound as well. Two vocabularies for one row of buttons was
-           the reader having to work out that "Answer" and "Done" were the
-           same thing. -->
-      <div class="einstellkachel probenkachel">
-        <div class="zeilentext">{t('meldewesen.probe')}</div>
-        <div class="proben">
-          {#each KLAENGE as name (name)}
-            <button class="probe" onclick={() => probehoeren(name)}>
-              <Leuchtpunkt farbe={FARBEN[name]} groesse={11} />
-              {t(`meldewesen.${name}`)}
-            </button>
-          {/each}
-        </div>
       </div>
     </div>
   </section>
@@ -150,24 +122,52 @@
   <section class="block">
     <div class="blocktitel tafelkopf">{t('meldewesen.gruppe_meldungen')}</div>
     <div class="kachelliste">
-      <!-- Each of the three switches the WHOLE notice — its text and its
-           sound together. The group is called Notices, not Sounds, and the
-           main sound switch with its volume stands one group above: a
-           switch that silenced a knock while its message still appeared
-           would be two answers to one question. No subtitles: the group
-           heading and the three words say the whole thing. -->
+      <!-- One row per occurrence, laid out as a table: the name, a button
+           that plays its sound whatever the switches say (a sound that can
+           only be judged by provoking an error would never be judged at
+           all) and the switch of its sound. Whether it is also seen as a
+           popup is asked in the block below, one switch to a row. No
+           subtitles: the group heading and the words say the whole
+           thing. -->
+      <div class="einstellkachel table-head" aria-hidden="true">
+        <span class="zeilentext"></span>
+        <span class="test-space"></span>
+        <span class="column">{t('meldewesen.spalte_ton')}</span>
+      </div>
       {#each MELDER as name (name)}
         <div class="einstellkachel">
-          <div class="zeilentext">{t(`meldewesen.${name}`)}</div>
-          <Schalter
-            an={meldewesen.melder[name] !== false}
-            beschriftung={t(`meldewesen.${name}`)}
-            onschalten={(an) => melderSchalten(name, an)}
-          />
+          <div class="zeilentext mitmarke">{t(`meldewesen.${name}`)}<InfoMark text={t(`meldewesen.info_${name}`)} /></div>
+          <button class="probe" onclick={() => probehoeren(name)}
+                  title={t('meldewesen.probe')} aria-label={t('meldewesen.probe')}>
+            <Hauszeichen zeichen="speaker" groesse={20} />
+          </button>
+          <span class="column">
+            <Schalter
+              an={klangwahl.ton[name] !== false}
+              beschriftung={`${t(`meldewesen.${name}`)} · ${t('meldewesen.spalte_ton')}`}
+              onschalten={(an) => setSound(name, an)}
+            />
+          </span>
         </div>
       {/each}
+    </div>
+  </section>
 
+  <section class="block popup-block">
+    <div class="blocktitel tafelkopf">{t('meldewesen.spalte_popup')}</div>
+    <div class="kachelliste">
+      <!-- Stops every notice card from being drawn; the duration below
+           stays as it was and greys out while this is on. -->
       <div class="einstellkachel">
+        <div class="zeilentext mitmarke">{t('meldewesen.popups_aus')}<InfoMark text={t('meldewesen.info_popups_aus')} /></div>
+        <Schalter
+          an={meldewesen.popupsAus}
+          beschriftung={t('meldewesen.popups_aus')}
+          onschalten={(an) => popupsAusSchalten(an)}
+        />
+      </div>
+
+      <div class="einstellkachel" class:grau={meldewesen.popupsAus}>
         <div class="zeilentext">{t('meldewesen.popup')}</div>
         <!-- A number, so a number field — and zero is not "no time at all"
              but the word standing in for it: a notice about a run then
@@ -181,10 +181,23 @@
             schritt={1}
             ganzzahlig={true}
             nullwort={t('parameter.auto')}
+            gesperrt={meldewesen.popupsAus}
           />
         </div>
         <span class="einheit">{t('meldewesen.popup_einheit')}</span>
       </div>
+
+      <!-- One row per occurrence, one switch: may its card be drawn. -->
+      {#each MELDER as name (name)}
+        <div class="einstellkachel">
+          <div class="zeilentext mitmarke">{t(`meldewesen.${name}`)}<InfoMark text={t(`meldewesen.info_${name}`)} /></div>
+          <Schalter
+            an={meldewesen.melder[name] !== false}
+            beschriftung={`${t(`meldewesen.${name}`)} · ${t('meldewesen.spalte_popup')}`}
+            onschalten={(an) => melderSchalten(name, an)}
+          />
+        </div>
+      {/each}
     </div>
   </section>
 
@@ -193,7 +206,7 @@
     <div class="kachelliste">
       {#each PUNKTE as name (name)}
         <div class="einstellkachel">
-          <div class="zeilentext">{t(`meldewesen.punkt_${name}`)}</div>
+          <div class="zeilentext mitmarke">{t(`meldewesen.punkt_${name}`)}<InfoMark text={t(`meldewesen.info_punkt_${name}`)} /></div>
           <Schalter
             an={meldewesen.punkte[name] !== false}
             beschriftung={t(`meldewesen.punkt_${name}`)}
@@ -226,11 +239,6 @@
     gap: 8px;
     padding: 0 2px;
   }
-  .blocktitel::after {
-    content: '';
-    flex: 1;
-    border-top: 1px solid var(--linie);
-  }
   .kachelliste {
     display: flex;
     flex-direction: column;
@@ -252,6 +260,10 @@
   .einstellkachel + .einstellkachel {
     border-top: 1px solid var(--linie);
   }
+  /* A row whose value is set aside by another switch stays readable. */
+  .einstellkachel.grau {
+    opacity: 0.45;
+  }
   .einstellkachel.regel {
     flex-direction: column;
     align-items: stretch;
@@ -267,6 +279,17 @@
     flex: 1;
     min-width: 0;
     font-size: 13px;
+  }
+  /* The mark right after the name, 6 px away, and its sentence on a line of
+     its own below the name when it is open. */
+  .mitmarke {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .mitmarke :global(.mark) {
+    margin-left: 0;
   }
   .zahl {
     flex: none;
@@ -325,37 +348,42 @@
     font-size: 13px;
     color: var(--text-leise);
   }
-  .proben {
-    display: flex;
-    gap: 6px;
+  /* The table's column: the name takes what is left, then the button and
+     one switch column as wide as the switch itself, so the switch stands on
+     the same right edge as the switches of the rows of every other group,
+     and the header over it is centred on it. */
+  .column {
     flex: none;
-    flex-wrap: wrap;
-    justify-content: flex-end;
+    width: 34px;
+    display: flex;
+    justify-content: center;
   }
-  /* The three buttons carry sentences now and not single words, so the row
-     is wide. In a narrow window it takes a line of its own instead of
-     squeezing the label beside it: crushed into what was left, the
-     sentence under "Listen" broke into a column of single words eight
-     lines tall. The minimum is what the label needs to stay a label. */
-  .probenkachel {
-    flex-wrap: wrap;
+  .table-head {
+    padding: 8px 0 0;
   }
-  .probenkachel .zeilentext {
-    min-width: 190px;
+  .table-head .column {
+    font-size: 12.5px;
+    color: var(--text-leise);
+  }
+  .test-space {
+    flex: none;
+    width: 32px;
   }
   .probe {
+    flex: none;
+    /* A square, and the width the header leaves free over the column, so
+       the columns line up. */
+    width: 32px;
     height: 32px;
-    padding: 0 10px;
+    padding: 0;
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    justify-content: center;
     border: none;
     border-radius: 9px;
     background: var(--glass-button);
     box-shadow: inset 0 0 0 1px var(--feldstrich);
     color: var(--text);
-    font: inherit;
-    font-size: 12.5px;
     cursor: pointer;
     transition: background 0.14s, color 0.14s;
   }

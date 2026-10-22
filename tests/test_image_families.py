@@ -65,6 +65,10 @@ _HEADERS = {
         "single_blocks.47.linear1.weight": [18432, 3072],
     },
     "flux2_klein": {"double_stream_modulation_img.lin.weight": [18432, 3072]},
+    # The names sd.cpp build 975 tells these three by (model_loader.cpp).
+    "flux3_klein": {"emb_in.image.weight": [3072, 128], "txt_mode_blocks.0.q_proj.weight": [3072, 3072]},
+    "moss_image": {"video_embedder.weight": [3072, 128], "shared_block_modulation.weight": [3072]},
+    "iris": {"y_embedder.layer_pool.weight": [3072, 2560], "modulation_cores.adaln_img.weight": [3072]},
     "zimage": {"cap_embedder.0.weight": [2560]},
     "sdxl": {
         "model.diffusion_model.input_blocks.0.0.weight": [320, 4, 3, 3],
@@ -595,13 +599,16 @@ def test_a_diffusion_model_with_the_prefix_is_still_standalone(tmp_path):
     assert bildinhalt.standalone_diffusion_model(path) is True
 
 
-def test_a_family_said_by_hand_starts_at_its_table_values():
+def test_a_family_said_by_hand_starts_at_the_values_the_service_answers_with():
     column = (_FRONTEND / "teile" / "StudioDetails.svelte").read_text(encoding="utf-8")
     assert "gewaehlt={familieWaehlen}" in column
     store = (_FRONTEND / "lib" / "studio.svelte.js").read_text(encoding="utf-8")
     said = store.split("export async function familieWaehlen(name) {", 1)[1].split("\n}\n", 1)[0]
     assert "werte.familie = name" in said
+    # The service works the values out from the family and the file name.
+    assert "vorgabenHolen(name)" in said
     assert "Object.assign(werte, startwerte(v))" in said
+    assert "familyOf(werte.familie)" not in store.split("export function startwerte(v) {", 1)[1].split("\n}\n", 1)[0]
     # Said by hand only for a model whose header names none: a header that
     # names one takes over on the next model change.
     basics = (_FRONTEND / "teile" / "StudioBasics.svelte").read_text(encoding="utf-8")
@@ -745,7 +752,7 @@ def test_each_kit_family_builds_its_command_from_the_table(tmp_path, monkeypatch
         "uncond_diffusion_model": "--uncond-diffusion-model",
         "high_noise_diffusion_model": "--high-noise-diffusion-model",
         "audio_vae": "--audio-vae", "audio_encoder": "--audio-encoder",
-        "embeddings_connectors": "--embeddings-connectors",
+        "embeddings_connectors": "--embeddings-connectors", "clip_vision": "--clip_vision",
     }
     for name, path in files.items():
         assert command[command.index(switches[name]) + 1] == str(path)
@@ -861,6 +868,42 @@ def test_a_checkpoint_and_a_standalone_file_are_read_alike(tmp_path):
     assert bildinhalt.family(raw) == bildinhalt.family(prefixed) == "qwen_image_2_1"
 
 
+def test_the_three_gguf_files_of_qwen_image_2_1_are_one_family(tmp_path):
+    """Measured on the files of the model: the turbo file names its weights
+    with sd.cpp's prefix and an architecture of its own, the plain one has
+    none worth the name and no prefix, and the UC one names a third
+    architecture. One family, whichever way the converter wrote it. (The
+    helper writes a GGUF only when it is given an architecture; an empty one
+    stands for the plain file's.)"""
+    from tests.test_bild_bausatz_api import _kopf
+
+    weights = {"txt_in.text_norm.weight": [4096], "img_in.weight": [3072, 64]}
+    prefixed = {f"model.diffusion_model.{name}": shape for name, shape in weights.items()}
+    for name, names, architecture in (
+        ("turbo.gguf", prefixed, "qwen_image"),
+        ("plain.gguf", weights, ""),
+        ("uc.gguf", weights, "qwen_image21"),
+    ):
+        _kopf(tmp_path / name, dict(names), architecture)
+        assert bildinhalt.family(tmp_path / name) == "qwen_image_2_1", name
+
+
+def test_silence_a_gguf_of_qwen_image_without_the_2_1_layer_stays_qwen_image(tmp_path):
+    from tests.test_bild_bausatz_api import _kopf
+
+    _kopf(tmp_path / "qwen.gguf", {
+        "model.diffusion_model.transformer_blocks.0.img_mod.1.weight": [18432, 3072],
+        "model.diffusion_model.img_in.weight": [3072, 64],
+    }, "qwen_image")
+    assert bildinhalt.family(tmp_path / "qwen.gguf") == "qwen_image"
+
+
+def test_silence_a_gguf_that_cannot_be_read_has_no_family(tmp_path):
+    broken = tmp_path / "broken.gguf"
+    broken.write_bytes(b"GGUF" + b"\x00" * 12)
+    assert bildinhalt.family(broken) is None
+
+
 def test_only_a_t5_xxl_counts_as_t5xxl(tmp_path):
     """flan-t5-large shares T5-XXL's vocabulary at a width of 1024 and is
     not offered as the T5 of a Flux."""
@@ -940,7 +983,7 @@ _NO_SOURCE = {
 }
 # Chroma1-Radiance draws the picture itself, and an SD3 checkpoint carries
 # its VAE: their docs name none.
-_NO_VAE = {"chroma_radiance", "sd3"}
+_NO_VAE = {"chroma_radiance", "sd3", "iris"}
 
 
 def test_every_family_with_a_kit_names_a_source_for_each_part():
@@ -959,7 +1002,7 @@ def test_every_family_with_a_kit_names_a_source_for_each_part():
         for part in family.kit_parts:
             assert "/" in part.repo and part.file and part.source, family.name
             assert part.name == part.file.rsplit("/", 1)[-1]
-            assert part.folder == ("vae" if part.part == "vae" else "text_encoders")
+            assert part.folder == ("vae" if part.part in ("vae", "audio_vae") else "text_encoders")
         # Every family with parts is told by its file name, or nothing finds
         # its kit.
         assert family.file_patterns, family.name
@@ -1104,6 +1147,8 @@ def test_half_a_kit_is_none():
     assert _kit("ltx-2.3-22b-dev-UD-Q4_K_M.gguf") == {
         "llm": "gemma-3-12b-it-UD-Q4_K_XL.gguf",
         "vae": "ltx-2.3-22b-dev_video_vae.safetensors",
+        "audio_vae": "ltx-2.3-22b-dev_audio_vae.safetensors",
+        "embeddings_connectors": "ltx-2.3-22b-dev_embeddings_connectors.safetensors",
     }
 
 
@@ -1253,6 +1298,7 @@ _STEPS = {
     "ovis": 20, "ernie": 8, "sefi": 4, "anima": 8, "boogu": 4, "mage_flow": 4,
     "ideogram4": 20, "pixart": 20, "wan": 20, "wan22_i2v": 10, "wan22_ti2v": 20,
     "wan22_s2v": 20, "ltx": 20, "minimax_h3": 20, "hunyuan_video": 20, "lingbot_video": 20,
+    "flux3_klein": 16, "moss_image": 50, "iris": 100,
 }
 
 
@@ -1278,6 +1324,7 @@ def _values(
 _VARIANTS = [
     ("flux", "schnell", "flux1-schnell-Q4_K_S.gguf", _values(1024, 1024, 4, 1.0)),
     ("flux2_klein", "base", "flux-2-klein-base-4b.safetensors", _values(1024, 1024, 20, 4.0)),
+    ("flux3_klein", "base", "flux-3-image-klein-base.safetensors", _values(1024, 1024, 20, 3.5)),
     ("sd3", "turbo", "sd3.5_large_turbo.safetensors", _values(1024, 1024, 4, 1.0, flow_shift=3.0)),
     ("ltx", "distilled", "ltx-2.3-22b-distilled.safetensors",
      _values(1280, 720, 8, 1.0, scheduler="ltx2", frames=121, fps=24)),
@@ -1348,10 +1395,10 @@ def test_a_file_named_for_a_variant_starts_at_the_variant_s_values(family, word,
     assert image_families.start_values(family) is own.start
 
 
-def test_the_turbo_model_of_qwen_image_2_1_names_the_card_it_starts_by():
+def test_the_turbo_model_of_qwen_image_2_1_names_the_doc_it_starts_by():
     start = image_families.start_values("qwen_image_2_1", "qwen-image-2.1-turbo-Q8_0.gguf")
-    assert "Qwen-Image-2.1-Turbo" in start.sources["steps"]
-    assert "Qwen-Image-2.1-Turbo" in start.sources["cfg"]
+    assert "docs/qwen_image_2.1.md" in start.sources["steps"]
+    assert "docs/qwen_image_2.1.md" in start.sources["cfg"]
     # The plain model, and the other Qwen-Image families, keep their start.
     plain = image_families.get("qwen_image_2_1").start
     assert image_families.start_values("qwen_image_2_1", "qwen_image_2.1-Q8_0.gguf") is plain
@@ -1656,7 +1703,7 @@ def test_the_families_whose_docs_pass_a_vae_cannot_start_without_one():
     # every other kit family is asked for one as before.
     needing = {f.name for f in image_families.FAMILIES if f.kit and image_families.needs_vae(f)}
     assert {f.name for f in image_families.FAMILIES if f.kit} - needing == {
-        "sd3", "chroma_radiance", "minit2i", "qwen_image_layered",
+        "sd3", "chroma_radiance", "minit2i", "qwen_image_layered", "iris",
     }
 
 

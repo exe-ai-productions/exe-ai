@@ -100,12 +100,12 @@ process.exit(0)
 
 
 def test_every_origin_has_its_word_in_both_languages():
-    for language, words in (("de", ["Nutzer", "Agent", "Cronjob"]), ("en", ["User", "Agent", "Cron job"])):
+    for language, words in (("de", ["Nutzer", "Agent", "Cronjob"]), ("en", ["User", "Agent", "Cronjob"])):
         catalogue = json.loads((WURZEL / f"app/locales/{language}.json").read_text(encoding="utf-8"))
         folder = catalogue["docfolder"]
         assert [folder["origin_user"], folder["origin_agent"], folder["origin_cronjob"]] == words
-        # The dock is called the same wherever its files are named.
-        assert catalogue["werkzeuge"]["quelle_dock"] == "Dock"
+        # The folder is called the same wherever its files are named.
+        assert catalogue["werkzeuge"]["quelle_dock"] == {"de": "Doc-Ordner", "en": "Doc folder"}[language]
 
 
 def test_the_ask_carries_origin_and_project_together():
@@ -419,7 +419,7 @@ def test_the_doc_folder_wears_the_galleries_folder_row_without_a_plus():
     assert zeile.index("{#if !chat}") < zeile.index('<div class="chooser-row">')
     assert '<div class="abschnitt">' not in quelle
     # No count anywhere in the head or over the wall.
-    assert "files.length}" not in quelle.replace("{#if files.length}", "")
+    assert "files.length}" not in quelle.replace("{:else if files.length}", "")
 
     reihe = (FRONTEND / "src/teile/Speicherortzeile.svelte").read_text(encoding="utf-8")
     assert '<span class="pfad" title={shownPath}><span>{shownPath}</span></span>' in reihe
@@ -430,7 +430,7 @@ def test_the_doc_folder_wears_the_galleries_folder_row_without_a_plus():
     assert "direction: rtl;" in box and "unicode-bidi" not in box
     inner = reihe.split("  .pfad span {", 1)[1].split("\n  }", 1)[0]
     assert "direction: ltr;" in inner and "unicode-bidi: bidi-override;" in inner
-    assert "const shownPath = $derived(pathText ?? pfad)" in reihe
+    assert "const shownPath = $derived(displayPath(pathText ?? pfad))" in reihe
     assert "onadd" not in reihe and "showPath" not in reihe
 
 
@@ -526,7 +526,7 @@ def test_the_wall_is_asked_again_while_the_open_chats_answer_runs():
     source = _source()
     assert "const answering = $derived(Boolean(laufVon(chat)))" in source
     assert "answering || zustand.auftraege.some(" in source
-    clock = source.split("const clock = setInterval(", 1)[0].rsplit("$effect(() => {", 1)[1]
+    clock = source.split("return pollWithoutOverlap(() => load(true), 3000)", 1)[0].rsplit("$effect(() => {", 1)[1]
     assert "if (!running) return" in clock
     # Only where the answer ended in the chat still open: a chat left in
     # mid-answer asks through its own change, and a second, quiet ask

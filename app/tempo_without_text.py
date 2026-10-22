@@ -9,6 +9,10 @@ is the speed of its text.
 The round's own counts stay in its stats (the tokens it produced, how long
 it ran); only its share in the speed goes, and with it the name of whoever
 measured that share.
+
+A run that was stopped is such a round as a whole: what was counted before
+the stop is not a stretch anybody timed to its end, so the stored stats of a
+stopped answer carry no speed either.
 """
 
 from __future__ import annotations

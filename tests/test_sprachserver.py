@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.conftest import sized_file
-from app import sprachserver, stimme
+from app import sprachserver, stimme, system_voice
 from app.modellrunner import Lauf
 
 
@@ -925,6 +925,9 @@ def _stimme_bereitstellen(client: TestClient, name="stimme-Q8_0.gguf", stimmprob
 
 
 def test_ohne_stimme_wird_nichts_gerufen(client: TestClient, monkeypatch):
+    # "-": the empty choice, stored on purpose (a machine starts with a voice
+    # of the system).
+    client.put("/api/v1/settings/global/diktat", json={"wert": {"stimme": ""}})
     gerufen = []
     monkeypatch.setattr(stimme, "sprechen", lambda *a, **kw: gerufen.append(1))
     antwort = client.post("/api/v1/sprachserver/sprechen", json={"text": "Guten Tag."})
@@ -933,34 +936,85 @@ def test_ohne_stimme_wird_nichts_gerufen(client: TestClient, monkeypatch):
     assert not gerufen
 
 
-def test_ohne_stimmsprache_wird_nichts_gerufen(client: TestClient, monkeypatch):
-    client.put("/api/v1/settings/global/diktat", json={"wert": {"stimme": "m.gguf"}})
-    gerufen = []
-    monkeypatch.setattr(stimme, "sprechen", lambda *a, **kw: gerufen.append(1))
+def test_ohne_stimmsprache_spricht_die_stimme_ohne_sprache(client: TestClient, monkeypatch):
+    """"-" in the language is no refusal: the voice model is asked without a
+    language and takes its own."""
+    _stimme_bereitstellen(client)
+    monkeypatch.setattr(stimme, "programm_finden", lambda llama_server: Path("/bin/llama-tts"))
+    client.put(
+        "/api/v1/settings/global/diktat", json={"wert": {"stimme": "stimme-Q8_0.gguf", "stimmsprache": ""}}
+    )
+    gesehen: dict = {}
+
+    def falsch(programm, modell, mmproj, text, *, sprache, **kw):
+        gesehen["sprache"] = sprache
+        return b"RIFF-WAV"
+
+    monkeypatch.setattr(stimme, "sprechen", falsch)
     antwort = client.post("/api/v1/sprachserver/sprechen", json={"text": "Guten Tag."})
-    assert antwort.status_code == 409
-    assert antwort.json()["detail"]
-    assert not gerufen
+    assert antwort.status_code == 200
+    assert gesehen["sprache"] == ""
 
 
-def test_eine_fremde_stimme_wird_abgewiesen(client: TestClient):
+def _systemstimmen(monkeypatch, *namen: str) -> list[tuple[str, str]]:
+    """The system lists these voices and speaks by recording what it was
+    asked: the pairs of voice name and text."""
+    monkeypatch.setattr(system_voice, "available", lambda: True)
+    monkeypatch.setattr(
+        system_voice, "_read_voices", lambda: [system_voice.SystemVoice(n, "de_DE") for n in namen]
+    )
+    monkeypatch.setattr(system_voice, "factory_voice", lambda: "Anna")
+    system_voice.forget_voices()
+    gesprochen: list[tuple[str, str]] = []
+
+    def sprechen(text, voice, *, cancel=None):
+        gesprochen.append((voice, text))
+        return b"RIFF-SYSTEM"
+
+    monkeypatch.setattr(system_voice, "speak", sprechen)
+    return gesprochen
+
+
+def test_eine_fremde_stimme_erreicht_keinen_pfad(client: TestClient, monkeypatch):
     """The setting is not a trusted path: a name that never was one of the
     real models in this folder must not reach `ordner / gewaehlte_stimme` —
     a `../` in it would walk out, an absolute path would replace `ordner`
     outright, and either would hand llama-tts a file this request had no
-    business naming."""
+    business naming. Now such a name is no voice at all: the voice of the
+    system speaks, and neither program is asked for the name."""
+    gesprochen = _systemstimmen(monkeypatch, "Anna")
+    gerufen = []
+    monkeypatch.setattr(stimme, "sprechen", lambda *a, **kw: gerufen.append(a))
     client.put(
         "/api/v1/settings/global/diktat",
         json={"wert": {"stimme": "../../etc/passwd", "stimmsprache": "de"}},
     )
     antwort = client.post("/api/v1/sprachserver/sprechen", json={"text": "Hallo."})
-    assert antwort.status_code == 404
+    assert antwort.status_code == 200
+    assert antwort.content == b"RIFF-SYSTEM"
+    assert gesprochen == [("Anna", "Hallo.")]
+    assert not gerufen
 
 
-def test_ohne_projektor_wird_es_gemeldet(client: TestClient):
-    """The model exists, but nothing beside it can hear — the panel says so
-    in plain words rather than letting the call fail with something about a
-    template."""
+def test_ohne_projektor_spricht_die_stimme_des_systems(client: TestClient, monkeypatch):
+    """The model exists, but nothing beside it can hear: the voice of the
+    system speaks."""
+    gesprochen = _systemstimmen(monkeypatch, "Anna")
+    ordner = Path(client.app.state.sprachrunner.ordner)
+    ordner.mkdir(parents=True, exist_ok=True)
+    (ordner / "einsam.gguf").write_bytes(b"x")
+    client.put(
+        "/api/v1/settings/global/diktat",
+        json={"wert": {"stimme": "einsam.gguf", "stimmsprache": "de"}},
+    )
+    antwort = client.post("/api/v1/sprachserver/sprechen", json={"text": "Hallo."})
+    assert antwort.status_code == 200
+    assert gesprochen == [("Anna", "Hallo.")]
+
+
+def test_ohne_projektor_und_ohne_stimmen_wird_es_gemeldet(client: TestClient, monkeypatch):
+    """Where the system has no voice to fall back on, the refusal stands."""
+    monkeypatch.setattr(system_voice, "available", lambda: False)
     ordner = Path(client.app.state.sprachrunner.ordner)
     ordner.mkdir(parents=True, exist_ok=True)
     (ordner / "einsam.gguf").write_bytes(b"x")
@@ -972,7 +1026,17 @@ def test_ohne_projektor_wird_es_gemeldet(client: TestClient):
     assert antwort.status_code == 412
 
 
-def test_ohne_llama_tts_wird_es_gemeldet(client: TestClient, monkeypatch):
+def test_ohne_llama_tts_spricht_die_stimme_des_systems(client: TestClient, monkeypatch):
+    gesprochen = _systemstimmen(monkeypatch, "Anna")
+    _stimme_bereitstellen(client)
+    monkeypatch.setattr(stimme, "programm_finden", lambda llama_server: None)
+    antwort = client.post("/api/v1/sprachserver/sprechen", json={"text": "Hallo."})
+    assert antwort.status_code == 200
+    assert gesprochen == [("Anna", "Hallo.")]
+
+
+def test_ohne_llama_tts_und_ohne_stimmen_wird_es_gemeldet(client: TestClient, monkeypatch):
+    monkeypatch.setattr(system_voice, "available", lambda: False)
     _stimme_bereitstellen(client)
     monkeypatch.setattr(stimme, "programm_finden", lambda llama_server: None)
     antwort = client.post("/api/v1/sprachserver/sprechen", json={"text": "Hallo."})

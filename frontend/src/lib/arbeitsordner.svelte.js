@@ -12,6 +12,7 @@ import { api } from './api.js'
 import { t } from './texte.svelte.js'
 import { zustand, aktuellerChat, chatSichern, chatsLaden, melde } from './zustand.svelte.js'
 import { gemeldetWird } from './meldewesen.svelte.js'
+import { lastPart } from './paths.js'
 
 /* How a pill appears and goes: a short fade with a touch of scale. This
    was the FALLBACK of a crossfade between two spots; with one spot left a
@@ -65,6 +66,11 @@ export const ordnerZustand = $state({
      so a toast about this would appear half hidden behind it. Cleared when
      the window closes and when a new attempt starts. */
   zurueckMeldung: null,
+  /* Why the service refused the path that was typed or chosen — shown in the
+     window itself, which stays open with the text in its field. Same reason
+     as above for not being a toast: the window's veil covers them. Cleared
+     when the window closes and when a new attempt starts. */
+  shareError: '',
 })
 
 /* Which run of ``ordnerstandPruefen`` is the youngest — only it may write.
@@ -90,8 +96,7 @@ export function ordnerListe() {
    anyway. The full path stays in the tooltip, so the short form never has to
    lie about where something is. */
 export function ordnerName(pfad) {
-  const teile = String(pfad).split('/').filter(Boolean)
-  return teile[teile.length - 1] || '/'
+  return lastPart(pfad)
 }
 
 export async function dialogPruefen() {
@@ -202,10 +207,13 @@ export function ersatzBeginnen(pfad) {
   ordnerZustand.maskeOffen = true
 }
 
-async function sichern(liste, ersatz = null) {
+/* Stores the list. Returns whether it was stored: the window that asked
+   stays open on a refusal and says why, while a list changed from the chip
+   reports a failure as a toast. */
+async function sichern(liste, ersatz = null, inWindow = false) {
   try {
     const chat = await chatSichern()
-    if (!chat) return
+    if (!chat) return true
     const daten = { working_dirs: liste }
     // Only when this save really replaces a folder that is gone. Without the
     // pair the service rewrites no document path — a changed list of folders
@@ -223,8 +231,17 @@ async function sichern(liste, ersatz = null) {
        the line below closes the window — waiting for them would leave it
        standing open with its buttons live. */
     void ordnerstandPruefen()
+    return true
   } catch (fehler) {
-    melde(fehler.message || t('fehler.allgemein'), 'fehler')
+    const reason = fehler.message || t('fehler.allgemein')
+    /* The same switch every other failure notice in the house respects
+       (melde(), art 'fehler'), shown where the user is looking. */
+    if (inWindow && ordnerZustand.maskeOffen) {
+      if (gemeldetWird('fehler')) ordnerZustand.shareError = reason
+    } else {
+      melde(reason, 'fehler')
+    }
+    return false
   }
 }
 
@@ -243,13 +260,23 @@ export async function ordnerHinzufuegen(pfad) {
      part: with a replacement running, the path that arrives is where a
      missing folder WENT — it takes that folder's place in the list and
      travels with it as a pair. Otherwise it is simply one more share. */
+  ordnerZustand.shareError = ''
   const alt = ordnerZustand.ersatzZiel
   if (alt) {
+    /* Cleared at once, so a second click on "Set" cannot send the pair a
+       second time; put back below when the service refuses the path. */
     ordnerZustand.ersatzZiel = null
-    await sichern(
+    const stored = await sichern(
       ordnerListe().map((eintrag) => (eintrag === alt ? pfad : eintrag)),
       { alt, neu: pfad },
+      true,
     )
+    /* A refused path keeps the question open: the same folder is still the
+       one being replaced, and the next path typed answers it. */
+    if (!stored) {
+      if (ordnerZustand.maskeOffen) ordnerZustand.ersatzZiel = alt
+      return
+    }
     ordnerZustand.maskeOffen = false
     return
   }
@@ -257,8 +284,7 @@ export async function ordnerHinzufuegen(pfad) {
     ordnerZustand.maskeOffen = false
     return
   }
-  await sichern([...ordnerListe(), pfad])
-  ordnerZustand.maskeOffen = false
+  if (await sichern([...ordnerListe(), pfad], null, true)) ordnerZustand.maskeOffen = false
 }
 
 export async function ordnerLoesen(pfad) {

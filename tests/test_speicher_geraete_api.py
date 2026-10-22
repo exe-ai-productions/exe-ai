@@ -98,10 +98,10 @@ def test_ein_bild_schickt_keinen_speicher_mehr(client: TestClient):
 def test_die_speicherschalter_kommen_aus_dem_bildserver(wunsch_senden, client: TestClient):
     """The memory block's switches are the machine's too: a picture's own
     copy of one is not heard, the stored one is."""
-    _geraete(client, switches={"vae_tiling": True, "fa": True})
-    auftrag = wunsch_senden(switches={"fa": False, "mmap": True})
+    _geraete(client, switches={"vae_tiling": True, "sage_attn": True})
+    auftrag = wunsch_senden(switches={"sage_attn": False, "mmap": True})
     assert auftrag.switches.get("vae_tiling") is True
-    assert auftrag.switches.get("fa") is True
+    assert auftrag.switches.get("sage_attn") is True
     assert "mmap" not in auftrag.switches
 
 
@@ -126,19 +126,19 @@ def test_a_memory_switch_turned_off_is_no_longer_kept(wunsch_senden, client: Tes
     Off is not a value the generator reads, so the switch is taken out of
     the stored set — the write is answered, not refused, also for the last
     switch that was on — and the next picture is drawn without it."""
-    assert _patch(client, switches={"fa": True}).status_code == 200
-    assert _stored(client)["switches"] == {"fa": True}
-    assert wunsch_senden().switches.get("fa") is True
+    assert _patch(client, switches={"sage_attn": True}).status_code == 200
+    assert _stored(client)["switches"] == {"sage_attn": True}
+    assert wunsch_senden().switches.get("sage_attn") is True
 
-    antwort = _patch(client, switches={"fa": False})
+    antwort = _patch(client, switches={"sage_attn": False})
     assert antwort.status_code == 200, antwort.text
     assert antwort.json()["wert"]["switches"] == {}
     assert _stored(client)["switches"] == {}
-    assert "fa" not in wunsch_senden().switches
+    assert "sage_attn" not in wunsch_senden().switches
 
     # On again, as before.
-    assert _patch(client, switches={"fa": True}).status_code == 200
-    assert _stored(client)["switches"] == {"fa": True}
+    assert _patch(client, switches={"sage_attn": True}).status_code == 200
+    assert _stored(client)["switches"] == {"sage_attn": True}
 
 
 def test_turning_one_switch_off_leaves_the_rest_alone(client: TestClient):
@@ -147,9 +147,9 @@ def test_turning_one_switch_off_leaves_the_rest_alone(client: TestClient):
     are; a cleared value goes like a switch turned off; a key the table
     does not know is still not kept."""
     _geraete(client, vram_limit="6", threads=8, offload_to_cpu=True,
-             switches={"fa": True, "mmap": True, "linear_scale": 0.5})
+             switches={"sage_attn": True, "mmap": True, "linear_scale": 0.5})
 
-    assert _patch(client, switches={"fa": False}).status_code == 200
+    assert _patch(client, switches={"sage_attn": False}).status_code == 200
     stand = _stored(client)
     assert stand["switches"] == {"mmap": True, "linear_scale": 0.5}
     assert (stand["vram_limit"], stand["threads"], stand["offload_to_cpu"]) == ("6", 8, True)
@@ -170,9 +170,9 @@ def test_two_windows_do_not_undo_each_other_s_switches(client: TestClient):
     """Each window sends the switches it changed, by key: one that still
     shows a switch as on, which the other has turned off meanwhile, does
     not bring it back by setting another."""
-    assert _patch(client, switches={"fa": True}).status_code == 200
+    assert _patch(client, switches={"sage_attn": True}).status_code == 200
     # Window one turns it off; window two, opened before, sets another.
-    assert _patch(client, switches={"fa": False}).status_code == 200
+    assert _patch(client, switches={"sage_attn": False}).status_code == 200
     assert _patch(client, switches={"mmap": True}).status_code == 200
     assert _stored(client)["switches"] == {"mmap": True}
 
@@ -190,10 +190,10 @@ def test_only_a_set_named_for_it_is_stored_as_the_check_leaves_it(client: TestCl
     from app.bildgeraete import SCHLUESSEL
 
     assert AS_KEPT == {SCHLUESSEL: frozenset({"switches"})}
-    _geraete(client, switches={"fa": True})
+    _geraete(client, switches={"sage_attn": True})
     # Not a set under that key: judged like every other value, nothing is cleared.
     assert _patch(client, switches=None).status_code == 400
-    assert _stored(client)["switches"] == {"fa": True}
+    assert _stored(client)["switches"] == {"sage_attn": True}
 
 
 # --- The time limit ----------------------------------------------------------

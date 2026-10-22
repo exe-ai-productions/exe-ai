@@ -9,6 +9,7 @@ useless as one that never does.
 from __future__ import annotations
 
 import json
+import logging
 
 import httpx
 import pytest
@@ -336,4 +337,108 @@ async def test_anthropic_schweigt_beim_normalen_ende(monkeypatch):
         {"type": "message_delta", "delta": {"stop_reason": "end_turn"},
          "usage": {"output_tokens": 3}},
     ))
+    assert messwerte["abgeschnitten"] is False
+
+
+# --- A refusal ------------------------------------------------------------
+
+
+def test_nur_das_wort_der_ablehnung_ist_eine_ablehnung():
+    assert antwortende.abgelehnt("refusal")
+    assert antwortende.abgelehnt(" REFUSAL ")
+    # Not a length, not a finished answer, and nothing guessed from silence.
+    assert not antwortende.abgeschnitten("refusal")
+    assert not antwortende.natuerliches_ende("refusal")
+    for wort in ("end_turn", "stop", "max_tokens", "length", "tool_use", "content_filter", "", None):
+        assert not antwortende.abgelehnt(wort), wort
+
+
+REFUSAL_WORDS = "I cannot help with that request because it would give the means to harm people."
+
+
+@pytest.mark.asyncio
+async def test_anthropic_meldet_die_ablehnung_mit_der_erklaerung_und_schreibt_eine_zeile(monkeypatch, caplog):
+    monkeypatch.setenv("TEST_SCHLUESSEL", "geheim")
+    with caplog.at_level("INFO", logger="app.providers.anthropic"):
+        messwerte = await _messwerte(_anthropic(), _transport(
+            {"type": "message_start", "message": {"model": "claude-test", "usage": {"input_tokens": 5}}},
+            {"type": "message_delta",
+             "delta": {"stop_reason": "refusal",
+                       "stop_details": {"type": "refusal", "category": "cyber", "explanation": REFUSAL_WORDS}},
+             "usage": {"output_tokens": 0}},
+        ))
+    assert messwerte["ende_grund"] == "refusal"
+    assert messwerte["abgelehnt"] is True and messwerte["ablehnung_erklaerung"] == REFUSAL_WORDS
+    # A refusal is no length: the window must not claim the answer was cut off.
+    assert messwerte["abgeschnitten"] is False and messwerte["kontextfenster_voll"] is False
+    lines = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(lines) == 1 and "claude-test" in lines[0] and "cyber" in lines[0] and REFUSAL_WORDS in lines[0], lines
+    assert "geheim" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("details", [
+    {"type": "refusal", "category": None, "explanation": None},
+    {"type": "refusal"},
+    None,
+    "not an object",
+    {"category": 7, "explanation": ["no", "text"]},
+    {"category": "cyber", "explanation": "   "},
+])
+async def test_ohne_erklaerung_ist_die_ablehnung_eine_ohne_satz_dazu(monkeypatch, caplog, details):
+    monkeypatch.setenv("TEST_SCHLUESSEL", "geheim")
+    delta = {"stop_reason": "refusal"}
+    if details is not None:
+        delta["stop_details"] = details
+    with caplog.at_level("INFO", logger="app.providers.anthropic"):
+        messwerte = await _messwerte(_anthropic(), _transport(
+            {"type": "message_start", "message": {"usage": {"input_tokens": 5}}},
+            {"type": "message_delta", "delta": delta, "usage": {"output_tokens": 0}},
+        ))
+    assert messwerte["abgelehnt"] is True and "ablehnung_erklaerung" not in messwerte
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+
+
+@pytest.mark.asyncio
+async def test_eine_ablehnung_nach_ein_paar_woertern_laesst_den_text_stehen(monkeypatch):
+    monkeypatch.setenv("TEST_SCHLUESSEL", "geheim")
+    transport = _transport(
+        {"type": "message_start", "message": {"usage": {"input_tokens": 5}}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Well, I "}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "would start by"}},
+        {"type": "message_delta",
+         "delta": {"stop_reason": "refusal", "stop_details": {"explanation": REFUSAL_WORDS}},
+         "usage": {"output_tokens": 6}},
+    )
+    echt = httpx.AsyncClient
+    try:
+        httpx.AsyncClient = lambda **kw: echt(transport=transport, **kw)
+        stuecke = [
+            s async for s in _anthropic().streamen(
+                Generierungsanfrage(nachrichten=[ChatNachricht(role="user", content="Hallo")])
+            )
+        ]
+    finally:
+        httpx.AsyncClient = echt
+    assert "".join(s.text for s in stuecke if s.sorte == "content") == "Well, I would start by"
+    stats = next(s.daten for s in stuecke if s.sorte == "stats")
+    assert stats["abgelehnt"] is True and stats["ablehnung_erklaerung"] == REFUSAL_WORDS
+
+
+@pytest.mark.asyncio
+async def test_schweigeprobe_andere_enden_tragen_keine_ablehnung(monkeypatch, caplog):
+    monkeypatch.setenv("TEST_SCHLUESSEL", "geheim")
+    for wort in ("end_turn", "max_tokens", "model_context_window_exceeded", "tool_use", "stop_sequence"):
+        caplog.clear()
+        with caplog.at_level("INFO", logger="app.providers.anthropic"):
+            messwerte = await _messwerte(_anthropic(), _transport(
+                {"type": "message_start", "message": {"usage": {"input_tokens": 5}}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "x"}},
+                {"type": "message_delta",
+                 "delta": {"stop_reason": wort, "stop_details": {"explanation": "ignored"}},
+                 "usage": {"output_tokens": 1}},
+            ))
+        assert "abgelehnt" not in messwerte and "ablehnung_erklaerung" not in messwerte, wort
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING], wort
+    # And the ends this file already pins keep their readings.
     assert messwerte["abgeschnitten"] is False

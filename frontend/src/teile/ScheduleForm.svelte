@@ -22,6 +22,7 @@
   import { zeitpunkt } from '../lib/zeitpunkt.js'
   import { changedSchedule, chipOf, formFromEntry, storedFromForm } from '../lib/terminform.js'
   import Auswahlfeld from './Auswahlfeld.svelte'
+  import ScheduleMoment from './ScheduleMoment.svelte'
   import { OHNE_AGENT } from '../lib/agentmarke.js'
 
   let { entry = null, day, script = '', onclose } = $props()
@@ -248,20 +249,20 @@
     {:else}
       <div class="pair">
         {#if repeat === 'once'}
-          <label class="field">
+          <div class="field">
             <span>{t('cronjobs.day')}</span>
-            <input type="date" bind:value={chosenDay} />
-          </label>
+            <ScheduleMoment mode="day" label={t('cronjobs.day')} bind:value={chosenDay} />
+          </div>
         {:else if repeat === 'monthly'}
           <label class="field">
             <span>{t('cronjobs.day_of_month')}</span>
             <input type="number" min="1" max="31" bind:value={monthDay} />
           </label>
         {/if}
-        <label class="field">
+        <div class="field">
           <span>{t('cronjobs.field_time')}</span>
-          <input type="time" bind:value={time} />
-        </label>
+          <ScheduleMoment mode="time" label={t('cronjobs.field_time')} bind:value={time} />
+        </div>
       </div>
     {/if}
   </div>
@@ -319,7 +320,7 @@
     padding: 6px 10px;
     min-height: 32px;
     resize: vertical;
-    /* The calendar and clock of the browser follow the look
+    /* The number field's spin buttons follow the look
        (`--feld-farbschema`, global.css); a page that names no scheme gives
        them the light one. */
     color-scheme: var(--feld-farbschema, normal);
@@ -391,10 +392,13 @@
     box-shadow: inset 0 0 0 1px var(--glass-button-edge);
     color: var(--text);
   }
+  /* The main button is button glass with its fine edge, like the start
+     button; only Send stays filled. */
   .foot .primary {
-    background: var(--text);
-    box-shadow: none;
-    color: var(--bg);
+    font-weight: 500;
+  }
+  .foot .primary:hover:not(:disabled) {
+    background: var(--glass-hover);
   }
   .foot .primary:disabled {
     opacity: 0.45;

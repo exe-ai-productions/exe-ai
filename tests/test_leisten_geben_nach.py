@@ -115,7 +115,7 @@ def test_the_rule_matches_the_list_of_states_it_is_written_as():
     cases = [
         {
             "windowWidth": rng.randrange(760, 2200),
-            "leftWidth": rng.randrange(314, 401),
+            "leftWidth": rng.randrange(285, 401),
             "rightWidth": rng.randrange(364, 901),
             "left": rng.random() < 0.8,
             "right": rng.random() < 0.8,

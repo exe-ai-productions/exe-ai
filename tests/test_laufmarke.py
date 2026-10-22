@@ -14,9 +14,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.fensterquelle import WINDOW_SOURCE
 
 WURZEL = Path(__file__).resolve().parent.parent
-QUELLE = WURZEL / "frontend/src/App.svelte"
+QUELLE = WINDOW_SOURCE
 RINGE = WURZEL / "frontend/src/lib/chatringe.svelte.js"
 
 
@@ -249,6 +250,13 @@ def _frage_trug_bild(quelle: str) -> str:
     return hilfe.group(0)
 
 
+def _taetigkeit_helfer() -> str:
+    """The shipped activity helpers (`lib/taetigkeit.js`), without their
+    `export`, so the lifted blocks below run the real ones."""
+    quelle = (WURZEL / "frontend/src/lib/taetigkeit.js").read_text(encoding="utf-8")
+    return re.sub(r"^export ", "", quelle, flags=re.M)
+
+
 def _uebernahme(nachrichten: list, wiederanhang: str) -> dict:
     """The adoption block out of App.svelte, over the list a scenario sets.
 
@@ -268,7 +276,7 @@ def _uebernahme(nachrichten: list, wiederanhang: str) -> dict:
     hilfe = _frage_trug_bild(quelle)
     skript = f"""
 const zustand = {{ nachrichten: {json.dumps(nachrichten)} }}
-const taetigkeitSetzen = () => {{}}
+{_taetigkeit_helfer()}
 const wiederanhang = {wiederanhang}
 const bilder = undefined
 {hilfe}
@@ -411,3 +419,91 @@ def test_the_bubble_and_the_mark_read_the_same_condition():
     assert ended
     # A row taken over by a new run starts live again.
     assert "platzhalter.runEnded = false" in source
+
+
+# --- A reattached run shows the activity it really has ----------------------
+
+JOINED = '{"chatId": "c1", "generationId": "g1", "messageId": "a1"}'
+
+
+def _pushed_row(wiederanhang: str) -> dict:
+    """The placeholder `antwortHolen` pushes when there is nothing to adopt:
+    a reattach (`wiederanhang`) or a plain send (`null`)."""
+    quelle = QUELLE.read_text(encoding="utf-8")
+    block = re.search(
+        r"    if \(!uebernehmen && !retried\) zustand\.nachrichten\.push\(\{\n.*?\n    \}\)\n",
+        quelle,
+        re.S,
+    )
+    assert block, "the placeholder push was not found"
+    skript = f"""
+const zustand = {{ nachrichten: [] }}
+const zielChat = 'c1'
+const wiederanhang = {wiederanhang}
+const bilder = null
+const uebernehmen = null
+const retried = null
+{_frage_trug_bild(quelle)}
+{block.group(0)}
+console.log(JSON.stringify(zustand.nachrichten[0]))
+"""
+    lauf = subprocess.run(["node", "-e", skript], capture_output=True, text=True, timeout=60)
+    assert lauf.returncode == 0, f"{lauf.stderr}\n{lauf.stdout}"
+    return json.loads(lauf.stdout)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed here")
+def test_a_reattached_row_does_not_claim_to_be_reading_the_context():
+    """The replay starts from the first event, so until it reaches the real
+    one the row knows nothing: no activity, no clock, an ordinary waiting
+    mark — not a reading-the-context line under an answer that is already
+    thinking."""
+    adopted = _uebernahme(
+        [{"id": "u1", "role": "user", "content": "q"},
+         {"id": "a1", "role": "assistant", "content": "half", "taetigkeit": "denkt", "taetigkeitSeit": 9}],
+        JOINED,
+    )
+    assert adopted["taetigkeit"] is None and adopted["taetigkeitSeit"] is None
+    pushed = _pushed_row(JOINED)
+    assert pushed["taetigkeit"] is None and pushed["taetigkeitSeit"] is None
+    for row in (adopted, pushed):
+        marke = _lauf([dict(row, zustand="laeuft", content="")])
+        assert marke == {"id": row["id"], "art": "antwort", "text": "", "seit": None}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed here")
+def test_silence_a_freshly_sent_run_starts_with_the_context_line():
+    """Silence probe: only the reattach lost its first activity. A run this
+    window sends itself still begins reading the context, with its clock."""
+    row = _pushed_row("null")
+    assert row["taetigkeit"] == "kontext"
+    assert row["taetigkeitSeit"] > 1_600_000_000_000
+    marke = _lauf([dict(row, zustand="laeuft")])
+    assert marke["kontext"] is True
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed here")
+def test_the_start_event_stamps_the_clock_only_on_a_row_reading_the_context():
+    """The `start` event moves the first context stretch to the moment the
+    round began. A reattached row has no activity then, and must not gain a
+    clock from it."""
+    block = re.search(
+        r"          if \(ereignis\.zeitpunkt_ms != null && platzhalter\.taetigkeit === 'kontext'\) \{\n.*?\n          \}",
+        QUELLE.read_text(encoding="utf-8"),
+        re.S,
+    )
+    assert block, "the start stamp was not found"
+
+    def stamped(row: dict) -> dict:
+        skript = f"""
+const platzhalter = {json.dumps(row)}
+const ereignis = {{ zeitpunkt_ms: 1_700_000_000_000 }}
+{block.group(0)}
+console.log(JSON.stringify(platzhalter))
+"""
+        lauf = subprocess.run(["node", "-e", skript], capture_output=True, text=True, timeout=60)
+        assert lauf.returncode == 0, f"{lauf.stderr}\n{lauf.stdout}"
+        return json.loads(lauf.stdout)
+
+    assert stamped({"taetigkeit": None, "taetigkeitSeit": None})["taetigkeitSeit"] is None
+    assert stamped({"taetigkeit": "kontext", "taetigkeitSeit": 5})["taetigkeitSeit"] == 1_700_000_000_000

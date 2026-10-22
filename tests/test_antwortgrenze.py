@@ -1178,9 +1178,12 @@ def test_jedes_feld_mit_wort_zeigt_dasselbe_wort():
     # guidance, frame count and frame rate, ten are its details (image CFG,
     # detection threshold, highres steps, denoise and target edges, skip
     # layer, preview rhythm, eta, flow shift, CLIP skip); one is the speech
-    # server's pause before sending, which says "Auto" while the service
-    # goes by its works number.
-    assert gefunden == 28
+    # server's pause before sending, and two more are its wait for speech
+    # and its rounds without speech, which say "Auto" while the service
+    # goes by its works number; one is the speech server's five voice values
+    # (one field in a loop), which say "Auto" while the engine goes by its
+    # own numbers.
+    assert gefunden == 31
 
 
 def test_ein_geleertes_feld_verliert_seine_herkunft():

@@ -3,9 +3,10 @@
 When the window runs out of room the words go first (``narrow``). When even
 that form does not fit, a second step follows (``tight``): the model picker
 drops its lamps from the row — they stay on the model's own line in its menu
-— and cuts the name shorter still, and the gaps close. The microphone and
-the arrow are what the bar is for: they are never the ones to go. Both steps
-are measured, and both come and go with the room the row has.
+— and lets the name shrink with the room the row has left, and the gaps
+close. The microphone and the arrow are what the bar is for: they are never
+the ones to go. Both steps are measured, and both come and go with the room
+the row has.
 """
 
 from __future__ import annotations
@@ -39,14 +40,14 @@ def test_the_second_step_comes_and_goes_with_the_room_the_narrow_form_has():
 
 def test_the_row_and_the_model_picker_wear_the_step():
     assert '<div class="bar-row" class:narrow class:tight bind:this={row}>' in BAR
-    assert "{narrow} {tight}" in BAR
+    assert "toggleMenu('model', open)} {tight}" in BAR
     assert "tight = false, label = $bindable('')" in PICKER
-    assert '<button class="part" class:narrow class:tight' in PICKER
+    assert '<button class="part" class:tight' in PICKER
 
 
-def test_tight_drops_the_lamps_from_the_row_and_cuts_the_name():
+def test_tight_drops_the_lamps_from_the_row_and_lets_the_name_shrink_to_a_floor():
     assert "display: none;" in _rule(PICKER, ".part.tight .lamps")
-    assert "max-width: 44px;" in _rule(PICKER, ".part.tight .name")
+    assert "min-width: 44px;" in _rule(PICKER, ".part.tight .name")
     assert "gap: 0;" in _rule(BAR, ".bar-row.tight .linkegruppe,\n  .bar-row.tight .rechts")
 
 

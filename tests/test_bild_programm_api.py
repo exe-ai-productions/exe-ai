@@ -37,9 +37,10 @@ def _macos(monkeypatch) -> None:
 
 def test_varianten_route_ist_leer_ohne_auswahl(config: Config, client: TestClient, monkeypatch):
     monkeypatch.setattr(sddownload, "waehlbare_varianten", lambda: [])
+    monkeypatch.setattr(sddownload, "unavailable_variants", lambda: [])
     antwort = client.get("/api/v1/bild/programm/varianten")
     assert antwort.status_code == 200
-    assert antwort.json() == {"varianten": [], "installiert": None}
+    assert antwort.json() == {"varianten": [], "installiert": None, "unavailable": []}
 
 
 def test_varianten_route_liefert_was_waehlbare_varianten_meldet(

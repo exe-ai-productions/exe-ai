@@ -295,11 +295,11 @@ def test_every_round_opens_through_the_same_door_and_the_end_frees_the_device():
     assert "if (gespraechAn) aufnahmeSchliessen()" in bar
 
 
-def test_the_rounds_fifteen_seconds_run_on_a_clock_and_not_on_the_blocks():
+def test_the_rounds_wait_runs_on_a_clock_and_not_on_the_blocks():
     bar = _bar()
-    assert "setTimeout(gespraechRundeAblaufen, GESPRAECH_RUNDE_STILLE_MS)" in bar
+    assert "setTimeout(gespraechRundeAblaufen, roundMs(diktat.conversation_wait_seconds))" in bar
     level = re.search(r"function gespraechPegel\(pegel\) \{(.*?)\n  \}", bar, re.S)
-    assert level is not None and "GESPRAECH_RUNDE_STILLE_MS" not in level.group(1)
+    assert level is not None and "roundMs" not in level.group(1)
     expiring = re.search(r"function gespraechRundeAblaufen\(\) \{(.*?)\n  \}", bar, re.S)
     assert expiring is not None
     assert "GESPRAECH_MIN_SPRACH_MS" in expiring.group(1)

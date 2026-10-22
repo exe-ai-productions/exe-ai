@@ -9,6 +9,13 @@
      catalogue tile (`modus: 'kachel'`) already knows its own kind, so it
      skips the asking and shows the right row straight away.
 
+     Every card and every new address opens the same sheet: the way the
+     server reports itself on top (a browser sign-in, or nothing to sign in
+     to), then always "own app" (client id, secret, the return address to
+     enter at the provider, an https return address of one's own) and "API
+     key" (the key and the header it goes in). A server that runs here, as a
+     program, has nothing to sign in to and shows neither.
+
      Both ends at the same place: once the server answers — right away, or
      after a key or a browser sign-in — its tools stand in the right
      column, three states a click cycles through, written back as the two
@@ -17,28 +24,37 @@
   import { t } from '../lib/texte.svelte.js'
   import Hauszeichen from './Hauszeichen.svelte'
   import {
-    apiKeyUmgebungsname, grundfelder as grundfelderAus, listenAusZustaenden,
-    naechsterZustand, serverKennung, timeLimitFromField, zustandAusEintrag,
+    apiKeyUmgebungsname, grundfelder as grundfelderAus, headerFields, headersWithoutKey, keyVariableOf, listenAusZustaenden,
+    naechsterZustand, serverKennung, stateWordKey, timeLimitFromField, zustandAusEintrag,
   } from '../lib/mcpWerkzeuge.js'
 
   /* `entfernen`: takes a server's entry out of the file. Given by the page
      only for a card that has an entry; it asks first and closes the sheet. */
   let { modus, kachel = null, fertig, entfernen = null, name = $bindable('') } = $props()
 
+  /* The sign-in through the browser replaces a key the entry had: both
+     would go out together, and the lamp would look for a variable nobody
+     reads any more. */
+  const signInFields = () => ({
+    auth: 'oauth', api_key_env: null, headers: headersWithoutKey(kachel?.eintrag?.headers),
+  })
+
   const istNeu = modus === 'neu'
   /* Where an existing tile's own data comes from: the shipped catalogue for
      a known server, or its own file entry for one nobody shipped — a tile
      reached through the raw JSON editor (Werkzeug-Datei) can be missing a
      key with no catalogue entry to fall back on at all. A custom entry
-     never carries `anmeldung` of its own — it only ever reaches this sheet
-     through the `schluessel_fehlt` state, so naming a key is the one thing
-     it can mean. */
+     carries no `anmeldung` of its own; its browser sign-in is the `auth`
+     field of the entry, and without that field it reaches this sheet through
+     the `schluessel_fehlt` state, where naming a key is the one thing it can
+     mean. */
   const quelle = istNeu ? null : (kachel.katalog ?? kachel.eintrag)
   // The catalogue's own word for a browser sign-in is 'oauth'
   // (serverkatalog.js) — this sheet's own state names it 'anmeldung',
   // the same word `sondieren()` returns for a freshly typed address.
   const anmeldungKachel = istNeu ? null : (
-    quelle.anmeldung === 'oauth' ? 'anmeldung' : (quelle.anmeldung ?? (quelle.api_key_env ? 'schluessel' : null))
+    quelle.anmeldung === 'oauth' || quelle.auth === 'oauth' ? 'anmeldung'
+    : (quelle.anmeldung ?? ((quelle.api_key_env || keyVariableOf(quelle.headers)) ? 'schluessel' : null))
   )
 
   let adresse = $state(istNeu ? '' : (quelle.url || ''))
@@ -53,6 +69,24 @@
   // way — Google issues no dynamic registration).
   let kennung = $state('')
   let geheimnis = $state('')
+  /* The header the key goes in: `Authorization` carries it as `Bearer …`,
+     any other name carries it as it is (a server that wants `X-Goog-Api-Key`
+     rejects a Bearer). An entry whose key already stands in a header shows
+     that header's name. */
+  const keyHeaders = istNeu ? {} : (kachel.eintrag?.headers ?? {})
+  // The variable a key header of the entry already reads: a new key goes to it.
+  const usedVariable = keyVariableOf(keyHeaders)
+  let headerName = $state(
+    Object.keys(keyHeaders).find((name) => keyHeaders[name].includes('${')) ?? 'Authorization',
+  )
+  /* The return address the person enters at the provider: the one this
+     service really uses, or — with an https address of one's own in the
+     field — that one. A provider that takes nothing but https (Slack) gets
+     the address a forwarding of the person's own leads back here. */
+  let ownRedirect = $state('')
+  let defaultRedirect = $state('')
+  let copied = $state(false)
+  let redirectField
   let arbeitet = $state(false)
   let fehler = $state('')
   let verbunden = $state(false)
@@ -69,16 +103,59 @@
      there and never sits at `undefined`. */
   let verlangt = $state(istNeu ? undefined : anmeldungKachel)
 
-  // A sign-in ('anmeldung', or 'oauth_kennung' with its own client id) is
-  // done through the row's own "Im Browser anmelden" button — the main
-  // one has nothing to submit for either.
+  /* A server reached over the network has something to sign in to; one that
+     runs here as a program does not. */
+  const overNetwork = istNeu || !!quelle.url
+  // Once the server answers, what is left to set is its tools and its time
+  // limit: the ways in make room.
+  const showWays = $derived(overNetwork && !verbunden)
+  const hasKey = $derived(apiKey.trim().length > 0)
+  // The way the server reports: a sign-in through the browser ('anmeldung',
+  // or 'oauth_kennung' with its own client id) is done through its own
+  // button; a key goes with "connect".
+  const browserWay = $derived(verlangt === 'anmeldung' || verlangt === 'oauth_kennung')
+  const headerNameValid = $derived(/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(headerName.trim()))
   const bereit = $derived(
-    verlangt === 'schluessel' ? apiKey.trim().length > 0
-    : verlangt === 'anmeldung' || verlangt === 'oauth_kennung' ? false
+    hasKey ? headerNameValid && (!istNeu || adresse.trim().length > 0)
+    : verlangt === 'schluessel' || browserWay ? false
     : istNeu ? adresse.trim().length > 0
     : fragtAdresse ? eigeneAdresse.trim().length > 0
     : true,
   )
+  const shownRedirect = $derived(ownRedirect.trim() || defaultRedirect)
+
+  if (overNetwork) {
+    api.oauthRedirect().then((antwort) => { defaultRedirect = antwort.redirect_uri }, () => {})
+    if (!istNeu) {
+      api.oauthStatus().then((liste) => {
+        const own = liste.find((e) => e.server === quelle.name)?.redirect_uri
+        // Not over what the person has typed in the meantime.
+        if (own && !ownRedirect) ownRedirect = own
+      }, () => {})
+    }
+  }
+
+  async function copyRedirect() {
+    if (!shownRedirect) return
+    try {
+      await navigator.clipboard.writeText(shownRedirect)
+    } catch {
+      // A page over plain http has no clipboard of its own to write to.
+      redirectField?.select()
+      if (!document.execCommand('copy')) return
+    }
+    copied = true
+    setTimeout(() => { copied = false }, 1500)
+  }
+
+  /* What a typed key writes: the header it goes in, the variable in the
+     .env the entry names it by (the shipped one where the server has one),
+     and the key itself, which the service puts in the .env and out of the
+     file. A key replaces any way the entry had before. */
+  function keyFields(serverName) {
+    const umgebungsname = quelle?.api_key_env || usedVariable || apiKeyUmgebungsname(serverName)
+    return { ...headerFields(umgebungsname, headerName, keyHeaders), api_key: apiKey.trim() }
+  }
 
   /* The tile's own preselected tools (Recraft: generate, image-to-image,
      background removal, inpaint) — carried over from the small menu's old
@@ -189,12 +266,7 @@
       fehler = t('mcp.name_ungueltig')
       return
     }
-    const felder = { type: 'http', url }
-    if (apiKey.trim()) {
-      felder.api_key_env = apiKeyUmgebungsname(serverName)
-      felder.api_key = apiKey.trim()
-    }
-    await anlegenUndVerbinden(serverName, felder)
+    await anlegenUndVerbinden(serverName, { type: 'http', url, ...keyFields(serverName) })
   }
 
   async function verbinden() {
@@ -203,19 +275,16 @@
     fehler = ''
     try {
       if (istNeu) {
-        if (verlangt === undefined) {
-          await sondieren()
-        } else if (verlangt === 'schluessel') {
+        if (hasKey) {
           await schluesselVerbinden()
+        } else if (verlangt === undefined) {
+          await sondieren()
         }
         return
       }
-      // A known tile with a plain key: the same write the old menu did.
+      // A known tile: its own preselection, and a key with the header it goes in.
       const felder = grundfelder()
-      if (apiKey.trim()) {
-        felder.api_key_env = quelle.api_key_env
-        felder.api_key = apiKey.trim()
-      }
+      if (hasKey) Object.assign(felder, keyFields(gespeicherterName))
       await anlegenUndVerbinden(gespeicherterName, felder)
     } catch (e) {
       fehler = e.message || t('fehler.allgemein')
@@ -244,11 +313,13 @@
         }
         await api.serverSchreiben(
           serverName,
-          { type: 'http', url: adresse.trim(), enabled: true },
+          { type: 'http', url: adresse.trim(), enabled: true, ...signInFields() },
           { neu: serverName !== gespeicherterName },
         )
       } else {
-        await api.serverSchreiben(serverName, grundfelder(), { neu: erstesSchreiben() })
+        await api.serverSchreiben(
+          serverName, { ...grundfelder(), ...signInFields() }, { neu: erstesSchreiben() },
+        )
         eintragGeschrieben = true
       }
       gespeicherterName = serverName
@@ -257,6 +328,7 @@
         daten.client_id = kennung
         if (geheimnis) daten.client_secret = geheimnis
       }
+      if (ownRedirect.trim()) daten.redirect_uri = ownRedirect.trim()
       const { url } = await api.oauthStart(daten)
       window.open(url, '_blank')
       // Up to three minutes: a browser sign-in is a person's own pace, not
@@ -297,88 +369,97 @@
 <div class="mcp">
   <div class="spalten">
     <div class="spalte">
-      {#if istNeu}
-        <label class="feldblock">
-          <span class="tafelkopf"><Hauszeichen zeichen="wolke" groesse="klein" />{t('mcp.url')}</span>
-          <input class="eingabe" bind:value={adresse} disabled={verlangt !== undefined}
-                 spellcheck="false" autocapitalize="off" />
-        </label>
-      {/if}
-      {#if fragtAdresse}
-        <label class="feldblock">
-          <span class="tafelkopf"><Hauszeichen zeichen="wolke" groesse="klein" />{t('modell.eigener_adresse')}</span>
-          <input class="eingabe" bind:value={eigeneAdresse}
-                 spellcheck="false" autocapitalize="off"
-                 onkeydown={(e) => { if (e.key === 'Enter' && bereit && !arbeitet) verbinden() }} />
-        </label>
-      {/if}
-      {#if verlangt === 'schluessel'}
-        <label class="feldblock">
-          <span class="tafelkopf"><Hauszeichen zeichen="schluessel" groesse="klein" />{t('mcp.api_key')}</span>
-          <input class="eingabe" type="password" bind:value={apiKey} autocomplete="off"
-                 onkeydown={(e) => { if (e.key === 'Enter' && bereit) verbinden() }} />
-        </label>
-      {:else if verlangt === 'anmeldung' || verlangt === 'oauth_kennung'}
-        {#if verlangt === 'oauth_kennung'}
+      <div class="fields">
+        {#if istNeu}
+          <label class="feldblock">
+            <span class="label">{t('mcp.url')}</span>
+            <input class="eingabe" bind:value={adresse} disabled={verlangt !== undefined}
+                   spellcheck="false" autocapitalize="off" />
+          </label>
+        {/if}
+        {#if fragtAdresse}
+          <label class="feldblock">
+            <span class="label">{t('modell.eigener_adresse')}</span>
+            <input class="eingabe" bind:value={eigeneAdresse}
+                   spellcheck="false" autocapitalize="off"
+                   onkeydown={(e) => { if (e.key === 'Enter' && bereit && !arbeitet) verbinden() }} />
+          </label>
+        {/if}
+        {#if browserWay && !verbunden}
+          <!-- The way the server reports itself: a sign-in through the
+               browser. With a client id in the fields below it signs in with
+               that app. -->
+          <div class="feldblock">
+            <span class="label">{t('mcp.anmeldung')}</span>
+            <div class="anmeldezeile">
+              <button class="button" disabled={arbeitet || (verlangt === 'oauth_kennung' && !kennung)}
+                      onclick={browserAnmelden}>
+                {t('mcp.im_browser_anmelden')}
+              </button>
+            </div>
+          </div>
+        {/if}
+        {#if showWays}
+          <div class="heading">{t('mcp.eigene_app')}</div>
           <!-- The manual path: a self-created client id (Google issues no
                dynamic registration) — the same two fields the small menu
                used to ask for. -->
+          <div class="pair">
+            <label class="feldblock">
+              <span class="label">{t('verbindungen.kennung')}</span>
+              <input class="eingabe" bind:value={kennung}
+                     spellcheck="false" autocapitalize="off" />
+            </label>
+            <label class="feldblock">
+              <span class="label">{t('verbindungen.geheimnis')}</span>
+              <input class="eingabe" type="password" bind:value={geheimnis} autocomplete="off" />
+            </label>
+          </div>
+          <div class="feldblock">
+            <span class="label">{t('mcp.rueckleitung')}</span>
+            <div class="copyrow">
+              <input class="eingabe" readonly value={shownRedirect} bind:this={redirectField}
+                     aria-label={t('mcp.rueckleitung')} spellcheck="false" />
+              <button class="button" data-copied={copied} disabled={!shownRedirect} onclick={copyRedirect}>
+                {t('nachricht.kopieren')}
+              </button>
+            </div>
+          </div>
           <label class="feldblock">
-            <span class="tafelkopf"><Hauszeichen zeichen="schluessel" groesse="klein" />{t('verbindungen.kennung')}</span>
-            <input class="eingabe" bind:value={kennung}
+            <span class="label">{t('mcp.eigene_rueckleitung')}</span>
+            <input class="eingabe" bind:value={ownRedirect}
                    spellcheck="false" autocapitalize="off" />
           </label>
+          <div class="pair">
+            <label class="feldblock">
+              <span class="label">{t('mcp.api_key')}</span>
+              <input class="eingabe" type="password" bind:value={apiKey} autocomplete="off"
+                     onkeydown={(e) => { if (e.key === 'Enter' && bereit) verbinden() }} />
+            </label>
+            <label class="feldblock">
+              <span class="label">{t('mcp.kopfzeile')}</span>
+              <input class="eingabe" bind:value={headerName}
+                     spellcheck="false" autocapitalize="off" />
+            </label>
+          </div>
+        {/if}
+        {#if verbunden}
           <label class="feldblock">
-            <span class="tafelkopf"><Hauszeichen zeichen="schluessel" groesse="klein" />{t('verbindungen.geheimnis')}</span>
-            <input class="eingabe" type="password" bind:value={geheimnis} autocomplete="off" />
+            <span class="label">{t('mcp.zeitgrenze')}</span>
+            <span class="limit-row">
+              <input class="eingabe limit" type="number" min="1" step="1" inputmode="numeric"
+                     placeholder="300" bind:value={timeLimit} />
+              <span class="unit">{t('mcp.zeitgrenze_einheit')}</span>
+            </span>
           </label>
         {/if}
-        <div class="feldblock">
-          <span class="tafelkopf"><Hauszeichen zeichen="person" groesse="klein" />{t('mcp.anmeldung')}</span>
-          <div class="anmeldezeile">
-            <button class="button" disabled={arbeitet || (verlangt === 'oauth_kennung' && !kennung)}
-                    onclick={browserAnmelden}>
-              {t('mcp.im_browser_anmelden')}
-            </button>
-          </div>
-        </div>
-      {/if}
-      {#if verbunden}
-        <label class="feldblock">
-          <span class="tafelkopf"><Hauszeichen zeichen="stoppuhr" groesse="klein" />{t('mcp.zeitgrenze')}</span>
-          <span class="limit-row">
-            <input class="eingabe limit" type="number" min="1" step="1" inputmode="numeric"
-                   placeholder="300" bind:value={timeLimit} />
-            <span class="unit">{t('mcp.zeitgrenze_einheit')}</span>
-          </span>
-        </label>
-      {/if}
-      <div class="fuellung"></div>
-      {#if fehler}<p class="fehlertext">{fehler}</p>{/if}
-      <div class="knopfzeile">
-        {#if verbunden}
-          <button class="button primary" disabled={arbeitet} onclick={uebernehmen}>
-            {t('mcp.uebernehmen')}
-          </button>
-        {:else if verlangt !== 'anmeldung' && verlangt !== 'oauth_kennung'}
-          <button class="button primary" disabled={!bereit || arbeitet} onclick={verbinden}>
-            {t('verbindungen.verbinden')}
-          </button>
-        {/if}
-        <button class="button" disabled={arbeitet} onclick={() => fertig?.()}>
-          {t('app.abbrechen')}
-        </button>
-        {#if !istNeu && kachel.eintrag && entfernen}
-          <button class="button" disabled={arbeitet} onclick={() => entfernen()}>
-            {t('verbindungen.entfernen')}
-          </button>
-        {/if}
       </div>
+      {#if fehler}<p class="fehlertext">{fehler}</p>{/if}
     </div>
     <div class="trenner"></div>
     <div class="spalte">
-      <div class="tafelkopf zeile"><Hauszeichen zeichen="werkzeug" groesse="klein" />{t('mcp.tools_titel')}</div>
-      {#if istNeu && verlangt === undefined}
+      <div class="heading">{t('mcp.tools_titel')}</div>
+      {#if istNeu && verlangt === undefined && !verbunden}
         <!-- Nothing has been asked yet, so nothing can be listed — the
              sign fills the column rather than a sentence explaining an
              empty shelf. -->
@@ -391,7 +472,7 @@
             {#each werkzeuge as werkzeug (werkzeug.name)}
               <button type="button" class="wz" data-stand={werkzeug.zustand} onclick={() => kippen(werkzeug)}>
                 <span class="name">{werkzeug.name}</span>
-                <span class="stand">{t(`werkzeuge.${werkzeug.zustand}`)}</span>
+                <span class="stand">{t(stateWordKey(werkzeug.zustand))}</span>
               </button>
             {:else}
               <p class="leertext">{t(verbunden ? 'mcp.keine_werkzeuge' : 'mcp.noch_nicht_verbunden')}</p>
@@ -409,6 +490,27 @@
       {/if}
     </div>
   </div>
+  <!-- The buttons stand under both columns, as wide as the widest and one
+       line each: three of them did not fit into a single column. -->
+  <div class="knopfzeile">
+    {#if verbunden}
+      <button class="button primary" disabled={arbeitet} onclick={uebernehmen}>
+        {t('mcp.uebernehmen')}
+      </button>
+    {:else}
+      <button class="button primary" disabled={!bereit || arbeitet} onclick={verbinden}>
+        {t('verbindungen.verbinden')}
+      </button>
+    {/if}
+    <button class="button" disabled={arbeitet} onclick={() => fertig?.()}>
+      {t('app.abbrechen')}
+    </button>
+    {#if !istNeu && kachel.eintrag && entfernen}
+      <button class="button" disabled={arbeitet} onclick={() => entfernen()}>
+        {t('verbindungen.entfernen')}
+      </button>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -425,48 +527,73 @@
   .trenner { background: none; }
   .spalte { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
-  /* The house section heading: a word in a line of its own with a hairline
-     running off to the right (Sprachserver.svelte:287) — a field label and
-     a section heading are the same thing, a word over a block saying what
-     the block is. Text itself: global.css, .tafelkopf. Only the flex row
-     around it is this panel's own. */
-  .tafelkopf {
-    display: flex; align-items: center; gap: 8px;
+  /* A field's label is a small quiet line over the field, with no sign and
+     no rule; a section heading ("Own app", "Tools") is half bold in the text
+     colour, one step above it. */
+  .label {
+    display: block; margin-bottom: 6px;
+    font-size: 12px; line-height: 15px; color: var(--text-leise);
   }
-  .feldblock .tafelkopf, .zeile { margin: 2px 0 6px; }
-  .feldblock .tafelkopf::after, .zeile::after {
-    content: ''; flex: 1; border-top: 1px solid var(--linie);
+  .heading {
+    margin: 2px 0 6px;
+    font-size: 13px; line-height: 16px; font-weight: 600; color: var(--text);
   }
-  .zeile { display: flex; align-items: center; gap: 8px; }
 
   .feldblock { display: block; margin-bottom: 10px; flex: none; }
   .eingabe {
-    display: block; width: 100%; margin-top: 8px; margin-bottom: 8px;
+    display: block; width: 100%; margin-top: 0; margin-bottom: 8px;
     /* A field on glass: glass with the house's field outline. */
     border: 1px solid var(--feldstrich); border-radius: 9px;
     background: var(--glass-button); color: var(--text);
     font: 400 13px/1.4 var(--schrift);
     padding: 8px 11px;
-    height: 32px;
+    height: 34px;
   }
   .feldblock .eingabe { margin-bottom: 0; }
   .eingabe:focus { outline: 2px solid var(--linie-stark); outline-offset: -2px; }
   .eingabe:disabled { opacity: 0.6; }
 
-  .anmeldezeile { display: flex; align-items: center; gap: 9px; margin-top: 7px; }
+  .anmeldezeile { display: flex; align-items: center; gap: 9px; }
 
   /* The number and its unit on one line; the field is as wide as a few
      digits need, not the column. */
   .limit-row { display: flex; align-items: center; gap: 9px; }
   .eingabe.limit { width: 96px; font-variant-numeric: tabular-nums; }
-  .unit { margin-top: 8px; font-size: 12px; color: var(--text-still); }
+  .unit { font-size: 12px; color: var(--text-still); }
 
-  .fuellung { flex: 1; min-height: 8px; }
-  .fehlertext { font-size: 11.5px; color: var(--rot); margin: 0 0 8px; line-height: 1.4; }
+  /* The fields roll inside the fixed frame, the buttons stay in sight — no
+     visible scrollbar, the house rule (like the tool list on the right). */
+  .fields {
+    flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 4px;
+    scrollbar-width: none; -ms-overflow-style: none;
+  }
+  .fields::-webkit-scrollbar { width: 0; height: 0; }
+  .fields > * { flex: none; }
+  .fields > .heading { margin-top: 6px; }
 
+  /* Two fields side by side, so the sheet fits its frame with little rolling. */
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .pair .feldblock { min-width: 0; }
+
+  /* The return address and the button that copies it on one line. */
+  .copyrow { display: flex; align-items: center; gap: 9px; }
+  .copyrow .eingabe { flex: 1; min-width: 0; }
+  /* The label stays, so the row does not jump: the word turns green. */
+  .copyrow button[data-copied='true'] { color: var(--gruen-text); }
+  .fehlertext { font-size: 11.5px; color: var(--rot-text); margin: 0 0 8px; line-height: 1.4; }
+
+  /* One grid column per button, every column as wide as the widest one: the
+     buttons come out the same width and height. From a window of 720 px
+     (the narrowest the program opens) no label breaks; on a phone the sheet
+     is narrower than the row, so the row stays inside it and the labels may
+     break there. */
   .knopfzeile {
-    display: flex; gap: 7px; align-items: center; flex: none;
-    margin-top: 10px; padding-top: 4px; border-top: none;
+    display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 7px;
+    width: max-content; max-width: 100%; align-self: flex-end; flex: none;
+    margin-top: 10px; padding-top: 4px;
+  }
+  @media (min-width: 720px) {
+    .knopfzeile .button { white-space: nowrap; }
   }
   /* The buttons of the mask are the house button (`.button`, stil/global.css). */
 
@@ -493,14 +620,14 @@
   }
   .wz:hover { background: color-mix(in srgb, var(--text) 8%, var(--glass-card)); }
   .wz .name {
-    font: 400 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text);
+    font: 400 12.5px/1.4 var(--schrift-fest); color: var(--text);
   }
   .wz .stand { font-size: 12px; color: var(--text-still); }
   /* an = ready to run, fragt = the house's warning colour (waiting for a
      yes), aus = dimmed and struck through — the same three-colour language
      the rest of the program already uses for state. */
-  .wz[data-stand='an'] .stand { color: var(--gruen); }
-  .wz[data-stand='fragt'] .stand { color: var(--gelb); }
+  .wz[data-stand='an'] .stand { color: var(--gruen-text); }
+  .wz[data-stand='fragt'] .stand { color: var(--gelb-text); }
   .wz[data-stand='aus'] { opacity: 0.5; }
   .wz[data-stand='aus'] .name { text-decoration: line-through; }
 
@@ -512,6 +639,6 @@
     font-variant-numeric: tabular-nums;
   }
   .stand-zeile .lampe { width: 6px; height: 6px; border-radius: 50%; background: var(--gruen); flex: none; }
-  .stand-zeile .wort { color: var(--gruen); }
+  .stand-zeile .wort { color: var(--gruen-text); }
   .stand-zeile .strich { color: var(--text-still); }
 </style>

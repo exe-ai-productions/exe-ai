@@ -39,7 +39,7 @@ def test_the_template_line_says_what_it_does_and_when_to_use_it():
         "description: Describe what this skill does and when to use it."
     )
     assert _catalogue("de")["template_description"] == (
-        "description: Beschreibe, was dieser Skill tut und wann er anzuwenden ist."
+        "description: Was dieser Skill tut und wann er anzuwenden ist."
     )
 
 

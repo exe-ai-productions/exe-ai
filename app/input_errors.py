@@ -15,15 +15,20 @@ every part of an entry except the sentence and the refused value —
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import Request
 from fastapi.encoders import jsonable_encoder
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import sprachwahl
 from app.i18n import t
+
+log = logging.getLogger(__name__)
 
 # One sentence per check that has something of its own to say — the length
 # bounds, because those are the ones a person can fix by typing less or more,
@@ -74,6 +79,29 @@ def _sentence(entry: dict[str, Any], language: str) -> str:
     return t(key, language, **placeholders)
 
 
+def _refused_in_words(entry: dict[str, Any]) -> str:
+    """One refused check as a person reading the log can use it: the field
+    and the kind of check. The value that was refused never appears. A key
+    nobody declared (``extra_forbidden``) is the caller's own text and can be
+    as long as the request, so only the kind is named for it."""
+    kind = str(entry.get("type", ""))
+    if kind == "extra_forbidden":
+        return kind
+    return f"{_field(tuple(entry.get('loc') or ()))} {kind}"
+
+
+async def answer_for_refusal(
+    request: Request, error: StarletteHTTPException
+) -> JSONResponse:
+    """The framework's own answer to a refusal a route raised, after a line in
+    the log for a 422: the access line names the status and nothing else, so
+    a request refused by a route could not be told from one refused by its
+    body checks. Every other status goes straight through."""
+    if error.status_code == 422 and isinstance(error.detail, str):
+        log.warning("Refused %s %s (422): %s", request.method, request.url.path, error.detail)
+    return await http_exception_handler(request, error)
+
+
 def answer_for_input_error(
     request: Request, error: RequestValidationError
 ) -> JSONResponse:
@@ -108,4 +136,10 @@ def answer_for_input_error(
         }
         for entry in error.errors()
     ]
+    log.warning(
+        "Refused %s %s (422): %s",
+        request.method,
+        request.url.path,
+        "; ".join(_refused_in_words(entry) for entry in error.errors()),
+    )
     return JSONResponse({"detail": jsonable_encoder(entries)}, status_code=422)

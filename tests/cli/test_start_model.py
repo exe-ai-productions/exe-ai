@@ -23,6 +23,9 @@ from typing import Any
 import httpx
 import pytest
 
+from app import modellwahl
+from app.config import EndpointConfig
+from app.discovery import EndpunktZustand
 from cli import commands, main, render
 from cli.client import ServiceError
 from cli.interfaces import Context
@@ -342,6 +345,30 @@ def test_a_listed_name_is_stored_without_the_blanks_around_it(
 
     started(wire, stub_http)
     assert writes(stub) == [WRITTEN]
+
+
+def test_a_listed_name_above_the_limit_is_kept_and_no_start_writes_it_again(
+    wire: Wire, stub: StubService, stub_http: httpx.Client
+) -> None:
+    """The entry is the one the service builds for a name of 401 characters,
+    and the choice is kept the way the service keeps it. Without the cut in
+    the list the name was dropped from the kept choice, found missing, and
+    written at every start."""
+    state = EndpunktZustand(
+        endpunkt=EndpointConfig(id="beta", base_url="http://127.0.0.1:9"), provider=None
+    )
+    state.gemeldeter_name = "n" * 401
+    listed = state.als_dict()
+    stub.models = [model("alpha", "Alpha 35B"), model("beta", "x") | listed | {"id": "beta"}]
+    kept = modellwahl.zuletzt_pruefen({"id": "beta", "name": listed["name"]})
+    assert kept == {"id": "beta", "name": listed["name"]}
+    stub.settings.setdefault("global", {})[commands.LAST_MODEL_KEY] = kept
+
+    started(wire, stub_http)
+    started(wire, stub_http)
+
+    assert stored(stub) == kept
+    assert writes(stub) == []
 
 
 @pytest.mark.parametrize("nameless", ["", "   ", None])

@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.api.abhaengigkeiten import hole_config, hole_sprache
-from app.config import Config
+from app.config import Config, config_file
 from app.i18n import t
 from app.previous_version import set_beside
 
@@ -54,7 +54,10 @@ def _pfad(config: Config, kennung: str, sprache: str) -> tuple[Path, bool, bool]
     if kennung not in DATEIEN:
         raise HTTPException(404, t("dateien.unbekannt", sprache, kennung=kennung))
     name, prueft_yaml, neustart = DATEIEN[kennung]
-    return config.pfad(f"./{name}"), prueft_yaml, neustart
+    # The configuration is the file the service read, wherever it lies; the
+    # credentials always sit in the data folder.
+    pfad = config_file(config) if kennung == "konfiguration" else config.pfad(f"./{name}")
+    return pfad, prueft_yaml, neustart
 
 
 def _pruefen(inhalt: str, sprache: str) -> str | None:

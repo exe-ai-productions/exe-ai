@@ -21,7 +21,7 @@ from cli.interfaces import Asker, Context, Entry
 from cli.main import main
 from cli.texts import Texts
 from tests.cli.conftest import RecordingRenderer, RecordingScreen
-from tests.cli.stub_service import StubService, model
+from tests.cli.stub_service import StubService, model, this_process
 
 
 def texts() -> Texts:
@@ -249,6 +249,7 @@ def test_exe_dir_without_a_terminal_says_what_to_give(stub, tmp_path, monkeypatc
 
 def test_exe_dir_add_with_a_path_needs_no_terminal(stub, tmp_path, monkeypatch, capsys):
     stub.models = [model("local", "Local Model")]
+    stub.process = lambda host: this_process()
     assert run_outside(stub, tmp_path, monkeypatch, "dir", "add", "/work/site", terminal=False) == 0
     # The folder the client started in is shared first, as with every chat
     # made at a service of this machine; the path comes after it.

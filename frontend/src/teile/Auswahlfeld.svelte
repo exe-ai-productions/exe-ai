@@ -25,8 +25,12 @@
 
      `eintraege` is a list of `{ wert, text }`. The caller decides what a
      value is called; this component only draws it. An entry may carry a
-     `group`: the list then shows that name above the first entry of each
-     run of the same group. `search` puts a search field at the top of the
+     `logo` (`{ vb, html }`, a mark out of `lib/logos.js`), drawn before its
+     text in the field and in the list; an entry with no `logo` may carry a
+     `letter` instead (one character), drawn in the same place. An entry may
+     carry a `group`: the list then shows that name above the first entry of each
+     run of the same group. An entry with `gesperrt` stands in the list but
+     cannot be chosen: a way that does not go with the other answers now. `search` puts a search field at the top of the
      open list — for a list too long to walk, like every model file in a
      folder. The field and its open list are glass: a see-through ground
      with the house's field outline, the list dense and blurred — one way,
@@ -102,7 +106,7 @@
 
   // Takes the walked-to entry, if the walk stands on one.
   function take() {
-    if (dran >= 0 && visible[dran]) waehlen(visible[dran].wert)
+    if (dran >= 0 && visible[dran] && !visible[dran].gesperrt) waehlen(visible[dran].wert)
   }
 
   /* What the open list does with a key, wherever the cursor is — on the
@@ -181,6 +185,7 @@
   }
 
   function waehlen(neu) {
+    if (eintraege.find((e) => e.wert === neu)?.gesperrt) return
     zumachen()
     /* Back to the field. A native select never leaves the focus on nothing;
        losing it here would drop the caller out of the form and make the next
@@ -249,8 +254,48 @@
      everything after that is chosen blind. */
   $effect(() => {
     if (!offen || dran < 0 || !liste) return
+    // What the list shows decides where it ends, so a narrowed list is read here too.
+    void visible.length
+    // Under a search field only: a list without one has no edge a cut row could hide behind.
+    if (search) endOnRow()
     liste.querySelector(`#${kennung}-${dran}`)?.scrollIntoView({ block: 'nearest' })
+    if (search) wholeRowsAtTop()
   })
+
+  /* A row cut through by the top edge of the list sits flush under the
+     search field and reads as lying beneath it. Where the walk to the entry
+     stops in the middle of a row, the list goes on to where the next row
+     starts, so only whole rows stand at the top. That moves the entry that
+     was brought into view further up, never out of the list. */
+  function wholeRowsAtTop() {
+    if (!liste) return
+    const edge = liste.getBoundingClientRect().top
+    for (const row of liste.children) {
+      const box = row.getBoundingClientRect()
+      if (box.bottom <= edge + 0.5) continue
+      if (box.top < edge - 0.5) liste.scrollTop += box.bottom - edge
+      return
+    }
+  }
+
+  /* The last place the list can scroll to may fall in the middle of a row
+     too, and then that row stands cut through under the search field with
+     the last entry chosen. The list gets as much room below its last entry
+     as it takes for its end to be where a row starts. */
+  function endOnRow() {
+    if (!liste) return
+    liste.style.paddingBottom = ''
+    const room = liste.scrollHeight - liste.clientHeight
+    if (room <= 0) return
+    const origin = liste.getBoundingClientRect().top - liste.scrollTop
+    for (const row of liste.children) {
+      const start = row.getBoundingClientRect().top - origin
+      if (start < room - 0.5) continue
+      const extra = start - room
+      if (extra > 0.5) liste.style.paddingBottom = `calc(4px + ${extra}px)`
+      return
+    }
+  }
 
   $effect(() => () => {
     if (offener === schliesserAbmelden) offener = null
@@ -300,7 +345,11 @@
       ereignis.preventDefault()
       const richtung = key === 'ArrowDown' ? 1 : -1
       const jetzt = eintraege.findIndex((e) => e.wert === wert)
-      const naechster = Math.min(eintraege.length - 1, Math.max(0, jetzt + richtung))
+      // Past an entry that cannot be chosen, to the next one that can.
+      let naechster = Math.min(eintraege.length - 1, Math.max(0, jetzt + richtung))
+      while (eintraege[naechster]?.gesperrt && naechster + richtung >= 0 && naechster + richtung < eintraege.length) {
+        naechster += richtung
+      }
       waehlen(eintraege[naechster].wert)
       return
     }
@@ -354,6 +403,11 @@
     onclick={schalten}
     onkeydown={tasten}
   >
+    {#if aktuell?.logo}
+      <svg class="logo" viewBox={aktuell.logo.vb} width="20" height="20" aria-hidden="true">{@html aktuell.logo.html}</svg>
+    {:else if aktuell?.letter}
+      <span class="letter" aria-hidden="true">{aktuell.letter}</span>
+    {/if}
     <span class="text">{text}</span>
     <svg class="winkel" width="11" height="11" viewBox="0 0 24 24" fill="none"
          stroke="currentColor" stroke-width="2.6" stroke-linecap="round"
@@ -394,7 +448,9 @@
             id="{kennung}-{i}"
             tabindex="-1"
             class:dran={i === dran}
+            class:gesperrt={eintrag.gesperrt}
             aria-selected={eintrag.wert === wert}
+            aria-disabled={eintrag.gesperrt || undefined}
             onclick={() => waehlen(eintrag.wert)}
             onmouseenter={() => (dran = i)}
           >
@@ -406,6 +462,11 @@
                 </svg>
               {/if}
             </span>
+            {#if eintrag.logo}
+              <svg class="logo" viewBox={eintrag.logo.vb} width="20" height="20" aria-hidden="true">{@html eintrag.logo.html}</svg>
+            {:else if eintrag.letter}
+              <span class="letter" aria-hidden="true">{eintrag.letter}</span>
+            {/if}
             <span class="zeile">{eintrag.text}</span>
           </button>
         {/each}
@@ -459,6 +520,23 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* An entry's maker mark (`logo`: { vb, html }) stands in front of its
+     text, in the field and in the list. */
+  .logo {
+    flex: none;
+    color: var(--text);
+  }
+  /* The first letter of an entry that has no mark: a 20 px box, centred. */
+  .letter {
+    flex: none;
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-still);
+    font: 700 13px var(--schrift);
+  }
   .winkel {
     flex: none;
     color: var(--text-still);
@@ -499,6 +577,13 @@
     overflow-y: auto;
     padding: 4px;
   }
+  /* Under the search field the gap is the field's own margin, so a row that
+     starts at the top edge of the list stands the same distance from it; the
+     list is as much shorter as its padding is, the room for rows the same. */
+  .search + .liste {
+    padding-top: 0;
+    max-height: 256px;
+  }
   .liste button {
     width: 100%;
     display: flex;
@@ -517,6 +602,10 @@
   .liste button.dran {
     background: var(--glass-button);
   }
+  .liste button.gesperrt {
+    opacity: 0.45;
+    cursor: default;
+  }
   /* The group's name above its entries: quiet, not choosable. */
   .group-name {
     padding: 8px 8px 3px;
@@ -528,7 +617,7 @@
     display: block;
     width: calc(100% - 8px);
     box-sizing: border-box;
-    margin: 4px 4px 0;
+    margin: 4px;
     padding: 6px 10px;
     font: inherit;
     font-size: 13px;

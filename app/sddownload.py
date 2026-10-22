@@ -60,7 +60,7 @@ from app.serverdownload import Fortschritt
 #
 # There is no Linux package. This program does not ship a Linux build, so
 # there is nothing to fetch a generator for there.
-BAU = "master-948-228c707"
+BAU = "master-975-95b3090"
 
 
 # Upstream stable-diffusion.cpp. Its releases carry the prebuilt packages
@@ -86,7 +86,7 @@ _VEROEFFENTLICHUNGEN = f"https://api.github.com/repos/{_REPO}/releases/latest"
 # One universal binary for both kinds of Mac — the arm64 package carries an
 # x86_64 slice as well, so an Intel Mac is served by the same file. Metal
 # support is built into this one build, so there is nothing to choose from.
-_PAKET_DARWIN = "sd-master-228c707-bin-Darwin-macOS-26.6.2-arm64.zip"
+_PAKET_DARWIN = "sd-master-95b3090-bin-Darwin-macOS-26.6.2-arm64.zip"
 
 # Windows offers a GPU backend on top of the CPU fallback. Each entry pairs
 # the package name with its size in bytes, checked against the release
@@ -96,10 +96,10 @@ _PAKET_DARWIN = "sd-master-228c707-bin-Darwin-macOS-26.6.2-arm64.zip"
 # Toolkit, and whether one is installed cannot be reliably detected, so it
 # is always fetched alongside.
 _PAKETE_WIN32: dict[str, tuple[str, int]] = {
-    "cpu": ("sd-master-228c707-bin-win-cpu-x64.zip", 17_517_910),
-    "cuda12": ("sd-master-228c707-bin-win-cuda12-x64.zip", 337_979_057),
-    "vulkan": ("sd-master-228c707-bin-win-vulkan-x64.zip", 30_098_372),
-    "rocm": ("sd-master-228c707-bin-win-rocm-7.14.0-x64.zip", 251_568_217),
+    "cpu": ("sd-master-95b3090-bin-win-cpu-x64.zip", 17_706_677),
+    "cuda12": ("sd-master-95b3090-bin-win-cuda12-x64.zip", 343_630_973),
+    "vulkan": ("sd-master-95b3090-bin-win-vulkan-x64.zip", 29_371_165),
+    "rocm": ("sd-master-95b3090-bin-win-rocm-10.1.0-x64.zip", 263_997_742),
 }
 _CUDART: tuple[str, int] = ("cudart-sd-bin-win-cu12-x64.zip", 563_452_046)
 
@@ -176,13 +176,35 @@ def gueltige_variante(variante: str) -> bool:
     return variante in _PAKETE_WIN32
 
 
+def _download_size(variante: str) -> int:
+    """What a fetch of this variant brings down in all: its package and, for
+    CUDA, the runtime that is always fetched alongside it."""
+    groesse = _PAKETE_WIN32[variante][1]
+    return groesse + (_CUDART[1] if variante == "cuda12" else 0)
+
+
+def _windows_varianten() -> list[tuple[str, int]]:
+    """The variants of Windows with their download size."""
+    return [(variante, _download_size(variante)) for variante in _PAKETE_WIN32]
+
+
 def waehlbare_varianten() -> list[tuple[str, int]]:
-    """The variants a picker could offer on THIS machine, with their
-    download size. Empty outside win32 — every other system has one
+    """The variants a picker could offer on THIS machine, with the size of
+    what each one downloads — CUDA with its runtime. Empty outside win32 — every other system has one
     package and nothing to choose from."""
     if sys.platform != "win32":
         return []
-    return [(variante, groesse) for variante, (_, groesse) in _PAKETE_WIN32.items()]
+    return _windows_varianten()
+
+
+def unavailable_variants() -> list[tuple[str, int]]:
+    """The variants a window lists greyed because this machine cannot run
+    them: on a Mac the four of Windows, with the sizes Windows would
+    download. Empty everywhere else — Windows offers them, and the other
+    systems list none."""
+    if sys.platform != "darwin":
+        return []
+    return _windows_varianten()
 
 
 def _program_files(folder: Path, name: str) -> list[Path]:
@@ -318,6 +340,39 @@ def installierter_bau(datenordner: Path, variante: str | None = None) -> str | N
     """
     chosen = _chosen_build_folder(datenordner, variante=variante)
     return chosen.tag if chosen else None
+
+
+def update_needed(datenordner: Path, variante: str | None = None) -> bool:
+    """Is the build that runs older than the pinned one? The pinned build
+    knows the switches this program sends, an older one refuses them: it has
+    to be replaced. A newer build and a program unpacked by hand stay where
+    they are — the first is somebody's choice, the second belongs to the
+    user — and with nothing installed there is nothing to replace (the first
+    fetch is the user's own step)."""
+    if _hand_install(datenordner) is not None:
+        return False
+    installed = installierter_bau(datenordner, variante)
+    if installed is None:
+        return False
+    number, pinned = _bau_nummer(installed), _bau_nummer(BAU)
+    return number is not None and pinned is not None and number < pinned
+
+
+def update_at_start(
+    download: Sddownload, datenordner: Path, variante: str | None = None
+) -> str | None:
+    """The service has started: an installed build older than the pinned one
+    is replaced by it, in the variant that runs, with the progress and the
+    removal of the old build of every other fetch. Returns the tag it fetches,
+    or nothing when there was nothing to do or the fetch could not start."""
+    if not update_needed(datenordner, variante):
+        return None
+    installed = installierter_bau(datenordner, variante)
+    try:
+        download.starten(installierte_variante(datenordner, bau=installed, variante=variante))
+    except SddownloadFehler:
+        return None
+    return BAU
 
 
 def _hand_install(datenordner: Path) -> Path | None:

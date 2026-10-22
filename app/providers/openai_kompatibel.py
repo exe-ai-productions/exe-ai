@@ -53,6 +53,7 @@ from app.providers.base import (
     kontext_stueck,
     zaehlung,
     provider_error,
+    refusal_of,
     require_stream_end,
     zeitlimit,
 )
@@ -938,16 +939,25 @@ class OpenAIKompatiblerProvider(Provider):
     # --- Reachability ----------------------------------------------------
 
     async def erreichbar(self, timeout: float = 3.0) -> bool:
+        self.letzter_grund = None
         adresse = f"{self.endpunkt.base_url}{self.endpunkt.health_path}"
         try:
             async with httpx.AsyncClient(timeout=timeout, headers=self._kopfzeilen) as client:
                 antwort = await client.get(adresse)
-            # 401/403 means: the server is up but will not let us in —
-            # usually a missing or wrong key. Reporting that as "reachable"
-            # would be a lie: the endpoint would appear in the model picker
-            # and fail on every request. Better honestly unreachable.
-            if antwort.status_code in (401, 403):
+            # 400, 401 and 403 mean: the server is up but will not let us in —
+            # usually a missing or wrong key (some hosts answer a wrong key
+            # with 400). Reporting that as "reachable" would be a lie: the
+            # endpoint would appear in the model picker and fail on every
+            # request. Better honestly unreachable, with what the server
+            # says about it kept for the window and the log.
+            if antwort.status_code in (400, 401, 403):
+                key = os.getenv(self.endpunkt.api_key_env or "", "").strip()
+                grund = refusal_of(antwort, key)
+                if grund is not None:
+                    self.letzter_grund = grund[1]
+                self.ablehnung_melden(log, antwort.status_code, grund)
                 return False
+            self.ablehnung_vorbei()
             return antwort.status_code < 500
         except (httpx.HTTPError, OSError):
             return False

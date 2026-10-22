@@ -420,7 +420,7 @@ def test_on_windows_a_py_without_python_says_so_in_both_languages(skriptordner, 
     )
     assert i18n.t(verboten.schluessel, "de", **verboten.werte) == (
         "„c.py“ lässt sich nicht starten, weil auf diesem Rechner kein Python gefunden wurde. "
-        "Installiere Python von python.org und versuche es erneut."
+        "Bitte Python von python.org installieren und erneut versuchen."
     )
 
 
@@ -658,8 +658,8 @@ async def test_exit_eins_scheitert_und_zaehlt_bis_zur_grenze(client, skriptordne
     # the run that reaches it (``schon_gemeldet``), and which says why that
     # run failed as the first one did.
     assert gemeldet == [
-        ("kaputt.py — ging schief — Skript mit Fehler beendet", False),
-        ("kaputt.py — nach 2 fehlgeschlagenen Durchläufen gestoppt — Skript mit Fehler beendet", False),
+        ("kaputt.py - ging schief - Skript mit Fehler beendet", False),
+        ("kaputt.py - nach 2 fehlgeschlagenen Läufen gestoppt - Skript mit Fehler beendet", False),
     ]
 
     lauf = laeufe(client, eintrag.id)[0]
@@ -709,7 +709,7 @@ async def test_announce_nennt_skript_und_letzte_zeile(client, skriptordner, geme
 
     await feuern(client, MORGEN.replace(hour=8, minute=1))
 
-    assert gemeldet == [("sicherung.py — 42 Dateien gesichert", True)]
+    assert gemeldet == [("sicherung.py - 42 Dateien gesichert", True)]
 
 
 async def test_stiller_eintrag_meldet_nicht(client, skriptordner, gemeldet):
@@ -723,7 +723,7 @@ async def test_stiller_eintrag_meldet_nicht(client, skriptordner, gemeldet):
 
 
 async def test_verlegter_ordner_feuert_am_neuen_ort(config, client, skriptordner, tmp_path):
-    """The pencil in the storage row moves the folder, and the next due time
+    """The three dots in the storage row move the folder, and the next due time
     runs the script THERE — the path is resolved at every firing, never once
     at startup."""
     alt = script_file(

@@ -66,10 +66,21 @@ ENTRY_JS = """import { mount } from 'svelte'
 import Shell from './Shell.svelte'
 import %(global)r
 
+// Three servers on file: the page draws a card only for a server that has an entry.
 const servers = [{
   name: 'websuche', enabled: true, laeuft: true, type: 'stdio',
   alle_werkzeuge: [{ name: 'search' }, { name: 'fetch' }], allowed_tools: [],
-}]
+}, {
+  name: 'notion', enabled: true, laeuft: true, type: 'http', url: 'https://mcp.notion.com/mcp',
+  alle_werkzeuge: [{ name: 'search' }], allowed_tools: [],
+}, {
+  name: 'github', enabled: true, laeuft: true, type: 'http', url: 'https://api.githubcopilot.com/mcp/',
+  alle_werkzeuge: [{ name: 'issues' }], allowed_tools: [],
+}, {
+  // A server of one's own that wants a sign-in and has none: its card says "not connected", its sheet carries three buttons.
+  name: 'atlas', enabled: true, laeuft: false, type: 'http', url: 'http://127.0.0.1:1/mcp', auth: 'oauth',
+  alle_werkzeuge: [], allowed_tools: [],
+}%(extra)s]
 const answers = { '/tools/servers': servers, '/tools/oauth/status': [] }
 window.fetch = async (address) => {
   const path = String(address).replace(/^.*?\\/api\\/v1/, '').split('?')[0]
@@ -89,7 +100,7 @@ export default defineConfig({
     outDir: 'out',
     emptyOutDir: true,
     minify: false,
-    lib: { entry: 'entry.js', formats: ['iife'], name: 'Measure', fileName: () => 'entry.js' },
+    lib: { entry: 'entry.js', formats: ['iife'], name: 'Measure', fileName: () => 'entry.js', cssFileName: 'style' },
   },
 })
 """
@@ -148,9 +159,124 @@ window.__closeShield = async () => {
 }
 """
 
+SHEET_CASES = r"""
+const report = {}
+const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+const rect = (node) => {
+  const r = node.getBoundingClientRect()
+  return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom }
+}
+for (let k = 0; k < 60 && document.querySelectorAll('.galerie .card').length === 0; k += 1) await wait(100)
+await wait(500)
+const measure = async (label, open) => {
+  open()
+  await wait(700)
+  const row = document.querySelector('.knopfzeile')
+  const popup = document.querySelector('.popup')
+  const buttons = row ? Array.from(row.querySelectorAll('button')) : []
+  report[label] = {
+    found: Boolean(row && popup),
+    names: buttons.map((b) => b.textContent.trim()),
+    widths: buttons.map((b) => b.getBoundingClientRect().width),
+    heights: buttons.map((b) => b.getBoundingClientRect().height),
+    row: row ? rect(row) : null,
+    popup: popup ? rect(popup) : null,
+    drawn: popup ? [parseFloat(getComputedStyle(popup).width), parseFloat(getComputedStyle(popup).height)] : null,
+    columns: document.querySelector('.spalten') ? rect(document.querySelector('.spalten')) : null,
+    left: document.querySelector('.spalte') ? rect(document.querySelector('.spalte')) : null,
+    leftHasButtons: Boolean(document.querySelector('.spalte .knopfzeile')),
+    viewport: [innerWidth, innerHeight],
+  }
+  const cancel = buttons.find((b) => b.textContent.trim() === 'Cancel' || b.textContent.trim() === 'Abbrechen') || buttons[1]
+  cancel?.click()
+  await wait(600)
+}
+const own = () => Array.from(document.querySelectorAll('.galerie .card')).find((c) => c.textContent.includes('atlas')).querySelector('button').click()
+await measure('own', own)
+await measure('fresh', () => document.querySelector('.tile.own button').click())
+document.title = 'open'
+document.getElementById('ergebnis').textContent = JSON.stringify(report)
+"""
+
+# The words of every state, in Pearl (`data-modus="hell"`, which also holds
+# against a device in its dark scheme) and in Exe (`data-modus="dunkel"`): their
+# colour is read from the page, and so are the colours they are to be.
+INK_CASES = r"""
+const report = {}
+const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+for (let k = 0; k < 60 && document.querySelectorAll('.galerie .card').length === 0; k += 1) await wait(100)
+await wait(500)
+const probe = (property, value) => {
+  const node = document.createElement('span')
+  node.style[property] = value
+  document.body.append(node)
+  const read = getComputedStyle(node)[property === 'background' ? 'backgroundColor' : property]
+  node.remove()
+  return read
+}
+const colour = (node) => (node ? getComputedStyle(node).color : null)
+const fill = (node) => (node ? getComputedStyle(node).fill : null)
+const state = (name) => document.querySelector(`.galerie .state[data-stand='${name}']`)
+const read = async (mode) => {
+  document.documentElement.setAttribute('data-modus', mode)
+  await wait(400)
+  const out = {
+    want: {
+      rotText: probe('color', 'var(--rot-text)'), gruenText: probe('color', 'var(--gruen-text)'),
+      leise: probe('color', 'var(--text-leise)'), still: probe('color', 'var(--text-still)'), rot: probe('color', 'var(--rot)'),
+      gruen: probe('color', 'var(--gruen)'),
+      gruenSurface: probe('background', 'color-mix(in srgb, var(--gruen) 12%, var(--glass-card))'),
+      gruenLine: probe('borderColor', 'color-mix(in srgb, var(--gruen) 28%, transparent)'),
+    },
+  }
+  const lost = document.querySelector('.galerie .lost')
+  out.lost = { word: colour(lost?.querySelector('.statetext')), dot: fill(lost?.querySelector('.scheibe')) }
+  for (const name of ['verbunden', 'wartet', 'schluessel_fehlt', 'aus']) {
+    const foot = state(name)
+    const style = foot && getComputedStyle(foot)
+    out[name] = foot && {
+      word: colour(foot.querySelector('.statetext')), dot: fill(foot.querySelector('.scheibe')),
+      surface: style.backgroundColor, line: style.borderTopColor,
+    }
+  }
+  out.heads = Array.from(document.querySelectorAll('.sectionname')).map(colour)
+  out.counts = Array.from(document.querySelectorAll('.sectioncount')).map(colour)
+  out.headWeights = Array.from(document.querySelectorAll('.sectionname')).map((n) => getComputedStyle(n).fontWeight)
+  out.countWeights = Array.from(document.querySelectorAll('.sectioncount')).map((n) => getComputedStyle(n).fontWeight)
+  state('verbunden').click()
+  await wait(500)
+  out.menuState = colour(document.querySelector('.mstand'))
+  document.querySelector('.schirm')?.click()
+  await wait(400)
+  state('schluessel_fehlt').click()
+  await wait(500)
+  out.menuStateMissingKey = colour(document.querySelector('.mstand'))
+  document.querySelector('.schirm')?.click()
+  await wait(400)
+  return out
+}
+report.pearl = await read('hell')
+report.exe = await read('dunkel')
+window.__closeShield = async () => ({})
+document.title = 'open'
+document.getElementById('ergebnis').textContent = JSON.stringify(report)
+"""
+
+EXTRA_SERVERS = """, {
+  name: 'starter', enabled: true, laeuft: false, type: 'stdio',
+  alle_werkzeuge: [], allowed_tools: [],
+}, {
+  name: 'locked', enabled: true, laeuft: false, type: 'stdio', schluessel_gesetzt: false, missing_keys: ['LOCKED_KEY'],
+  alle_werkzeuge: [], allowed_tools: [],
+}, {
+  name: 'asleep', enabled: false, laeuft: false, type: 'stdio',
+  alle_werkzeuge: [], allowed_tools: [],
+}"""
+
 PAGE = """<!doctype html>
 <html><head><meta charset="utf-8">
-<style>html, body { margin: 0; background: #2a2a28; } #wurzel { width: 1280px; height: 800px; position: relative; }</style>
+<link rel="stylesheet" href="out/style.css">
+<style>html { --stufenfaktor: 1; } html, body { margin: 0; background: #2a2a28; } #wurzel { width: 1280px; height: 800px; position: relative; }</style>
 </head><body>
 <div id="wurzel"></div>
 <pre id="ergebnis" style="display: none"></pre>
@@ -221,8 +347,7 @@ async def _drive(port: int, limit: float = 120.0) -> dict:
         return report
 
 
-@pytest.fixture(scope="module")
-def report() -> dict:
+def _run_case(cases: str, width: int, extra: str = "") -> dict:
     program = appfenster._programm() or pytest.skip("no Chrome on this machine")
     folder = FRONTEND / "node_modules" / f".harness-mcp-sheet-{uuid4().hex}"
     folder.mkdir(parents=True)
@@ -236,18 +361,18 @@ def report() -> dict:
             encoding="utf-8",
         )
         (folder / "entry.js").write_text(
-            ENTRY_JS % {"global": "../../src/stil/global.css"}, encoding="utf-8"
+            ENTRY_JS % {"global": "../../src/stil/global.css", "extra": extra}, encoding="utf-8"
         )
         (folder / "vite.config.js").write_text(VITE_CONFIG, encoding="utf-8")
         build = subprocess.run(
-            [str(FRONTEND / "node_modules" / ".bin" / "vite"), "build", "--config", "vite.config.js"],
+            [shutil.which("vite", path=str(FRONTEND / "node_modules" / ".bin")), "build", "--config", "vite.config.js"],
             cwd=folder,
             capture_output=True,
             text=True,
             timeout=240,
         )
         assert build.returncode == 0, (build.stdout + build.stderr)[-2000:]
-        (folder / "measure.html").write_text(PAGE % {"cases": CASES}, encoding="utf-8")
+        (folder / "measure.html").write_text(PAGE % {"cases": cases}, encoding="utf-8")
         port = _free_port()
         browser = subprocess.Popen(
             [
@@ -256,7 +381,7 @@ def report() -> dict:
                 "--no-first-run",
                 "--disable-background-networking",
                 "--allow-file-access-from-files",
-                "--window-size=1280,800",
+                f"--window-size={width},800",
                 f"--remote-debugging-port={port}",
                 f"--user-data-dir={folder / 'profile'}",
                 (folder / "measure.html").as_uri(),
@@ -271,6 +396,21 @@ def report() -> dict:
             prozessstopp.beenden(browser, frist=5)
     finally:
         shutil.rmtree(folder, ignore_errors=True)
+
+
+@pytest.fixture(scope="module")
+def report() -> dict:
+    return _run_case(CASES, 1280)
+
+
+@pytest.fixture(scope="module")
+def ink() -> dict:
+    return _run_case(INK_CASES, 1280, EXTRA_SERVERS)
+
+
+@pytest.fixture(scope="module", params=[1280, 720, 375], ids=["1280", "720", "375"])
+def sheets(request) -> dict:
+    return _run_case(SHEET_CASES, request.param)
 
 
 def test_the_case_stands_a_masked_scroller_and_an_open_menu(report):
@@ -309,3 +449,94 @@ def test_the_area_under_the_first_row_of_cards_is_not_black(report):
 
 def test_a_click_on_the_shield_takes_both_layers_away(report):
     assert report["after_click"] == {"menus": 0, "shields": 0, "layers": 0}
+
+
+# --- The button row of the sheet, measured ----------------------------------
+
+
+def test_the_sheets_of_an_entry_and_of_a_new_address_are_measured(sheets):
+    assert sheets["own"]["found"] and sheets["fresh"]["found"]
+    assert len(sheets["own"]["names"]) == 3 and len(sheets["fresh"]["names"]) == 2
+
+
+def test_the_buttons_of_a_sheet_are_equally_wide_and_equally_high(sheets):
+    for label in ("own", "fresh"):
+        measured = sheets[label]
+        assert max(measured["widths"]) - min(measured["widths"]) < 1.0, (label, measured["widths"])
+        assert max(measured["heights"]) - min(measured["heights"]) < 1.0, (label, measured["heights"])
+
+
+def test_from_a_window_of_720_px_every_label_stands_in_one_line(sheets):
+    """A button of one line is 34 high; a broken label makes it taller. On a
+    phone the sheet is narrower than the row and the labels may break."""
+    if sheets["own"]["viewport"][0] < 720:
+        pytest.skip("a phone: the labels may break")
+    for label in ("own", "fresh"):
+        assert max(sheets[label]["heights"]) < 40, (label, sheets[label]["heights"])
+
+
+def test_the_row_stands_under_both_columns_at_the_right_edge_and_inside_the_sheet(sheets):
+    for label in ("own", "fresh"):
+        measured = sheets[label]
+        row, popup, columns = measured["row"], measured["popup"], measured["columns"]
+        assert not measured["leftHasButtons"]
+        assert row["y"] >= columns["bottom"] - 1, (label, row, columns)
+        assert row["right"] <= popup["right"] + 0.5 and row["x"] >= popup["x"] - 0.5, (label, row, popup)
+        assert abs(row["right"] - columns["right"]) < 1.5, (label, row, columns)
+
+
+def test_the_sheet_keeps_its_size_with_the_row_under_the_columns(sheets):
+    """740 wide where the window has room, inside the window where it has not,
+    and 520 high, the same for both."""
+    for label in ("own", "fresh"):
+        width, height = sheets[label]["drawn"]
+        assert abs(height - 520) < 1.5, (label, height)
+        viewport = sheets[label]["viewport"][0]
+        if viewport >= 900:
+            assert abs(width - 740) < 1.5, (label, width)
+        else:
+            assert width > 250, (label, width)
+        assert sheets[label]["popup"]["right"] <= viewport, (label, sheets[label]["popup"])
+    if sheets["own"]["viewport"][0] >= 720:
+        assert sheets["own"]["drawn"] == sheets["fresh"]["drawn"]
+
+
+# --- The words of a state wear the form made for type -----------------------
+
+
+@pytest.mark.parametrize("look", ["pearl", "exe"])
+def test_every_state_word_wears_the_text_form_of_its_colour(ink, look):
+    mode, want = ink[look], ink[look]["want"]
+    assert mode["lost"]["word"] == want["rotText"], (look, mode["lost"])
+    assert mode["verbunden"]["word"] == want["gruenText"], (look, mode["verbunden"])
+    assert mode["wartet"]["word"] == want["gruenText"], (look, mode["wartet"])
+    assert mode["schluessel_fehlt"]["word"] == want["rotText"], (look, mode["schluessel_fehlt"])
+    assert mode["aus"]["word"] == want["leise"], (look, mode["aus"])
+    assert mode["menuState"] == want["gruenText"], look
+    assert mode["menuStateMissingKey"] == want["rotText"], look
+
+
+@pytest.mark.parametrize("look", ["pearl", "exe"])
+def test_the_dots_the_surface_and_the_line_keep_the_plain_colour(ink, look):
+    mode, want = ink[look], ink[look]["want"]
+    assert mode["lost"]["dot"] == want["rot"], (look, mode["lost"])
+    assert mode["verbunden"]["dot"] == want["gruen"] and mode["wartet"]["dot"] == want["gruen"], look
+    assert mode["schluessel_fehlt"]["dot"] == want["rot"], look
+    assert mode["verbunden"]["surface"] == want["gruenSurface"], (look, mode["verbunden"])
+    assert mode["verbunden"]["line"] == want["gruenLine"], (look, mode["verbunden"])
+
+
+def test_the_two_forms_differ_where_the_ground_asks_for_it(ink):
+    """Pearl: red and green both need the darker form as type. Exe: only red
+    does — green and yellow are the same there, which is why Pearl is measured."""
+    assert ink["pearl"]["want"]["rotText"] != ink["pearl"]["want"]["rot"]
+    assert ink["pearl"]["want"]["gruenText"] != ink["pearl"]["want"]["gruen"]
+    assert ink["exe"]["want"]["rotText"] != ink["exe"]["want"]["rot"]
+
+
+@pytest.mark.parametrize("look", ["pearl", "exe"])
+def test_the_section_heads_are_quiet_and_their_count_stays_still(ink, look):
+    mode = ink[look]
+    assert len(mode["heads"]) == 2 and set(mode["heads"]) == {mode["want"]["leise"]}, (look, mode["heads"])
+    assert mode["counts"] == [mode["want"]["still"]] * 2, (look, mode["counts"])
+    assert mode["headWeights"] == ["600"] * 2 and mode["countWeights"] == ["400"] * 2, mode

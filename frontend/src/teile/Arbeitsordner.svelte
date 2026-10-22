@@ -14,6 +14,7 @@
   import Fenster from './Fenster.svelte'
   import { t } from '../lib/texte.svelte.js'
   import { system } from '../lib/keyNames.js'
+  import { displayPath } from '../lib/paths.js'
   import {
     ordnerZustand, dialogPruefen, ordnerHinzufuegen, systemdialog,
     ersatzBeginnen, ordnerstandPruefen, notizenZurueckholen,
@@ -72,6 +73,12 @@
     if (!ordnerZustand.maskeOffen) ordnerZustand.zurueckMeldung = null
   })
 
+  /* The same for the reason a path was refused: it belongs to the attempt
+     that was made, not to the next opening. */
+  $effect(() => {
+    if (!ordnerZustand.maskeOffen) ordnerZustand.shareError = ''
+  })
+
   function feldTaste(ereignis) {
     if (ereignis.key === 'Enter') {
       ereignis.preventDefault()
@@ -101,12 +108,12 @@
                stroke-linejoin="round" aria-hidden="true">
             <path d={WARNZEICHEN} />
           </svg>
-          <span class="wo" title={pfad}>{pfad}</span>
+          <span class="wo" title={displayPath(pfad)}>{displayPath(pfad)}</span>
           <button
             class="knopf"
             onclick={() => ersatzBeginnen(pfad)}
             aria-pressed={ordnerZustand.ersatzZiel === pfad}
-            title={t('arbeitsordner.neu_waehlen_titel', { pfad })}
+            title={t('arbeitsordner.neu_waehlen_titel', { pfad: displayPath(pfad) })}
           >
             {t('arbeitsordner.neu_waehlen')}
           </button>
@@ -128,12 +135,12 @@
       <p class="notizsatz">{t('arbeitsordner.notizen_satz')}</p>
       {#each ordnerZustand.notizverlust as pfad (pfad)}
         <div class="zeile">
-          <span class="wo" title={pfad}>{pfad}</span>
+          <span class="wo" title={displayPath(pfad)}>{displayPath(pfad)}</span>
           <button
             class="knopf"
             onclick={() => notizenZurueckholen(pfad)}
             disabled={Boolean(ordnerZustand.holtZurueck)}
-            title={t('arbeitsordner.notizen_zurueck_titel', { pfad })}
+            title={t('arbeitsordner.notizen_zurueck_titel', { pfad: displayPath(pfad) })}
           >
             {t('arbeitsordner.notizen_zurueck')}
           </button>
@@ -187,6 +194,10 @@
     {t(system === 'mac' ? 'arbeitsordner.pfad_hilfe' : 'arbeitsordner.pfad_hilfe_windows')}
   </p>
 
+  {#if ordnerZustand.shareError}
+    <p class="grund zurueckmeldung fehler" role="alert">{ordnerZustand.shareError}</p>
+  {/if}
+
   <div class="knopfreihe">
     <button class="button" onclick={() => (ordnerZustand.maskeOffen = false)}>
       {t('app.abbrechen')}
@@ -238,7 +249,7 @@
   .fehlt .wo {
     flex: 1;
     min-width: 0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--schrift);
     font-size: 11.5px;
     color: var(--text-still);
     text-decoration: line-through;
@@ -286,7 +297,7 @@
   .notizen .wo {
     flex: 1;
     min-width: 0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--schrift);
     font-size: 11.5px;
     color: var(--text-still);
     overflow: hidden;
@@ -323,6 +334,10 @@
   }
   .zurueckmeldung.fehler {
     color: var(--rot-text);
+  }
+  /* Under the field it refers to, not above the folder list. */
+  .zurueckmeldung.grund {
+    margin: 10px 2px 0;
   }
   .durchsuchen {
     display: flex;
@@ -376,7 +391,7 @@
     border-radius: 9px;
     background: var(--bg-seite, var(--bg));
     color: var(--text);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: var(--schrift);
     font-size: 13px;
     padding: 9px 11px;
     outline: none;

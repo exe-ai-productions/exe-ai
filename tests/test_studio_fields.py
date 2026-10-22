@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from tests.fensterquelle import WINDOW_SOURCE
 
 
 
@@ -223,7 +224,7 @@ def test_a_new_chat_is_the_open_chat_of_the_window_and_the_studio_opens_none():
     # It writes nothing of the studio into the chat, and holds none of it.
     assert "einstellungSetzen" not in opened and "chatless" not in state
     assert "await openNewChat({ title: t('chat.unbenannt')" in state
-    assert "await openNewChat({ title: ersterTitel" in (source / "App.svelte").read_text(encoding="utf-8")
+    assert "await openNewChat({ title: ersterTitel" in WINDOW_SOURCE.read_text(encoding="utf-8")
     # The studio's draw opens no chat, names none and says it is the studio's.
     draw = DRAW.read_text(encoding="utf-8")
     assert "openNewChat" not in draw and "chat_id" not in draw and "chatanzeige" not in draw
@@ -238,41 +239,34 @@ def test_a_new_chat_is_the_open_chat_of_the_window_and_the_studio_opens_none():
     assert "chatZustandLaden(null)" in fresh
 
 
-def test_a_picture_in_the_area_sets_kind_and_strength_in_one_place():
+def test_a_picture_in_the_area_sets_the_strength_in_one_place_and_never_the_mode():
     """Whichever way a picture comes into the generation area, it passes
-    `startbildWaehlen`, and that is where a full strength steps down and,
-    after that, a mode that does not draw from the picture gives way to
-    one that does. No caller sets either on its own."""
+    `startbildWaehlen`, and that is where a full strength steps down. It
+    never changes the mode: "generate" stays "generate". No caller sets the
+    strength on its own."""
     source = WURZEL / "frontend" / "src"
     studio = (source / "lib" / "studio.svelte.js").read_text(encoding="utf-8")
     chosen = studio.split("export function startbildWaehlen(name) {", 1)[1].split("\n}\n", 1)[0]
     assert "pictureInArea()" in chosen
     rule = studio.split("export function pictureInArea() {", 1)[1].split("\n}\n", 1)[0]
-    # The strength first: "auto" goes by it when it names the kind it draws.
-    lowered = "if (Number(werte.staerke) >= 1) werte.staerke = art().video ? 0.75 : 0.6"
-    assert rule.index(lowered) < rule.index("kindOntoPicture()")
-    onto = studio.split("function kindOntoPicture() {", 1)[1].split("\n}\n", 1)[0]
-    assert "if (!FROM_AREA.includes(now.value))" in onto
-    assert "kindsOf(now.video).find((k) => FROM_AREA.includes(k.value))" in onto
+    # The strength alone: "auto" goes by it when it names the kind it draws.
+    assert rule.strip() == "if (Number(werte.staerke) >= 1) werte.staerke = art().video ? 0.75 : 0.6"
+    assert "auswahl.art" not in rule
+    # The mode is no longer moved onto the picture, now or when a family arrives late.
+    assert "kindOntoPicture" not in studio and "kindDue" not in studio
     assert "KINDS.filter((k) => k.video === video && (!family || family.tasks.includes(k.task))" in studio
     assert "const FROM_AREA = ['img2img', 'edit', 'i2v', 'flf2v']" in studio
-    # A family unknown at that moment is asked again when it arrives, for
-    # the model the picture came into the area with.
-    assert "kindDue = familie() ? null : { model: werte.modell }" in rule
-    asked_again = studio.split("export async function vorgabenHolen() {", 1)[1].split("\n}\n", 1)[0]
-    assert "if (due && dueModel === model && werte.startbild) kindOntoPicture()" in asked_again
     # Picture to picture stands before the edit in the table the rule walks.
     kinds = studio.split("export const KINDS = [", 1)[1].split("\n]\n", 1)[0]
     assert kinds.index("'img2img'") < kinds.index("'edit'") and kinds.index("'i2v'") < kinds.index("'flf2v'")
     # A studio that opens with a picture in its area is shown the same, unwritten.
     # The family off a header is the model's it was read for: another model in
-    # the values makes it unknown before the rule walks the kinds.
+    # the values makes it unknown until its own arrives.
     filling = studio.split("export function werteFuellen() {", 1)[1].split("\n}\n", 1)[0]
     assert "if ((werte.modell || listen.standardmodell) !== headerModel) auswahl.klasse = ''" in filling
-    assert filling.index("auswahl.klasse = ''") < filling.index("pictureInArea()")
     assert filling.count("pictureInArea()") == 2
     assert "geschrieben.staerke = werte.staerke" in filling
-    asked = studio.split("export async function vorgabenHolen() {", 1)[1].split("\n}\n", 1)[0]
+    asked = studio.split("export async function vorgabenHolen(chosenFamily = werte.familie) {", 1)[1].split("\n}\n", 1)[0]
     assert "headerModel = model" in asked
     # No caller lowers the strength or names the kind for a picture itself.
     for pfad in sorted(source.rglob("*.svelte")) + sorted(source.rglob("*.js")):
@@ -493,10 +487,12 @@ def test_a_draw_waits_for_the_start_values_of_the_shown_model():
                           (store, ("export async function familieWaehlen(name) {",))):
         for head in heads:
             body = source.split(head, 1)[1].split("\n}\n" if source is store else "\n  }\n", 1)[0]
-            assert body.index("return layingStartValues(async () => {") < body.index("await vorgabenHolen()"), head
+            assert body.index("return layingStartValues(async () => {") < body.index("await vorgabenHolen("), head
             assert "return false" in body or "return Boolean(v)" in body, head
-        fetches = source.count("await vorgabenHolen()")
-        assert fetches == len(heads), "start values fetched outside layingStartValues"
+        fetches = source.count("await vorgabenHolen(")
+        # A model chosen asks twice when a family said by hand stands and its
+        # header names none: once without the family, once with it.
+        assert fetches == len(heads) + (1 if source is basics else 0), "start values fetched outside layingStartValues"
     filling = basics.split("async function fuellen() {", 1)[1].split("\n  }\n", 1)[0]
     # What was set by hand while the start values were on their way stays:
     # they go only to a value that still stands as it was filled.
@@ -559,7 +555,7 @@ def test_the_mode_stands_at_the_prompt_bar_and_auto_names_the_kind_it_draws():
     area holds none. The left column has no row for the kind any more."""
     parts = _studio_parts()
     store = (WURZEL / "frontend" / "src" / "lib" / "studio.svelte.js").read_text(encoding="utf-8")
-    assert "export const auswahl = $state({ art: 'auto', medium: 'bild', klasse: '', startKante: 0 })" in store
+    assert "export const auswahl = $state({ art: 'auto', medium: 'bild', klasse: '', startKante: 0, vae: '' })" in store
     now = store.split("export function art() {", 1)[1].split("\n}\n", 1)[0]
     assert "if (auswahl.art === 'auto') return autoKind()" in now
     auto = store.split("export function autoKind() {", 1)[1].split("\n}\n", 1)[0]
@@ -673,7 +669,7 @@ def test_the_newest_picture_of_the_studio_stands_in_its_area_by_itself():
     assert "const finished = Boolean(leinwand.keepView) && loaded === api.bildAdresse(leinwand.keepView)" in loaded
     assert "if (!(finished && replaced.w === natur.w && replaced.h === natur.h)) einpassen()" in loaded
     # The silence check: a picture laid in by hand still passes the one rule
-    # that sets strength and mode, and is written.
+    # that sets the strength, and is written.
     assert "pictureInArea()" in chosen
     assert "onclick={() => startbildWaehlen(name)}" in parts["StudioGallery.svelte"]
 
@@ -791,21 +787,22 @@ def test_picture_infos_ask_the_program_first_and_the_file_second():
 def test_the_studio_lays_in_the_vae_format_the_rng_and_the_switch_rows_a_family_starts_with():
     """A family's start values name a VAE format, an RNG and switch rows
     (app/image_families.py). The studio lays them in like the measures: from
-    the service's answer for the shown model, or from the family table for a
-    family said by hand. A switch row is a start value only where some
+    the service's answer for the shown model, which works them out for a
+    family said by hand as well. A switch row is a start value only where some
     family starts with it; every other row stays as it was set."""
     from app import bildwahlen, image_families
 
     studio = (WURZEL / "frontend" / "src" / "lib" / "studio.svelte.js").read_text(encoding="utf-8")
     start = studio.split("export function startwerte(v) {", 1)[1].split("\n}\n", 1)[0]
-    # A family said by hand hands in the same three the service's answer names.
-    assert "vae_format: start.vae_format, rng: start.rng, switches: start.switches }" in start
-    assert "VAE_FORMATS_OFFERED.includes(werteDerKlasse.vae_format)" in start
-    assert "? werteDerKlasse.vae_format : ANFANG.vae_format" in start
-    assert "teil.rng = werteDerKlasse.rng || ANFANG.rng" in start
+    # The table of the browser is not asked: a family said by hand reaches the
+    # studio through the service's answer, like the header's.
+    assert "familyOf(" not in start
+    assert "VAE_FORMATS_OFFERED.includes(v.vae_format)" in start
+    assert "? v.vae_format : ANFANG.vae_format" in start
+    assert "teil.rng = v.rng || ANFANG.rng" in start
     assert "imageFamilies.list.flatMap((family) => Object.keys(family.start?.switches ?? {}))" in start
     assert ".filter(([key]) => !started.has(key))" in start
-    assert start.index("!started.has(key)") < start.index("...werteDerKlasse.switches,")
+    assert start.index("!started.has(key)") < start.index("...v.switches,")
 
     # The formats laid in are the ones the field offers, and the service knows each.
     offered = re.findall(r"'(\w+)'", re.search(r"const VAE_FORMATS_OFFERED = \[(.*?)\]", studio).group(1))
@@ -905,11 +902,11 @@ def test_a_draw_without_a_prompt_says_so_and_the_two_sentences_read_as_decided()
         for language in ("de", "en")
     }
     assert {language: catalogue["studio"]["no_prompt"] for language, catalogue in texts.items()} == {
-        "de": "Kein Prompt eingegeben. Beschreibe das gewünschte Bild in der Prompt-Leiste.",
+        "de": "Kein Prompt eingegeben. Bitte das gewünschte Bild in der Prompt-Leiste beschreiben.",
         "en": "No prompt entered. Describe the image you want in the prompt bar.",
     }
     assert {language: catalogue["bildserver"]["kein_standardmodell"] for language, catalogue in texts.items()} == {
-        "de": "Kein Bildmodell ausgewählt. Wähle eines auf der Seite Bild-Server.",
+        "de": "Kein Bildmodell ausgewählt. Bitte eines auf der Seite „Bild-Server“ auswählen.",
         "en": "No image model selected. Choose one on the Image server page.",
     }
     # The silence check: a press with a prompt goes on to the model as

@@ -95,6 +95,16 @@ _UNSICHER = re.compile(r"[^A-Za-z0-9._-]+")
 # delivery agents make most often — so the shelf carries that one itself.
 NACHSCHLAG = {".md": "text/markdown"}
 
+# Video and sound, by their ending, the same on every system: the table the
+# machine keeps (Python reads it from the system) hands out different words
+# for one kind of file, "audio/mp4a-latm" and "audio/x-wav" among them, and a
+# player has to be told what it is given. These win over the system's table.
+MEDIA_TYPES = {
+    ".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+    ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4", ".aac": "audio/aac",
+    ".ogg": "audio/ogg", ".oga": "audio/ogg", ".flac": "audio/flac", ".opus": "audio/ogg",
+}
+
 
 def _jetzt() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -165,6 +175,9 @@ def type_from_name(name: str) -> str:
     typ, kodierung = mimetypes.guess_type(name)
     if kodierung:
         return ""
+    ending = Path(name).suffix.lower()
+    if ending in MEDIA_TYPES:
+        return MEDIA_TYPES[ending]
     if not typ:
         # Only what Python's own table misses, and only here — a global
         # ``add_type`` would change how the whole program serves files.

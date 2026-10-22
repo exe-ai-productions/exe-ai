@@ -326,7 +326,7 @@ async def test_einmaliger_eintrag_ohne_meldung_sagt_es(repos, gemeldet):
         repos, eintrag.id, "Ins Postfach sehen", bericht=None, erfolgreich=True
     )
     assert gemeldet == [
-        ("Ins Postfach sehen — Ran once; goal not reached.", False)
+        ("Ins Postfach sehen - Ran once; goal not reached.", False)
     ]
 
 

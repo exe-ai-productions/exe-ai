@@ -30,6 +30,15 @@ class SpeicherblickAntwort(BaseModel):
     belegt_gb: float | None
     gesamt_gb: float | None
     anteil: float | None
+    # The wired part alone (macOS), apart from the sum above, which stays what
+    # it was for the pill. None where the platform has no such figure.
+    wired_gb: float | None = None
+    wired_anteil: float | None = None
+    # The most the system lets stay wired (macOS, read from the graphics
+    # device). The wired figure is measured against it: against the whole
+    # memory the bar would never fill while the limit already holds. None
+    # where it cannot be read — the share then falls back to the whole memory.
+    wired_limit_gb: float | None = None
 
 
 @router.get(
@@ -40,11 +49,25 @@ class SpeicherblickAntwort(BaseModel):
 async def speicherblick() -> SpeicherblickAntwort:
     # The readout runs a subprocess; off the event loop, so a slow shell
     # never stalls a streaming answer.
-    belegt = await asyncio.to_thread(systemspeicher.belegt_gb)
+    (belegt, wired), limit = await asyncio.gather(
+        asyncio.to_thread(systemspeicher.used_and_wired_gb),
+        asyncio.to_thread(systemspeicher.wired_limit_gb),
+    )
     gesamt = systemspeicher.gesamt_gb()
     anteil = (
         round(min(belegt / gesamt, 1.0), 4)
         if belegt is not None and gesamt
         else None
     )
-    return SpeicherblickAntwort(belegt_gb=belegt, gesamt_gb=gesamt, anteil=anteil)
+    denominator = limit or gesamt
+    wired_anteil = (
+        round(min(wired / denominator, 1.0), 4) if wired is not None and denominator else None
+    )
+    return SpeicherblickAntwort(
+        belegt_gb=belegt,
+        gesamt_gb=gesamt,
+        anteil=anteil,
+        wired_gb=wired,
+        wired_anteil=wired_anteil,
+        wired_limit_gb=limit,
+    )

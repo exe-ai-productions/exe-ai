@@ -14,6 +14,12 @@
     font: 15px/1.6 -apple-system, "Segoe UI", system-ui, sans-serif;
   }
   main { text-align: center; }
+  /* Where the system's top bar is left out of the window (the Mac), this
+     strip is the place to grab the window by while the splash stands. */
+  [data-top-bar]::before {
+    content: ""; position: fixed; top: 0; left: 0; right: 0; height: 38px;
+    -webkit-app-region: drag;
+  }
   /* The mark at half strength, as the start page draws it above its
      greeting: the splash and the page that follows read as one picture. */
   svg { display: block; margin: 0 auto 14px; opacity: 0.5; }
@@ -43,6 +49,10 @@
     root.setProperty('--ink', light ? '#1a1a18' : '#ecebe6')
     root.setProperty('color-scheme', light ? 'light' : 'dark')
   })()
+</script>
+<script>
+  /* Whether the page draws the window's top bar: the strip above stands then. */
+  if (window.exeHuelle && window.exeHuelle.topBar) document.documentElement.setAttribute('data-top-bar', '')
 </script>
 </head>
 <body>

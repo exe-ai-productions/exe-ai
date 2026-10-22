@@ -251,7 +251,11 @@ def test_the_once_per_session_gate_is_gone():
     module = MODULE.read_text(encoding="utf-8")
     assert "geladen" not in module
     assert "werkzeugwahl.geladen" not in page
-    assert "    werkzeugeLaden()\n" in page
+    # The list's figures are read whenever the list appears, which is whenever the settings open.
+    figures = (FRONTEND / "src" / "lib" / "settingsState.svelte.js").read_text(encoding="utf-8")
+    nav = (FRONTEND / "src" / "teile" / "SettingsNav.svelte").read_text(encoding="utf-8")
+    assert "  werkzeugeLaden()\n" in figures
+    assert "loadSettingsState({ own })" in nav
     assert "onMount(() => {\n    werkzeugeLaden()\n  })" in view
 
 

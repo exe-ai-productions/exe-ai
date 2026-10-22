@@ -18,6 +18,11 @@
   margin: 0 0 0.85em; padding: 0.1em 0 0.1em 0.9em;
   border-left: 2px solid var(--linie-stark); color: var(--text-leise);
 }
+/* A quote of several blocks starts and ends flush, like the report itself. */
+.berichttext blockquote > :first-child { margin-top: 0; }
+.berichttext blockquote > :last-child { margin-bottom: 0; }
+/* The locked box of a task item: the browser's own, set in line with the text. */
+.berichttext li > input[type='checkbox'] { margin: 0 0.45em 0 0; vertical-align: -0.1em; }
 .berichttext hr { border: none; border-top: 1px solid var(--linie); margin: 1.4em 0; }
 /* A markdown image is at most as wide as the text it stands in. */
 .berichttext img.md-bild { max-width: 100%; height: auto; }

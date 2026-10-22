@@ -16,6 +16,7 @@ import {
 import { chatZustandLaden, chatanzeige } from './chatanzeige.svelte.js'
 import { VORGABE_CHATLAYOUT, chatlayoutAnwenden, chatlayoutAusGespeichert, chatlayoutZumSpeichern } from './chatlayout.js'
 import { ausFenster, ohneWeg } from './fensterweg.svelte.js'
+import { answerPreview } from './answerPreview.js'
 import { melde, melden } from './meldewesen.svelte.js'
 import { t } from './texte.svelte.js'
 import { leeren as warteschlangeLeeren } from './warteschlange.svelte.js'
@@ -38,6 +39,11 @@ export const zustand = $state({
   nachrichtenChatId: null,
   version: '',
   aktiverChat: null,
+  /* The switch "Suspend instructions for this chat", set in the plus menu
+     before any chat exists: the value waits here and goes to the chat with
+     the first message (`haltendenWertSetzen`). Leaving for another chat or
+     a fresh start lets it go. */
+  pendingPromptOff: false,
   /* The placeholder message of a running TEXT answer, held here because
      switching chats replaces `nachrichten` wholesale with the server's
      fetch below, which would otherwise lose the one message still living
@@ -82,7 +88,7 @@ export const zustand = $state({
   suche: '',
   // Running text answers, keyed by chat id: { [chatId]: { abbruch,
   // generationId, chatId } }. One entry per chat with a run in flight —
-  // read it through `laufVon(chatId)` / `laeuftIrgendwo()`, never as a bare
+  // read it through `laufVon(chatId)`, never as a bare
   // truthiness check (the object itself is always there now).
   laeuft: {},
   /* Chats whose send is still on its way to a run — the stretch between
@@ -129,14 +135,24 @@ export const zustand = $state({
   lokalOffen: false,
   katalogOffen: false,
   /* Which tab the catalogue should open on when a panel sends the user
-     there — read once by the catalogue window, then cleared. */
+     there — read once by the catalogue window, then cleared. `downloads`
+     names the page of the downloads. */
   katalogArtWunsch: null,
+  /* Which server the local menu should show when a row of the settings list
+     sends the user there — read once by the local window, then cleared. */
+  lokalWunsch: null,
   cloudOffen: false,
   /* The section column of the menu standing open: handed over by the frame
      its page renders (teile/Menueseite.svelte) and drawn by the sidebar in
      the chat list's place — `{ snippet, label }`, or null while no menu
      stands open. Lives only as long as that page does; never persisted. */
   menuSections: null,
+  /* The lowest edge, in the pixels the browser measures, of what the page
+     standing open keeps free at its top — its head, or the studio's bars —
+     handed over by that page (lib/noticeStart.js); the notices begin under
+     it (teile/Meldungen.svelte). Null while nothing asks for it: the notices
+     then stand where they stand over the chat. */
+  menuHeadBottom: null,
   /* Pending tool confirmation (Tor 3), a map keyed by chat id:
      { [chatId]: { generationId, aufrufId, name, argumente, chatId } }.
      One standing question per chat, so a confirmation in chat B cannot
@@ -145,24 +161,6 @@ export const zustand = $state({
      never as a bare `zustand.werkzeugfrage` truthiness check — the map
      object itself is always there. */
   werkzeugfrage: {}, // { [chatId]: { generationId, aufrufId, name, argumente, chatId } }
-  /* What the planned server starts will roughly take, one entry per server —
-     shown as ONE number in the head of the Models page, next to the machine
-     total.
-
-     Two entries because the model server and the agent server are two
-     processes on two ports and run at the same time, on the same memory.
-     Each page wrote this slot alone before, so the head showed whichever of
-     the two happened to be open and a pair that together burst the machine
-     looked fine from either side.
-
-     A page fills its own entry while it is open; the head fills the entry of
-     the page that is not, from what that page stored — so the number is the
-     same before and after switching, and a number that jumps on a page
-     change would be worse than no number at all. Null in an entry means that
-     server adds nothing: nothing chosen, or already running, in which case
-     what it holds is a measured fact its own card reports and no longer a
-     plan. */
-  serverPlan: { modell: null, agent: null },
   // Chats with a finished answer nobody has looked at yet — the sidebar
   // shows the pulsing dot for them.
   fertigeChats: [],
@@ -202,7 +200,7 @@ export const zustand = $state({
   promptStart: 'system',
   // The house's pending prompt dialog: replaces the bare
   // confirm()/prompt() boxes of the browser. At most one at a time.
-  frage: null, // { text, eingabe, okSchluessel, aufloesen }
+  frage: null, // { text, eingabe, okSchluessel, danger, aufloesen }
 })
 
 /* The menus and the flag each one stands on, in the order of the window
@@ -320,10 +318,10 @@ export function katalogOeffnen(art) {
 
    The bare confirm()/prompt() boxes of the browser are off-limits from
    here on — they were the last foreign body in the interface. */
-export function frage(text, { eingabe = null, okSchluessel = 'app.ok' } = {}) {
+export function frage(text, { eingabe = null, okSchluessel = 'app.ok', danger = false } = {}) {
   melden({ was: 'wartet', von: 'chat' })
   return new Promise((aufloesen) => {
-    zustand.frage = { text, eingabe, okSchluessel, aufloesen }
+    zustand.frage = { text, eingabe, okSchluessel, danger, aufloesen }
   })
 }
 
@@ -335,11 +333,14 @@ export function frageBeantworten(wert) {
 }
 
 /* Chats whose answer finished while the user was looking elsewhere. The
-   sidebar marks them with the pulsing dot until they are opened. */
-export function chatFertigMerken(id) {
+   sidebar marks them with the pulsing dot until they are opened, and the
+   card that says so carries the chat's name and the beginning of its answer
+   (`answer` is the visible text of the finished message). */
+export function chatFertigMerken(id, answer = '') {
   if (id && !zustand.fertigeChats.includes(id)) {
     zustand.fertigeChats.push(id)
-    melden({ was: 'fertig', von: 'chat' })
+    const chat = zustand.chats.find((c) => c.id === id)
+    melden({ was: 'fertig', von: 'chat', heading: chat?.title || t('chat.unbenannt'), text: answerPreview(answer) })
   }
 }
 
@@ -435,13 +436,6 @@ export function laufVon(chatId) {
   return chatId != null ? (zustand.laeuft[chatId] ?? null) : null
 }
 
-/* Is any chat running an answer at all — for the few readers that genuinely
-   mean "anywhere", not "here". */
-export function laeuftIrgendwo() {
-  for (const _ in zustand.laeuft) return true
-  return false
-}
-
 /* The standing question of one kind for a given chat, or null. Each of the
    three is a map keyed by chat id now, so two runs in two chats can each
    hold one without the second overwriting the first. Read through these,
@@ -460,6 +454,53 @@ export function jobfrageVon(chatId) {
 
 export function aktuellerChat() {
   return zustand.chats.find((c) => c.id === zustand.aktiverChat) || null
+}
+
+/* Whether the instructions are suspended for what is on screen: the open
+   chat's own switch or the value still waiting to go to it — a chat made by
+   the first message holds nothing for the few moments before the hand-over,
+   and after a refused hand-over the value is still owed. */
+export function promptAusgesetzt() {
+  const chat = aktuellerChat()
+  return Boolean(chat?.prompt_aus) || zustand.pendingPromptOff
+}
+
+/* Flips the switch "Suspend instructions for this chat". An open chat keeps
+   it in its own row; with no chat the value is only held. Answers whether it
+   is set — a refusal of the service is told and leaves the switch as it was. */
+export async function promptAusUmschalten() {
+  const chat = aktuellerChat()
+  const an = !promptAusgesetzt()
+  if (!chat) {
+    zustand.pendingPromptOff = an
+    return true
+  }
+  try {
+    await chatAendern(chat.id, { prompt_aus: an })
+    // What was waiting for this chat is settled by this answer, either way.
+    zustand.pendingPromptOff = false
+    return true
+  } catch {
+    melde(t('systemprompt.schalter_fehler'), 'fehler')
+    return false
+  }
+}
+
+/* Hands a waiting value to the chat the first message is about to go into.
+   Answers false when the service refuses it, so the message is not sent with
+   the instructions the person switched off. */
+export async function haltendenWertSetzen() {
+  if (!zustand.pendingPromptOff) return true
+  const chat = aktuellerChat()
+  if (!chat) return true
+  try {
+    await chatAendern(chat.id, { prompt_aus: true })
+    zustand.pendingPromptOff = false
+    return true
+  } catch {
+    melde(t('systemprompt.schalter_fehler'), 'fehler')
+    return false
+  }
 }
 
 /* The one way a chat comes into being in this window. It is created and is
@@ -698,7 +739,7 @@ export const geraet = $state({
  *  and draw different looks. */
 export function lookFuer(modus) {
   if (modus !== 'auto') return modus
-  return geraet.dunkel ? 'dunkel' : 'hell'
+  return geraet.dunkel ? 'dunkel' : 'snow'
 }
 
 /* Whether the document currently shows the look a fresh read would speak
@@ -706,7 +747,8 @@ export function lookFuer(modus) {
    look, and kept they would stay wrong for the whole session. */
 function stilPasstZu(schema) {
   const attr = document.documentElement.getAttribute('data-modus')
-  if (schema === 'hell') return attr === null || attr === 'hell'
+  if (schema === 'hell') return attr === 'hell'
+  if (schema === 'snow') return attr === 'snow' || (attr === null && !geraet.dunkel)
   if (schema === 'dunkel') return attr === 'dunkel' || (attr === null && geraet.dunkel)
   return attr === schema
 }
@@ -976,9 +1018,10 @@ if (typeof window !== 'undefined') {
 /* The sidebar is dragged, not configured: the seam clamps the hand to what
    the head row can carry (below, the section labels would clip) and to what
    still leaves the chat its room. */
-// Six 40px buttons of the window row, five 10px gaps and 12px either side:
-// no button of the row ever has to shrink.
-const SEITEN_MIN = 314
+// Five 40px signs of the window row, spread with 12px either side: at this
+// width they stand a little over 15px apart, and no sign of the row ever has
+// to shrink.
+const SEITEN_MIN = 285
 const SEITEN_MAX = 400
 
 export function seitenBreiteSetzen(px) {
@@ -1174,6 +1217,8 @@ export async function chatOeffnen(id) {
   // the interface would query `/chats//messages` — with a double slash,
   // because the id is empty — and catch a 404 every few seconds,
   // cluttering the log.
+  // Another chat or none: a value waiting for a chat that never came is void.
+  zustand.pendingPromptOff = false
   if (!id) {
     zustand.aktiverChat = null
     nachrichtenSetzen(null, [])
@@ -1409,6 +1454,7 @@ export async function chatOeffnen(id) {
 export function neuerChat() {
   zustand.seitenblatt = 'chats'
   zustand.aktiverChat = null
+  zustand.pendingPromptOff = false
   nachrichtenSetzen(null, [])
   // A fresh chat starts on the defaults — and what was still waiting for
   // the one being left goes out first.

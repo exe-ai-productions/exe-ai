@@ -40,7 +40,7 @@ import {
   uebernehmen as serverzustandUebernehmen,
 } from './serverzustand.svelte.js'
 import { auftraegeStillLaden, chatOeffnen, modelleLaden, zustand } from './zustand.svelte.js'
-import { auswahlLaden } from './modelle.svelte.js'
+import { auswahlLaden, loadRunApprovals } from './modelle.svelte.js'
 
 export const leitung = $state({
   /* Has the line carried anything yet? `EventSource.onopen` is what says
@@ -107,6 +107,7 @@ const HANDLUNG = {
      again, the way a window reads it when it opens. */
   model_switches_changed: () => {
     auswahlLaden()
+    loadRunApprovals()
   },
   /* Reachability rides on the model list, which is where the windows read
      it from. */
@@ -240,6 +241,7 @@ export function verbinden() {
     if (!erstesOeffnen) {
       modelleLaden()
       auswahlLaden()
+      loadRunApprovals()
       /* And the chat that is on screen, exactly once.
 
          The line hands out FACTS, and nothing here is numbered — a burst of

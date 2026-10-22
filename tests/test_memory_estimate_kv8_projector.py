@@ -23,13 +23,12 @@ needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="no Node on
 SCRIPT = """
 import { pathToFileURL } from 'node:url'
 const lib = await import(process.argv[1])
-const { serverAnteil, speicherSchaetzung, isEightBitCache, EIGHT_BIT_CACHE_SHARE } = lib
+const { serverAnteil, speicherSchaetzung, kvShare } = lib
 const cases = JSON.parse(process.argv[2])
 const out = cases.map((c) => {
   if (c.fn === 'anteil') return serverAnteil(c.dateien, c.module, c.opt)
   if (c.fn === 'schaetzung') return speicherSchaetzung(...c.args)
-  if (c.fn === 'isEightBitCache') return isEightBitCache(c.wert)
-  if (c.fn === 'anteil_konstante') return EIGHT_BIT_CACHE_SHARE
+  if (c.fn === 'kvShare') return kvShare(c.wert)
 })
 console.log(JSON.stringify(out))
 """
@@ -52,7 +51,7 @@ DATEIEN = [{"name": "m.gguf", "groesse_gb": 4.0}]
 def test_the_8_bit_cache_takes_the_measured_share_of_the_cache():
     voll, acht = _run(
         {"fn": "schaetzung", "args": [4.0, 8192, 0]},
-        {"fn": "schaetzung", "args": [4.0, 8192, 0, {"eightBit": True}]},
+        {"fn": "schaetzung", "args": [4.0, 8192, 0, {"kvShare": 34 / 64}]},
     )
     assert voll["kv"] == pytest.approx(8192 * 8 * 4.0 / 1e6)
     assert acht["kv"] == pytest.approx(voll["kv"] * 476 / 896)
@@ -95,14 +94,19 @@ def test_silence_without_the_switch_the_number_is_the_old_one():
 
 
 @needs_node
-def test_which_cache_types_count_as_8_bit():
+def test_each_cache_step_takes_its_share_of_the_16_bit_cache():
+    """ggml keeps 32 values in 64 bytes (f16), 34 (8 bit), 22 (5 bit) and 18
+    (4 bit); an unknown type counts as the 16-bit cache."""
     antworten = _run(
-        {"fn": "isEightBitCache", "wert": "q8_0"},
-        {"fn": "isEightBitCache", "wert": "q4_0"},
-        {"fn": "isEightBitCache", "wert": "f16"},
-        {"fn": "isEightBitCache", "wert": None},
+        {"fn": "kvShare", "wert": "f16"},
+        {"fn": "kvShare", "wert": "q8_0"},
+        {"fn": "kvShare", "wert": "q5_0"},
+        {"fn": "kvShare", "wert": "q4_0"},
+        {"fn": "kvShare", "wert": None},
     )
-    assert antworten == [True, True, False, False]
+    assert antworten == pytest.approx([1, 34 / 64, 22 / 64, 18 / 64, 1])
+    # The 8-bit share is the one the engine reported: 476 MiB against 896.
+    assert antworten[1] == pytest.approx(476 / 896)
 
 
 def test_both_server_answers_carry_the_projector_sizes(client: TestClient, config):
@@ -122,7 +126,7 @@ def test_silence_without_projectors_the_sizes_are_empty(client: TestClient):
 
 def test_the_windows_hand_both_to_the_estimate():
     teile = LIB.parent / "teile"
-    for datei in ("Modellserver.svelte", "Agentserver.svelte", "ModelleLokal.svelte"):
+    for datei in ("Modellserver.svelte", "Agentserver.svelte"):
         quelle = (teile / datei).read_text(encoding="utf-8")
-        assert "eightBit: isEightBitCache(" in quelle, datei
+        assert "kvShare: kvShare(" in quelle, datei
         assert "projectors:" in quelle, datei

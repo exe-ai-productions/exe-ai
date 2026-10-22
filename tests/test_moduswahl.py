@@ -10,9 +10,9 @@ from app import moduswahl
 
 def test_jeder_angebotene_modus_kommt_durch():
     """The list mirrors MODI in the settings window and the first-start
-    screen — seven, not the three the mode looks like from outside; the
+    screen — eight, not the three the mode looks like from outside; the
     own gradient among them."""
-    for modus in ("auto", "hell", "dunkel", "darkmatter", "heaven", "moune", "eigen"):
+    for modus in ("auto", "hell", "dunkel", "darkmatter", "heaven", "moune", "snow", "eigen"):
         assert moduswahl.wahl_pruefen({"modus": modus}) == {"modus": modus}
 
 
@@ -24,7 +24,7 @@ def test_muell_faellt_raus():
 
 
 def test_die_vorgabe_steht_dahinter():
-    assert moduswahl.aufgeloest(None) == {"modus": "dunkel"}
+    assert moduswahl.aufgeloest(None) == {"modus": "auto"}
     assert moduswahl.aufgeloest({"modus": "heaven"}) == {"modus": "heaven"}
 
 

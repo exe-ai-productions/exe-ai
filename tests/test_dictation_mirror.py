@@ -16,6 +16,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.fensterquelle import BAR_SOURCE
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="no node on this machine")
 
@@ -482,7 +483,7 @@ def test_escape_throws_away_a_transcription_that_never_answers():
     call = call[: call.index("}),") + 3]
     assert "signal" in call.split("=>", 1)[0] and "signal," in call, call
 
-    bar = (FRONTEND / "teile/Eingabeleiste.svelte").read_text(encoding="utf-8")
+    bar = BAR_SOURCE.read_text(encoding="utf-8")
     fetch = bar[bar.index("async function diktatHolen(") :]
     fetch = fetch[: fetch.index("\n  }\n")]
     assert "api.spracheTranskribieren(blob, { signal: controller.signal })" in fetch

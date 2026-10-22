@@ -69,6 +69,17 @@ WERKZEUGE = [
 ]
 
 
+def _engines_down(daten: dict[str, Any]) -> list[str]:
+    """The engines SearXNG could not ask, each as "name (reason)": its answer
+    lists them as [name, reason] pairs (a timeout, a captcha, too many requests,
+    or "Suspended: …" for an engine it has set aside for a while)."""
+    down = []
+    for pair in daten.get("unresponsive_engines") or []:
+        name, reason = (list(pair) + ["", ""])[:2]
+        down.append(f"{name} ({reason})" if reason else str(name))
+    return down
+
+
 async def websuche(suchbegriff: str, sprache: str | None = None, anzahl: int | None = None) -> str:
     if not SEARXNG_URL:
         raise ValueError("No SearXNG address is set. Set the address of your instance (SEARXNG_URL).")
@@ -84,6 +95,15 @@ async def websuche(suchbegriff: str, sprache: str | None = None, anzahl: int | N
 
     treffer = daten.get("results", [])[:grenze]
     if not treffer:
+        # Nothing found AND engines that did not answer: the search did not run,
+        # which is not the same as the web having nothing on it.
+        if down := _engines_down(daten):
+            return (
+                "The web search found nothing because no search engine answered: "
+                + ", ".join(down)
+                + ". This is not an empty result, and searching again with other words "
+                "will not help right now. Tell the user that the web search is unavailable at the moment."
+            )
         return f"No results for: {suchbegriff}"
 
     zeilen = [f"Results for “{suchbegriff}”:", ""]

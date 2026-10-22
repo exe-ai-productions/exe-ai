@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from app.api.v1.bild import _turbo_auftrag
 from app.bildrunner import Bildrunner
 from app.config import Config
+from tests import upscaler_file
 
 
 @pytest.fixture
@@ -33,7 +34,7 @@ def bild_senden(config: Config, client: TestClient, monkeypatch, tmp_path: Path)
     (bildordner / "base.safetensors").write_bytes(b"x")
     upscaler_ordner = bildordner / "upscaler"
     upscaler_ordner.mkdir()
-    (upscaler_ordner / "esrgan-x4.pth").write_bytes(b"x")
+    upscaler_file.write(upscaler_ordner / "esrgan-x4.pth")
     yolo_ordner = bildordner / "adetailer"
     yolo_ordner.mkdir()
     (yolo_ordner / "face.pt").write_bytes(b"x")
@@ -138,7 +139,7 @@ def test_a_name_two_upscalers_share_is_refused(
     from app.i18n import t
 
     for file in files:
-        (tmp_path / "bildmodelle" / "upscaler" / file).write_bytes(b"x")
+        upscaler_file.write(tmp_path / "bildmodelle" / "upscaler" / file)
     response = client.post(
         "/api/v1/bild",
         json={"prompt": "x", "modell": "base.safetensors", "hires": True, "hires_upscaler": chosen},
@@ -150,7 +151,7 @@ def test_a_name_two_upscalers_share_is_refused(
 
 
 def test_the_built_in_name_still_draws_beside_a_file_of_that_name(bild_senden, tmp_path: Path):
-    (tmp_path / "bildmodelle" / "upscaler" / "Lanczos.pth").write_bytes(b"x")
+    upscaler_file.write(tmp_path / "bildmodelle" / "upscaler" / "Lanczos.pth")
     auftrag = bild_senden(hires=True, hires_upscaler="Lanczos")
     assert auftrag.hires_upscaler == "Lanczos"
 
@@ -159,7 +160,7 @@ def test_a_lower_case_file_is_a_name_of_its_own_beside_the_built_in_one(bild_sen
     """sd.cpp compares its built-in upscaler names exactly as spelled, so
     `lanczos.pth` in the folder is not the built-in `Lanczos`: it is taken and
     sent as `lanczos`."""
-    (tmp_path / "bildmodelle" / "upscaler" / "lanczos.pth").write_bytes(b"x")
+    upscaler_file.write(tmp_path / "bildmodelle" / "upscaler" / "lanczos.pth")
     auftrag = bild_senden(hires=True, hires_upscaler="lanczos.pth")
     assert auftrag.hires_upscaler == "lanczos"
 
@@ -167,8 +168,8 @@ def test_a_lower_case_file_is_a_name_of_its_own_beside_the_built_in_one(bild_sen
 def test_a_shared_name_does_not_stop_a_picture_without_highres(bild_senden, tmp_path: Path):
     """The window sends the locked field along while highres is off; nothing
     is upscaled then, so nothing is refused."""
-    (tmp_path / "bildmodelle" / "upscaler" / "x.pth").write_bytes(b"x")
-    (tmp_path / "bildmodelle" / "upscaler" / "x.safetensors").write_bytes(b"x")
+    upscaler_file.write(tmp_path / "bildmodelle" / "upscaler" / "x.pth")
+    upscaler_file.write(tmp_path / "bildmodelle" / "upscaler" / "x.safetensors")
     auftrag = bild_senden(hires=False, hires_upscaler="x.pth")
     assert auftrag.hires is False
 

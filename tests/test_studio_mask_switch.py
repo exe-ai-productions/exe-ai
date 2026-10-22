@@ -114,7 +114,7 @@ def test_auto_counts_a_mask_only_while_the_switch_is_on():
 
 def test_the_surface_opens_with_the_hand_and_the_switch_off():
     assert "let werkzeug = $state('hand')" in CANVAS
-    assert "export const surface = $state({ masked: false, maskOn: false })" in STUDIO
+    assert "export const surface = $state({ masked: false, maskOn: false, brushRow: false })" in STUDIO
     # The switch is the studio's state, not one of the surface alone.
     assert "maskeSichtbar" not in CANVAS
     assert re.search(r"<Schalter an=\{surface\.maskOn\} onschalten=\{\(an\) => \(surface\.maskOn = an\)\}", CANVAS)

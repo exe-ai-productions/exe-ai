@@ -252,8 +252,88 @@ def test_the_row_of_the_settings_asks_by_hand_and_says_what_came_of_it():
     assert "t('updates.found', { version: updates.found })" in row
     assert "t(failedKey(), { reason: updates.reason })" in row
     assert "t('updates.current')" in row
-    settings = (PARTS / "SystemPrompt.svelte").read_text(encoding="utf-8")
-    assert settings.count("<Updatezeile />") == 1
+    # The settings list has no block of its own under it any more: the row
+    # "Updates" shows the answer at its right end (the phone keeps this part).
+    nav = (PARTS / "SettingsNav.svelte").read_text(encoding="utf-8")
+    assert "Updatezeile" not in nav
+    assert "<Updatezeile" not in (PARTS / "SystemPrompt.svelte").read_text(encoding="utf-8")
+    assert "<Updatezeile />" in (WURZEL / "frontend" / "src" / "phone" / "pages" / "Settings.svelte").read_text(encoding="utf-8")
+    # The look belongs to the button of the row alone; nothing reaches it from outside any more.
+    assert "  async function look()" in row and "export async function look()" not in row
+
+
+ROW_OF_LIST = '''
+const texts = {
+  'updates.store': 'STORE', 'updates.found': 'FOUND {version}', 'updates.download': 'DOWNLOAD',
+  'updates.install': 'INSTALL', 'updates.downloading': 'FETCHING {percent}', 'updates.current': 'CURRENT',
+  'updates.failed': 'FAILED {reason}',
+}
+const t = (key, p = {}) => (texts[key] ?? key).replace(/\\{(\\w+)\\}/g, (_, k) => p[k])
+'''
+
+
+def _row_of_the_list(script: str):
+    """``updatesRowShow`` run against the real state module and a stand-in for
+    the texts (each key says itself)."""
+    state = re.sub(r"^export ", "", (LIB / "updates.svelte.js").read_text(encoding="utf-8"), flags=re.M).replace("$state(", "(")
+    row = re.sub(r"^import .*$", "", (LIB / "updatesRow.js").read_text(encoding="utf-8"), flags=re.M)
+    row = re.sub(r"^export ", "", row, flags=re.M)
+    return _run(f"{_SHELL}\n{ROW_OF_LIST}\nglobalThis.window = {{ exeHuelle: {{ updates: shell }} }}\n{state}\n{row}", f"(async () => {{ {script} }})()")
+
+
+@needs_node
+def test_the_row_of_the_list_shows_the_version_at_rest_and_the_answer_after_a_look():
+    shown = _row_of_the_list(
+        """
+        updatesStart(); await null; await null
+        const out = { rest: updatesRowShow() }
+        tell({ state: 'checking' }); out.checking = updatesRowShow()
+        tell({ state: 'none' }); out.current = updatesRowShow()
+        tell({ state: 'available', found: '0.7.0' }); out.available = updatesRowShow()
+        tell({ state: 'downloading', progress: { percent: 40 } }); out.downloading = updatesRowShow()
+        tell({ state: 'downloaded', progress: null }); out.downloaded = updatesRowShow()
+        tell({ state: 'error', step: 'download', reason: 'offline' }); out.failed = updatesRowShow()
+        tell({ state: 'store' }); out.store = updatesRowShow()
+        console.log(JSON.stringify(out))
+        """
+    )
+    assert shown["rest"] == {"text": "0.6.9", "art": "", "tat": ""}
+    assert shown["checking"] == {"text": "0.6.9", "art": "", "tat": ""}
+    assert shown["current"] == {"text": "CURRENT", "art": "done", "tat": ""}
+    assert shown["available"] == {"text": "FOUND 0.7.0", "art": "", "tat": "DOWNLOAD"}
+    assert shown["downloading"] == {"text": "FETCHING 40", "art": "running", "tat": ""}
+    assert shown["downloaded"] == {"text": "FOUND 0.7.0", "art": "", "tat": "INSTALL"}
+    assert shown["failed"] == {"text": "updates.failed_download", "art": "failed", "tat": ""}
+    assert shown["store"] == {"text": "STORE", "art": "done", "tat": ""}
+
+
+@needs_node
+def test_a_click_on_the_row_takes_the_next_step_and_never_two_at_once():
+    source = (LIB / "settingsrow.js").read_text(encoding="utf-8")
+    body = source.split("export function chooseRow", 1)[1]
+    script = """
+const calls = []
+const updates = { state: 'none' }
+const downloadUpdate = () => calls.push('download')
+const installUpdate = () => calls.push('install')
+const zustand = {}, seiteZeigen = () => {}, handbuchOeffnen = () => {}, openSettingsPage = () => {}
+function chooseRow""" + body + """
+const row = { ziel: { update: true } }
+const out = {}
+for (const state of ['none', 'error', 'available', 'downloaded', 'downloading', 'checking', 'store']) {
+  updates.state = state
+  calls.length = 0
+  chooseRow(row, { look: () => calls.push('look') })
+  out[state] = [...calls]
+}
+console.log(JSON.stringify(out))
+"""
+    run = subprocess.run(["node", "-e", script], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    assert json.loads(run.stdout) == {
+        "none": ["look"], "error": ["look"], "available": ["download"], "downloaded": ["install"],
+        "downloading": [], "checking": [], "store": [],
+    }
 
 
 def test_every_text_stands_word_for_word_in_both_languages():
@@ -264,8 +344,8 @@ def test_every_text_stands_word_for_word_in_both_languages():
     assert texts["de"] == {
         "title": "Neue Version verfügbar",
         "version_line": "Version {version}, veröffentlicht am {date}",
-        "download": "Laden",
-        "downloading": "Lädt … {percent} %",
+        "download": "Download",
+        "downloading": "Download … {percent} %",
         "install": "Installieren",
         "later": "Später",
         "version": "Version {version}",
@@ -273,7 +353,7 @@ def test_every_text_stands_word_for_word_in_both_languages():
         "current": "Die App ist aktuell.",
         "found": "Neue Version {version} verfügbar.",
         "failed": "Prüfen nicht möglich: {reason}",
-        "failed_download": "Laden nicht möglich: {reason}",
+        "failed_download": "Download nicht möglich: {reason}",
         "failed_install": "Installieren nicht möglich: {reason}",
         "store": "Updates kommen aus dem Microsoft Store.",
     }

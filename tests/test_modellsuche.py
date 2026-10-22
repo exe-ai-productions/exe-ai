@@ -136,6 +136,20 @@ def test_einbettung_fragt_beide_etiketten_und_meldet_jeden_fund_einmal(client, k
     assert [f["id"] for f in antwort] == ["nomic/embed"]
 
 
+def test_sprache_fragt_beide_etiketten_und_meldet_jeden_fund_einmal(client, katalog):
+    """Speech models come with two tags, listening and speaking; the tab asks
+    for both with the file filter kept, and a repository that carries both
+    comes back once. The chat tab, which asks without a tag, drops them."""
+    katalog([{"modelId": "kokoro/tts", "downloads": 12, "pipeline_tag": "text-to-speech"}])
+    antwort = client.get("/api/v1/models/search?q=gguf&art=sprache").json()
+    etiketten = {p.get("pipeline_tag") for p in FalscherKlient.alle_parameter}
+    assert etiketten == {"automatic-speech-recognition", "text-to-speech"}
+    assert all(p["filter"] == "gguf" for p in FalscherKlient.alle_parameter)
+    assert [f["id"] for f in antwort] == ["kokoro/tts"]
+    katalog([{"modelId": "kokoro/tts", "downloads": 12, "pipeline_tag": "text-to-speech"}])
+    assert client.get("/api/v1/models/search?q=gguf&art=chat").json() == []
+
+
 def test_bild_fragt_nur_sein_eigenes_etikett(client, katalog):
     katalog([])
     client.get("/api/v1/models/search?q=x&art=bild")
@@ -203,15 +217,15 @@ def test_tab_namen_laufen_ueberall_gleich():
     (modellempfehlungen.js ARTEN) and as locale labels (katalog.art_*).
     Nothing ties them together at runtime — this test does.
 
-    Some kinds deliberately have NO tab: the sibling Exe programs share this
-    search (the video kind belongs to Exe Motion), and this window never
-    shows them. They are declared here so a missing tab stays a choice, not
-    an accident."""
+    A kind may deliberately have NO tab (the sibling Exe programs share this
+    search); it is declared here so a missing tab stays a choice, not an
+    accident. Today every searchable kind has its tab, the video kind
+    included."""
     import json
     import re
     from pathlib import Path
 
-    OHNE_TAB = {"video"}
+    OHNE_TAB: set[str] = set()
 
     wurzel = Path(__file__).resolve().parent.parent
     js = (wurzel / "frontend/src/lib/modellempfehlungen.js").read_text(encoding="utf-8")
@@ -317,3 +331,233 @@ def test_ein_farbton_ueberlebt_einen_palettennamen():
         assert "farbton(farbe," in quelle
         for schwanz in ("${farbe}55", "${farbe}18", "${farbe}66"):
             assert schwanz not in quelle
+
+
+# --- The picture of a repository's owner ------------------------------------
+
+
+def _avatar_world(monkeypatch):
+    """Names resolve from this table only; no test reaches the network."""
+    import socket
+
+    from app import public_host
+
+    names = {"huggingface.co": "34.0.0.1", "cdn-avatars.huggingface.co": "34.0.0.2",
+             "inside.example": "10.0.0.5"}
+
+    def resolve(host, *_args, **_kwargs):
+        if host not in names:
+            raise socket.gaierror(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (names[host], 0))]
+
+    monkeypatch.setattr(public_host.socket, "getaddrinfo", resolve)
+
+
+def _png_bytes(edge: int = 48) -> bytes:
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (edge, edge), (30, 120, 200)).save(buffer, "PNG")
+    return buffer.getvalue()
+
+
+class _Hugging:
+    """A Hugging Face that answers from a table of addresses and keeps what
+    it was asked."""
+
+    def __init__(self, answers: dict[str, httpx.Response]):
+        self.answers = answers
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        answer = self.answers.get(str(request.url))
+        return answer if answer is not None else httpx.Response(404)
+
+    @property
+    def transport(self):
+        return httpx.MockTransport(self)
+
+    @property
+    def asked(self) -> list[str]:
+        return [str(request.url) for request in self.requests]
+
+
+PICTURE = "https://cdn-avatars.huggingface.co/v1/production/uploads/abc/face.png"
+
+
+def _overview(address: str | None = PICTURE) -> httpx.Response:
+    return httpx.Response(200, json={"name": "x", "avatarUrl": address} if address else {"name": "x"})
+
+
+def _picture() -> httpx.Response:
+    return httpx.Response(200, content=_png_bytes(), headers={"content-type": "image/png"})
+
+
+@pytest.fixture
+def avatar_world(monkeypatch):
+    _avatar_world(monkeypatch)
+
+
+async def test_an_organisation_gets_its_picture_as_a_data_url(avatar_world):
+    import base64
+
+    hugging = _Hugging({
+        "https://huggingface.co/api/organizations/LiquidAI/overview": _overview(),
+        PICTURE: _picture(),
+    })
+
+    image = await modellsuche.owner_avatar("LiquidAI", hugging.transport)
+
+    assert image == "data:image/png;base64," + base64.b64encode(_png_bytes()).decode()
+    assert hugging.asked == [
+        "https://huggingface.co/api/organizations/LiquidAI/overview", PICTURE
+    ]
+
+
+async def test_after_the_organisation_the_user_account_of_that_name_is_asked(avatar_world):
+    hugging = _Hugging({
+        "https://huggingface.co/api/users/TheDrummer/overview": _overview(),
+        PICTURE: _picture(),
+    })
+
+    image = await modellsuche.owner_avatar("TheDrummer", hugging.transport)
+
+    assert image and image.startswith("data:image/png;base64,")
+    assert hugging.asked == [
+        "https://huggingface.co/api/organizations/TheDrummer/overview",
+        "https://huggingface.co/api/users/TheDrummer/overview",
+        PICTURE,
+    ]
+
+
+async def test_a_picture_named_relative_to_the_site_is_taken(avatar_world):
+    hugging = _Hugging({
+        "https://huggingface.co/api/organizations/acme/overview": _overview("/avatars/face.png"),
+        "https://huggingface.co/avatars/face.png": _picture(),
+    })
+
+    assert await modellsuche.owner_avatar("acme", hugging.transport) is not None
+
+
+async def test_nothing_asked_carries_credentials(avatar_world, monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "hf_secret")
+    hugging = _Hugging({
+        "https://huggingface.co/api/organizations/acme/overview": _overview(),
+        PICTURE: _picture(),
+    })
+
+    await modellsuche.owner_avatar("acme", hugging.transport)
+
+    assert hugging.requests
+    for request in hugging.requests:
+        assert "authorization" not in request.headers
+        assert "cookie" not in request.headers
+
+
+@pytest.mark.parametrize("address", [
+    "http://cdn-avatars.huggingface.co/face.png",  # not https
+    "ftp://cdn-avatars.huggingface.co/face.png",
+    "https://inside.example/face.png",  # leads to a private place
+    "data:image/png;base64,AAAA",
+])
+async def test_silence_a_picture_that_is_not_a_public_https_one_is_not_asked(avatar_world, address):
+    hugging = _Hugging({"https://huggingface.co/api/organizations/acme/overview": _overview(address)})
+
+    assert await modellsuche.owner_avatar("acme", hugging.transport) is None
+    assert hugging.asked == ["https://huggingface.co/api/organizations/acme/overview"]
+
+
+async def test_silence_a_redirect_is_not_followed(avatar_world):
+    hugging = _Hugging({
+        "https://huggingface.co/api/organizations/acme/overview": _overview(),
+        PICTURE: httpx.Response(302, headers={"location": "https://cdn-avatars.huggingface.co/other.png"}),
+    })
+
+    assert await modellsuche.owner_avatar("acme", hugging.transport) is None
+    assert len(hugging.requests) == 2
+
+
+async def test_silence_a_redirect_of_the_overview_is_not_followed(avatar_world):
+    """The overview itself may not send the request somewhere else either:
+    the one address asked of Hugging Face is the one that is answered."""
+    hugging = _Hugging({
+        "https://huggingface.co/api/organizations/acme/overview": httpx.Response(
+            302, headers={"location": "https://elsewhere.example/overview"},
+        ),
+        "https://elsewhere.example/overview": _overview(),
+        PICTURE: _picture(),
+    })
+
+    assert await modellsuche.owner_avatar("acme", hugging.transport) is None
+    assert hugging.asked == ["https://huggingface.co/api/organizations/acme/overview"]
+
+
+async def test_silence_a_picture_too_large_or_no_picture_gives_nothing(avatar_world):
+    from app.tools import mcp_logo
+
+    big = httpx.Response(200, content=b"\x89PNG\r\n\x1a\n" + b"0" * (mcp_logo.MAX_BYTES + 10))
+    not_a_picture = httpx.Response(200, content=b"<html>no</html>")
+    for answer in (big, not_a_picture, httpx.Response(500)):
+        hugging = _Hugging({
+            "https://huggingface.co/api/organizations/acme/overview": _overview(),
+            PICTURE: answer,
+        })
+        assert await modellsuche.owner_avatar("acme", hugging.transport) is None
+
+
+async def test_silence_an_overview_without_a_picture_or_too_large_gives_nothing(avatar_world):
+    huge = httpx.Response(200, content=b"{" + b" " * (modellsuche.MAX_OVERVIEW_BYTES + 10) + b"}")
+    for answer in (_overview(None), huge, httpx.Response(200, json=["not", "an", "object"]),
+                   httpx.Response(500)):
+        hugging = _Hugging({"https://huggingface.co/api/organizations/acme/overview": answer})
+        assert await modellsuche.owner_avatar("acme", hugging.transport) is None
+        assert PICTURE not in hugging.asked
+
+
+async def test_an_owner_with_neither_organisation_nor_account_gives_nothing(avatar_world):
+    hugging = _Hugging({})
+
+    assert await modellsuche.owner_avatar("nobody", hugging.transport) is None
+    assert len(hugging.requests) == 2
+
+
+@pytest.mark.parametrize("name", ["../etc/passwd", "a/b", "", "-x", "a b", "x" * 97, "a?b=c"])
+async def test_silence_a_name_that_is_no_hugging_face_name_asks_nothing(avatar_world, name):
+    hugging = _Hugging({})
+
+    assert await modellsuche.owner_avatar(name, hugging.transport) is None
+    assert hugging.requests == []
+
+
+async def test_a_failed_request_gives_nothing_and_raises_nothing(avatar_world):
+    def broken(request):
+        raise httpx.ConnectError("down")
+
+    assert await modellsuche.owner_avatar("acme", httpx.MockTransport(broken)) is None
+
+
+def test_the_route_answers_with_the_picture_and_may_be_kept(client, monkeypatch):
+    async def fixed(owner, transport=None):
+        return "data:image/png;base64,AAAA"
+
+    monkeypatch.setattr(modellsuche, "owner_avatar", fixed)
+
+    answer = client.get("/api/v1/models/avatar/LiquidAI")
+
+    assert answer.status_code == 200
+    assert answer.json() == {"image": "data:image/png;base64,AAAA"}
+    assert "max-age=86400" in answer.headers["cache-control"]
+
+
+def test_silence_the_route_answers_not_found_without_a_picture(client, monkeypatch):
+    async def none(owner, transport=None):
+        return None
+
+    monkeypatch.setattr(modellsuche, "owner_avatar", none)
+
+    answer = client.get("/api/v1/models/avatar/nobody")
+
+    assert answer.status_code == 404

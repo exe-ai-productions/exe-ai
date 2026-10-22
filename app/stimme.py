@@ -21,8 +21,10 @@ too.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -62,6 +64,12 @@ class SprechenNichtMoeglich(Exception):
         super().__init__(grund)
 
 
+def _program_file_name() -> str:
+    """The name the program file carries on this system. llama.cpp's Windows
+    builds ship ``llama-tts.exe`` beside ``llama-server.exe``."""
+    return f"{BINARNAME}.exe" if sys.platform == "win32" else BINARNAME
+
+
 def programm_finden(llama_server: Path | None) -> Path | None:
     """``llama-tts``, resolved next to the already-resolved ``llama-server``.
 
@@ -70,9 +78,13 @@ def programm_finden(llama_server: Path | None) -> Path | None:
     build from a different llama.cpp checkout — one that may not carry
     Qwen3-TTS support at all. PATH is only the fallback for a machine where
     the two happen to live apart.
+
+    On Windows the sibling is looked for with its ending: the bare name is
+    never a file there, and the voice answered "llama-tts not found" with the
+    program lying right beside the server.
     """
     if llama_server is not None:
-        neben = llama_server.parent / BINARNAME
+        neben = llama_server.parent / _program_file_name()
         if neben.is_file():
             return neben
     gefunden = shutil.which(BINARNAME)
@@ -98,6 +110,99 @@ def _stimmprobe_pruefen(ordner: Path, name: str) -> Path:
     return ziel
 
 
+# What a recording made in the window is called: this word and the lowest
+# free number, so the first one is ``stimmprobe-1.wav`` and, once that is
+# deleted, the next one takes the number again.
+PROBE_VORSATZ = "stimmprobe-"
+
+
+def naechste_probe(ordner: Path) -> str:
+    """The lowest ``stimmprobe-N.wav`` whose name is not taken in the folder
+    — by a file, a folder or anything else lying under that name."""
+    nummer = 1
+    while os.path.lexists(ordner / f"{PROBE_VORSATZ}{nummer}.wav"):
+        nummer += 1
+    return f"{PROBE_VORSATZ}{nummer}.wav"
+
+
+def probe_sichern(ordner: Path, daten: bytes) -> str:
+    """Writes one recording into the voice folder under the next free name
+    and answers that name. Only a WAV is kept: the voice model reads nothing
+    else, and a file that is none would stand in the list as a sample that
+    can never speak."""
+    if daten[:4] != b"RIFF" or daten[8:12] != b"WAVE":
+        raise SprechenNichtMoeglich("stimmprobe_ungueltig")
+    ordner.mkdir(parents=True, exist_ok=True)
+    while True:
+        name = naechste_probe(ordner)
+        try:
+            # Exclusive creation: a second recording saved at the same
+            # moment cannot overwrite the first one's name.
+            datei = open(ordner / name, "xb")  # noqa: SIM115 - closed below
+        except FileExistsError:
+            continue
+        try:
+            with datei:
+                datei.write(daten)
+        except OSError:
+            # A recording that did not fit must not stay behind as a sample.
+            (ordner / name).unlink(missing_ok=True)
+            raise
+        return name
+
+
+def probe_pfad(ordner: Path, name: str) -> Path:
+    """A voice sample for the window to hand out or delete: inside the voice
+    folder as speaking requires, and a WAV by its name as well — the folder
+    also holds the models, and a delete that took any file of it would take
+    those too."""
+    if not name.lower().endswith(".wav"):
+        raise SprechenNichtMoeglich("stimmprobe_ungueltig")
+    return _stimmprobe_pruefen(ordner, name)
+
+
+def probe_loeschen(ordner: Path, name: str) -> None:
+    """Deletes one voice sample."""
+    probe_pfad(ordner, name).unlink()
+
+
+def probe_dauer(pfad: Path) -> float | None:
+    """The length of a WAV in seconds, read from its header alone — the
+    chunk with the byte rate and the chunk with the data size. ``None`` for
+    a file that is not laid out that way."""
+    try:
+        with open(pfad, "rb") as datei:
+            kopf = datei.read(12)
+            if kopf[:4] != b"RIFF" or kopf[8:12] != b"WAVE":
+                return None
+            byterate = 0
+            while True:
+                chunk = datei.read(8)
+                if len(chunk) < 8:
+                    return None
+                kennung, groesse = chunk[:4], int.from_bytes(chunk[4:], "little")
+                if kennung == b"fmt ":
+                    if groesse > 64:
+                        return None
+                    format_ = datei.read(groesse)
+                    if len(format_) < 12:
+                        return None
+                    byterate = int.from_bytes(format_[8:12], "little")
+                elif kennung == b"data":
+                    # A header written before the length was known says so
+                    # with all ones: no length to read from it.
+                    if not byterate or groesse == 0xFFFFFFFF:
+                        return None
+                    return round(groesse / byterate, 2)
+                else:
+                    datei.seek(groesse, 1)
+                # Chunks are padded to an even length.
+                if groesse % 2:
+                    datei.seek(1, 1)
+    except OSError:
+        return None
+
+
 class SpeakCancelled(Exception):
     """The sentence was asked for no longer: the program was ended."""
 
@@ -107,21 +212,25 @@ _CANCEL_POLL_SECONDS = 0.25
 
 
 def _laufen(
-    befehl: list[str], *, cancel: threading.Event | None, timeout: float
+    befehl: list[str], *, cancel: threading.Event | None, timeout: float, eingabe: str | None = None,
 ) -> subprocess.CompletedProcess:
     """Runs the program to its end, or ends it: when ``cancel`` is set, or
-    when ``timeout`` runs out (raised as ``subprocess.TimeoutExpired``)."""
+    when ``timeout`` runs out (raised as ``subprocess.TimeoutExpired``).
+    ``eingabe`` is handed to the program on its standard input."""
     prozess = subprocess.Popen(
-        befehl, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        befehl, stdin=subprocess.PIPE if eingabe is not None else None,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         encoding="utf-8", errors="replace", **no_window(),
     )
     start = time.monotonic()
     while True:
         try:
-            ausgabe, fehler = prozess.communicate(timeout=_CANCEL_POLL_SECONDS)
+            ausgabe, fehler = prozess.communicate(input=eingabe, timeout=_CANCEL_POLL_SECONDS)
             return subprocess.CompletedProcess(befehl, prozess.returncode, ausgabe, fehler)
         except subprocess.TimeoutExpired:
-            pass
+            # The input has been handed over with the first call; the next
+            # calls only wait for the end.
+            eingabe = None
         if cancel is not None and cancel.is_set():
             prozess.kill()
             prozess.communicate()
@@ -130,6 +239,10 @@ def _laufen(
             prozess.kill()
             prozess.communicate()
             raise subprocess.TimeoutExpired(befehl, timeout)
+
+
+# The same runner, for the voices of the system (app/system_voice.py).
+programm_laufen = _laufen
 
 
 def sample_path(ordner: Path, name: str) -> Path:
@@ -161,18 +274,23 @@ def sprechen(
     this returns.
 
     The five generation values arrive as one dict (``sampling``) — one door,
-    not two: what the settings carry beats the constants above, and a value
-    they leave out stays at the constant it always was.
+    not two. Without a dict the values of the constants above stand in. With
+    one, exactly the values it carries go to the program, each as its flag,
+    and a value it leaves out is no flag at all: the program takes its own
+    ("Auto"). An empty ``sprache`` is no ``--tts-lang`` either.
     """
     probe = _stimmprobe_pruefen(ordner, stimmprobe) if stimmprobe else None
-    werte = {
-        "temperature": TEMPERATUR,
-        "top_k": TOP_K,
-        "top_p": TOP_P,
-        "min_p": MIN_P,
-        "repeat_penalty": WIEDERHOLUNGSSTRAFE,
-        **(sampling or {}),
-    }
+    werte = (
+        {
+            "temperature": TEMPERATUR,
+            "top_k": TOP_K,
+            "top_p": TOP_P,
+            "min_p": MIN_P,
+            "repeat_penalty": WIEDERHOLUNGSSTRAFE,
+        }
+        if sampling is None
+        else sampling
+    )
     with tempfile.TemporaryDirectory() as tmp:
         ziel = Path(tmp) / "stimme.wav"
         befehl = [
@@ -180,7 +298,7 @@ def sprechen(
             "-m", str(modell),
             "-mm", str(mmproj),
             "-p", text,
-            "--tts-lang", sprache,
+            *(["--tts-lang", sprache] if sprache else []),
             "-o", str(ziel),
             # The model's own values stand in the constants above and are
             # beaten by whatever the settings carry (app/diktatsprachewahl.py),
@@ -193,11 +311,11 @@ def sprechen(
             # it the engine takes the model's (32768) and a Mac with 8 GB
             # cannot hold the cache of one sentence.
             "-c", str(VOICE_CONTEXT_SIZE),
-            "--temp", str(werte["temperature"]),
-            "--top-k", str(int(werte["top_k"])),
-            "--top-p", str(werte["top_p"]),
-            "--min-p", str(werte["min_p"]),
-            "--repeat-penalty", str(werte["repeat_penalty"]),
+            *(["--temp", str(werte["temperature"])] if "temperature" in werte else []),
+            *(["--top-k", str(int(werte["top_k"]))] if "top_k" in werte else []),
+            *(["--top-p", str(werte["top_p"])] if "top_p" in werte else []),
+            *(["--min-p", str(werte["min_p"])] if "min_p" in werte else []),
+            *(["--repeat-penalty", str(werte["repeat_penalty"])] if "repeat_penalty" in werte else []),
         ]
         # Zero means "the engine decides", exactly as on the chat servers —
         # and it travels as no flag at all.
@@ -237,6 +355,7 @@ __all__ = [
     "SprechenNichtMoeglich",
     "proben_auflisten",
     "programm_finden",
+    "programm_laufen",
     "sample_path",
     "sprechen",
 ]

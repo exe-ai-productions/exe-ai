@@ -270,7 +270,7 @@
   /* A touch screen has no pointer to hover with; there the steppers stay in
      sight, or a tap on the field's right edge would change the value
      unseen. */
-  @media (hover: none) {
+  @media (hover: none), (any-pointer: coarse) {
     .treppe {
       opacity: 1;
     }

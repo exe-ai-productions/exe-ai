@@ -12,6 +12,7 @@ Started in production via systemd, by hand:
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -25,16 +26,17 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import anmeldung, atomic_file
+from app import anmeldung, atomic_file, own_process
 from app import __version__
 from app import input_errors, model_image, sprachwahl
 from app import folder_names
 from app.i18n import t
 from app.login_limit import LoginLimit
-from app import agent_report, instanzschloss
+from app.static_revalidate import RevalidatingStaticFiles
+from app import agent_report, child_environment, cronmeldung, instanzschloss
 from app.api.v1 import router as api_v1_router
 from app.api.v1.bilder import empty_scratch_pictures
 from app.api.v1.health import _health_ermitteln
@@ -44,6 +46,7 @@ from app.voice_library import VoiceLibrary
 from app.voice_service import VoiceService
 from app import picture_program_choice
 from app.bildrunner import Bildrunner
+from app import bild_leerlauf, shutdown, throughput
 from app.bildturbo import Bildturbo
 from app.modellrunner import Modellrunner, begleiter_einsortieren
 from app import modellvorlauf, server_restart
@@ -51,7 +54,7 @@ from app.server_restart import Restart
 from app import runnerzustand
 from app import stoppmarke
 from app import server_state
-from app.sddownload import Sddownload
+from app.sddownload import Sddownload, update_at_start
 from app.serverdownload import Serverdownload, installed_variant
 from app.config import Config, abgelegte_schluessel_melden, get_config
 from app.configwanderung import file_tool_added
@@ -258,6 +261,22 @@ def _foreign_lock(config: Config) -> int | None:
     return None
 
 
+def _other_service(config: Config, first_look_port: int | None) -> int | None:
+    """The port of ANOTHER service on this data folder, asked NOW.
+
+    Two facts, both true when they are read: a lock held in the folder right
+    now, and the port the look from the top of the lifespan named answering
+    right now. The second covers the service that left no lock behind — an
+    older build, or one whose lock could not be taken. A service that was on
+    the folder at the start and has gone since answers None, so whoever asks
+    later (a start, a clean-up) is not held back by a service that is gone.
+    """
+    held = _foreign_lock(config)
+    if held is None and first_look_port is not None and _antwortet(first_look_port, host=config.app.host):
+        return first_look_port
+    return held
+
+
 def _lock_file_removed(lock_file: Path) -> None:
     """Removes the lock file of a service that is gone. One that cannot be
     removed — a folder in its place, a file the system will not let go —
@@ -443,9 +462,19 @@ def _instanz_eintragen(config: Config, *, gleicher_port: bool) -> bool:
         # note — never half a file (that half was once read as garbage and
         # the live claim went with it).
         ziel = _instanznotiz(config)
-        atomic_file.write(
-            ziel, json.dumps({"pid": os.getpid(), "port": int(config.app.port)})
-        )
+        content: dict[str, int | float] = {"pid": os.getpid(), "port": int(config.app.port)}
+        # When this process began, as the system says: the proof that a
+        # process of this number is the one that wrote the note, and not one
+        # the number was handed on to (cli/service.py, ``wrote``).
+        this = own_process.named()
+        if this is not None:
+            content["began"] = this.began
+        else:
+            log.warning(
+                "The system does not say when this process began: the note carries "
+                "no beginning, and a client cannot prove this service by it."
+            )
+        atomic_file.write(ziel, json.dumps(content))
     except OSError:
         # A folder we cannot write is a problem the database will report far
         # more loudly a moment later; losing the note only costs the guard.
@@ -743,6 +772,8 @@ async def lebenszyklus(app: FastAPI):
         db = datenbank_oeffnen(config)
         app.state.db = db
         app.state.repositories = repositories_erstellen(db)
+        # The sound and the system notification of a run follow the stored switches.
+        cronmeldung.connect_settings(app.state.repositories)
         # The second half of the same move, and under the same claim: the
         # note this reads is the one the move above wrote, and it goes once
         # the paths have followed. Read and deleted by a service that only
@@ -811,13 +842,7 @@ async def lebenszyklus(app: FastAPI):
             # folder right now, and the port that look named answering right
             # now. The second covers the service that left no lock behind —
             # an older build, or one whose lock could not be taken.
-            foreign_now = _foreign_lock(config)
-            if (
-                foreign_now is None
-                and fremder_port is not None
-                and _antwortet(fremder_port, host=config.app.host)
-            ):
-                foreign_now = fremder_port
+            foreign_now = _other_service(config, fremder_port)
             _startbereinigung(app, config, nur_eigene=foreign_now is not None)
             if foreign_now is not None:
                 log.info(
@@ -855,7 +880,10 @@ async def lebenszyklus(app: FastAPI):
         registry: WerkzeugRegistry | None = None
         if config.features.mcp:
             registry = registry_bauen(app, config)
-            await registry.starten()
+            # The servers start behind the service, side by side: it answers
+            # at once with the built-in tools, and each server's tools join
+            # the offer when it is ready. Shutdown ends a start still under way.
+            registry.start_in_background()
         app.state.werkzeuge = registry
 
         discovery = Discovery(config, bus, app.state.repositories)
@@ -880,9 +908,24 @@ async def lebenszyklus(app: FastAPI):
         # a drafter is told by its file header, and a whole model found in the
         # drafter folder moves back.
         begleiter_einsortieren(modellordner)
+        # The servers of this data folder belong to the service that holds it.
+        # Asked at every start and every clean-up (app/modellrunner.py): while
+        # another service is on the folder this one uses that service's
+        # servers through their ports and starts and ends none of them.
+        other_service = functools.partial(_other_service, config, fremder_port)
+        sharing_port = other_service()
+        if sharing_port is not None:
+            log.info(
+                "Another service (port %s) uses this data folder: this service "
+                "starts no model server, ends none and loads nothing ahead; "
+                "the servers of that service stay as they are",
+                sharing_port,
+                extra={"ereignis": "server_geteilt", "fremder_port": sharing_port},
+            )
         app.state.modellrunner = Modellrunner(
             models_folder,
             config.app.runner_programm,
+            shared_with=other_service,
             # Only this runner ever serves a cron entry ahead of
             # time, so only this one gets to record how long a load took — the
             # embedding and vision-encoder runners below have nothing to
@@ -926,6 +969,7 @@ async def lebenszyklus(app: FastAPI):
             lambda: ort(config, "embedding_models"),
             config.app.runner_programm,
             config.app.einbettung_port,
+            other_service,
         )
         if app.state.einbettungsrunner.aufraeumen():
             log.info("Orphaned embedding server stopped")
@@ -942,10 +986,10 @@ async def lebenszyklus(app: FastAPI):
         # cannot hear at all, and the pairing reads that sub-folder.
         begleiter_einsortieren(sprachordner)
         app.state.sprachrunner = sprachserver.runner_bauen(
-            speech_folder, config.app.runner_programm, config.app.sprache_port
+            speech_folder, config.app.runner_programm, config.app.sprache_port, other_service
         )
         app.state.sprachputzrunner = sprachserver.putzrunner_bauen(
-            speech_folder, config.app.runner_programm, config.app.sprachputz_port
+            speech_folder, config.app.runner_programm, config.app.sprachputz_port, other_service
         )
         # The voice kept loaded for a conversation (app/voice_service.py);
         # nothing is started here, a conversation's announcement does that.
@@ -961,7 +1005,7 @@ async def lebenszyklus(app: FastAPI):
         # here; whether it also STARTS here is the one field's answer, and that is
         # asked further down, once the discovery it registers with exists.
         app.state.agentenrunner = agentenserver.runner_bauen(
-            models_folder, config.app.runner_programm
+            models_folder, config.app.runner_programm, shared_with=other_service
         )
         if app.state.agentenrunner.aufraeumen():
             log.info("Orphaned agent model server stopped")
@@ -1044,11 +1088,45 @@ async def lebenszyklus(app: FastAPI):
             marker = stoppmarke.marker_file(config.datenverzeichnis, config.app.port)
             stoppmarke.clear(marker)
             stop_watch = asyncio.create_task(stoppmarke.watch(marker))
+        # A service shown to a phone when the program ended is shown again —
+        # off the loop, it is a few calls of another program.
+        # The task is kept: the loop holds a task weakly and could drop it.
+        resume_task = asyncio.create_task(asyncio.to_thread(app.state.web_app.resume))
+        # Ends the picture server once it has drawn nothing for the stored
+        # idle time (app/bild_leerlauf.py).
+        idle_watch = asyncio.create_task(bild_leerlauf.watch(app))
+        # The tokens per second of the running servers, read from their own
+        # counters every few seconds and kept in memory (app/throughput.py).
+        app.state.throughput = throughput.Watch()
+        throughput_watch = asyncio.create_task(throughput.watch(app))
+        # An installed picture generator older than the pinned build refuses
+        # the switches this program sends: it is replaced now, in the variant
+        # that runs, and the progress shows in the generator's panel like the
+        # one of a fetch by hand (app/sddownload.py).
+        fetching = update_at_start(
+            app.state.sddownload, config.datenverzeichnis,
+            picture_program_choice.picked(app.state.repositories),
+        )
+        if fetching:
+            log.info("The installed picture generator is older than %s; fetching it", fetching)
+        # The end of the service is heard here, ahead of uvicorn's wait for
+        # open connections: the lines a window holds open end at once, so
+        # that the shutdown below is reached at all.
+        shutdown.reset()
+        shutdown.on_begin(ereignisstrom.strom.close_watchers)
+        shutdown.on_begin(laeufe.close_watchers)
+        stop_listening = shutdown.listen(asyncio.get_running_loop())
         try:
             yield
         finally:
+            stop_listening()
+            shutdown.begin()
+            idle_watch.cancel()
+            throughput_watch.cancel()
             if stop_watch is not None:
                 stop_watch.cancel()
+            # No await before the wake-ups below are cancelled (see there).
+            resume_task.cancel()
             # No server outlives the program. The model, embedding, slot and
             # image-turbo servers each run in their OWN session (so a crash of the
             # service does not take them with it), which means they also do NOT die
@@ -1056,23 +1134,29 @@ async def lebenszyklus(app: FastAPI):
             # launch mints a fresh session key and the old server rejects it with
             # "Invalid API-Key" — the bug that made the program look broken after a
             # restart. So every server the service holds goes down here first.
+            # Side by side and within one short time for all (app/shutdown.py):
+            # the shell kills the service a few seconds after its signal, and
+            # a stop of one server after the other, each with its own wait,
+            # did not fit in them. The voice process and the painter's own
+            # one-picture runner go with them.
+            grace = shutdown.SERVER_GRACE_SECONDS
+            stoppers: dict[str, Callable[[], object]] = {}
             for name in (
                 "modellrunner", "einbettungsrunner", "agentenrunner",
-                "sprachrunner", "sprachputzrunner", "bildturbo",
+                "sprachrunner", "sprachputzrunner", "bildturbo", "bildrunner",
             ):
                 server = getattr(app.state, name, None)
-                if server is None:
-                    continue
-                try:
-                    server.stoppen()
-                except Exception:
-                    log.warning("%s could not be stopped on shutdown", name, exc_info=True)
+                if server is not None:
+                    stoppers[name] = functools.partial(server.stoppen, frist=grace)
             voice_service = getattr(app.state, "voice_service", None)
             if voice_service is not None:
-                try:
-                    voice_service.stop()
-                except Exception:
-                    log.warning("The kept voice could not be stopped on shutdown", exc_info=True)
+                stoppers["voice_service"] = functools.partial(voice_service.stop, wait=grace)
+            # Not awaited: nothing may yield to the loop before the wake-ups
+            # below are cancelled, or one of them starts an answer against
+            # servers that are already stopped. The wait is short and bounded.
+            late = shutdown.stop_together(stoppers)
+            if late:
+                log.warning("Not stopped in time on shutdown: %s", ", ".join(late))
             # No process outlives its chat unseen: whatever a background run
             # still has running goes down with the service.
             getoetet = laeufe.alle_toeten()
@@ -1095,8 +1179,13 @@ async def lebenszyklus(app: FastAPI):
                 log.info("%d waiting wake-up(s) discarded on shutdown", verworfen)
             await wecker.stoppen()
             if registry is not None:
-                await registry.stoppen()
+                await registry.stoppen(frist=grace / 2)
             await discovery.stoppen()
+            # The program's own Tailscale goes with the program, and a start
+            # of it that is still under way ends it too when it is done. Off
+            # the loop: ending a program is a wait.
+            await asyncio.to_thread(app.state.web_app.end)
+            cronmeldung.connect_settings(None)
             db.schliessen()
             # The claim on the data folder goes last, once nothing of ours can
             # write into it any more: while the note lies there, a service
@@ -1104,6 +1193,9 @@ async def lebenszyklus(app: FastAPI):
             # for a run that is already over would strand exactly the rows the
             # cleanup is for.
             _instanz_austragen(config)
+            # A service that ended is not "ending" for whatever runs in this
+            # process afterwards (the tests start several in a row).
+            shutdown.reset()
             log.info("Exe AI Terminal stopped")
     except BaseException:
         _instanz_austragen(config)
@@ -1126,6 +1218,8 @@ def app_erstellen(config: Config | None = None) -> FastAPI:
         redoc_url=None,
     )
     app.state.config = config
+    # Which names a process the model starts does not inherit.
+    child_environment.use(config)
     # A fresh key per start — never written to disk, so it
     # cannot outlive this process. See app/sitzungsschluessel.py.
     from app.sitzungsschluessel import neuer_schluessel
@@ -1135,6 +1229,20 @@ def app_erstellen(config: Config | None = None) -> FastAPI:
     # (app/anmeldung.py). The page says which of the two it is.
     app.state.anmeldung = anmeldung.required(config)
     app.state.passwort = anmeldung.read_password(config)
+    # The web app: this service shown to a phone over https, through
+    # Tailscale (app/web_app.py). Nothing starts here; the lifespan shows the
+    # service again where it was shown when the program ended.
+    from app import tailscale, web_app
+
+    app.state.web_app = web_app.WebApp(
+        config,
+        tailscale.Tailscale(
+            data_folder=config.datenverzeichnis,
+            app_port=config.app.port,
+            program_folder=tailscale.program_folder(),
+        ),
+        app.state,
+    )
     # Wrong passwords are counted per service (app/login_limit.py).
     app.state.login_limit = LoginLimit()
 
@@ -1186,6 +1294,11 @@ def app_erstellen(config: Config | None = None) -> FastAPI:
     app.add_exception_handler(
         RequestValidationError, input_errors.answer_for_input_error
     )
+    # A refusal a route raises itself with 422 goes into the log the same way,
+    # with the sentence it carries; every other status is answered as before.
+    app.add_exception_handler(
+        StarletteHTTPException, input_errors.answer_for_refusal
+    )
 
     # Unversioned health check — fixed address for monitoring/systemd.
     @app.get("/health", tags=["health"], summary="Service status")
@@ -1205,7 +1318,11 @@ def app_erstellen(config: Config | None = None) -> FastAPI:
             return JSONResponse(
                 {"detail": t("fehler.manifest_fehlt", sprache)}, status_code=404
             )
-        return FileResponse(datei, media_type="application/manifest+json")
+        # Fixed name from one version to the next, so checked back like
+        # every such file of the static folder (app/static_revalidate.py).
+        return FileResponse(
+            datei, media_type="application/manifest+json", headers={"Cache-Control": "no-cache"}
+        )
 
     # The interface's own page: served here, ahead of the plain
     # static mount below, so this run's key can be stitched in — the one
@@ -1217,6 +1334,13 @@ def app_erstellen(config: Config | None = None) -> FastAPI:
     @app.get("/app/", include_in_schema=False)
     @app.get("/app/index.html", include_in_schema=False)
     def oberflaeche(request: Request):
+        # Where no sign-in stands guard the page carries the key, so it goes
+        # only to a request that names this machine: a foreign site whose
+        # name was pointed here would otherwise read the key out of it.
+        if not anmeldung.needs_login(request) and not anmeldung.host_is_loopback(
+            request.headers.get("host", "")
+        ):
+            return PlainTextResponse("Invalid host header", status_code=400)
         datei = STATIC_VERZEICHNIS / "app" / "index.html"
         # The language this page is about to speak, which only the service
         # knows — the stored choice, or on "auto" the language of this very
@@ -1247,7 +1371,7 @@ def app_erstellen(config: Config | None = None) -> FastAPI:
         # Beyond the loopback address the page carries no key: whoever
         # reaches the address would hold every right. The page then signs in
         # first (app/api/v1/anmeldung.py) and fetches the key that way.
-        schluessel = None if app.state.anmeldung else app.state.sitzungsschluessel
+        schluessel = None if anmeldung.needs_login(request) else app.state.sitzungsschluessel
         # ``<`` never travels as itself into the script block: JSON does not
         # escape it, and a catalogue text carrying "</script>" would end the
         # element early — the page would come without key, diagnosis flag and
@@ -1266,7 +1390,7 @@ def app_erstellen(config: Config | None = None) -> FastAPI:
                 "</head>",
                 f"<script>window.__SITZUNGSSCHLUESSEL__="
                 f"{json.dumps(schluessel)};"
-                f"window.__ANMELDUNG__={json.dumps(bool(app.state.anmeldung))};"
+                f"window.__ANMELDUNG__={json.dumps(anmeldung.needs_login(request))};"
                 f"window.__DIAGNOSE__={json.dumps(bool(config.app.diagnose))};"
                 f"window.__TEXTE__={texte_json}"
                 f"</script></head>",
@@ -1279,7 +1403,9 @@ def app_erstellen(config: Config | None = None) -> FastAPI:
     # The Vite-built Svelte folder will land here later.
     if STATIC_VERZEICHNIS.exists():
         app.mount(
-            "/", StaticFiles(directory=STATIC_VERZEICHNIS, html=True), name="static"
+            "/",
+            RevalidatingStaticFiles(directory=STATIC_VERZEICHNIS, html=True),
+            name="static",
         )
     else:
         log.warning("No static folder under %s", STATIC_VERZEICHNIS)

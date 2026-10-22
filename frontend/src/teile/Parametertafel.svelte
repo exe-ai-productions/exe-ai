@@ -12,12 +12,14 @@
   import { fractionDigits, formatNumber, parseNumber } from '../lib/numberDisplay.js'
   import { melde } from '../lib/zustand.svelte.js'
   import Serverabschnitt from './Serverabschnitt.svelte'
-  import Knopfreihe from './Knopfreihe.svelte'
+  import Hauszeichen from './Hauszeichen.svelte'
   import {
     einstellungen, parameterLaden, parameterSetzen, parameterZuruecksetzen,
   } from '../lib/einstellungen.svelte.js'
 
-  let { modell } = $props()
+  /* `withName`: the model's name stands in the title ("Parameter · name") —
+     for the page that shows the parameters of one model among several. */
+  let { modell, withName = false } = $props()
 
   let werte = $state({})
   let geladenesModell = null
@@ -105,8 +107,26 @@
     }
   }
 
-  const sichtbar = $derived((modell?.parameter || []).filter((p) => p.gruppe === 'sichtbar'))
-  const weitere = $derived((modell?.parameter || []).filter((p) => p.gruppe === 'mehr'))
+  const sectionTitle = $derived(
+    withName && modell?.name ? `${t('parameter.titel')} · ${modell.name}` : t('parameter.titel'),
+  )
+  /* Two cards, one rule for local, cloud and phone: what picks the next
+     word on the left, the lengths and the brakes on the right, each in this
+     order. What a model does not offer is missing; a knob that has no place
+     in either list goes to the end of the right card; a card without a row
+     is not drawn. */
+  const SAMPLING_ORDER = ['temperature', 'top_p', 'top_k', 'min_p', 'typical_p', 'seed']
+  const LENGTH_ORDER = [
+    'max_tokens', 'reasoning_budget', 'repeat_penalty', 'repeat_last_n',
+    'presence_penalty', 'frequency_penalty',
+  ]
+  const offered = $derived(modell?.parameter || [])
+  const inOrder = (order) => order.map((name) => offered.find((p) => p.name === name)).filter(Boolean)
+  const sampling = $derived(inOrder(SAMPLING_ORDER))
+  const lengths = $derived([
+    ...inOrder(LENGTH_ORDER),
+    ...offered.filter((p) => !SAMPLING_ORDER.includes(p.name) && !LENGTH_ORDER.includes(p.name)),
+  ])
 </script>
 
 {#snippet regler(p)}
@@ -166,23 +186,43 @@
   </div>
 {/snippet}
 
+{#snippet card(list)}
+  {#if list.length}
+    <Serverabschnitt>
+      {#each list as p (p.name)}
+        {@render regler(p)}
+      {/each}
+    </Serverabschnitt>
+  {/if}
+{/snippet}
+
 <!-- All of them at once. The show-more button made the window jump in
      height every time you switched between a model and a provider; the panel
-     scrolls instead. The rare ones (`weitere`) follow the everyday ones
-     without a line calling that out. -->
+     scrolls instead. Under the head stand two cards of the same width, each as
+     high as its rows. -->
 <div class="parameter">
-  <Serverabschnitt titel={t('parameter.titel')} hinweis={t('parameter.gilt_fuer_modell')}>
-    {#each sichtbar as p (p.name)}
-      {@render regler(p)}
-    {/each}
-    {#each weitere as p (p.name)}
-      {@render regler(p)}
-    {/each}
+  <Serverabschnitt
+    zeichen="settings_two"
+    gewicht={1}
+    titel={sectionTitle}
+    bare
+  >
+    {#snippet rechts()}
+      <!-- The reset is a sign at the right end of the head. -->
+      <button
+        class="signbutton"
+        onclick={zuruecksetzen}
+        aria-label={t('parameter.zuruecksetzen')}
+        title={t('parameter.zuruecksetzen')}
+      >
+        <Hauszeichen zeichen="refresh" groesse={16} />
+      </button>
+    {/snippet}
+    <div class="param-cards">
+      {@render card(sampling)}
+      {@render card(lengths)}
+    </div>
   </Serverabschnitt>
-
-  <Knopfreihe>
-    <button class="stillknopf" onclick={zuruecksetzen}>{t('parameter.zuruecksetzen')}</button>
-  </Knopfreihe>
 </div>
 
 <style>
@@ -190,6 +230,48 @@
     display: flex;
     flex-direction: column;
     gap: 28px;
+    flex: 1 1 auto;
+    container: params / inline-size;
+  }
+  /* Two cards of the same width share the panel, 24 px apart, level at the
+     top and each as high as its rows; the hairlines between rows are the
+     card's own. Narrow: one under the other. */
+  .param-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px;
+    align-items: start;
+  }
+  @container params (max-width: 560px) {
+    .param-cards {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+  /* The reset is a sign: the two arrows, in a square of the buttons' ground.
+     It stands in the 26 px head and is taller than it; the negative margin
+     keeps the head as high as every other section's. */
+  .signbutton {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 34px;
+    height: 34px;
+    margin: -4px 0;
+    border: none;
+    border-radius: 9px;
+    background: var(--glass-button);
+    box-shadow: inset 0 0 0 1px var(--feldstrich);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .signbutton:hover {
+    background: var(--glass-hover);
+  }
+  :global(html[data-phone]) .signbutton {
+    width: 44px;
+    height: 44px;
+    margin: -9px 0;
   }
   /* Offered but not usable here. Dimmed as a whole rather than hidden: the
      panel then keeps the same rows for every model, and the row itself says
@@ -197,9 +279,9 @@
   .zeile.gesperrt { opacity: 0.45; cursor: not-allowed; }
   .zeile.gesperrt input { pointer-events: none; }
 
-  /* The track runs over the whole row, filled from its start to the grip
-     like every slider of the server windows; the room above and below it
-     is the grip's. */
+  /* The track runs over the whole row: the part up to the grip in the text
+     colour, the rest in the strong line colour, so the empty part shows as
+     far as it goes; the room above and below it is the grip's. */
   .regelspur {
     -webkit-appearance: none;
     appearance: none;
@@ -207,7 +289,7 @@
     height: 4px;
     margin: 9px 0;
     border-radius: 9px;
-    background: linear-gradient(to right, var(--text-leise) var(--anteil), var(--bg-hoch) var(--anteil));
+    background: linear-gradient(to right, var(--text) var(--anteil), var(--linie-stark) var(--anteil));
     outline: none;
   }
   .regelspur::-webkit-slider-thumb {

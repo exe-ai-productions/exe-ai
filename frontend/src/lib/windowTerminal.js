@@ -26,7 +26,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { api } from './api.js'
 import { droppedText } from './droppedPaths.js'
 import { system } from './keyNames.js'
-import { followTheBox } from './terminalResize.js'
+import { followTheBox, usableSize } from './terminalResize.js'
 import { t, texte } from './texte.svelte.js'
 import { zustand } from './zustand.svelte.js'
 
@@ -38,13 +38,13 @@ export function bridge() {
 /* The window's looks under the client's names: the fixed ones by name,
    the own gradient by whether it stands dark or light, and a look that
    follows the device by what the device prefers. */
-const LOOKS = { dunkel: 'exe', hell: 'pearl', darkmatter: 'darkmatter', heaven: 'heaven', moune: 'moune' }
+const LOOKS = { dunkel: 'exe', hell: 'pearl', darkmatter: 'darkmatter', heaven: 'heaven', moune: 'moune', snow: 'snow' }
 
 export function currentLook() {
   const root = document.documentElement
   const modus = root.getAttribute('data-modus')
   if (modus === 'eigen') return root.getAttribute('data-eigen') === 'hell' ? 'pearl' : 'exe'
-  if (modus === null) return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'exe' : 'pearl'
+  if (modus === null) return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'exe' : 'snow'
   return LOOKS[modus] ?? 'exe'
 }
 
@@ -58,6 +58,14 @@ export function currentLook() {
 const NO_GROUND = '#00000000'
 const FALLBACK_INK = '#ecebe6'
 const FALLBACK_GROUND = '#1c1c1a'
+
+/* The house's fixed-width face as the page names it. The drawing reads no
+   `var()` of its own, so it is handed the value of the token; the page
+   always has one, the generic name only stands where there is no sheet. */
+function fixedFont() {
+  const read = getComputedStyle(document.documentElement).getPropertyValue('--schrift-fest').trim()
+  return read || 'monospace'
+}
 
 function sheetColour(name, fallback) {
   const read = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
@@ -190,11 +198,29 @@ export function theme() {
 
 /* The keys the page keeps for itself while the terminal has the focus:
    its own shortcuts (App.svelte). Handed back to the page, not to the
-   client. */
-export function pageKeepsKey(event) {
+   client.
+
+   On a Mac the shortcut key is Cmd and Ctrl belongs to the client. Anywhere
+   else Ctrl is the shortcut key, as the list of shortcuts shows it — except
+   Ctrl+J, which the client takes as a line break. */
+export function pageKeepsKey(event, os = system) {
   if (event.type !== 'keydown') return false
   if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === '`') return true
-  return event.metaKey && !event.altKey && ['b', 'j', 'k', 'n', ','].includes(event.key)
+  if (os === 'mac') {
+    return event.metaKey && !event.altKey && ['b', 'j', 'k', 'n', ','].includes(event.key)
+  }
+  return event.ctrlKey && !event.metaKey && !event.altKey && ['b', 'k', 'n', ','].includes(event.key)
+}
+
+/* The keys the browser itself acts on in the terminal, off a Mac: Ctrl+V
+   pastes, Ctrl+C copies what is selected. Neither goes to the client as a
+   key; without a selection Ctrl+C stays an interrupt, as the client reads
+   it. On a Mac Cmd does both through the window's menu. */
+export function leavesToBrowser(event, hasSelection, os = system) {
+  if (os === 'mac' || event.type !== 'keydown') return false
+  if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false
+  const key = event.key.toLowerCase()
+  return key === 'v' || (key === 'c' && hasSelection)
 }
 
 /* What is typed before the client's screen is up. Until then the terminal
@@ -218,9 +244,12 @@ function typedGate(send) {
       if (waiting && data !== INTERRUPT) waiting.push(data)
       else send(data)
     },
-    open() {
+    // `asLines` turns an Enter among what waited into a line break, for the
+    // client's input field; a program that is not the client gets it as typed.
+    open(asLines = true) {
       if (!waiting) return
-      const held = waiting.join('').replaceAll('\r', '\n')
+      const joined = waiting.join('')
+      const held = asLines ? joined.replaceAll('\r', '\n') : joined
       waiting = null
       if (held) send(held)
     },
@@ -248,6 +277,9 @@ const session = {
   order: null,
   running: false,
   ended: false,
+  // Whether the program is not the client: it has no screen of the client's
+  // kind, so the drawing never waits for it.
+  foreign: false,
   // The look and the language the client was last given, at its start or
   // by a change.
   look: '',
@@ -286,11 +318,18 @@ export function ensureTerminal() {
   const xterm = new Xterm({
     allowTransparency: true,
     theme: theme(),
-    fontFamily: "ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
+    fontFamily: fixedFont(),
     fontSize: 13,
     lineHeight: 1.25,
     cursorBlink: true,
     scrollback: 5000,
+    // The client's full screen takes the mouse: its wheel scrolls the history
+    // and a click opens an address. Text is marked with the Option key held
+    // down; on Windows and Linux the drawing marks with the Shift key as it is.
+    // That click must not also move the cursor: the drawing would send arrow
+    // keys to the client, which recalls old lines into its input field.
+    macOptionClickForcesSelection: true,
+    altClickMovesCursor: false,
     // A link the client writes itself (OSC 8) opens at a click; without
     // this the drawing asks with a browser dialog.
     linkHandler: { activate: (_event, address) => openAddress(address) },
@@ -303,11 +342,12 @@ export function ensureTerminal() {
   xterm.open(holder)
   // A key the page keeps goes up to the page and not to the client; every
   // other key goes to the client and stops there — the page's own key
-  // handler must not act on what was typed into the terminal.
+  // handler must not act on what was typed into the terminal. Copy and
+  // paste stop here too, but are left to the browser, which does them.
   xterm.attachCustomKeyEventHandler((event) => {
     const keep = pageKeepsKey(event)
     if (!keep) event.stopPropagation()
-    return !keep
+    return !keep && !leavesToBrowser(event, xterm.hasSelection())
   })
   try {
     const webgl = new WebglAddon()
@@ -321,7 +361,7 @@ export function ensureTerminal() {
     xterm,
     fit,
     tell: (cols, rows) => shell.resize(cols, rows),
-    screenIsUp: () => session.running && !session.ended && gate.isOpen(),
+    screenIsUp: () => session.running && !session.ended && !session.foreign && gate.isOpen(),
     // Windows breaks nothing of the block in its console the way a terminal
     // does; there the drawing follows at once, as before.
     atOnce: system === 'windows',
@@ -330,7 +370,7 @@ export function ensureTerminal() {
     /* After the client has ended, Enter starts it again; nothing else
        typed goes anywhere. */
     if (session.ended) {
-      if (data.includes('\r')) start()
+      if (data.includes('\r')) startWhenLaidOut(true)
       return
     }
     gate.typed(data)
@@ -356,6 +396,9 @@ export function ensureTerminal() {
   shell.onExit(() => {
     session.running = false
     session.ended = true
+    // The next client begins behind a gate that is shut, with nothing left
+    // waiting from this one.
+    gate.shut()
     // Nobody will ask any more: the drawing takes the size it waits for.
     order.release()
     xterm.write(`\r\n${endedLine()}\r\n`)
@@ -411,12 +454,9 @@ export async function start() {
   if (!shell || !session.xterm || session.running) return
   session.ended = false
   session.running = true
-  /* The new client's keys wait for its screen — where early keys show at
-     all. The terminal a client gets on Windows shows nothing before the
-     client reads, and not every version of that system lets the client's
-     first drawing announce itself to the page: there nothing waits. */
-  session.gate.shut()
-  if (system === 'windows') session.gate.open()
+  session.foreign = false
+  /* The new client's keys wait for its screen, those typed before it started
+     with them: the gate was shut when the last client ended. */
   session.fit.fit()
   // The client begins with the size the drawing has now.
   session.order.started(session.xterm.cols, session.xterm.rows)
@@ -435,6 +475,20 @@ export async function start() {
     })
   } catch (failure) {
     answer = { error: String((failure && failure.message) || failure) }
+  }
+  /* A program that is not the client has no screen to wait for, and one
+     that asks for a line first would never get it: what waited for it goes
+     to it now, and from then on every key goes straight through. */
+  if (answer && answer.foreign && session.running && !session.ended) {
+    session.foreign = true
+    session.gate.open(false)
+  }
+  /* The terminal a client gets on Windows shows nothing before the client
+     reads, and not every version of that system lets the client's first
+     drawing announce itself to the page: there nothing waits once the client
+     is there to be written to. */
+  if (system === 'windows' && answer && !answer.error && session.running && !session.ended && !session.foreign) {
+    session.gate.open()
   }
   if (answer && answer.error) {
     session.running = false
@@ -465,9 +519,52 @@ export function typeDropped(files) {
   return true
 }
 
+/* The frames the box may take to settle before the client is started with the
+   size it has then — or with none, as before, where the drawing has no cells
+   to count with. The tab is never left blank for good. */
+const SETTLE_FRAMES = 120
+
+const nextFrame = (step) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(step) : step())
+
+// Whether a look at the box is under way, so that one look at a time is made.
+let settling = false
+
+/* Starts the client once the box has its size: the same size at two frames
+   in a row. The fit gives a size for a box that has none yet — two columns,
+   one row — and the shell takes whatever lies in its range, so a client
+   started before the layout was done would be given that and keep the head
+   it drew for it. A box that has no size at all is looked at again when it
+   reports one (the watcher in `show`); one that has a size and no cells to
+   count with yet, or none that holds still, at the next frame. `afterEnd`
+   starts the client again where the last one has ended. */
+function startWhenLaidOut(afterEnd = false) {
+  if (settling || session.running || (session.ended && !afterEnd)) return
+  settling = true
+  let before = null
+  let frames = 0
+  const look = () => {
+    const { fit, holder } = session
+    const room = holder.parentElement
+    if (session.running || !holder.isConnected || (room && (!room.clientWidth || !room.clientHeight))) {
+      settling = false
+      return
+    }
+    const size = usableSize(fit.proposeDimensions())
+    const steady = size && before && before.cols === size.cols && before.rows === size.rows
+    if (steady || ++frames > SETTLE_FRAMES) {
+      settling = false
+      start()
+      return
+    }
+    before = size
+    nextFrame(look)
+  }
+  nextFrame(look)
+}
+
 /** Shows the drawing in `root`: fits it, follows the size of `root`, starts
- *  the client where none is running or has ended, and hands back the way
- *  to take the drawing out again. */
+ *  the client where none is running or has ended once the box has its size,
+ *  and hands back the way to take the drawing out again. */
 export function show(root) {
   const { xterm, order, holder } = ensureTerminal()
   // The view that stands on the last row when the drawing is taken in again
@@ -475,12 +572,14 @@ export function show(root) {
   const atBottom = order.atBottom()
   root.appendChild(holder)
   const watcher = new ResizeObserver(() => {
-    if (holder.isConnected) order.follow()
+    if (!holder.isConnected) return
+    order.follow()
+    startWhenLaidOut()
   })
   watcher.observe(root)
   order.follow()
   if (atBottom) order.pin()
-  if (!session.running && !session.ended) start()
+  startWhenLaidOut()
   xterm.focus()
   return () => {
     watcher.disconnect()

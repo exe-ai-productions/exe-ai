@@ -173,7 +173,9 @@ def test_the_quick_picker_has_no_group_for_the_agent_server():
     assert "[SLOT_ENDPUNKT]: 'agentserver.titel'" not in source
     assert "[SLOT_ENDPUNKT]: 1" not in source
     # The server list still names the agent server: it is a server to set up.
-    assert "titel: 'agentserver.titel'" in source
+    # (the list the page and the settings share).
+    assert "SERVER as SERVER_PAGES" in source
+    assert "titel: 'agentserver.titel'" in (LIB / "einstellungsliste.js").read_text(encoding="utf-8")
 
 
 def test_the_word_for_the_agent_server_is_one_word_in_three_files():

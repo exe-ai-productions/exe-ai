@@ -47,7 +47,8 @@ console.log(JSON.stringify(ergebnis))
 
 
 def _row(nachricht: dict, teile: list[dict], laeuft: bool, laufzustand: str,
-         dokumentKarten: list | None = None, abgeschnitten: bool = False) -> bool:
+         dokumentKarten: list | None = None, abgeschnitten: bool = False,
+         abgelehnt: bool = False) -> bool:
     kam = _stueck(MESSAGE, r"  const etwasKam = \$derived\(.*?\n  \)\n", "etwasKam")
     leer = _stueck(MESSAGE, r"  const leereAntwort = \$derived\(.*?\n  \)\n", "leereAntwort")
     got = _node(f"""
@@ -59,6 +60,7 @@ const hatInhalt = Boolean((nachricht.content || '').trim())
 const laeuft = {json.dumps(laeuft)}
 const laufzustand = {json.dumps(laufzustand)}
 const abgeschnitten = {json.dumps(abgeschnitten)}
+const abgelehnt = {json.dumps(abgelehnt)}
 {kam}
 {leer}
 console.log(JSON.stringify({{ leereAntwort }}))
@@ -152,6 +154,14 @@ def test_failed_and_silent_answers_keep_their_line_as_before():
 
 
 @needs_node
+def test_a_declined_answer_has_no_red_silent_line_of_its_own():
+    """The line that says the model declined stands in its place."""
+    nachricht = {"content": "", "reasoning": ""}
+    assert _row(nachricht, [], False, "fertig", abgelehnt=True) is False
+    assert _row(nachricht, [], False, "fertig", abgelehnt=False) is True
+
+
+@needs_node
 def test_an_image_answer_a_running_answer_and_a_cut_off_one_have_no_red_line():
     nachricht = {"content": "", "reasoning": ""}
     assert _row({**nachricht, "bild": "x.png"}, [], False, "fertig") is False
@@ -159,3 +169,15 @@ def test_an_image_answer_a_running_answer_and_a_cut_off_one_have_no_red_line():
     assert _row(nachricht, [], False, "fertig", abgeschnitten=True) is False
     # An answer with text never had one.
     assert _row({"content": "hi"}, [], False, "fertig") is False
+
+
+def test_the_foot_is_bound_to_the_run_and_the_wait_row_keeps_its_rule():
+    """The foot is quiet for every running answer — with text and before its
+    first word — and for no other: finished, stopped and failed ones show the
+    buttons. The wait row keeps its own rule (it still speaks before the
+    first word). Real behaviour is measured in a browser
+    (`test_a_running_answer_without_text_shows_no_button_...`); this guards
+    the binding."""
+    source = MESSAGE.read_text(encoding="utf-8")
+    assert '<div class="fuss" class:ruhig={laeuft}>' in source, "the foot is no longer quiet while the run goes"
+    assert "const markeRuhig = $derived(laeuft && hatInhalt)" in source, "the wait row's rule changed"

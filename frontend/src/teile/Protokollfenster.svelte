@@ -44,7 +44,7 @@
       onclick={(e) => e.stopPropagation()}
     >
       <div class="kopf">{protokollTitel()}</div>
-      <pre class="protokoll" bind:this={kasten}>{protokollZeilen().join('\n') || '—'}</pre>
+      <pre class="protokoll" bind:this={kasten}>{protokollZeilen().join('\n') || '-'}</pre>
       <div class="knoepfe">
         <button class="knopf wichtig" onclick={schliesseProtokoll}>{t('app.schliessen')}</button>
       </div>
@@ -79,6 +79,18 @@
     /* The glass edge as a ring ON the edge and a soft fall, the frame the
        main windows wear. */
     box-shadow: 0 0 0 1px var(--glass-button-edge), 0 28px 70px -12px rgba(0, 0, 0, 0.55);
+  }
+  /* On a narrow screen the window is the whole screen. */
+  @media (max-width: 720px) {
+    .schleier {
+      padding: 0;
+    }
+    .popup {
+      width: 100vw;
+      height: 100dvh;
+      border-radius: 0;
+      padding: calc(16px + env(safe-area-inset-top)) 14px calc(14px + env(safe-area-inset-bottom));
+    }
   }
   .kopf {
     flex: none;

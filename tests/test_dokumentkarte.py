@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 
 from tests.test_hintergrundmeldung import _modul, _node
+from tests.fensterquelle import WINDOW_SOURCE
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "frontend/src"
@@ -37,7 +38,7 @@ CARD = SOURCE / "teile/Dateikarte.svelte"
 RAIL = SOURCE / "teile/ModulVorschau.svelte"
 COLUMN = SOURCE / "teile/Arbeitsleiste.svelte"
 MESSAGE = SOURCE / "teile/Nachricht.svelte"
-APP = SOURCE / "App.svelte"
+APP = WINDOW_SOURCE
 SHEET = SOURCE / "stil/global.css"
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="no node on this machine")
@@ -432,7 +433,7 @@ def test_the_stream_hands_every_file_to_the_writer():
     """The wiring in the stream: the closed files and the one still open all
     go through the one writer of this answer."""
     app = APP.read_text(encoding="utf-8")
-    assert "dateienAus, dateienDavor, dateienVorherJeNachricht, endsInFence, openFile," in app
+    assert "import { dateienAus, dateienDavor, endsInFence, openFile } from './markdown.js'" in app
     assert "const carryFile = tabWriter(zielChat, () => {" in app
     assert "for (const file of dateienAus(platzhalter.content, dateienVorher)) carryFile(file)" in app
     # A fence left unsettled is looked at again with the next piece.
@@ -524,10 +525,11 @@ def test_the_rail_is_tabs_an_address_line_and_the_page():
     # In the rail itself the name stands once beside the tabs: in the
     # address line, and only where the file has no path to show there.
     assert (
-        '<span class="adresse-name" title={offen?.pfad || null}><span>{offen?.pfad || offen?.name}</span></span>'
+        '<span class="adresse-name" title={offen?.pfad ? displayPath(offen.pfad) : null}>'
+        "<span>{displayPath(offen?.pfad || offen?.name)}</span></span>"
         in markup
     )
-    assert markup.count("offen?.name}") == 1
+    assert markup.count("offen?.name)") == 1
 
     # No footer, no fading edge, no frame around the page.
     assert 'class="fuss"' not in markup and ".fuss" not in sheet
@@ -551,7 +553,7 @@ def test_the_head_of_the_column_does_not_name_the_file_again():
     assert "leiste.modul === 'vorschau'" not in column.split("const MODULE", 1)[0]
     assert "const detail = " not in column and "{detail}" not in column
     assert "terminal.laeufe.length" not in column and "t('terminal.laeufe'" not in column
-    head = column.split('<div class="kopf">', 1)[1].split("<!-- Folds the column", 1)[0]
+    head = column.split('<div class="kopf" class:grab={windowButtonsInPage}>', 1)[1].split("<!-- Folds the column", 1)[0]
     assert '<span class="modulname">{titel}</span>' in head
     assert head.count('<span class="spacer"></span>') == 3
     # The text is gone from both catalogues: nothing reads it any more.
@@ -565,7 +567,7 @@ def test_the_rail_draws_markdown_and_can_show_its_source():
     assert "{:else if isMarkdown && !quelltextZeigen}" in rail
     assert "{#each dateiTeile(offen.inhalt) as stueck, i (i)}" in rail
     # The switch exists only where there are two views to switch between.
-    assert "const hasTwoViews = $derived(kannZeichnen || kannTabelle || isMarkdown)" in rail
+    assert "const hasTwoViews = $derived(kannZeichnen || kannTabelle || isMarkdown || isSvg)" in rail
     assert "{#if hasTwoViews}" in rail
     assert "aria-pressed={quelltextZeigen}" in rail
     # What the browser draws stays sealed.

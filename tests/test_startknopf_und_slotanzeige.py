@@ -324,4 +324,6 @@ def test_ein_modul_das_der_filter_nicht_vorschlaegt_wird_trotzdem_gezeigt(datei:
     auswahl = quelle[quelle.index("const drafterauswahl") :]
     auswahl = auswahl[: auswahl.index("])") + 2]
     assert "drafterKandidaten.some" in auswahl, datei.name
-    assert "{ wert: drafter, text: drafter }" in auswahl, datei.name
+    # The foreign module is listed as itself, carrying its mark like every
+    # other file of the row.
+    assert "{ wert: drafter, text: drafter, ...entryMark(drafter) }" in auswahl, datei.name

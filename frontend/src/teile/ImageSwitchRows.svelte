@@ -16,6 +16,7 @@
   import InfoMark from './InfoMark.svelte'
   import Schalter from './Schalter.svelte'
   import { api } from '../lib/api.js'
+  import { hasNoPlace } from '../lib/imageSwitchPlace.js'
   import { imageSwitches } from '../lib/imageSwitches.svelte.js'
   import { t } from '../lib/texte.svelte.js'
 
@@ -36,6 +37,7 @@
   // only for what is drawn — the service drops it everywhere else.
   const rows = $derived(imageSwitches.list.filter((row) => row.group === group
     && (!keys || keys.includes(row.key))
+    && !hasNoPlace(row, conditions)
     && (row.video == null || row.video === Boolean(conditions.video))))
 
   // A row that needs one of several things (split by "|") acts once any is on.

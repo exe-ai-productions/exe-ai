@@ -137,24 +137,24 @@
   input[type='range']:disabled {
     cursor: default;
   }
-  /* A soft track on the field ground and a round grip riding on it — the
+  /* A track in the strong line colour and a round grip riding on it — the
      grip sits centred on the track, so the spot it marks stays visible
-     on either side. */
+     on either side, and the empty stretch shows as far as it goes. */
   input[type='range']::-webkit-slider-runnable-track {
     height: 4px;
     border-radius: 9px;
-    background: var(--bg-hoch);
+    background: var(--linie-stark);
   }
   input[type='range']::-moz-range-track {
     height: 4px;
     border-radius: 9px;
-    background: var(--bg-hoch);
+    background: var(--linie-stark);
   }
   .fuellung input[type='range']::-webkit-slider-runnable-track {
-    background: linear-gradient(to right, var(--text-leise) var(--anteil), var(--bg-hoch) var(--anteil));
+    background: linear-gradient(to right, var(--text) var(--anteil), var(--linie-stark) var(--anteil));
   }
   .fuellung input[type='range']::-moz-range-track {
-    background: linear-gradient(to right, var(--text-leise) var(--anteil), var(--bg-hoch) var(--anteil));
+    background: linear-gradient(to right, var(--text) var(--anteil), var(--linie-stark) var(--anteil));
   }
   input[type='range']::-webkit-slider-thumb {
     appearance: none;

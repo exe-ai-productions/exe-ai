@@ -15,6 +15,7 @@ extension is the agent's name. The front matter holds its rules:
     max_minutes: 20        # minutes before we stop
     max_tokens: 16000      # answer budget; overrides the settings cascade (optional)
     reasoning_budget: 2048 # how long it may think first; same cascade (optional)
+    reasoning_effort: high # the thinking stage a run asks for, as in a chat (optional)
     max_command_seconds: 600  # seconds one shell command may run (optional)
     color: "#2f8f84"       # the agent's own colour, wherever its name stands
     permissions:            # per-tool overrides for Tor 3 (app/berechtigungen.py)
@@ -92,7 +93,7 @@ from pathlib import Path
 
 import yaml
 
-from app import __version__, frontmatter, i18n
+from app import __version__, denkstufen, frontmatter, i18n
 from app.auftragdenklaengewahl import AUTO as DENKLAENGE_AUTO
 from app.auftragdenklaengewahl import OBERGRENZE as DENKLAENGE_OBERGRENZE
 from app.auftragtokenwahl import OBERGRENZE as MAX_TOKENS_OBERGRENZE
@@ -119,7 +120,7 @@ STANDARD_MINUTEN = 20.0
 # for an "unknown field" on top of the one clear line the loader already logs.
 BEKANNTE_FELDER = {
     "description", "model", "tools", "folders", "max_rounds", "max_minutes", "max_tokens",
-    "reasoning_budget", "max_command_seconds", "schedule", "schedule_task",
+    "reasoning_budget", "reasoning_effort", "max_command_seconds", "schedule", "schedule_task",
     "permissions", "color",
 }
 
@@ -217,6 +218,12 @@ class Agent:
     # means no thinking at all, which is why it may not be mistaken for unset.
     # Minus one is Auto, as in a chat: no cap at all.
     denklaenge: int | None = None
+    # The thinking stage a run of this agent asks for, one of the words a chat
+    # offers (app/denkstufen.py). It goes out through the same switch as the
+    # chat's (app/denkschalter.py); a stage this model does not have is dropped
+    # there, not here. None means the agent has no opinion and no thinking field
+    # goes out, as before.
+    thinking_stage: str | None = None
     # Seconds one shell command may run — overrides the settings cascade
     # (app/befehlszeitwahl.py) the same way. None: the cascade decides. A
     # research agent and a build agent genuinely need different values here.
@@ -370,6 +377,20 @@ def agent_aus_text(name: str, text: str) -> Agent:
             anzeige, "reasoning_budget", min=DENKLAENGE_AUTO, max=DENKLAENGE_OBERGRENZE
         )
 
+    thinking_stage = kopf.get("reasoning_effort")
+    # A bare ``off`` or ``on`` is a truth value to YAML; it means the word.
+    if isinstance(thinking_stage, bool):
+        thinking_stage = "on" if thinking_stage else "off"
+    # A field left empty says nothing, like one left out.
+    if isinstance(thinking_stage, str) and not thinking_stage.strip():
+        thinking_stage = None
+    if thinking_stage is not None:
+        thinking_stage = thinking_stage.strip().lower() if isinstance(thinking_stage, str) else None
+        if thinking_stage not in denkstufen.STUFEN:
+            raise AgentDateiKaputt(
+                anzeige, "reasoning_effort", words=", ".join(denkstufen.STUFEN)
+            )
+
     befehlssekunden = kopf.get("max_command_seconds")
     if befehlssekunden is not None and (
         isinstance(befehlssekunden, bool)
@@ -440,6 +461,7 @@ def agent_aus_text(name: str, text: str) -> Agent:
         minuten=float(minuten),
         max_tokens=max_tokens,
         denklaenge=denklaenge,
+        thinking_stage=thinking_stage,
         befehlssekunden=befehlssekunden,
         berechtigungen=berechtigungen,
         farbe=farbe,

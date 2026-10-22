@@ -66,6 +66,8 @@ const app = {{
   quit: () => calls.push('quit'),
 }}
 console.log = () => {{}}
+let sign = null
+async function openWindow() {{ calls.push('open') }}
 const fenster = {str(window).lower()} ? {{
   isDestroyed: () => false,
   isMinimized: () => {str(minimised).lower()},

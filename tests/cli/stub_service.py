@@ -89,10 +89,6 @@ def eventually(check: Callable[[], Any], *, timeout: float = PATIENCE_SECONDS) -
 
 # --- Which process a stand-in says it is -------------------------------------------
 
-# The names under which a stand-in is asked as the service of the machine
-# the test runs on. Asked under any other, it stands for a service elsewhere.
-THIS_MACHINE = frozenset({"127.0.0.1", "localhost", "::1"})
-
 # How much earlier than the test's own the process of a service elsewhere
 # began: an hour, far beyond the seconds two readings of a process list may
 # lie apart.
@@ -123,13 +119,12 @@ def a_process_elsewhere() -> dict[str, Any]:
     return {"pid": os.getpid(), "began": _began_here() - ANOTHER_BEGINNING_SECONDS}
 
 
-def process_by_name(host: str) -> dict[str, Any] | None:
+def process_elsewhere(host: str) -> dict[str, Any] | None:
     """What a stand-in says of its process where a test asked for nothing
-    else. A stand-in runs in the test's process whatever name it is reached
-    under; the name stands for where the service is meant to run. Under a
-    name of this machine it is this machine's service and names the process
-    it really runs in; under any other it is a service elsewhere."""
-    return this_process() if host in THIS_MACHINE else a_process_elsewhere()
+    else: that of a service elsewhere, whatever name it is reached under —
+    the name says nothing about where a service runs. A test that stands for
+    the service of this machine puts ``this_process`` there."""
+    return a_process_elsewhere()
 
 
 # --- Reaching an app without a port ----------------------------------------------
@@ -580,6 +575,10 @@ class StubService:
         self.download_steps: list[dict[str, Any]] = []
         self.download_posts: list[dict[str, Any]] = []
         self.download_refusal: tuple[int, str] | None = None
+        # What the service answers for the head of a picture file, by the
+        # file's path (the row itself where none is set), and the questions.
+        self.file_heads: dict[str, dict[str, Any]] = {}
+        self.head_questions: list[dict[str, Any]] = []
         self.download_cancelled = False
         self.download_deletes = 0
         self.token: str | None = None
@@ -618,9 +617,10 @@ class StubService:
         self.script: list[dict[str, Any]] = [content("Hello.\n"), done()]
         # While true, the event stream is refused.
         self.events_refused = False
-        # What the stand-in says of its process, by the name it is asked
-        # under. A test puts another answer here.
-        self.process: Callable[[str], dict[str, Any] | None] = process_by_name
+        # What the stand-in says of its process: that of a service elsewhere,
+        # whatever name it is asked under. A test that stands for the
+        # service of this machine puts another answer here.
+        self.process: Callable[[str], dict[str, Any] | None] = process_elsewhere
         # Read now and kept, not at the first ``health``: a test that
         # replaces the client's clock by then would make the process list's
         # answer fail, and the first look at the service with it.
@@ -946,6 +946,12 @@ class StubService:
             self.file_requests.append(dict(request.query_params))
             return json.loads(json.dumps(self.repository_listing))
 
+        @api.post("/models/files/head")
+        async def file_head(question: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+            self.head_questions.append(json.loads(json.dumps(question)))
+            row = question.get("datei") or {}
+            return json.loads(json.dumps(self.file_heads.get(row.get("datei"), row)))
+
         @api.get("/runner/download")
         async def fetch_state() -> dict[str, Any] | None:
             if self.download_cancelled:
@@ -1003,6 +1009,7 @@ class StubService:
                 "modelle": [entry["name"] for entry in image.files],
                 "sizes": {entry["name"]: int(entry["groesse_gb"] * 1e9) for entry in image.files},
                 "programm_da": image.program,
+                "standardmodell": self.settings.get("global", {}).get("bild_standardmodell", ""),
             }
 
         @api.get("/bild/programm")

@@ -29,6 +29,7 @@ from PIL.PngImagePlugin import PngInfo
 from app import draw_input, image_switches, model_image, paste_back
 from app.bildrunner import BildFehler, Bildrunner
 from app.config import Config
+from tests import upscaler_file
 from app.speicherorte import ort
 
 
@@ -1037,7 +1038,10 @@ def mode_run(bild_senden, config: Config, tmp_path: Path):
     models = tmp_path / "bildmodelle"
     for sub, name in (("upscaler", "big.pth"), ("adetailer", "face.pt")):
         (models / sub).mkdir(parents=True, exist_ok=True)
-        (models / sub / name).write_bytes(b"x")
+        if sub == "upscaler":
+            upscaler_file.write(models / sub / name)
+        else:
+            (models / sub / name).write_bytes(b"x")
 
     def run(chat: str, mode: str) -> dict:
         return bild_senden(

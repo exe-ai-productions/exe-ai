@@ -80,20 +80,6 @@ def _regel(quelle: str, name: str) -> str:
     return treffer.group(1)
 
 
-def _palette_wert(modus: str, name: str) -> str:
-    """One colour out of one appearance block — read, never repeated.
-
-    ``modus`` empty means the base block, the light appearance.
-    """
-    quelle = PALETTE.read_text(encoding="utf-8")
-    kopf = ":root {" if not modus else f":root[data-modus='{modus}'] {{"
-    block = re.search(rf"{re.escape(kopf)}([\s\S]*?)\n\}}", quelle)
-    assert block, f"the block for {modus or 'light'} is missing"
-    treffer = re.search(rf"{re.escape(name)}:\s*(#[0-9a-fA-F]{{6}})", block.group(1))
-    assert treffer, f"{name} is missing in {modus or 'light'}"
-    return treffer.group(1)
-
-
 def test_the_thinking_mark_wears_the_quietest_text_step():
     """The head of a block says that the answer thought and did something
     before its text. It is no state, it is a name: it carries the quietest
@@ -191,7 +177,7 @@ def _auto_werte() -> dict[str, str]:
     quelle = PALETTE.read_text(encoding="utf-8")
     block = re.search(
         r"@media \(prefers-color-scheme: dark\) \{\n"
-        r"  :root:not\(\[data-modus='hell'\], \[data-eigen='hell'\]\) \{([\s\S]*?)\n  \}",
+        r"  :root:not\(\[data-modus='hell'\], \[data-modus='snow'\], \[data-eigen='hell'\]\) \{([\s\S]*?)\n  \}",
         quelle,
     )
     assert block, "the auto-dark block is missing"
@@ -211,50 +197,37 @@ def test_moune_setzt_jedes_token_von_heaven():
     assert "--vek" in moune, "moune has no --vek for its drawings"
 
 
-# The warm tone every look mixes into its own quiet ink for a tool call.
-TOOL_TONE = "#c98a5a"
-# Parts of that tone out of a hundred. The light base block takes two fewer:
-# at 45 its mix came to 4.39 : 1 on the raised ground, under what text needs.
-TOOL_SHARE = {"": 43, "dunkel": 45, "auto": 45, "darkmatter": 45, "heaven": 45, "moune": 45}
+def test_no_look_keeps_a_tool_colour():
+    """A tool call has no colour of its own: its mark and its name stand in the
+    text colour of the look, light in Exe, dark in Pearl. Colour is for
+    state alone. The token is in none of the six looks, and nothing in the
+    sources reads it."""
+    palette = PALETTE.read_text(encoding="utf-8")
+    assert "--werkzeug" not in palette
+    uses = re.compile(r"var\(\s*--werkzeug|--werkzeug\s*:")
+    for path in (WURZEL / "frontend" / "src").rglob("*"):
+        if path.suffix in {".svelte", ".js", ".css"}:
+            assert not uses.search(path.read_text(encoding="utf-8")), path
+    # The marks and names that wore it now say the text colour themselves, or
+    # inherit it from their row.
+    name = re.search(r"\.werkzeugname \{([^}]*)\}", palette)
+    assert name and "color: var(--text)" in name.group(1)
+    mark = (TEILE / "Werkzeugzeichen.svelte").read_text(encoding="utf-8")
+    assert "color: var(--text);" in mark.split(".zeichen.werkzeug {", 1)[1].split("}", 1)[0]
 
 
-def _mix(tone: str, ink: str, share: int) -> str:
-    """Two colours mixed channel by channel in sRGB, as `color-mix` does."""
-    one = [int(tone[i : i + 2], 16) for i in (1, 3, 5)]
-    two = [int(ink[i : i + 2], 16) for i in (1, 3, 5)]
-    return "#" + "".join(
-        f"{round((a * share + b * (100 - share)) / 100):02x}" for a, b in zip(one, two, strict=True)
-    )
-
-
-def _look_values(look: str) -> dict[str, str]:
-    if look == "auto":
-        return _auto_werte()
-    return {
-        name: _palette_wert(look, name)
-        for name in ("--werkzeug", "--text-leise", "--bg-erhoben")
-    }
-
-
-def test_the_tool_colour_is_a_quiet_sand_in_every_look():
-    """A tool call keeps a colour of its own, and a quiet one: the same warm
-    tone mixed into the quiet ink of each look, set as a fixed value. As
-    text on the raised ground of its look it has to carry what a line of
-    type needs."""
-    for look, share in TOOL_SHARE.items():
-        values = _look_values(look)
-        colour = values["--werkzeug"].lower()
-        expected = _mix(TOOL_TONE, values["--text-leise"], share)
-        assert colour == expected, (
-            f"{look or 'light'}: the tool colour is {colour}, the mix of {share} parts is {expected}"
-        )
-        k = _kontrast(colour, values["--bg-erhoben"])
-        assert k >= 4.5, f"{look or 'light'}: only {k:.2f} : 1 on the raised ground"
-    # The counter-check: the light look at the share of the others falls short.
-    light = _look_values("")
-    assert _kontrast(_mix(TOOL_TONE, light["--text-leise"], 45), light["--bg-erhoben"]) < 4.5, (
-        "45 parts carry in the light look after all — then it needs no share of its own"
-    )
+def test_silence_the_state_colours_of_a_tool_stay():
+    """Only the sand went. The name and the outcome of a failed call in the
+    terminal are still red, a waiting answer's state still yellow, and the
+    kind for everything unknown still grey."""
+    terminal = (TEILE / "ModulTerminal.svelte").read_text(encoding="utf-8")
+    for part in (".name", ".ausgang"):
+        rule = terminal.split(f".werkzeugblock.misslungen {part} {{", 1)[1].split("}", 1)[0]
+        assert "color: var(--rot-text)" in rule, part
+    window = (TEILE / "Auftragfenster.svelte").read_text(encoding="utf-8")
+    assert ".wzzeichen.weitere { color: var(--text-still); }" in window
+    message = (TEILE / "Nachricht.svelte").read_text(encoding="utf-8")
+    assert ".agent-state.wartet { color: var(--gelb-text); }" in message
 
 
 def test_the_chat_glass_is_never_frosted():

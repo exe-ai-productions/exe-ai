@@ -48,8 +48,8 @@ def test_die_shell_nennt_was_nur_sie_weiss():
 
 def test_das_gedaechtnis_nennt_seine_grenzen():
     text = memory.werkzeug_beschreibung().beschreibung.lower()
-    assert "cannot delete" in text
-    assert "replaces" in text
+    assert "at most" in text and "characters" in text
+    assert "replaces" in text and "remove" in text
 
 
 def test_die_beschreibungen_wiederholen_den_grundprompt_nicht():

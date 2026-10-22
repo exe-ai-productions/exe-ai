@@ -11,6 +11,8 @@
   import { frage, melde } from '../lib/zustand.svelte.js'
   import { meldeText } from '../lib/meldewesen.svelte.js'
   import { skillsLaden } from '../lib/skills.svelte.js'
+  import Hauszeichen from './Hauszeichen.svelte'
+  import InfoMark from './InfoMark.svelte'
   import Schalter from './Schalter.svelte'
   import Werkzeugzeichen from './Werkzeugzeichen.svelte'
 
@@ -125,6 +127,7 @@ ${t('skills.template_instructions')}
     if (endgueltig) {
       const ja = await frage(t('skills.loeschen_frage', { name: zeile.name }), {
         okSchluessel: 'skills.loeschen',
+        danger: true,
       })
       if (!ja) return
     }
@@ -155,17 +158,19 @@ ${t('skills.template_instructions')}
     />
     <textarea class="inhaltsfeld" bind:value={neuInhalt} spellcheck="false"></textarea>
     <div class="formfuss">
-      <button class="textknopf" onclick={() => (schreibt = false)}>{t('app.abbrechen')}</button>
-      <button class="knopf wichtig" disabled={!neuName.trim() || !neuInhalt.trim()} onclick={neuSpeichern}>
-        {t('app.sichern')}
+      <button class="symbolknopf" onclick={() => (schreibt = false)}
+              aria-label={t('app.abbrechen')} title={t('app.abbrechen')}>
+        <Hauszeichen zeichen="kreuz" groesse={18} />
+      </button>
+      <button class="symbolknopf" disabled={!neuName.trim() || !neuInhalt.trim()} onclick={neuSpeichern}
+              aria-label={t('app.sichern')} title={t('app.sichern')}>
+        <Hauszeichen zeichen="save" groesse={18} />
       </button>
     </div>
   </div>
 {:else}
 <div class="schalterzeile">
-  <div class="beschriftung">
-    {t('skills.selbst')}
-  </div>
+  <div class="beschriftung mitmarke">{t('skills.selbst')}<InfoMark text={t('skills.info_selbst')} /></div>
   <Schalter an={selbstWaehlen} beschriftung={t('skills.selbst')} onschalten={selbstSchalten} />
 </div>
 
@@ -186,18 +191,23 @@ ${t('skills.template_instructions')}
     <!-- Every skill can be opened and edited — a shipped one is quietly
          copied to the user's folder on save, so the change survives the
          next update. -->
-    <button class="zurueck" onclick={() => bearbeiten(zeile)}>
-      {t('skills.bearbeiten')}
+    <button class="signbutton" onclick={() => bearbeiten(zeile)}
+            aria-label={t('skills.bearbeiten')} title={t('skills.bearbeiten')}>
+      <Hauszeichen zeichen="stift" groesse={16} />
     </button>
     <!-- Only what the user owns can go: a shipped skill would be back with
-         the next update, so it stays switchable and nothing more. -->
+         the next update, so it stays switchable and nothing more. A changed
+         shipped one gets its own version back (both ways round arrows); one
+         the user wrote is deleted (the bin, in the colour of deleting). -->
     {#if zeile.eigen}
       <button
-        class="zurueck"
-        class:gefahr={!zeile.mitgeliefert}
+        class="signbutton"
+        class:danger={!zeile.mitgeliefert}
         onclick={() => entfernen(zeile)}
+        aria-label={t(zeile.mitgeliefert ? 'skills.zuruecksetzen' : 'skills.loeschen')}
+        title={t(zeile.mitgeliefert ? 'skills.zuruecksetzen' : 'skills.loeschen')}
       >
-        {t(zeile.mitgeliefert ? 'skills.zuruecksetzen' : 'skills.loeschen')}
+        <Hauszeichen zeichen={zeile.mitgeliefert ? 'refresh' : 'trash'} groesse={16} />
       </button>
     {/if}
     <Schalter
@@ -209,8 +219,7 @@ ${t('skills.template_instructions')}
 {/each}
 
 <button class="skillneu" onclick={neuAnfangen}>
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-       stroke-width="2.2" stroke-linecap="round"><path d="M12 5 V19 M5 12 H19" /></svg>
+  <Hauszeichen zeichen="plus" groesse={15} />
   {t('skills.schreiben')}
 </button>
 {/if}
@@ -234,8 +243,20 @@ ${t('skills.template_instructions')}
     border-top-right-radius: 9px;
   }
   .beschriftung {
+    flex: 1;
     font-size: 13.5px;
     min-width: 0;
+  }
+  /* The mark right after the name, 6 px away, and its sentence on a line of
+     its own below the name when it is open. */
+  .mitmarke {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .mitmarke :global(.mark) {
+    margin-left: 0;
   }
   .zeile {
     display: flex;
@@ -264,44 +285,39 @@ ${t('skills.template_instructions')}
     color: var(--text-still);
     margin-top: 1px;
   }
-  /* Brightness, not colour: having taken a shipped skill over is a fact
-     about it, not a state it is in. */
+  /* Having taken a shipped skill over is a fact about it, not a state it is
+     in: plain quiet text behind the name, no badge. */
   .vermerk {
-    font-size: 11px;
+    font-size: 12.5px;
     color: var(--text-leise);
-    /* A fact badge wears the divider line, not the field outline; one pixel
-       of edge is taken from the padding so the mark keeps its size. */
-    border: 1px solid var(--linie);
-    border-radius: 9px;
-    padding: 0 7px 1px;
-    background: var(--glass-button);
   }
-  /* The field outline is the edge of a quiet button on a card, drawn as a
-     ring ON the edge so the button keeps the house's size: the line colour
-     darkened to 3 : 1 on the light grounds, the glass edge on the dark. */
-  .zurueck {
+  /* A sign button on a card: button glass with the field outline drawn as a
+     ring ON the edge, so the button keeps the house's size. */
+  .signbutton {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
     border: none;
     background: var(--glass-button);
     box-shadow: inset 0 0 0 1px var(--feldstrich);
     border-radius: 9px;
     color: var(--text);
-    font: inherit;
-    font-size: 12px;
-    padding: 5px 11px;
     cursor: pointer;
     flex: none;
   }
+  .signbutton:hover {
+    background: var(--glass-hover);
+  }
   /* Red means it deletes — the house colour for exactly this, and only on
      the button that really destroys something. */
-  .zurueck.gefahr {
+  .signbutton.danger {
     color: var(--rot-text);
     background: color-mix(in srgb, var(--rot) 12%, var(--glass-button));
   }
-  .zurueck.gefahr:hover {
+  .signbutton.danger:hover {
     background: color-mix(in srgb, var(--rot) 18%, var(--glass-button));
-  }
-  .zurueck:hover {
-    background: var(--glass-hover);
   }
 
   /* The way to a skill of one's own: a dashed tile, plus and word, the same
@@ -310,7 +326,7 @@ ${t('skills.template_instructions')}
     display: flex;
     align-items: center;
     gap: 8px;
-    width: 100%;
+    width: fit-content;
     border: none;
     border-radius: 9px;
     background: none;
@@ -360,48 +376,27 @@ ${t('skills.template_instructions')}
     justify-content: flex-end;
     gap: 8px;
   }
-  .knopf {
-    border: none;
+  .symbolknopf {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    color: var(--text);
     background: var(--glass-button);
     box-shadow: inset 0 0 0 1px var(--feldstrich);
-    color: var(--text);
-    font: inherit;
-    font-size: 13px;
-    padding: 7px 15px;
+    border: none;
     border-radius: 9px;
     cursor: pointer;
-    transition: background 0.12s;
   }
-  .knopf:hover:not(:disabled) {
+  .symbolknopf:hover:not(:disabled) {
     background: var(--glass-hover);
   }
-  /* The main button is button glass with its fine edge, like the start
-     button; only Send stays filled. */
-  .knopf.wichtig {
-    background: var(--glass-button);
-    color: var(--text);
-    box-shadow: inset 0 0 0 1px var(--glass-button-edge);
-    font-weight: 500;
+  .symbolknopf:active:not(:disabled) {
+    transform: scale(0.95);
   }
-  .knopf.wichtig:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--text) 6%, var(--glass-button));
-  }
-  .knopf:disabled {
+  .symbolknopf:disabled {
     opacity: 0.5;
     cursor: default;
-  }
-  .textknopf {
-    border: none;
-    background: none;
-    color: var(--text-leise);
-    font: inherit;
-    font-size: 12.5px;
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 9px;
-  }
-  .textknopf:hover {
-    background: var(--glass-hover);
-    color: var(--text);
   }
 </style>

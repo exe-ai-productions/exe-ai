@@ -15,6 +15,7 @@ in sight.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,11 +32,13 @@ PART_SWITCHES = {
     "uncond_diffusion_model": "--uncond-diffusion-model",
     # The video kits' further files: Wan 2.2 A14B's second model for the
     # noisy first steps, LTX's and MiniMax-H3's sound decoder, Wan 2.2 S2V's
-    # speech encoder and LTX's embeddings connectors.
+    # speech encoder, LTX's embeddings connectors and the image encoder of
+    # Wan 2.1's I2V and FLF2V models.
     "high_noise_diffusion_model": "--high-noise-diffusion-model",
     "audio_vae": "--audio-vae",
     "audio_encoder": "--audio-encoder",
     "embeddings_connectors": "--embeddings-connectors",
+    "clip_vision": "--clip_vision",
 }
 
 
@@ -49,6 +52,52 @@ PART_SWITCHES = {
 # say it — it is put in by the service alone.
 FREE = "free"
 
+# A tiny autoencoder (TAE) chosen where a VAE is chosen carries this word in
+# front of its file name: the name alone does not say which folder it lies
+# in, and a name of one folder is never looked up in the other.
+TAE_PREFIX = "taesd:"
+
+
+def is_tae_choice(name: str | None) -> bool:
+    """Is this VAE choice a tiny autoencoder of the ``taesd`` folder?"""
+    return bool(name) and str(name).startswith(TAE_PREFIX)
+
+
+# The kinds of tiny autoencoder, as the word a file's name carries them by.
+_TAE_KINDS = ("taesdxl", "taesd3", "taesd", "taef1", "taef2", "taew2_1", "taew2_2", "taeqi2_1")
+_TAE_KIND = re.compile(
+    r"(?:^|[^a-z0-9])(" + "|".join(_TAE_KINDS) + r")(?![a-z0-9])"
+)
+
+
+def tae_kind(file_name: str) -> str:
+    """The kind of tiny autoencoder a file is, from its name: the longest of
+    the kind words that stands at the start of the name or after a separator
+    and is followed by no letter or digit (``taesd_decoder.safetensors`` is
+    ``taesd``, ``taesdxl.safetensors`` is ``taesdxl``). Empty for a name that
+    carries none of them."""
+    name = Path(file_name).name.lower()
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    found = _TAE_KIND.findall(stem)
+    return max(found, key=len) if found else ""
+
+
+def tae_fits(choice: str, family: image_families.Family | None) -> bool:
+    """Does a tiny autoencoder chosen as a VAE (``TAE_PREFIX`` and its file
+    name) decode the latent space of this family? Where no family is read it
+    does: nothing says what would not."""
+    if family is None:
+        return True
+    return tae_kind(choice[len(TAE_PREFIX):]) in family.tae
+
+
+def vae_switch(vae: Path, tae: bool) -> list[str]:
+    """The switch that hands the finished picture's decoder to sd.cpp: a VAE
+    file takes ``--vae``, a tiny autoencoder ``--taesd`` — without
+    ``--taesd-preview-only``, so it decodes the picture and reads a start
+    picture in as well. sd.cpp holds one such file per run."""
+    return ["--taesd" if tae else "--vae", str(vae)]
+
 
 def _encoders(familie: str) -> dict[str, str]:
     family = image_families.get(familie)
@@ -61,7 +110,9 @@ def checkpoint_switches(familie: str | None, **encoders: object | None) -> list[
     """The text encoders passed beside ``-m`` for a checkpoint that brings
     none of its own: each encoder its family reads that is set, in the
     family's order (sd.cpp docs/sd3.md:17, ``-m … --clip_l … --clip_g …
-    --t5xxl …``). Empty for a family that reads none, and for no family.
+    --t5xxl …``), then each further part its family reads that is set (LTX's
+    sound decoder and embeddings connectors). Empty for a family that reads
+    none, and for no family.
 
     Where no family decides (``FREE``), every part that is set goes beside
     ``-m`` with its own switch — a text encoder or any further part."""
@@ -74,9 +125,9 @@ def checkpoint_switches(familie: str | None, **encoders: object | None) -> list[
     family = image_families.get(familie)
     if family is None:
         return []
-    switches = {**_ENCODER_SWITCHES, "clip_g": "--clip_g"}
+    switches = {**_ENCODER_SWITCHES, "clip_g": "--clip_g", **PART_SWITCHES}
     parts: list[str] = []
-    for name in family.encoders:
+    for name in (*family.encoders, *family.parts):
         if encoders.get(name):
             parts += [switches[name], str(encoders[name])]
     return parts
@@ -101,6 +152,8 @@ class Gespann:
     clip_g: Path | None = None
     llm: Path | None = None
     vae: Path | None = None
+    # ``vae`` is a tiny autoencoder, not a VAE file.
+    vae_tae: bool = False
     vae_format: str = ""
     llm_vision: Path | None = None
     tokenizer: Path | None = None
@@ -109,6 +162,7 @@ class Gespann:
     audio_vae: Path | None = None
     audio_encoder: Path | None = None
     embeddings_connectors: Path | None = None
+    clip_vision: Path | None = None
 
 
 def familie_pruefen(
@@ -176,7 +230,7 @@ def familie_pruefen(
         # text encoder of its own (``bare_checkpoint``, read from its header
         # by the caller) takes the encoders of its family, and only those.
         family = image_families.get(familie) if bare_checkpoint else None
-        read = family.encoders if family is not None and family.kit else ()
+        read = (*family.encoders, *family.parts) if family is not None and family.kit else ()
         for feld, wert in (
             ("t5xxl", t5xxl), ("clip_l", clip_l), ("clip_g", clip_g), ("llm", llm),
             ("llm_vision", llm_vision), ("tokenizer", tokenizer),
@@ -200,20 +254,44 @@ def familie_pruefen(
 
 # What a part is called where the user reads that it is missing — the name
 # the docs give it, the same in every language.
-_PART_NAMES = {"t5xxl": "T5-XXL", "clip_l": "CLIP-L", "clip_g": "CLIP-G", "llm": "LLM", "vae": "VAE"}
+_PART_NAMES = {
+    "t5xxl": "T5-XXL", "clip_l": "CLIP-L", "clip_g": "CLIP-G", "llm": "LLM", "vae": "VAE",
+    "audio_vae": "Audio VAE", "audio_encoder": "Audio encoder", "clip_vision": "CLIP Vision",
+    "embeddings_connectors": "Embeddings connectors", "llm_vision": "LLM Vision",
+    "tokenizer": "Tokenizer",
+}
 
 
-def fehlendes_teil(familie: str | None, teile: dict[str, object | None]) -> str | None:
+def fehlender_textversteher(familie: str | None, teile: dict[str, object | None]) -> str | None:
+    """The first text encoder a kit family reads that ``teile`` does not
+    carry, or None: what a checkpoint without text encoders of its own is
+    started with. None for a family without a kit and for one that goes on
+    without an encoder it is not given (``needs_text_encoder``): that one is
+    started with the encoders there are."""
+    family = image_families.get(familie)
+    if family is None or not family.kit or not family.needs_text_encoder:
+        return None
+    return next((teil for teil in family.encoders if not teile.get(teil)), None)
+
+
+def fehlendes_teil(
+    familie: str | None, teile: dict[str, object | None], modell: str | None = None,
+) -> str | None:
     """The first part a kit of this family needs that ``teile`` does not
     carry, or None when nothing is missing. Needed are every text encoder the
     family reads and, where its kit names a VAE or it decodes with one of its
-    own (``image_families.needs_vae``), the VAE. Asked before sd.cpp is started, on
+    own (``image_families.needs_vae``), the VAE — and, for the standalone
+    diffusion model named by ``modell``, the further parts the docs name for
+    it (``image_families.needed_parts``). Asked before sd.cpp is started, on
     the server's start as on a drawing, so it never starts on half a kit and
     the user learns which part is missing instead of reading a load error."""
     family = image_families.get(familie)
     if family is None or not family.kit:
         return None
-    needed = [*family.encoders, *(["vae"] if image_families.needs_vae(family) else [])]
+    needed = [
+        *family.encoders, *(["vae"] if image_families.needs_vae(family) else []),
+        *(image_families.needed_parts(family, modell) if modell else ()),
+    ]
     return next((teil for teil in needed if not teile.get(teil)), None)
 
 
@@ -263,7 +341,7 @@ def schalter(gespann: Gespann) -> list[str]:
     if gespann.clip_g is not None:
         teile += ["--clip_g", str(gespann.clip_g)]
     if gespann.vae is not None:
-        teile += ["--vae", str(gespann.vae)]
+        teile += vae_switch(gespann.vae, gespann.vae_tae)
     if gespann.vae_format:
         teile += ["--vae-format", gespann.vae_format]
     return teile

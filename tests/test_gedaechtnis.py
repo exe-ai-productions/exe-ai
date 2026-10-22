@@ -60,7 +60,7 @@ def test_ohne_prompt_steht_das_gedaechtnis_allein():
     assert "Arbeitet am Mac" in zusammen
 
 
-# --- The default: on here, off out there ------------------------------------
+# --- The default: on, here and out there ------------------------------------
 
 
 class _Endpunkt:
@@ -73,7 +73,13 @@ class _Zustand:
         self.endpunkt = _Endpunkt(group)
 
 
-def test_vorgabe_lokal_an_cloud_aus(repos):
+def test_the_memory_travels_to_both_sides_from_the_start(repos):
+    assert gedaechtnis.mitschicken(repos, _Zustand("local")) is True
+    assert gedaechtnis.mitschicken(repos, _Zustand("cloud")) is True
+
+
+def test_a_side_switched_off_stays_home_and_the_other_still_travels(repos):
+    repos.einstellungen.setzen("global", gedaechtnis.SCHLUESSEL, {"lokal": True, "cloud": False})
     assert gedaechtnis.mitschicken(repos, _Zustand("local")) is True
     assert gedaechtnis.mitschicken(repos, _Zustand("cloud")) is False
 
@@ -150,13 +156,14 @@ def test_abgeschaltet_bleibt_es_zuhause(client, chat_id):
     assert "Geheim." not in system
 
 
-def test_ein_anbieter_bekommt_das_gedaechtnis_nur_eingeschaltet(client, chat_id):
-    """An entry from the configuration is a provider, and to a
-    provider the memory travels only when somebody switched that on.
+def test_ein_anbieter_bekommt_das_gedaechtnis_solange_es_nicht_ausgeschaltet_ist(client, chat_id):
+    """An entry from the configuration is a provider, and to a provider the
+    memory travels from the start, until somebody switches that off.
 
-    The two halves in one test on purpose: switched off it stays here, and
-    the same request with the cloud switch on carries it — without the second
-    half, a memory that never travelled at all would pass as well."""
+    The two halves in one test on purpose: with the cloud switch off it stays
+    here, and the same request without it carries it — without the first
+    half, a memory that travelled whatever the switch says would pass as
+    well."""
     client.app.state.config.memory_schreiben("## Facts\n- Prüfstein.")
     client.app.state.config.system_prompt_schreiben("Sei knapp.")
     provider = MockProvider(mock_endpunkt("test"), haeppchen=["ok"])
@@ -166,14 +173,14 @@ def test_ein_anbieter_bekommt_das_gedaechtnis_nur_eingeschaltet(client, chat_id)
         "/api/v1/chat/completions",
         json={"chat_id": chat_id, "endpoint_id": "test", "content": "hallo"},
     )
-    assert "Prüfstein." not in _system_nachricht(provider)
+    assert "Prüfstein." in _system_nachricht(provider)
 
-    client.put("/api/v1/settings/global/gedaechtnis", json={"wert": {"cloud": True}})
+    client.put("/api/v1/settings/global/gedaechtnis", json={"wert": {"lokal": True, "cloud": False}})
     client.post(
         "/api/v1/chat/completions",
         json={"chat_id": chat_id, "endpoint_id": "test", "content": "hallo"},
     )
-    assert "Prüfstein." in _system_nachricht(provider)
+    assert "Prüfstein." not in _system_nachricht(provider)
 
 
 def test_die_route_speichert_die_schalter(client):

@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -46,15 +47,17 @@ export const drawn = []
 export const asked = []
 export const answers = { kept: {} }
 export const werte = {
-  prompt: '', ad_modell: 'face_yolov8n.pt', hires_upscaler: 'ESRGAN_4x', upscale_model: '',
+  prompt: '', ad_modell: 'face_yolov8n.pt', hires_upscaler: 'ESRGAN_4x', upscale_model: 'ESRGAN_4x',
 }
 export const listen = { upscalers: ['ESRGAN_4x'] }
+export const modellDa = (name) => Boolean(name)
 export const auswahl = {}
 export const chatanzeige = { chatId: 'chat-1' }
 export const emptyArea = () => {}
 export const familie = () => null
 export const pictureMissing = () => false
 export const startbildWaehlen = () => {}
+export const upscaleWerte = () => ({ upscale_repeats: 1, upscale_tile_size: 128 })
 export const melde = (text, kind) => said.push([text, kind ?? ''])
 export const t = (key) => key
 export const studioZeichnen = (wish) => { drawn.push(wish) }
@@ -88,7 +91,7 @@ const reset = () => {
   said.length = 0; drawn.length = 0; asked.length = 0
   answers.kept = {}; answers.hook = null
   werte.prompt = ''; werte.ad_modell = 'face_yolov8n.pt'
-  werte.hires_upscaler = 'ESRGAN_4x'; werte.upscale_model = ''
+  werte.hires_upscaler = 'ESRGAN_4x'; werte.upscale_model = 'ESRGAN_4x'
   listen.upscalers = ['ESRGAN_4x']
   chatanzeige.chatId = 'chat-1'
 }
@@ -101,18 +104,22 @@ process.exit(0)
 
 
 def _run(scenario: str) -> dict:
+    # Files of a name of their own: the cases of this file run side by side.
+    tag = f"nachbessern-{uuid.uuid4().hex[:8]}"
     files = {
-        FRONTEND / "nachbessern.stubs.mjs": STUBS,
-        FRONTEND / "nachbessern.driver.mjs": DRIVER % {"lib": str(LIB), "scenario": scenario},
+        FRONTEND / f"{tag}.stubs.mjs": STUBS,
+        FRONTEND / f"{tag}.driver.mjs": DRIVER.replace("nachbessern.", f"{tag}.") % {
+            "lib": str(LIB), "scenario": scenario,
+        },
     }
     for path, content in files.items():
         path.write_text(content, encoding="utf-8")
     try:
         done = subprocess.run(
-            ["node", "nachbessern.driver.mjs"], cwd=FRONTEND, capture_output=True, text=True, timeout=120,
+            ["node", f"{tag}.driver.mjs"], cwd=FRONTEND, capture_output=True, text=True, timeout=120,
         )
     finally:
-        for path in [*files, FRONTEND / "nachbessern.studiobilder.mjs"]:
+        for path in [*files, FRONTEND / f"{tag}.studiobilder.mjs"]:
             path.unlink(missing_ok=True)
     assert done.returncode == 0, (done.stdout + done.stderr)[-3000:]
     mark = "---REPORT---"
@@ -211,8 +218,9 @@ def test_upscaling_enlarges_with_the_model_of_its_own_row_and_not_the_highres_on
 
 @needs_node
 @pytest.mark.parametrize("chosen", ["''", "'gone.pth'"])
-def test_a_model_not_chosen_or_no_longer_in_the_folder_is_the_first_of_the_folder(chosen):
-    """The row shows the first file then, and that is the one that is used."""
+def test_a_model_not_chosen_or_no_longer_in_the_folder_enlarges_nothing_and_says_so(chosen):
+    """The row shows "-" then, and nothing is enlarged with a file that was
+    not chosen: it says what is missing, as "-" in the row of the detector."""
     report = _run(f"""
     reset()
     listen.upscalers = ['a.pth', 'b.pth']
@@ -220,9 +228,10 @@ def test_a_model_not_chosen_or_no_longer_in_the_folder_is_the_first_of_the_folde
     werte.hires_upscaler = 'b.pth'
     answers.kept = {{ prompt: 'a red car' }}
     await pictures.hochskalieren('car.png')
-    return {{ drawn }}
+    return {{ drawn, asked, said }}
     """)
-    assert [wish["upscale_model"] for wish in report["drawn"]] == ["a.pth"]
+    assert report["drawn"] == [] and report["asked"] == []
+    assert report["said"] == [["bild.modus_unvollstaendig", "fehler"]]
 
 
 @needs_node
@@ -264,7 +273,8 @@ def test_upscaling_sends_the_kept_prompt_before_the_bar_and_never_a_word_of_the_
     assert report["said"] == []
     assert report["drawn"] == [{
         "mode": "upscale", "startbild": "car.png", "maske": None,
-        "upscale_model": "ESRGAN_4x", "prompt": sent,
+        "upscale_model": "ESRGAN_4x", "upscale_repeats": 1, "upscale_tile_size": 128,
+        "prompt": sent,
     }]
 
 
@@ -287,7 +297,7 @@ def _upscaling_section() -> str:
 
 def test_the_row_upscaler_stands_above_the_highres_switch_and_is_always_there():
     """The row is the model "Upscale" enlarges with: not behind the highres
-    switch, and only the files of the folder (no built-in names — the
+    switch, and "-" or a file of the folder (no built-in names — the
     enlarging needs a file)."""
     section = _upscaling_section()
     row = section.index("data-suche={t('bild.upscaler')}")
@@ -297,7 +307,9 @@ def test_the_row_upscaler_stands_above_the_highres_switch_and_is_always_there():
     assert "{#if" not in section[:row]
     own = section[row:highres]
     assert "upscalerFeste" not in own
-    assert "bind:wert={upscaleAnzeige, upscaleSetzen}" in own
+    assert "bind:wert={werte.upscale_model}" in own
+    # "-" first, like the other rows: the folder's files after it.
+    assert "eintraege={keins(listen.upscalers)}" in own
 
 
 def test_silence_the_highres_upscaler_row_keeps_its_condition_and_its_built_in_names():

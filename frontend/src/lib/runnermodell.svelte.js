@@ -47,6 +47,9 @@ export const runnermodell = $state({
      every other field here — the page fills it in from `vorgaben` until
      then. */
   vorladen: null,
+  /* Whether a run the program places itself may land on this server. Null
+     while unread; the window shows the shipped answer until then. */
+  use_for_runs: null,
   /* Whether the values above have been read. A page must not write before it
      has read, or its first pass would store its own placeholders over what
      was there. */
@@ -83,6 +86,7 @@ function alsObjekt() {
     port: runnermodell.port,
     module: runnermodell.module,
     vorladen: runnermodell.vorladen,
+    use_for_runs: runnermodell.use_for_runs,
   }
 }
 
@@ -218,6 +222,7 @@ function uebernehmen(w) {
   runnermodell.port = Number(w.port) || null
   runnermodell.module = w.module && typeof w.module === 'object' ? w.module : {}
   runnermodell.vorladen = typeof w.vorladen === 'boolean' ? w.vorladen : null
+  runnermodell.use_for_runs = typeof w.use_for_runs === 'boolean' ? w.use_for_runs : null
 }
 
 let laden = null

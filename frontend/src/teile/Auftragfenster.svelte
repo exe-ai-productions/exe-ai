@@ -107,7 +107,7 @@
   {/if}
   {#if arten.length}
     <!-- What the agent may do, one mark per kind of tool: the drawing in the
-         tool colour, the kind's name in grey, and the count only from two
+         text colour, the kind's name in grey, and the count only from two
          on. The row has a place of its own above the field and wraps: an
          agent that may use every tool has more kinds than one line holds.
          The pointer and a screen reader get the names of the tools behind
@@ -222,8 +222,8 @@
   }
   /* A mark draws itself at the size of its box, so the size is said here
      once instead of inside every icon (Werkzeugzeichen.svelte); the chevron
-     of the unknown kind is smaller than its box and is centred in it. The
-     tool colour belongs to a tool; the kind for everything unknown stays
+     of the unknown kind is smaller than its box and is centred in it. A
+     tool's mark wears the text colour; the kind for everything unknown stays
      grey. */
   .wzzeichen {
     display: grid;
@@ -231,7 +231,7 @@
     --wz-groesse: 17px;
     width: 17px;
     height: 17px;
-    color: var(--werkzeug);
+    color: var(--text);
   }
   .wzzeichen.weitere { color: var(--text-still); }
   /* The dead-end case: no field, no tool row below it — so this is the
@@ -265,6 +265,16 @@
   .fussrechts {
     display: flex;
     gap: 8px;
+  }
+  /* On a narrow screen the foot's two sides do not fit in one row: the
+     buttons wrap under the picker instead of running out of the window. */
+  @media (max-width: 720px) {
+    .fuss {
+      flex-wrap: wrap;
+    }
+    .fussrechts {
+      margin-left: auto;
+    }
   }
   /* Cancel and Go are the house button (`.button`, stil/global.css): Go is
      its main form, glass like every main button but Send. */

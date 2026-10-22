@@ -63,6 +63,23 @@ def abgeschnitten(grund: str | None) -> bool:
     return grund.strip().lower() in LAENGENENDE or kontextfenster_voll(grund)
 
 
+# The word of a model that declined to answer: Anthropic ends such a stream
+# with ``stop_reason: refusal`` on an ordinary HTTP 200, usually with no text
+# at all. Not a length and not a finished answer — a reading of its own, so
+# the window can say that nothing is coming instead of showing an empty
+# answer.
+ABGELEHNT = frozenset({
+    "refusal",
+})
+
+
+def abgelehnt(grund: str | None) -> bool:
+    """True only for the words that mean the model declined to answer."""
+    if not isinstance(grund, str):
+        return False
+    return grund.strip().lower() in ABGELEHNT
+
+
 # Every spelling seen for "the model ended this answer on its own" — nothing
 # cut it off and it asked for nothing more. Lowercased like the length set,
 # and just as narrow: Anthropic spells it ``end_turn`` where the

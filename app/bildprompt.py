@@ -44,7 +44,8 @@ LESER: dict[str, tuple[str, ...]] = {
     "llm": (
         "flux2", "flux2_klein", "zimage", "qwen_image", "qwen_image_2_1", "krea2",
         "ideogram4", "ernie", "lens", "longcat", "ovis", "sefi", "anima", "boogu",
-        "mage_flow", "hidream_o1", "llada_image", "sensenova_u1",
+        "mage_flow", "hidream_o1", "llada_image", "sensenova_u1", "flux3_klein",
+        "moss_image", "iris",
     ),
 }
 

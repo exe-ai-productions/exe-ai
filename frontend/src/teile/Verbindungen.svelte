@@ -1,26 +1,26 @@
 <script>
   import { rollfade } from '../lib/rollfade.js'
   import { toRoot } from '../lib/rootPortal.js'
-  /* The MCP server gallery — one card per server, and each card says what
-     the server is for.
-
-     A card carries the maker's logo, the name, one line of purpose and one
-     control at its foot. A server that is not yet connected shows a button
-     that opens the MCP sheet — the same sheet a brand-new address goes
-     through, so a browser sign-in gets no separate door from a plain key. One
-     that is on file but has no valid sign-in says so beside that button. A
-     server that is on file and needs nothing shows its state there instead,
+  /* The MCP server gallery: two groups, by whether a server has an entry in
+     the file. On top, "Set up": every server with an entry as a card — the
+     maker's logo, the name, one line of purpose and one control at its
+     foot. A server that is on file and needs nothing shows its state there,
      and that state is the way into the small options menu below (the switch,
      the tool count, forgetting or removing): once a server works, there is
-     nothing left to ask it for.
+     nothing left to ask it for. One that is on file but has no valid sign-in
+     says so beside the grey button that opens the MCP sheet. Below, "Not set
+     up": every shipped server without an entry as a wide tile with the grey
+     button into that sheet — the same sheet a brand-new address goes
+     through, so a browser sign-in gets no separate door from a plain key —
+     and last the tile for a server of one's own.
 
      The list is the union of the shipped catalog and everything in
      mcp_servers.json; the file stays the one source of truth, reached
-     through the card for a server of one's own at the end. Logos are our
-     own embedded original vendor vectors (lib/logos.js) — nothing is
+     through the last tile. A server moves up to a card with the first entry
+     written for it and back down to a tile when the entry is removed. Logos
+     are our own embedded original vendor vectors (lib/logos.js) — nothing is
      fetched at runtime. */
   import Bereichszeichen from './Bereichszeichen.svelte'
-  import Hauszeichen from './Hauszeichen.svelte'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import Schalter from './Schalter.svelte'
   import Fenster from './Fenster.svelte'
@@ -28,8 +28,11 @@
   import { api, ApiFehler } from '../lib/api.js'
   import { melde, frage } from '../lib/zustand.svelte.js'
   import { t } from '../lib/texte.svelte.js'
-  import { LOGOS } from '../lib/logos.js'
-  import { SERVERKATALOG as KATALOG, gehoertZurKachel, serverTitel } from '../lib/serverkatalog.js'
+  import { SERVERKATALOG as KATALOG } from '../lib/serverkatalog.js'
+  import {
+    cardsOf, zustand as stateOf, setUpCards, notSetUpCards, stateHead as headOf, stateText as textOf,
+    punktFarbe, nameVon, schluesselVon, titelVon, logoVon, eigenLogoVon,
+  } from '../lib/mcpCards.js'
 
   let { zuWerkzeugen } = $props()
 
@@ -44,7 +47,7 @@
 
   /* The MCP sheet (MCPMaske.svelte) — a proper window over the settings
      window, not the anchored menu above. Reached two ways: a not-yet-
-     connected catalogue card (`modus: 'kachel'`), or the card for a server
+     shipped server's tile (`modus: 'kachel'`), or the tile for a server
      of one's own at the end (`modus: 'neu'`). `mcpName` is filled in by the
      sheet itself, once a fresh address answers `initialize` right away —
      the one case where the server's own name is known before anything is
@@ -80,57 +83,20 @@
     laden()
   })
 
-  /* A card belongs to the shipped server whose name and address an entry
-     carries (`gehoertZurKachel`). An entry under a shipped name that points
-     somewhere else is a server of one's own: a card of its own beside the
-     shipped one, which stands as not set up. */
-  const alle = $derived.by(() => [
-    ...KATALOG.map((k) => ({
-      katalog: k,
-      eintrag: eintraege.find((e) => gehoertZurKachel(k, e)) || null,
-    })),
-    ...eintraege
-      .filter((e) => !KATALOG.some((k) => gehoertZurKachel(k, e)))
-      .map((e) => ({ katalog: null, eintrag: e })),
-  ])
-  /* One grid for all of them, the connected servers first; either half
-     keeps the order of the list above. */
-  const isConnected = (k) => ['verbunden', 'wartet'].includes(zustand(k))
-  const cards = $derived([...alle.filter(isConnected), ...alle.filter((k) => !isConnected(k))])
-
-  function zustand(kachel) {
-    const { katalog, eintrag } = kachel
-    if (!eintrag) return 'frei'
-    if (eintrag.api_key_env && eintrag.schluessel_gesetzt === false) return 'schluessel_fehlt'
-    if (!eintrag.enabled) return 'aus'
-    const oertlich = katalog && katalog.anmeldung === 'keine'
-    /* The browser sign-in is a question for a server reached over the
-       network. An entry that starts a program on this machine has nothing
-       to sign in to, whatever it is called — it runs or it does not, and
-       a name it shares with a shipped server must not turn it into one
-       that waits for a sign-in. */
-    const oauthKachel =
-      katalog && !oertlich && katalog.anmeldung !== 'schluessel' && !eintrag.api_key_env &&
-      eintrag.type === 'http'
-    if (oauthKachel && !status[eintrag.name]?.verbunden) return 'getrennt'
-    if (eintrag.laeuft) return 'verbunden'
-    return 'wartet'
-  }
-
-  const punktFarbe = (stand) =>
-    stand === 'verbunden' || stand === 'wartet' ? 'gruen'
-    : stand === 'getrennt' || stand === 'schluessel_fehlt' ? 'rot'
-    : 'still'
-
-  const nameVon = (k) => k.katalog?.name || k.eintrag.name
-  /* What tells two cards apart: the name alone is not enough once a server
-     of one's own carries the name of a shipped one. */
-  const schluesselVon = (k) => `${k.katalog ? 'katalog' : 'eigen'}:${nameVon(k)}`
-  const katalogNamen = new Set(KATALOG.map((k) => k.name))
-  /* The shipped title and logo belong to the shipped server. A server of
-     one's own under its name has its own name as the title and the house's
-     plug as its sign, as every server of one's own has. */
-  const istKatalogName = (k) => k.katalog || !katalogNamen.has(nameVon(k))
+  /* The cards, the two groups and every state are worked out in
+     lib/mcpCards.js, the same place the server overview reads them from. A
+     card belongs to the shipped server whose name and address an entry
+     carries; an entry under a shipped name that points somewhere else is a
+     server of one's own: a card of its own beside the shipped one, which
+     stands as not set up. A server with an entry is a card, the connected
+     and starting ones first; one without is a tile. `zustand` stays the one
+     place that tells them apart. */
+  const alle = $derived(cardsOf(eintraege))
+  const setUp = $derived(setUpCards(alle, status))
+  const notSetUp = $derived(notSetUpCards(alle, status))
+  const zustand = (kachel) => stateOf(kachel, status)
+  const stateHead = (stand) => headOf(stand, t)
+  const stateText = (k, stand) => textOf(k, stand, t)
 
   /* What a server is for, in one line. The text catalogue carries a line
      for every shipped server. A server nobody knows has none, and its card
@@ -138,31 +104,10 @@
   const withPurpose = new Set(KATALOG.map((k) => k.name))
   const purposeOf = (serverName) =>
     withPurpose.has(serverName) ? t(`verbindungen.zweck.${serverName}`) : ''
-  const titelVon = (k) => (istKatalogName(k) ? serverTitel(nameVon(k)) : nameVon(k))
-  /* The maker's logo, or nothing — then the house's plug stands in. Asked
-     for the table's own entries only: a server may be called any word, also
-     one every object answers to. */
-  const logoVon = (k) => (istKatalogName(k) && Object.hasOwn(LOGOS, nameVon(k)) ? LOGOS[nameVon(k)] : null)
-  /* The logo a server of one's own sent along (checked by the service, a
-     data URL), or nothing. Never for a shipped server's card: that one
-     wears its maker's vector above. */
-  const eigenLogoVon = (k) => (!k.katalog && k.eintrag?.logo) || null
-  const kachelVon = (schluessel) => alle.find((k) => schluesselVon(k) === schluessel) || null
+  /* Only a card on file has a menu: an entry taken out from elsewhere turns
+     its card into a tile, and the menu goes with it. */
+  const kachelVon = (schluessel) => setUp.find((k) => schluesselVon(k) === schluessel) || null
   const offeneKachel = $derived(menue ? kachelVon(menue.schluessel) : null)
-
-  /* A server that is not yet connected — never asked for a key, or an
-     oauth one nobody has signed into — has nothing to show in the small
-     menu but a way into the MCP sheet; its card carries the button into
-     that sheet, for every kind, not only the plain-key one.
-
-     Not a server whose key is missing: it is on file, with an entry to
-     switch off, and the sheet does not switch it. Its card shows the state,
-     which opens the small menu, and the menu carries a way into the sheet
-     for the key. The sheet of a server on file does carry the removal, so
-     an entry whose sign-in was abandoned can still go. */
-  function brauchtVerbindung(k) {
-    return ['frei', 'getrennt'].includes(zustand(k))
-  }
 
   function maskeOeffnen(k) {
     mcpKachel = k
@@ -223,8 +168,10 @@
     }
   }
 
-  async function vergessen(eintrag) {
-    if (!(await frage(t('verbindungen.vergessen_frage', { name: eintrag.name })))) return
+  /* The question names the server as its card does; the entry is still
+     reached under the key of the file. */
+  async function vergessen(eintrag, serverTitle) {
+    if (!(await frage(t('verbindungen.vergessen_frage', { name: serverTitle })))) return
     try {
       await api.oauthVergessen(eintrag.name)
       schliessen()
@@ -235,8 +182,8 @@
     }
   }
 
-  async function entfernen(eintrag) {
-    if (!(await frage(t('verbindungen.entfernen_frage', { name: eintrag.name })))) return
+  async function entfernen(eintrag, serverTitle) {
+    if (!(await frage(t('verbindungen.entfernen_frage', { name: serverTitle })))) return
     try {
       await api.serverEntfernen(eintrag.name)
       schliessen()
@@ -263,38 +210,36 @@
   onkeydown={(e) => { if (e.key === 'Escape') schliessen() }}
 />
 
+{#snippet mark(k, size)}
+  {@const logo = logoVon(k)}
+  {#if logo}
+    <svg viewBox={logo.vb} width={size} height={size}>{@html logo.html}</svg>
+  {:else if eigenLogoVon(k)}
+    <img class="eigenlogo" src={eigenLogoVon(k)} width={size} height={size} alt="" />
+  {:else}
+    <Bereichszeichen zeichen="stecker" groesse={size} />
+  {/if}
+{/snippet}
+
 {#snippet card(k)}
   {@const name = nameVon(k)}
   {@const stand = zustand(k)}
-  {@const logo = logoVon(k)}
   <div class="card" class:offen={menue?.schluessel === schluesselVon(k)} role="group" aria-label={titelVon(k)}>
     <div class="cardhead">
-      <span class="logo" aria-hidden="true">
-        {#if logo}
-          <svg viewBox={logo.vb} width="40" height="40">{@html logo.html}</svg>
-        {:else if eigenLogoVon(k)}
-          <img class="eigenlogo" src={eigenLogoVon(k)} width="40" height="40" alt="" />
-        {:else}
-          <Bereichszeichen zeichen="stecker" groesse={40} />
-        {/if}
-      </span>
+      <span class="logo" aria-hidden="true">{@render mark(k, 40)}</span>
       <span class="titel">{titelVon(k)}</span>
     </div>
     <p class="purpose">{purposeOf(name)}</p>
-    {#if brauchtVerbindung(k)}
-      <!-- One foot line for both kinds. A server never set up shows the
-           button alone. One that is on file without a valid sign-in says so
-           to the left of it, in the colour of a failure: dot and words as
-           plain text without a surface, so the button stays the one thing
-           to press. -->
+    {#if stand === 'getrennt'}
+      <!-- On file without a valid sign-in: it says so to the left of the
+           button, in the colour of a failure — dot and words as plain text
+           without a surface, so the button stays the one thing to press. -->
       <div class="foot">
-        {#if stand === 'getrennt'}
-          <span class="lost">
-            <Leuchtpunkt farbe={punktFarbe(stand)} groesse={11} />
-            <span class="statetext">{t('verbindungen.stand_getrennt')}</span>
-          </span>
-        {/if}
-        <button class="connect" onclick={() => maskeOeffnen(k)}>{t('verbindungen.verbinden')}</button>
+        <span class="lost">
+          <Leuchtpunkt farbe={punktFarbe(stand)} groesse={11} />
+          <span class="statetext">{t('verbindungen.stand_getrennt')}</span>
+        </span>
+        <button class="button" onclick={() => maskeOeffnen(k)}>{t('verbindungen.verbinden')}</button>
       </div>
     {:else}
       <!-- The state of a server on file, and the way into its menu. The dot
@@ -303,39 +248,68 @@
       <button
         class="state"
         data-stand={stand}
+        title={stateText(k, stand)}
         onclick={(e) => { e.stopPropagation(); oeffnen(k, e) }}
         aria-haspopup="menu"
         aria-expanded={menue?.schluessel === schluesselVon(k)}
       >
         <Leuchtpunkt farbe={punktFarbe(stand)} groesse={11} />
-        <span class="statetext">{t(`verbindungen.stand_${stand}`)}</span>
+        <span class="statetext">{stateText(k, stand)}</span>
         <span class="arrow" aria-hidden="true">›</span>
       </button>
     {/if}
   </div>
 {/snippet}
 
+<!-- A shipped server without an entry: logo, name, what it is for, and the
+     grey button into the sheet. -->
+{#snippet tile(k)}
+  <div class="tile" role="group" aria-label={titelVon(k)}>
+    <span class="tilelogo" aria-hidden="true">{@render mark(k, 36)}</span>
+    <span class="tiletext">
+      <span class="titel">{titelVon(k)}</span>
+      <span class="purpose">{purposeOf(nameVon(k))}</span>
+    </span>
+    <button class="button" onclick={() => maskeOeffnen(k)}>{t('verbindungen.verbinden')}</button>
+  </div>
+{/snippet}
+
 <div class="rollbereich" use:rollfade>
-  <!-- What the page is for, said once above the cards. -->
+  <!-- What the page is for, said once above the groups. -->
   <div class="intro">
     <p class="introhead">{t('verbindungen.einleitung_kopf')}</p>
     <p class="introhint">{t('verbindungen.einleitung')}</p>
   </div>
-  <div class="galerie">
-    {#each cards as k (schluesselVon(k))}{@render card(k)}{/each}
-    <!-- The way to a server nobody shipped: the same card, the house's own
-         plug where a maker's logo would stand. -->
-    <div class="card own" role="group" aria-label={t('verbindungen.custom_server')}>
-      <div class="cardhead">
-        <span class="logo" aria-hidden="true"><Bereichszeichen zeichen="stecker" groesse={40} /></span>
-        <span class="titel">{t('verbindungen.custom_server')}</span>
+  {#if setUp.length}
+    <section class="section">
+      <h3 class="sectionhead">
+        <span class="sectionname">{t('verbindungen.section_set_up')}</span>
+        <span class="sectioncount">{setUp.length}</span>
+      </h3>
+      <div class="galerie">
+        {#each setUp as k (schluesselVon(k))}{@render card(k)}{/each}
       </div>
-      <p class="purpose">{t('verbindungen.zweck.eigener')}</p>
-      <div class="foot">
-        <button class="connect" onclick={mcpNeuOeffnen}>{t('verbindungen.hinzufuegen')}</button>
+    </section>
+  {/if}
+  <section class="section">
+    <h3 class="sectionhead">
+      <span class="sectionname">{t('verbindungen.section_not_set_up')}</span>
+      <span class="sectioncount">{notSetUp.length}</span>
+    </h3>
+    <div class="tiles">
+      {#each notSetUp as k (schluesselVon(k))}{@render tile(k)}{/each}
+      <!-- The way to a server nobody shipped: the same tile, the house's own
+           plug where a maker's logo would stand. -->
+      <div class="tile own" role="group" aria-label={t('verbindungen.custom_server')}>
+        <span class="tilelogo" aria-hidden="true"><Bereichszeichen zeichen="stecker" groesse={36} /></span>
+        <span class="tiletext">
+          <span class="titel">{t('verbindungen.custom_server')}</span>
+          <span class="purpose">{t('verbindungen.zweck.eigener')}</span>
+        </span>
+        <button class="button" onclick={mcpNeuOeffnen}>{t('verbindungen.hinzufuegen')}</button>
       </div>
     </div>
-  </div>
+  </section>
 </div>
 
 {#if menue && offeneKachel}
@@ -360,7 +334,7 @@
           {:else}<Bereichszeichen zeichen="stecker" groesse={18} />{/if}
         </span>
         <span class="mtitel">{titelVon(k)}</span>
-        <span class="mstand" data-stand={stand}>{t(`verbindungen.stand_${stand}`)}</span>
+        <span class="mstand" data-stand={stand}>{stateHead(stand)}</span>
       </div>
 
       <!-- Reached once a server is connected or at least configured: a
@@ -386,12 +360,12 @@
         </button>
       {/if}
       {#if status[name]?.verbunden}
-        <button class="mleise" onclick={() => vergessen(k.eintrag)}>{t('verbindungen.vergessen')}</button>
+        <button class="mleise" onclick={() => vergessen(k.eintrag, titelVon(k))}>{t('verbindungen.vergessen')}</button>
       {/if}
       <!-- Every server on file can be removed, a catalogue one too: removing
            it takes its entry out of the file and leaves the card to be
            connected again, with or without a key. -->
-      <button class="mleise gefahr" onclick={() => entfernen(k.eintrag)}>{t('verbindungen.entfernen')}</button>
+      <button class="mleise gefahr" onclick={() => entfernen(k.eintrag, titelVon(k))}>{t('verbindungen.entfernen')}</button>
     </div>
   </div>
 {/if}
@@ -400,11 +374,8 @@
          titel={mcpModus === 'neu'
            ? (mcpName || t('mcp.titel_neu'))
            : t('mcp.titel_kachel', { name: titelVon(mcpKachel) })}>
-  {#snippet symbol()}
-    <Hauszeichen zeichen={mcpModus === 'neu' ? 'plus' : 'plug'} groesse="mittel" />
-  {/snippet}
   <MCPMaske modus={mcpModus} kachel={mcpKachel} fertig={mcpFertig}
-            entfernen={mcpKachel?.eintrag ? () => entfernen(mcpKachel.eintrag) : null}
+            entfernen={mcpKachel?.eintrag ? () => entfernen(mcpKachel.eintrag, titelVon(mcpKachel)) : null}
             bind:name={mcpName} />
 </Fenster>
 
@@ -430,11 +401,43 @@
     font-size: var(--schrift-hinweis);
     color: var(--text-still);
   }
+  /* The two groups, each under its heading: the name half bold, the count
+     quiet beside it. */
+  .section {
+    margin-bottom: 28px;
+  }
+  .sectionhead {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0 0 10px;
+    font-size: 13px;
+    line-height: 16px;
+  }
+  .sectionname {
+    font-weight: 600;
+    color: var(--text-leise);
+  }
+  .sectioncount {
+    font-weight: 400;
+    color: var(--text-still);
+  }
+  /* Three columns at about a thousand pixels of page, four at the full
+     width; one column on a phone, where the minimum gives way. */
   .galerie {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
     /* One height for every card of a group, whichever line runs longest. */
     grid-auto-rows: 1fr;
+    gap: 12px;
+    align-content: start;
+  }
+  /* The wide tiles: two columns at about a thousand pixels, three at the
+     full width. Every row is as tall as its tallest tile, at least 88. */
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(400px, 100%), 1fr));
+    grid-auto-rows: minmax(88px, auto);
     gap: 12px;
     align-content: start;
   }
@@ -476,8 +479,45 @@
     place-items: center;
     color: var(--text);
   }
-  .card.own .logo {
+  /* A tile: the logo at thirty-six, the name over its line, the grey button
+     at the right edge. */
+  .tile {
+    border: 1px solid var(--glass-card-line);
+    border-radius: 9px;
+    background: var(--glass-card);
+    color: var(--text);
+    padding: 14px 16px;
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 14px;
+    transition: background 0.12s;
+  }
+  .tilelogo {
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    color: var(--text);
+  }
+  .tile.own .tilelogo {
     color: var(--text-leise);
+  }
+  .tiletext {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .tile .titel {
+    font-size: 14px;
+  }
+  .tile .purpose {
+    flex: none;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
   }
   .titel {
     min-width: 0;
@@ -495,12 +535,11 @@
     color: var(--text-leise);
   }
 
-  /* The foot. Both forms are one size, so a row of cards keeps one line
-     whether its servers are connected or not: the button in the colour of
-     something to switch on, the state in the colour of what it reports —
-     each on the quiet surface every coloured notice sits on, never the
-     full colour behind text. */
-  .connect,
+  /* The foot. Both forms are one height, so a row of cards keeps one line
+     whether its servers are connected or not: the state in the colour of
+     what it reports on the quiet surface every coloured notice sits on,
+     never the full colour behind text — or, for a server whose sign-in is
+     gone, the words of that on no surface and the grey house button. */
   .state {
     width: 100%;
     height: 34px;
@@ -510,18 +549,20 @@
     font-weight: 600;
     cursor: pointer;
   }
-  /* The foot of a card with a button. The button alone fills it; beside
-     the words of a lost sign-in they take the width they need on one line
-     and the button takes the rest, so no card of the grid grows taller. The
-     words take their height from the button beside them. */
+  /* The words stand left, the button right, on one line: the button is as
+     wide as its word needs and as tall as the state button of a card beside
+     it, so no card of the grid grows taller. */
   .foot {
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(0, 1fr);
+    display: flex;
+    align-items: center;
     gap: 8px;
   }
-  .foot:has(.lost) {
-    grid-auto-columns: auto minmax(0, 1fr);
+  .foot .button {
+    flex: none;
+    height: 34px;
+    margin-left: auto;
+    padding-top: 0;
+    padding-bottom: 0;
   }
   .lost {
     display: flex;
@@ -529,25 +570,18 @@
     gap: 8px;
     font-size: 13px;
     font-weight: 600;
-    color: var(--rot);
+    color: var(--rot-text);
   }
-  /* Never broken and never cut: the column of the words is as wide as they
-     are. */
+  /* Never broken and never cut: the words are as wide as they are. */
   .lost .statetext {
     white-space: nowrap;
     line-height: 1.2;
   }
-  .connect {
-    color: var(--blau);
-    /* A state surface mixes its colour over the card glass. */
-    background: color-mix(in srgb, var(--blau) 12%, var(--glass-card));
-    border: 1px solid color-mix(in srgb, var(--blau) 28%, transparent);
-  }
-  .connect:hover {
-    background: color-mix(in srgb, var(--blau) 18%, var(--glass-card));
-  }
   .state {
     --state-colour: var(--text-leise);
+    /* The same state as written words: the dot, the surface and the line
+       keep the plain colour, the type takes the form made for text. */
+    --state-ink: var(--text-leise);
     display: flex;
     align-items: center;
     gap: 8px;
@@ -563,9 +597,14 @@
   .state[data-stand='verbunden'],
   .state[data-stand='wartet'] {
     --state-colour: var(--gruen);
+    --state-ink: var(--gruen-text);
   }
   .state[data-stand='schluessel_fehlt'] {
     --state-colour: var(--rot);
+    --state-ink: var(--rot-text);
+  }
+  .state .statetext {
+    color: var(--state-ink);
   }
   .statetext {
     min-width: 0;
@@ -646,11 +685,11 @@
   }
   .mstand[data-stand='verbunden'],
   .mstand[data-stand='wartet'] {
-    color: var(--gruen);
+    color: var(--gruen-text);
   }
   .mstand[data-stand='getrennt'],
   .mstand[data-stand='schluessel_fehlt'] {
-    color: var(--rot);
+    color: var(--rot-text);
   }
   .mzeile {
     display: flex;
@@ -691,6 +730,6 @@
     color: var(--text);
   }
   .mleise.gefahr:hover {
-    color: var(--rot);
+    color: var(--rot-text);
   }
 </style>

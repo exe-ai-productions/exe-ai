@@ -31,13 +31,15 @@
   import StudioPictureMenu from './StudioPictureMenu.svelte'
   import { api } from '../lib/api.js'
   import { draussen } from '../lib/draussen.js'
+  import { system } from '../lib/keyNames.js'
   import { pictureProgress, watchPicturePreview, watchPictureProgress } from '../lib/pictureProgress.svelte.js'
   import { zeichnung } from '../lib/studiozeichnen.svelte.js'
   import { alsSchwarzWeiss, aufFlaeche, bemalt, leeren, malflaeche, strich, umkehren } from '../lib/maske.js'
   import { layerChangeable, paintAllowed } from '../lib/maskLock.js'
-  import { fitArea } from '../lib/studioArea.js'
+  import { brushBarAbove, fitArea } from '../lib/studioArea.js'
   import {
-    leinwand, newestIntoArea, pictureFromOutside, releaseLayers, studioMask, studioSichtbar, surface, werte,
+    bildmass, leinwand, newestIntoArea, pictureFromOutside, releaseLayers, studioMask, studioSichtbar, surface,
+    werte,
   } from '../lib/studio.svelte.js'
   import { studioStore } from '../lib/studioStore.svelte.js'
   import { t } from '../lib/texte.svelte.js'
@@ -72,6 +74,16 @@
     return () => beobachter.disconnect()
   })
 
+  // Told to the row of pictures: below the width the brush bar needs between
+  // the tools and the zoom, it stands in a row of its own under the zoom.
+  const brushRow = $derived(!brushBarAbove(fw))
+  $effect(() => {
+    surface.brushRow = brushRow
+    return () => {
+      surface.brushRow = false
+    }
+  })
+
   // The generation area: the studio's width × height, fitted into the room.
   const gw = $derived(Math.max(64, Number(werte.breite) || 1024))
   const gh = $derived(Math.max(64, Number(werte.hoehe) || 1024))
@@ -85,6 +97,10 @@
   /* "···" at the area's top right: the picture menu for the picture in it,
      there only while one is. A click anywhere else shuts it. */
   let menueOffen = $state(false)
+  let menueBreite = $state(0)
+  // How far the area's row reaches: to the area's right edge, 8 px short of
+  // "···" while that stands there.
+  const zeilenbreite = $derived(Math.max(0, bereich.w - (bildUrl ? menueBreite + 8 : 0)))
   $effect(() => {
     if (!bildUrl) menueOffen = false
   })
@@ -98,6 +114,11 @@
   const natur = $derived(
     bildUrl && gemessen.url === bildUrl ? { w: gemessen.w, h: gemessen.h } : { w: 0, h: 0 },
   )
+  // What the details column tells the final size of an enlarging from.
+  $effect(() => {
+    bildmass.w = natur.w
+    bildmass.h = natur.h
+  })
   let lage = $state({ x: 0, y: 0, zoom: 1 })
   const bildStil = $derived(
     `width:${natur.w}px;height:${natur.h}px;transform:translate(${bereich.x + lage.x * bereich.s}px,`
@@ -547,7 +568,7 @@
   }
 
   /* Space lends the hand while held; Cmd/Ctrl+Z steps back, with Shift
-     forward. Never while something is typed, and only while the studio
+     forward (on Windows Ctrl+Y forward too). Never while something is typed, and only while the studio
      shows. */
   function tasteRunter(ereignis) {
     if (!studioSichtbar()) return
@@ -563,6 +584,11 @@
       ereignis.preventDefault()
       if (ereignis.shiftKey) vor()
       else zurueck()
+    } else if (system === 'windows' && ereignis.ctrlKey && !ereignis.metaKey && !ereignis.altKey
+      && !ereignis.shiftKey && ereignis.key.toLowerCase() === 'y') {
+      // Windows names Ctrl+Y for stepping forward, as the list of shortcuts shows it.
+      ereignis.preventDefault()
+      vor()
     }
   }
   function tasteHoch(ereignis) {
@@ -698,19 +724,26 @@
          lies in the area and what the area asks for can be told apart.
          Only while a picture lies there. -->
     <div class="bereichsname" role="group" aria-label={t('bild.startbild')}
-         style="left:{bereich.x}px;top:{bereich.y - 66}px">
+         style="left:{bereich.x}px;top:{bereich.y - 66}px;max-width:{bereich.w}px">
       <Hauszeichen zeichen="bild" groesse={14} />
-      <span>{natur.w} × {natur.h}</span>
+      <span class="mass">{natur.w} × {natur.h}</span>
     </div>
   {/if}
 
-  <div class="bereichsname" style="left:{bereich.x}px;top:{bereich.y - 36}px">
+  <!-- Both rows end at the area's right edge; this one 8 px before "···"
+       while that stands there. Too long, only the label's last word gives
+       way ("…"); the sign and the size stay whole. -->
+  <div class="bereichsname" style="left:{bereich.x}px;top:{bereich.y - 36}px;max-width:{zeilenbreite}px">
     <Hauszeichen zeichen="raster" groesse={14} />
-    <span>{t('studio.generierungsbereich')} · {gw} × {gh}</span>
+    <span class="text">
+      <span class="wort">{t('studio.generierungsbereich')}</span>
+      <span class="mass">{' · ' + gw + ' × ' + gh}</span>
+    </span>
   </div>
 
   {#if bildUrl}
-    <div class="bereichsmenue" style="left:{bereich.x + bereich.w}px;top:{bereich.y - 36}px" use:draussen={() => (menueOffen = false)}>
+    <div class="bereichsmenue" style="left:{bereich.x + bereich.w}px;top:{bereich.y - 36}px"
+         bind:offsetWidth={menueBreite} use:draussen={() => (menueOffen = false)}>
       <button class="mehr" aria-label="···" aria-haspopup="menu" aria-expanded={menueOffen}
               onclick={() => (menueOffen = !menueOffen)}>···</button>
       {#if menueOffen}
@@ -761,7 +794,7 @@
   </div>
 
   {#if malt}
-    <div class="oben">
+    <div class="oben" class:zeile={brushRow}>
     <div class="pinselleiste glas">
       <span class="teil">
         <MaskenZeichen name={werkzeug} groesse={14} />
@@ -939,6 +972,24 @@
     font: 400 13px/18px var(--schrift);
     pointer-events: none;
     white-space: nowrap;
+    /* Never wider than the max-width the markup gives: what does not fit
+       is cut off at the end of the row. */
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+  .bereichsname .text {
+    display: flex;
+    min-width: 0;
+  }
+  /* The label gives way with "…"; the size after it stays whole. */
+  .bereichsname .wort {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .bereichsname .mass {
+    flex: none;
+    white-space: pre;
   }
   .bereichsmenue {
     position: absolute;
@@ -1011,6 +1062,10 @@
   }
   .pinselleiste {
     min-width: 0;
+    /* Never wider than the room between the tools and the zoom: the bar
+       rolls sideways inside its glass rather than reach out of it. */
+    max-width: 100%;
+    overflow-x: auto;
     pointer-events: auto;
     display: flex;
     align-items: center;
@@ -1023,6 +1078,7 @@
   }
   .teil {
     display: inline-flex;
+    flex: none;
     align-items: center;
     gap: 8px;
   }
@@ -1072,5 +1128,25 @@
   .zoom .step:disabled {
     opacity: 0.35;
     cursor: default;
+  }
+  /* On a surface too narrow for the brush bar between the tools and the
+     zoom (studioArea.js `BRUSH_BAR_MIN_WIDTH`) it moves to a row of its own
+     under the zoom and rolls sideways when its three parts are wider than
+     the surface. */
+  .oben.zeile {
+    top: 52px;
+    left: 8px;
+    right: 8px;
+    justify-content: flex-start;
+  }
+  .oben.zeile .pinselleiste {
+    gap: 8px;
+    padding: 0 10px;
+  }
+  .oben.zeile .regler {
+    width: 52px;
+  }
+  .oben.zeile .zahl {
+    display: none;
   }
 </style>

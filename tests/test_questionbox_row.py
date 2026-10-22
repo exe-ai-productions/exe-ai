@@ -18,11 +18,12 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from tests.fensterquelle import BAR_SOURCE
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 MODULE = FRONTEND / "src" / "lib" / "questionbox.svelte.js"
-BAR = FRONTEND / "src" / "teile" / "Eingabeleiste.svelte"
+BAR = BAR_SOURCE
 CARD = FRONTEND / "src" / "teile" / "QuestionBox.svelte"
 
 needs_node = pytest.mark.skipif(
@@ -218,7 +219,8 @@ def test_each_question_pushed_away_has_a_chip_that_names_who_asks():
     chip = bar[bar.index("{#each pushedAway as item"):]
     chip = chip[:chip.index("{/each}")]
     assert 'class="later-chip"' in chip and "onclick={() => resume(item)}" in chip
-    assert "{item.kind === 'agent' ? item.question.agentName : modelName}" in chip
+    assert "{@const asker = item.kind === 'agent' ? item.question.agentName : modelName}" in chip
+    assert '<span class="asker">{asker}</span>' in chip
     # The card gets the place of the question in the row.
     assert "position={standing.position}" in bar and "total={standing.total}" in bar
 

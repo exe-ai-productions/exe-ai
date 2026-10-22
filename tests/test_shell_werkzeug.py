@@ -66,6 +66,60 @@ def test_alltag_laeuft_durch(befehl):
     assert shell.blockiert(befehl) is None
 
 
+@pytest.mark.parametrize(
+    "befehl",
+    [
+        "grep -rn halt src/",
+        "grep -rn 'systemctl' deploy/",
+        'echo "Das ist halt so" >> notiz.md',
+        "git commit -m 'fix shutdown hook'",
+        "man launchctl",
+        "echo mkfs",
+        "echo hi; echo reboot",
+        "git log --grep=shutdown",
+    ],
+)
+def test_a_word_in_a_search_or_a_text_does_not_trip_the_wire(befehl):
+    assert shell.blockiert(befehl) is None
+
+
+@pytest.mark.parametrize(
+    "befehl",
+    [
+        "shutdown -h now",
+        "ls; reboot",
+        "ls && halt",
+        "ls || poweroff",
+        "ls\nreboot",
+        "echo $(reboot)",
+        "echo `halt`",
+        "nohup shutdown -r now",
+        "env X=1 reboot",
+        "X=1 reboot",
+        "time halt",
+        "/sbin/shutdown -h now",
+        'bash -c "shutdown -h now"',
+        "sh -c 'reboot'",
+        "eval reboot",
+        "mkfs.ext4 /dev/sda1",
+        "launchctl unload a.plist",
+        "systemctl stop nginx",
+        "sudo reboot",
+        "ls | xargs halt",
+        "if true; then reboot; fi",
+        "(reboot)",
+    ],
+)
+def test_silence_a_command_that_begins_with_the_name_is_still_stopped(befehl):
+    assert shell.blockiert(befehl) is not None
+
+
+def test_the_names_are_stopped_with_the_name_of_what_they_do():
+    assert shell.blockiert("ls; reboot") == "shutting the machine down"
+    assert shell.blockiert("env X=1 systemctl stop a") == "system services"
+    assert shell.blockiert("mkfs.ext4 /dev/sda1") == "mkfs"
+
+
 def test_rm_rf_im_ordner_ist_kein_rm_rf_wurzel():
     """The pattern must hit the root, not every forceful delete.
 

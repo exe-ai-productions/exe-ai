@@ -105,6 +105,15 @@ const KOPIER_ZEICHEN =
   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">' +
   '<rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 012-2h10" /></svg>';
 
+/* The tick the copy button shows once the text is on the clipboard: the
+   house's `haken` drawing (Hauszeichen.svelte) at the copy mark's size and
+   stroke. It lies over the copy mark and the two cross-fade (codeblock.css). */
+export const TICK_SIGN =
+  '<svg class="code-tick" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M4 12.5 L9.5 18 L20 6.5" /></svg>';
+// How long the tick stays before the copy mark comes back.
+const TICK_MS = 1000;
+
 /*
   One frame for every code block of an answer, finished or still being
   written. No header bar: the language, when the model named one, sits small
@@ -124,7 +133,7 @@ function codeRahmen(roh, sprache, offen) {
   const kopieren = t('nachricht.kopieren');
   const knopf = offen
     ? ''
-    : `<button class="code-kopieren" title="${kopieren}" aria-label="${kopieren}">${KOPIER_ZEICHEN}</button>`;
+    : `<button class="code-kopieren" title="${kopieren}" aria-label="${kopieren}">${KOPIER_ZEICHEN}${TICK_SIGN}</button>`;
   const kennung = sprache ? `<span class="code-sprache">${maskieren(sprache)}</span>` : '';
   // The digit count sizes the number column, so row 9 and row 10 line up.
   const breite = zeilen > 1 ? ` style="--ziffern:${String(zeilen).length}"` : '';
@@ -179,21 +188,26 @@ function inline(text) {
   //
   // A finished image is set aside and put back at the very end: its
   // attributes must not be read by the emphasis and link rules below, which
-  // would write markup into them.
-  const bilder = [];
+  // would write markup into them. A code span is set aside the same way:
+  // what stands between backticks is written character for character, so no
+  // rule below may reach into it — a command with `2*3*4` or `x**2` in it
+  // would otherwise be copied out wrong.
+  const beiseite = [];
   return text
-    // A code span is skipped whole, so an image written in backticks stays
-    // the text it was written as. Before the code rule below, so that an
+    // A code span is taken out whole, so an image written in backticks stays
+    // the text it was written as. In the same pass as the images, so that an
     // alt text with backticks in it is not already markup when it is read.
-    .replace(/(`[^`]+`)|!\[([^\]]*)\]\(([^)\s]+)\)/g,
+    .replace(/`([^`]+)`|!\[([^\]]*)\]\(([^)\s]+)\)/g,
       (alles, code, alt, adresse) => {
-        if (code) return code;
+        if (code !== undefined) {
+          beiseite.push('<code>' + code + '</code>');
+          return '\x02' + (beiseite.length - 1) + '\x02';
+        }
         const html = bildOderLink(alt, adresse);
         if (html === null) return alles;
-        bilder.push(html);
-        return '\x02' + (bilder.length - 1) + '\x02';
+        beiseite.push(html);
+        return '\x02' + (beiseite.length - 1) + '\x02';
       })
-    .replace(/`([^`]+)`/g, (_, c) => '<code>' + c + '</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
     .replace(/~~([^~]+)~~/g, '<del>$1</del>')
@@ -204,7 +218,7 @@ function inline(text) {
     // is read, and an address in it is cut by the rule of the own message.
     .replace(/(<code>.*?<\/code>|<a [^>]*>.*?<\/a>|<[^>]+>)|([^<]+)/gs,
       (alles, markup, text) => (markup ? markup : adressenVerlinken(text)))
-    .replace(/\x02(\d+)\x02/g, (_, i) => bilder[i]);
+    .replace(/\x02(\d+)\x02/g, (_, i) => beiseite[i]);
 }
 
 /* The bare addresses of one stretch of text that is already masked
@@ -473,37 +487,94 @@ function rendern(quelltext) {
 
   text = maskieren(text);
 
-  const zeilen = text.split('\n');
-  const raus = [];
-  let liste = null, zitat = [], absatz = [];
+  return zeilenRendern(text.split('\n')).replace(BLOCK_MARKE, (_, i) => bloecke[i]);
+}
 
+/* The blocks of a run of lines. A quote hands its own lines (the marker
+   taken off) back to this function, so what stands in a quote is read by the
+   same rules as what stands outside it: paragraphs, lists, headings. */
+function zeilenRendern(zeilen) {
+  const raus = [];
+  let zitat = [], absatz = [];
+
+  /* The lists that stand open, the outermost first. A level knows where its
+     marker stands (`rand`) and where the text of its item begins (`inhalt`,
+     the marker, its blanks and the margin): a line indented to that column
+     belongs to the item, a marker indented to it opens a list inside the
+     item, a marker left of it is the item's sibling or an outer list's.
+     `text` is the item still being written, `kopfGeschrieben` whether its
+     opening tag and first text are already out (a list inside it has to come
+     after them). */
+  const listen = [];
+  /* The box in front of the text of a task item (`- [ ] text`, `- [x] text`):
+     the browser's own box, locked, ticked for an `x`. */
+  const kasten = (ebene) => {
+    if (ebene.aufgabe === undefined) return '';
+    return '<input type="checkbox" disabled' + (ebene.aufgabe ? ' checked' : '') + '> ';
+  };
+  const punktKopf = (ebene) => {
+    if (!ebene.kopfGeschrieben) {
+      raus.push('<li>' + kasten(ebene) + inline(ebene.text.join(' ')));
+      ebene.kopfGeschrieben = true;
+    }
+  };
+  const punktSchliessen = (ebene) => {
+    if (!ebene.punktOffen) return;
+    if (ebene.kopfGeschrieben) raus.push('</li>');
+    else raus.push('<li>' + kasten(ebene) + inline(ebene.text.join(' ')) + '</li>');
+    ebene.punktOffen = false;
+  };
+  const ebeneSchliessen = () => {
+    const ebene = listen.pop();
+    punktSchliessen(ebene);
+    raus.push('</' + ebene.art + '>');
+  };
+  const listeSchliessen = () => { while (listen.length) ebeneSchliessen(); };
   const absatzSchliessen = () => {
     if (absatz.length) { raus.push('<p>' + inline(absatz.join(' ')) + '</p>'); absatz = []; }
   };
-  const listeSchliessen = () => {
-    if (liste) { raus.push('</' + liste + '>'); liste = null; }
-  };
   const zitatSchliessen = () => {
-    if (zitat.length) {
-      raus.push('<blockquote>' + inline(zitat.join(' ')) + '</blockquote>');
-      zitat = [];
-    }
+    if (!zitat.length) return;
+    /* One paragraph stands in the quote as bare text, as it always did; more
+       blocks stand as they are. */
+    const innen = zeilenRendern(zitat);
+    const einzeln = innen.match(/^<p>((?:(?!<\/?p>)[\s\S])*)<\/p>$/);
+    raus.push('<blockquote>' + (einzeln ? einzeln[1] : innen) + '</blockquote>');
+    zitat = [];
   };
   const allesSchliessen = () => { absatzSchliessen(); listeSchliessen(); zitatSchliessen(); };
+
+  /* How far a line is indented, a tab counting as four blanks. */
+  const einzugVon = (zeile) => zeile.match(/^[ \t]*/)[0].replace(/\t/g, '    ').length;
+  const PUNKT_MARKE = /^([ \t]*)([-*+]|\d+\.)([ \t]+)(\S.*)$/;
 
   for (let i = 0; i < zeilen.length; i++) {
     const zeile = zeilen[i];
     const roh = zeile.trim();
 
-    if (!roh) { allesSchliessen(); continue; }
+    if (!roh) {
+      /* A blank line does not end a list that goes on: the next line is
+         another item, or indented to the open item's text. */
+      let weiter = i + 1;
+      while (weiter < zeilen.length && !zeilen[weiter].trim()) weiter++;
+      const folgt = zeilen[weiter];
+      const geht = listen.length && folgt !== undefined && (
+        PUNKT_MARKE.test(folgt) ||
+        einzugVon(folgt) >= listen[0].inhalt
+      );
+      if (geht) { i = weiter - 1; continue; }
+      allesSchliessen();
+      continue;
+    }
 
     if (/^\d+$/.test(roh)) { allesSchliessen(); raus.push(roh); continue; }
     if (/^datei\d+$/.test(roh)) { allesSchliessen(); raus.push(roh); continue; }
 
-    const ueberschrift = roh.match(/^(#{1,4})\s+(.*)$/);
+    // Six hashes are the deepest heading; the fourth level and below look alike.
+    const ueberschrift = roh.match(/^(#{1,6})\s+(.*)$/);
     if (ueberschrift) {
       allesSchliessen();
-      const stufe = ueberschrift[1].length + 1;
+      const stufe = Math.min(ueberschrift[1].length, 4) + 1;
       raus.push('<h' + stufe + '>' + inline(ueberschrift[2]) + '</h' + stufe + '>');
       continue;
     }
@@ -527,13 +598,53 @@ function rendern(quelltext) {
       continue;
     }
 
-    const punkt = roh.match(/^[-*+]\s+(.*)$/);
-    const nummer = roh.match(/^\d+\.\s+(.*)$/);
-    if (punkt || nummer) {
+    const punkt = zeile.match(PUNKT_MARKE);
+    if (punkt) {
       absatzSchliessen(); zitatSchliessen();
-      const art = punkt ? 'ul' : 'ol';
-      if (liste !== art) { listeSchliessen(); raus.push('<' + art + '>'); liste = art; }
-      raus.push('<li>' + inline((punkt || nummer)[1]) + '</li>');
+      const rand = einzugVon(punkt[1]);
+      const marke = punkt[2];
+      const art = /^\d/.test(marke) ? 'ol' : 'ul';
+      // The text starts after the marker and its blanks; five blanks or
+      // more are the start of a code block in CommonMark, so one counts.
+      const inhalt = rand + marke.length + (punkt[3].length > 4 ? 1 : punkt[3].length);
+      while (listen.length && rand < listen[listen.length - 1].rand) ebeneSchliessen();
+      let oben = listen[listen.length - 1];
+      if (oben && rand >= oben.inhalt) {
+        // Inside the open item: its text first, then the list.
+        punktKopf(oben);
+        oben = null;
+      } else if (oben && oben.art !== art) {
+        ebeneSchliessen();
+        oben = null;
+      }
+      if (oben) {
+        punktSchliessen(oben);
+      } else {
+        const start = art === 'ol' ? parseInt(marke, 10) : 1;
+        raus.push('<' + art + (start !== 1 ? ' start="' + start + '"' : '') + '>');
+        listen.push({ art, rand, inhalt, text: [], kopfGeschrieben: false, punktOffen: false });
+        oben = listen[listen.length - 1];
+      }
+      oben.inhalt = inhalt;
+      const aufgabe = punkt[4].match(/^\[([ xX])\][ \t]+(\S.*)$/);
+      if (aufgabe) oben.aufgabe = aufgabe[1] !== ' ';
+      else delete oben.aufgabe;
+      oben.text = [(aufgabe ? aufgabe[2] : punkt[4]).trim()];
+      oben.kopfGeschrieben = false;
+      oben.punktOffen = true;
+      continue;
+    }
+
+    /* A line indented to the text of an open item continues that item: the
+       item it reaches, the lists inside it closed. Anything not indented
+       that far ends the lists and is a paragraph of its own. */
+    if (listen.length && einzugVon(zeile) >= listen[0].inhalt) {
+      absatzSchliessen(); zitatSchliessen();
+      const einzug = einzugVon(zeile);
+      while (listen.length > 1 && einzug < listen[listen.length - 1].inhalt) ebeneSchliessen();
+      const oben = listen[listen.length - 1];
+      if (oben.kopfGeschrieben) raus.push(inline(roh));
+      else oben.text.push(roh);
       continue;
     }
 
@@ -542,7 +653,7 @@ function rendern(quelltext) {
   }
   allesSchliessen();
 
-  return raus.join('\n').replace(/(\d+)/g, (_, i) => bloecke[i]);
+  return raus.join('\n');
 }
 
 /*
@@ -771,7 +882,20 @@ function codeKopierKlick(ereignis, fertig) {
   const text = reihen.length
     ? Array.from(reihen, (reihe) => reihe.textContent).join('\n')
     : code.textContent
-  navigator.clipboard.writeText(text).then(fertig)
+  // The tick comes only once the text is on the clipboard; a refused write
+  // leaves the copy mark as it is and says nothing.
+  navigator.clipboard.writeText(text).then(() => {
+    showTick(knopf)
+    fertig()
+  }, () => {})
+}
+
+/* The button wears the tick for a second. A second press while it shows
+   copies again and starts the second over: the timer lives on the button. */
+export function showTick(knopf) {
+  clearTimeout(knopf.tickTimer)
+  knopf.classList.add('copied')
+  knopf.tickTimer = setTimeout(() => knopf.classList.remove('copied'), TICK_MS)
 }
 
 /* The own message is plain text, not markup — only an address with `http://`
@@ -808,6 +932,6 @@ function adressTeile(inhalt) {
 }
 
 export {
-  rendern, hervorheben, maskieren, dateienAus, adressTeile, openFile, endsInFence, nummernspalte, dateiTeile,
+  rendern, hervorheben, maskieren, dateienAus, adressTeile, openFile, endsInFence, nummernspalte, zeilenReihen, dateiTeile,
   dateienZahl, dateienDavor, dateienVorherJeNachricht, codeKopierKlick, KOPIER_ZEICHEN,
 }

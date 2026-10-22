@@ -16,6 +16,7 @@ llama.cpp (b819): 50 tokens, 1144.515 ms and
 from __future__ import annotations
 
 from app.providers.openai_kompatibel import tempo_ermitteln
+from tests.fensterquelle import WINDOW_SOURCE
 
 # The chunk count and the seconds of the answer from the measurement above.
 MTP_HAEPPCHEN = 156
@@ -184,7 +185,7 @@ def test_die_erzeugungszeit_bleibt_der_rest_nach_dem_ersten_token():
 
 from pathlib import Path  # noqa: E402 - the guard half belongs at the bottom
 
-APP = Path(__file__).resolve().parents[1] / "frontend" / "src" / "App.svelte"
+APP = WINDOW_SOURCE
 ANSWER = Path(__file__).resolve().parents[1] / "frontend" / "src" / "teile" / "Nachricht.svelte"
 # The rule the answer's foot follows, live and finished alike.
 QUELLENREGEL = Path(__file__).resolve().parents[1] / "frontend" / "src" / "lib" / "tempoquelle.js"

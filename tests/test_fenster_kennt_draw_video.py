@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from tests.fensterquelle import WINDOW_SOURCE
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "frontend" / "src"
@@ -27,7 +28,7 @@ def test_one_question_names_both_drawing_calls():
 
 
 def test_the_stream_and_the_reconnect_ask_that_question_and_no_longer_the_picture_alone():
-    app = _read("App.svelte")
+    app = WINDOW_SOURCE.read_text()
     assert app.count("isDrawingTool(ereignis.name)") == 2
     assert "ereignis.name === 'draw_image'" not in app
     state = _read("lib/zustand.svelte.js")

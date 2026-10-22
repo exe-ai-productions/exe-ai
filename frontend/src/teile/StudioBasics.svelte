@@ -29,7 +29,7 @@
   import { seedlage } from '../lib/bildseed.svelte.js'
   import {
     EDGE_GRID, EDGE_MAX, EDGE_MIN, art, auswahl, familie, fillDue, filledFromStore, kindsOf,
-    layingStartValues, listen, listenLaden, pictureInArea, search, searchRows, searching,
+    missingFiles, layingStartValues, listen, listenLaden, modellDa, pictureInArea, search, searchRows, searching,
     startwerte, vorgabenHolen, werte, werteFuellen, werteSchreiben, werteVorschlagen,
   } from '../lib/studio.svelte.js'
   import { studioStore, readStudioStore } from '../lib/studioStore.svelte.js'
@@ -63,7 +63,7 @@
       const at = imageFamilies.list.findIndex((f) => f.name === listen.families[name])
       return at < 0 ? imageFamilies.list.length : at
     }
-    return [...listen.modelle]
+    return listen.modelle.filter(modellDa)
       .sort((a, b) => rang(a) - rang(b))
       .map((name) => ({
         wert: name,
@@ -71,6 +71,13 @@
         group: familyOf(listen.families[name])?.label ?? t('bild.familie_keine'),
       }))
   })
+
+  /* The part the default model misses while the studio shows it (the choice
+     stands empty): the sentence under the choice names it. */
+  const defaultMissing = $derived(
+    listen.geladen && !werte.modell && listen.standardmodell
+      ? (listen.missingParts[listen.standardmodell] ?? '') : '',
+  )
 
   const familyEntry = $derived(familie())
   // A family whose model has sd-cli's distilled guidance starts with one.
@@ -93,7 +100,7 @@
   $effect(() => {
     if (auswahl.art === 'auto' || !kinds.length || kinds.some((k) => k.value === auswahl.art)) return
     auswahl.art = kinds.find((k) => k.value === COUNTERPART[auswahl.art])?.value ?? 'auto'
-    // A picture in the area stays what is drawn from, where the family can.
+    // A picture in the area starts a video at a video's strength.
     untrack(() => {
       if (werte.startbild) pictureInArea()
     })
@@ -160,13 +167,19 @@
 
   /* A model chosen by hand starts the studio at its values: the measures, the
      CFG and what goes with them. A model whose header names its family
-     takes that one, and a family said by hand goes. */
+     takes that one, and a family said by hand goes; one whose header names
+     none keeps the family said by hand, and its values are asked for again
+     with it. */
   async function modellGewaehlt(name) {
     werte.modell = name
     return layingStartValues(async () => {
-      const v = await vorgabenHolen()
+      let v = await vorgabenHolen('')
       if (!v || werte.modell !== name) return false
       if (v.family) werte.familie = ''
+      else if (werte.familie) {
+        v = await vorgabenHolen(werte.familie)
+        if (!v || werte.modell !== name) return false
+      }
       Object.assign(werte, startwerte(v))
       return true
     })
@@ -181,7 +194,14 @@
     })
   }
 
-  // "last: N": the last drawn seed, held.
+  // The reuse button's sentence: it names the last drawn seed once there is one.
+  const reuseHint = $derived(
+    seedlage.letzter === null
+      ? t('bild.seed_uebernehmen')
+      : `${t('bild.seed_uebernehmen')} (${t('bild.seed_zuletzt', { zahl: seedlage.letzter })})`,
+  )
+
+  // The last drawn seed, held.
   function seedUebernehmen() {
     if (seedlage.letzter === null) return
     werte.seed = String(seedlage.letzter)
@@ -211,9 +231,14 @@
     const filled = $state.snapshot(werte)
     return layingStartValues(async () => {
       await listenDa
-      if (listen.geladen && !listen.modelle.includes(werte.modell)) {
-        werteVorschlagen({ modell: listen.standardmodell })
+      /* A model that is gone or misses a part shows the default model; a
+         default that misses one itself leaves the field empty — the first
+         model is never the default. */
+      if (listen.geladen && !modellDa(werte.modell)) {
+        werteVorschlagen({ modell: modellDa(listen.standardmodell) ? listen.standardmodell : '' })
       }
+      // A file the folders do not hold (any more) is "-", not a refusal at the draw.
+      werteVorschlagen(missingFiles())
       const v = await vorgabenHolen()
       if (!v) return false
       const teil = startwerte(v)
@@ -273,6 +298,13 @@
           <Auswahlfeld wert={werte.modell} eintraege={modellEintraege} gewaehlt={modellGewaehlt}
                        beschriftung={t('bild.modell')} search searchLabel={t('app.suchen')} />
         </div>
+        {#if defaultMissing}
+          <!-- The default model misses a part: no other model takes its place,
+               and its file name says which one cannot start. -->
+          <p class="zeile leer" data-suche={t('bild.modell')}>
+            {listen.standardmodell}: {t('bild.teil_fehlt', { teil: defaultMissing })}
+          </p>
+        {/if}
       {/if}
       {#if usesGuidance}
         <!-- The family's own distilled guidance, sd-cli's --guidance: a
@@ -344,11 +376,6 @@
 
   <StudioSection titel={t('bild.gruppe_masse')}>
     {#snippet rechts()}
-      {#if seedlage.letzter !== null}
-        <button class="kopfknopf" onclick={seedUebernehmen} title={t('bild.seed_uebernehmen')}>
-          {t('bild.seed_zuletzt', { zahl: seedlage.letzter })}
-        </button>
-      {/if}
       {#if werte.modell}
         <button class="kopfknopf" onclick={standardHolen}>{t('bild.standard')}</button>
       {/if}
@@ -396,6 +423,11 @@
         <InfoMark text={t('bild.info_seed')} />
         <div class="rechts seedplatz">
           <input id={feld('seed')} class="eingabe" bind:value={werte.seed} inputmode="numeric" />
+          <!-- The last drawn seed, taken over and held; dimmed until a picture is drawn. -->
+          <button class="seed-reuse" onclick={seedUebernehmen} disabled={seedlage.letzter === null}
+                  title={reuseHint} aria-label={reuseHint}>
+            <Hauszeichen zeichen="neu_laden" groesse={14} />
+          </button>
           <!-- The dice of the house's sign catalogue, its paths unchanged. -->
           <button class="wuerfel" onclick={wuerfeln} title={t('studio.wuerfel')} aria-label={t('studio.wuerfel')}>
             <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-linecap="round"
@@ -424,6 +456,7 @@
                         nullwort={t('parameter.auto')} />
           </div>
         </div>
+        {#if !familyEntry?.fixed_fps}
         <div class="zeile" data-suche={t('bild.fps')}>
           <label class="name" for={feld('fps')}>{t('bild.fps')}</label>
           <InfoMark text={t('bild.info_fps')} />
@@ -432,6 +465,7 @@
                         nullwort={t('parameter.auto')} />
           </div>
         </div>
+        {/if}
       {/if}
       <div class="zeile regel" data-suche={t('bild.bilder_zahl')}>
         <div class="kopfzeile">
@@ -559,7 +593,8 @@
   .seedplatz .eingabe {
     width: 108px;
   }
-  .wuerfel {
+  .wuerfel,
+  .seed-reuse {
     flex: none;
     display: inline-flex;
     align-items: center;
@@ -574,8 +609,13 @@
     color: var(--text-leise);
     cursor: pointer;
   }
-  .wuerfel:hover {
+  .wuerfel:hover,
+  .seed-reuse:hover:not(:disabled) {
     color: var(--text);
+  }
+  .seed-reuse:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
   .wuerfel svg {
     width: 14px;

@@ -142,7 +142,36 @@ def test_an_editor_that_cannot_be_started_is_said_in_the_systems_words(tool, mon
     # own, so they are asked of it instead of written down here.
     with pytest.raises(OSError) as asked:
         subprocess.run(["no-such-editor-0f3a"], check=False)
-    assert tool.renderer.errors == [str(asked.value)]
+    # Where the system's words leave out the program, the client adds its name.
+    assert len(tool.renderer.errors) == 1
+    assert tool.renderer.errors[0].startswith(str(asked.value))
+    assert "no-such-editor-0f3a" in tool.renderer.errors[0]
+
+
+def test_an_error_that_leaves_out_the_program_is_given_its_name(tool, monkeypatch):
+    """Falls over without the name: a Windows system says "[WinError 2] The
+    system cannot find the file specified" and nothing else."""
+    monkeypatch.setenv("VISUAL", "some-editor --wait")
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise OSError(2, "The system cannot find the file specified")
+
+    monkeypatch.setattr(editor.subprocess, "run", refuse)
+    assert editor.edit(tool, "Before.") is None
+    assert len(tool.renderer.errors) == 1
+    assert "some-editor" in tool.renderer.errors[0]
+    assert "The system cannot find the file specified" in tool.renderer.errors[0]
+
+
+def test_silence_probe_an_error_that_names_a_file_is_said_as_it_is(tool, monkeypatch):
+    monkeypatch.setenv("VISUAL", "some-editor")
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise FileNotFoundError(2, "No such file or directory", "some-editor")
+
+    monkeypatch.setattr(editor.subprocess, "run", refuse)
+    editor.edit(tool, "Before.")
+    assert tool.renderer.errors == [str(FileNotFoundError(2, "No such file or directory", "some-editor"))]
 
 
 def test_the_editor_is_never_started_through_a_shell(tool, monkeypatch):

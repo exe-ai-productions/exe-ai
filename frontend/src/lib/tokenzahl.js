@@ -11,9 +11,11 @@
   to the first.
 */
 
-export function kurz(zahl) {
+export function kurz(zahl, sprache = 'en') {
   if (!zahl) return null
   if (zahl < 1000) return String(zahl)
   const k = zahl / 1000
-  return (k >= 100 ? Math.round(k) : Math.round(k * 10) / 10) + 'k'
+  const text = (k >= 100 ? Math.round(k) : Math.round(k * 10) / 10) + 'k'
+  /* A comma for the decimal where the language writes one. */
+  return sprache === 'de' ? text.replace('.', ',') : text
 }

@@ -804,6 +804,7 @@ def test_the_menu_of_the_image_server_offers_the_program_where_it_is_not_there(t
     assert [text for entry in tool.asker.shown[0] for _, text in entry.cells] == [
         texts().t("modell.server_starten"),
         texts().t("modell.protokoll"),
+        texts().t("bildserver.standardmodell"),
         texts().t("bildserver.generator_holen"),
     ]
 
@@ -819,7 +820,7 @@ def test_where_the_program_is_there_the_menu_has_the_check_and_no_fetch(tool, fo
 
 def test_the_check_says_up_to_date_where_it_is(tool, folder):
     folder.image.update = {"verfuegbar": False, "aktuell": True}
-    tool.asker.queue = [2]
+    tool.asker.queue = [3]
     tool.commands.run("/server image")
     assert tool.renderer.notices == [texts().t("bildserver.aktuell")]
 
@@ -829,7 +830,7 @@ def test_a_newer_program_brings_the_update_and_fetches_the_newest(tool, folder):
     folder.image.program_steps = [dict(step) for step in FETCHING]
     # The check, then — the menu again with the update in its place — the
     # update; the check that follows it says nothing more.
-    tool.asker.queue = [2, 2]
+    tool.asker.queue = [3, 3]
     tool.commands.run("/server image")
     labels = [text for entry in tool.asker.shown[1] for _, text in entry.cells]
     assert texts().t("bildserver.generator_aktualisieren") in labels
@@ -839,7 +840,7 @@ def test_a_newer_program_brings_the_update_and_fetches_the_newest(tool, folder):
 
 def test_a_release_page_that_cannot_be_read_is_not_taken_for_up_to_date(tool, folder):
     folder.image.update = {"verfuegbar": False, "aktuell": False, "unreadable": True}
-    tool.asker.queue = [2]
+    tool.asker.queue = [3]
     tool.commands.run("/server image")
     assert tool.renderer.notices == [texts().t("bildserver.updates_nicht_pruefbar")]
 
@@ -854,3 +855,53 @@ def test_the_model_server_still_fetches_its_program_over_its_own_route(tool, fol
     assert count(folder, "POST /api/v1/runner/programm") == 1
     assert folder.image.program_posts == []
     folder.program_steps = original
+
+
+def test_the_menu_of_the_image_server_alone_has_the_default_model_after_the_log(tool, folder):
+    folder.image.files = [dict(entry) for entry in IMAGE_FILES]
+    tool.asker.queue = [None]
+    tool.commands.run("/server image")
+    labels = [text for entry in tool.asker.shown[0] for _, text in entry.cells]
+    assert labels[:3] == [
+        texts().t("modell.server_starten"),
+        texts().t("modell.protokoll"),
+        texts().t("bildserver.standardmodell"),
+    ]
+    # The other servers have no such entry.
+    for word in ("model", "embedding", "speech"):
+        tool.asker.queue = [None]
+        tool.commands.run(f"/server {word}")
+        assert texts().t("bildserver.standardmodell") not in [
+            text for entry in tool.asker.shown[-1] for _, text in entry.cells
+        ]
+
+
+def test_the_choice_of_the_default_model_is_written_under_the_key_of_the_window(tool, folder):
+    files = [*IMAGE_FILES, {"name": "other.safetensors", "groesse_gb": 2.1}]
+    folder.image.files = [dict(entry) for entry in files]
+    folder.settings["global"] = {"bild_standardmodell": files[0]["name"]}
+    tool.asker.queue = [2, 1]
+    tool.commands.run("/server image")
+    # The list is the folder's models with their sizes; the held default is the marked row.
+    models = tool.asker.shown[1]
+    assert [entry.cells[0][1] for entry in models] == [entry["name"] for entry in files]
+    assert [entry.in_use for entry in models] == [True] + [False] * (len(files) - 1)
+    assert "PUT /api/v1/settings/global/bild_standardmodell" in folder.requests
+    assert folder.settings["global"]["bild_standardmodell"] == files[1]["name"]
+    assert tool.renderer.notices == [f"{texts().t('bildserver.standardmodell')}: {files[1]['name']}"]
+
+
+def test_closing_the_list_of_default_models_changes_nothing(tool, folder):
+    folder.image.files = [dict(entry) for entry in IMAGE_FILES]
+    tool.asker.queue = [2, None]
+    tool.commands.run("/server image")
+    assert not [request for request in folder.requests if request.startswith("PUT ")]
+    assert tool.renderer.notices == []
+
+
+def test_without_a_model_in_the_folder_the_default_is_not_asked_for_and_nothing_is_written(tool, folder):
+    folder.image.files = []
+    tool.asker.queue = [2]
+    tool.commands.run("/server image")
+    assert tool.renderer.notices == [texts().t("cli.no_model_in_folder")]
+    assert not [request for request in folder.requests if request.startswith("PUT ")]

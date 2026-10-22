@@ -30,6 +30,7 @@ SOURCE = ROOT / "frontend" / "src"
 CATALOGUE = SOURCE / "lib" / "serverkatalog.js"
 LOGOS = SOURCE / "lib" / "logos.js"
 GALLERY = SOURCE / "teile" / "Verbindungen.svelte"
+CARDS = SOURCE / "lib" / "mcpCards.js"
 LOCALES = ROOT / "app" / "locales"
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="no node on this machine")
@@ -94,6 +95,11 @@ def _texts(language: str) -> dict:
 
 def _gallery() -> str:
     return GALLERY.read_text(encoding="utf-8")
+
+
+def _cards() -> str:
+    """The rules of a card (state, name, logo, split into groups), which the page and the overview share."""
+    return CARDS.read_text(encoding="utf-8")
 
 
 def _card() -> str:
@@ -234,20 +240,20 @@ def test_the_lines_are_written_in_each_language():
 
 
 def test_the_gallery_draws_a_card_with_line_and_foot():
-    source = _gallery()
     card = _card()
     # Who it is: the logo at forty, the name beside it.
-    assert 'width="40" height="40"' in card and "{titelVon(k)}" in card
-    assert "const titelVon = (k) => (istKatalogName(k) ? serverTitel(nameVon(k)) : nameVon(k))" in source
+    assert "{@render mark(k, 40)}" in card and "{titelVon(k)}" in card
+    assert "const titelVon = (k) => (istKatalogName(k) ? serverTitel(nameVon(k)) : nameVon(k))" in _cards()
     # What it is for.
     assert '<p class="purpose">{purposeOf(name)}</p>' in card
-    # What to do with it: the sheet for a server still to be connected …
-    branch, on_file = card.split("{#if brauchtVerbindung(k)}", 1)[1].split("{:else}", 1)
-    assert 'class="connect"' in branch and "maskeOeffnen(k)" in branch
+    # What to do with it: for a server whose sign-in is gone, the grey house
+    # button into the sheet …
+    branch, on_file = card.split("{#if stand === 'getrennt'}", 1)[1].split("{:else}", 1)
+    assert 'class="button"' in branch and "maskeOeffnen(k)" in branch
     assert "t('verbindungen.verbinden')" in branch
-    # … and the state of a server on file, which opens its menu.
+    # … and the state of every other server on file, which opens its menu.
     assert 'class="state"' in on_file and "oeffnen(k, e)" in on_file
-    assert "t(`verbindungen.stand_${stand}`)" in on_file
+    assert "{stateText(k, stand)}" in on_file
     assert 'aria-haspopup="menu"' in on_file
 
 
@@ -256,7 +262,7 @@ def test_a_server_without_a_logo_wears_the_plug():
     the table's own entries only, it has no logo and gets the plug like any
     other server nobody drew a mark for."""
     source = _gallery()
-    assert "Object.hasOwn(LOGOS, nameVon(k)) ? LOGOS[nameVon(k)] : null" in source
+    assert "Object.hasOwn(LOGOS, nameVon(k)) ? LOGOS[nameVon(k)] : null" in _cards()
     # Card and menu both draw from that one answer, never from the table itself.
     assert "LOGOS[name]" not in source
     assert source.count("{#if logo}") == 2 and source.count("{@const logo = logoVon(k)}") == 2
@@ -287,67 +293,79 @@ def test_a_local_program_under_a_shipped_name_is_not_asked_to_sign_in():
     one is no question for it: read as one, a running server would show the
     button for connecting, and the sheet behind that button would write the
     shipped address over the entry."""
-    state = _gallery().split("function zustand(kachel)", 1)[1].split("\n  }", 1)[0]
+    state = _cards().split("export function zustand(kachel, status)", 1)[1].split("\n}", 1)[0]
     sign_in = state.split("const oauthKachel =", 1)[1].split("\n    if", 1)[0]
     assert "eintrag.type === 'http'" in sign_in
 
 
-def test_the_last_card_adds_a_server_of_ones_own():
+def test_the_last_tile_adds_a_server_of_ones_own():
     source = _gallery()
-    own = source.split('<div class="card own"', 1)[1].split("</div>\n  </div>", 1)[0]
-    assert own.count('<div class="foot">') == 1 and own.count("<button") == 1
-    assert 'zeichen="stecker"' in own
+    own = source.split('<div class="tile own"', 1)[1].split("</div>\n    </div>", 1)[0]
+    assert own.count("<button") == 1
+    assert 'zeichen="stecker" groesse={36}' in own
     assert "t('verbindungen.custom_server')" in own
     assert "t('verbindungen.zweck.eigener')" in own
-    assert "onclick={mcpNeuOeffnen}" in own and "t('verbindungen.hinzufuegen')" in own
+    assert 'class="button" onclick={mcpNeuOeffnen}' in own and "t('verbindungen.hinzufuegen')" in own
+    # It is the last of the group, after the shipped servers without an entry.
+    tiles = source.split('<div class="tiles">', 1)[1]
+    assert tiles.index("{@render tile(k)}") < tiles.index('<div class="tile own"')
 
 
 def test_the_cards_of_a_group_are_one_size():
-    """As many columns as fit at 260 wide, and one height for every row."""
+    """As many columns as fit at 300 wide (three at about a thousand pixels of
+    page, four at the full width), and one height for every row; a phone gets
+    one column because the minimum gives way."""
     grid = _gallery().split("\n  .galerie {", 1)[1].split("}", 1)[0]
-    assert "repeat(auto-fill, minmax(260px, 1fr))" in grid
+    assert "repeat(auto-fill, minmax(min(300px, 100%), 1fr))" in grid
     assert "grid-auto-rows: 1fr" in grid
 
 
+def test_the_tiles_are_wide_and_at_least_eighty_eight_high():
+    """Two columns at about a thousand pixels, three at the full width, every
+    row as tall as its tallest tile."""
+    grid = _rule(".tiles")
+    assert "repeat(auto-fill, minmax(min(400px, 100%), 1fr))" in grid
+    assert "grid-auto-rows: minmax(88px, auto)" in grid
+    tile = _rule(".tile")
+    assert "grid-template-columns: 36px minmax(0, 1fr) auto" in tile and "border-radius: 9px" in tile
+    assert "--glass-card" in tile
+
+
 def test_button_and_state_are_the_same_size():
-    """Side by side in one row, so neither may be taller than the other."""
+    """Side by side in one row of cards, so neither may be taller than the other."""
     source = _gallery()
-    shared = re.search(r"\.connect,\s*\.state \{(.*?)\}", source, re.S)
-    assert shared and "height: 34px" in shared.group(1) and "border-radius: 9px" in shared.group(1)
+    state = re.search(r"\n  \.state \{(.*?)\}", source, re.S)
+    assert state and "height: 34px" in state.group(1) and "border-radius: 9px" in state.group(1)
+    assert "height: 34px" in _rule(".foot .button")
 
 
 # --- The foot of a card still to be connected ------------------------------
 
 
 def test_a_server_that_lost_its_sign_in_says_so_beside_the_button():
-    """Set up once and no longer signed in is not the same as never set up.
-    Both get the button; only the first gets the red dot and the words to the
-    left of it. With the button alone on both, nothing on the card says that
-    something has failed."""
-    source = _gallery()
-    branch = _card().split("{#if brauchtVerbindung(k)}", 1)[1].split("{:else}", 1)[0]
+    """Set up once and no longer signed in is not the same as never set up:
+    only the first stands as a card, with the red dot and the words to the
+    left of the grey button. With the button alone nothing on the card would
+    say that something has failed."""
+    branch = _card().split("{#if stand === 'getrennt'}", 1)[1].split("{:else}", 1)[0]
     foot = branch.split('<div class="foot">', 1)[1]
-    lost, after = foot.split("{#if stand === 'getrennt'}", 1)[1].split("{/if}", 1)
-    # Only the lost sign-in gets them: the dot, then the words.
-    assert foot.count("{#if") == 1
-    assert 'class="lost"' in lost and "<button" not in lost
+    lost, after = foot.split('<span class="lost">', 1)[1].split("</span>\n        <button", 1)
+    # The dot, then the words; no button inside them.
+    assert "<button" not in lost
     assert lost.index("<Leuchtpunkt farbe={punktFarbe(stand)}") < lost.index("t('verbindungen.stand_getrennt')")
-    # One button for both kinds, after the words; never set up, it stands alone.
-    assert branch.count("<button") == 1 and after.count('<button class="connect"') == 1
+    # One grey button after the words.
+    assert branch.count("<button") == 1 and after.count('class="button"') == 1
     assert "maskeOeffnen(k)" in after and "t('verbindungen.verbinden')" in after
     # The dot of that state is red, and so are the words — plain text on no surface.
-    assert "stand === 'getrennt' || stand === 'schluessel_fehlt' ? 'rot'" in source
+    assert "stand === 'getrennt' || stand === 'schluessel_fehlt' ? 'rot'" in _cards()
     words = _rule(".lost")
-    assert "color: var(--rot)" in words and "background" not in words and "border" not in words
-    # One line: the words take the width they need, the button the rest; the
-    # button alone fills the foot. The words are as high as the button beside
-    # them, which the line stretches them to.
+    assert "color: var(--rot-text)" in words and "background" not in words and "border" not in words
+    # One line: the words left, the button right and as tall as the state
+    # button of a card beside it.
     line = _rule(".foot")
-    assert "display: grid" in line and "grid-auto-flow: column" in line
-    assert "grid-auto-columns: minmax(0, 1fr)" in line and "gap: 8px" in line
-    assert "align-items" not in line and "height" not in words
-    beside = _rule(".foot:has(.lost)")
-    assert "grid-auto-columns: auto minmax(0, 1fr)" in beside
+    assert "display: flex" in line and "align-items: center" in line
+    button = _rule(".foot .button")
+    assert "margin-left: auto" in button and "height: 34px" in button
     # Never cut short and never broken, in a narrow card too.
     whole = _rule(".lost .statetext")
     assert "white-space: nowrap" in whole and "line-height: 1.2" in whole
@@ -358,20 +376,24 @@ def test_a_server_on_file_that_needs_nothing_keeps_its_state_and_arrow():
     """The other side of the foot is as it was: the dot in the colour of the
     state, its words, the arrow into the menu — and nothing to connect."""
     source = _gallery()
-    on_file = _card().split("{#if brauchtVerbindung(k)}", 1)[1].split("{:else}", 1)[1]
+    on_file = _card().split("{#if stand === 'getrennt'}", 1)[1].split("{:else}", 1)[1]
     assert "<Leuchtpunkt farbe={punktFarbe(stand)} groesse={11} />" in on_file
     assert 'class="arrow"' in on_file
-    assert 'class="connect"' not in on_file and 'class="lost"' not in on_file
-    assert "stand === 'verbunden' || stand === 'wartet' ? 'gruen'" in source
+    assert 'class="button"' not in on_file and 'class="lost"' not in on_file
+    assert "stand === 'verbunden' || stand === 'wartet' ? 'gruen'" in _cards()
     green = re.search(
         r"\.state\[data-stand='verbunden'\],\s*\.state\[data-stand='wartet'\] \{(.*?)\}", source, re.S)
     assert green and "--state-colour: var(--gruen)" in green.group(1)
+    # The words of that state wear the form made for type; the dot, the
+    # surface and the line stay in the plain colour.
+    assert "--state-ink: var(--gruen-text)" in green.group(1)
+    assert "color: var(--state-ink)" in _rule(".state .statetext")
 
 
 # --- The page above the cards ----------------------------------------------
 
 INTRO = {
-    "de": ("Deine Apps, direkt im Chat.", "Verbinde Exe mit den Anwendungen, die du täglich nutzt."),
+    "de": ("Eigene Apps, direkt im Chat.", "Exe mit den täglich genutzten Anwendungen verbinden."),
     "en": ("Your apps, directly in the chat.", "Connect Exe to the applications you use every day."),
 }
 
@@ -395,18 +417,83 @@ def test_the_second_line_is_a_quiet_hint():
         assert declaration in hint
 
 
-def test_all_cards_stand_in_one_grid_the_connected_first():
-    """No heading splits the cards into two groups any more: one grid, and
-    what is connected leads it."""
+def test_two_groups_by_the_entry_the_connected_cards_first():
+    """"Installed" on top: every server with an entry as a card, what is
+    connected or starting first. "Not installed" below: the shipped servers
+    without an entry as tiles, and last the tile of one's own."""
     source = _gallery()
     page = source.split('<div class="rollbereich"', 1)[1].split("<style>", 1)[0]
-    assert page.count('<div class="galerie">') == 1
-    assert "{#each cards as k (schluesselVon(k))}{@render card(k)}{/each}" in page
+    assert page.count('<div class="galerie">') == 1 and page.count('<div class="tiles">') == 1
+    assert page.index('<div class="galerie">') < page.index('<div class="tiles">')
+    assert "{#each setUp as k (schluesselVon(k))}{@render card(k)}{/each}" in page
+    assert "{#each notSetUp as k (schluesselVon(k))}{@render tile(k)}{/each}" in page
     assert "Schriftzug" not in source and ".bereich" not in source and 'class="bereich"' not in source
-    assert "const isConnected = (k) => ['verbunden', 'wartet'].includes(zustand(k))" in source
-    order = re.search(r"const cards = \$derived\(\[(.*?)\]\)", source, re.S)
-    assert order and [part.strip() for part in order.group(1).split(", ")] == [
-        "...alle.filter(isConnected)", "...alle.filter((k) => !isConnected(k))"]
-    # The words of the two headings left both catalogues with them.
-    for language in ("de", "en"):
-        assert not {"gruppe_verbunden", "gruppe_mehr"} & set(_texts(language)), language
+    shared = _cards()
+    assert "const isConnected = (stand) => ['verbunden', 'wartet'].includes(stand)" in shared
+    group = shared.split("export function setUpCards(cards, status) {", 1)[1].split("\n}", 1)[0]
+    assert "cards.filter((k) => zustand(k, status) !== 'frei')" in group
+    assert "onFile.filter((k) => isConnected(zustand(k, status)))" in group
+    assert "onFile.filter((k) => !isConnected(zustand(k, status)))" in group
+    assert "export const notSetUpCards = (cards, status) => cards.filter((k) => zustand(k, status) === 'frei')" in shared
+    assert "const setUp = $derived(setUpCards(alle, status))" in source
+    assert "const notSetUp = $derived(notSetUpCards(alle, status))" in source
+    # `zustand` stays the one place that decides; the markup never asks twice.
+    assert shared.count("export function zustand(") == 1 and "function zustand(" not in source
+
+
+def test_a_group_without_servers_leaves_no_empty_head():
+    """No entry in the file: "Installed" goes with its head, no empty surface
+    stands over nothing. The other group always has its own tile."""
+    page = _gallery().split('<div class="rollbereich"', 1)[1].split("<style>", 1)[0]
+    on_top = page.split("{#if setUp.length}", 1)[1].split("{/if}", 1)[0]
+    assert "verbindungen.section_set_up" in on_top and "{setUp.length}" in on_top
+    assert "verbindungen.section_not_set_up" not in on_top
+    below = page.split("{/if}", 1)[1]
+    assert "verbindungen.section_not_set_up" in below and "{notSetUp.length}" in below
+
+
+def test_the_heads_are_half_bold_with_a_quiet_count():
+    name = _rule(".sectionname")
+    assert "font-weight: 600" in name and "color: var(--text-leise)" in name
+    count = _rule(".sectioncount")
+    assert "color: var(--text-still)" in count and "font-weight: 400" in count
+
+
+@pytest.mark.parametrize("language,words", [("de", ("Eingerichtet", "Nicht eingerichtet")),
+                                            ("en", ("Installed", "Not installed"))])
+def test_the_two_heads_are_words_of_their_own(language, words):
+    texts = _texts(language)
+    assert (texts["section_set_up"], texts["section_not_set_up"]) == words
+    # The state `frei` has no card any more, so no text of its own either.
+    assert "stand_frei" not in texts
+
+
+def test_a_tile_is_logo_name_line_and_the_grey_button_and_nothing_blue_is_left():
+    source = _gallery()
+    tile = source.split("{#snippet tile(k)}", 1)[1].split("{/snippet}", 1)[0]
+    assert "{@render mark(k, 36)}" in tile and "{titelVon(k)}" in tile
+    assert "purposeOf(nameVon(k))" in tile
+    assert 'class="button" onclick={() => maskeOeffnen(k)}' in tile
+    assert 'role="group" aria-label={titelVon(k)}' in tile
+    # The one blue connect button of the program is gone with its rules.
+    assert "--blau" not in source and ".connect" not in source and 'class="connect"' not in source
+
+
+def test_no_rule_of_the_page_sets_a_plain_state_colour_as_type():
+    """A plain colour is made for dots and surfaces; written words take the
+    `-text` form. The colour of a surface or a line is not type and may mix
+    the plain one, so only the `color` property is read here."""
+    source = _gallery()
+    plain = re.findall(r"(?<![-\w])color:\s*var\(--(gruen|gelb|rot|blau)\)", source)
+    assert plain == [], plain
+
+
+def test_every_state_word_wears_the_text_form_of_its_colour():
+    source = _gallery()
+    assert "color: var(--rot-text)" in _rule(".lost")
+    heads = re.search(r"\.state\[data-stand='schluessel_fehlt'\] \{(.*?)\}", source, re.S)
+    assert heads and "--state-ink: var(--rot-text)" in heads.group(1)
+    assert "--state-colour: var(--rot)" in heads.group(1)
+    stand = source.split(".mstand[data-stand='verbunden']", 1)[1].split(".mzeile", 1)[0]
+    assert "var(--gruen-text)" in stand and "var(--rot-text)" in stand
+    assert "color: var(--rot-text)" in _rule(".mleise.gefahr:hover")

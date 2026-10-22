@@ -5,13 +5,14 @@
 
   `there` and `all` count the parts; `there` left out shows no count.
   `countRight` moves the count to the right end; `rest` is a short text on
-  what is missing, and always stands there.
+  what is missing, and always stands there. `word` is the head's own word;
+  without one it is "kit".
 -->
 <script>
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import { t } from '../lib/texte.svelte.js'
 
-  let { open = false, there = null, all = 0, countRight = false, rest = '', onToggle } = $props()
+  let { open = false, there = null, all = 0, countRight = false, rest = '', word = '', onToggle } = $props()
 </script>
 
 <button class="kitkopf tafelkopf" aria-expanded={open} onclick={() => onToggle?.()}>
@@ -20,7 +21,7 @@
        aria-hidden="true">
     <path d="M4.125 2.75L6.875 5.5L4.125 8.25" />
   </svg>
-  <span>{t('bildserver.bausatz')}</span>
+  <span>{word || t('bildserver.bausatz')}</span>
   {#if there != null}
     <span class="stand" class:rechts={countRight}>
       <Leuchtpunkt farbe={there === all ? 'gruen' : 'still'} groesse={10} />

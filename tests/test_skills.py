@@ -10,6 +10,7 @@ there is a limit on it at all.
 
 from __future__ import annotations
 
+import logging
 import pathlib
 
 import pytest
@@ -183,6 +184,21 @@ def test_der_mitgelieferte_cronjob_skill_widerspricht_der_werkzeugbeschreibung_n
     assert skill.beschreibung.startswith("Schedules future actions:")
     assert "| every day at 08:00 | `08:00` — a daily time, 24-hour `HH:MM` |" in skill.anleitung
     assert "| every fifteen minutes | `*/15 * * * *` — a five-field cron expression |" in skill.anleitung
+
+
+def test_every_shipped_skill_header_is_valid_yaml(caplog):
+    """A shipped header YAML cannot read is read line by line and warns on
+    every listing of the skills and on the first message of every chat. Two
+    did: a second unquoted ``: `` in ``description`` (cronjob, help)."""
+    ordner = pathlib.Path(__file__).resolve().parent.parent / "skills"
+    gelesen = []
+    with caplog.at_level(logging.WARNING, logger="app.skills"):
+        for skill_ordner in sorted(p for p in ordner.iterdir() if (p / "SKILL.md").is_file()):
+            skills.skill_lesen(skill_ordner)
+            gelesen.append(skill_ordner.name)
+
+    assert {"cronjob", "help"} <= set(gelesen)
+    assert [r.getMessage() for r in caplog.records if "not valid YAML" in r.getMessage()] == []
 
 
 # --- writing one from the UI -------------------------------------------------

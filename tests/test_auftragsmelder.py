@@ -140,7 +140,8 @@ def test_der_satz_des_agenten_steht_im_toast():
     )
     assert len(meldungen) == 1
     assert meldungen[0]["text"] == "Rechercheur · Drei Quellen geprüft."
-    assert meldungen[0]["was"] == "fertig"
+    # A run that ended well is its own occurrence, with a sound of its own.
+    assert meldungen[0]["was"] == "agent_cronjob"
     assert meldungen[0]["auftragId"] == "a"
 
 

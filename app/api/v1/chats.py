@@ -43,7 +43,7 @@ from app.events import Ereignisse, bus
 from app.generationen import Generierungsverwaltung
 from app.i18n import t
 from app.tools.hintergrund import laeufe
-from app import arbeitsordnerpruefung, bildfensterwahl, ordnerstand
+from app import arbeitsordnerpruefung, attachment_sizes, bildfensterwahl, ordnerstand
 from app import (
     chatverdichtung,
     dokumentbudget,
@@ -272,7 +272,9 @@ def chat_aendern(
     # pair that does not describe what just happened is not an instruction.
     if ersatz:
         alter_pfad = ersatz["alt"]
-        neuer_pfad = str(Path(ersatz["neu"]).expanduser().resolve())
+        neuer_pfad = str(
+            Path(arbeitsordnerpruefung.typed_path(ersatz["neu"])).expanduser().resolve()
+        )
         if (
             alter_pfad in (vorher.working_dirs or [])
             and alter_pfad not in antwort.working_dirs
@@ -555,6 +557,7 @@ def nachrichten_auflisten(
     user_id: str = Depends(hole_benutzer_id),
     sprache: str = Depends(hole_sprache),
     generierungen: Generierungsverwaltung = Depends(hole_generierungen),
+    config: Config = Depends(hole_config),
 ) -> NachrichtenSeite:
     """One page of a chat, oldest first.
 
@@ -637,11 +640,15 @@ def nachrichten_auflisten(
         karten = [meta_fuer(dokument_id, nachricht) for dokument_id in ids]
         return [karte for karte in karten if karte] or None
 
+    def antwort_zeile(nachricht):
+        zeile = NachrichtAntwort.aus(nachricht, meta(nachricht), metas(nachricht))
+        namen = nachricht.anhang_bilder() if nachricht.role == "user" else []
+        if namen:
+            zeile.attachment_sizes = attachment_sizes.of_names(bilder_verzeichnis(config), namen) or None
+        return zeile
+
     return NachrichtenSeite(
-        nachrichten=[
-            NachrichtAntwort.aus(nachricht, meta(nachricht), metas(nachricht))
-            for nachricht in nachrichten
-        ],
+        nachrichten=[antwort_zeile(nachricht) for nachricht in nachrichten],
         laufend=laufend,
         gehalten=gehalten,
         frage=frage,

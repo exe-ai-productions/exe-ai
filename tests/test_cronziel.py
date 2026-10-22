@@ -208,7 +208,7 @@ async def test_zu_lange_still_meldet_einmal_und_laeuft_weiter(repos, gemeldet):
     # The program saying it has heard nothing back, not the entry's own
     # report — which is why it comes even though this entry has a goal and
     # is otherwise exempt from the closing announcement.
-    assert gemeldet == [("Ins Postfach sehen — no goal completion report after 3 runs", False)]
+    assert gemeldet == [("Ins Postfach sehen - no goal completion report after 3 runs", False)]
 
     frisch = repos.cronjobs.holen(eintrag.id)
     # Never switched off for being quiet — that was the whole decision.

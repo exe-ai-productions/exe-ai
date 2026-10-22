@@ -1,11 +1,11 @@
 <script>
-  /* A server window's one deed: start it or stop it.
+  /* A server's one deed: start it or stop it.
 
-     It stands at the right end of a section's head line, not in the window's
-     head card — the drawing puts it in the line of the first group, flush
-     with the card below it. Which group that is differs from window to
-     window, so the button is its own small piece and each panel sets it
-     where its drawing has it. */
+     It is the same button everywhere — at the right end of a server page's
+     head and in each row of the server overview: one size, one word with a
+     dot in front of it. The dot is green while the server runs and the quiet
+     grey of a fact while it does not, so the button says which of the two it
+     is before it is read. */
   import Leuchtpunkt from './Leuchtpunkt.svelte'
 
   let {
@@ -17,22 +17,22 @@
 </script>
 
 <button class="startknopf" disabled={gesperrt} onclick={onTat}>
-  {#if punkt === 'gruen'}
-    <Leuchtpunkt farbe="gruen" groesse={11} />
-  {/if}
+  <Leuchtpunkt farbe={punkt === 'gruen' ? 'gruen' : 'still'} groesse={10} />
   {text}
 </button>
 
 <style>
-  /* The primary button of a server window: glass with a fine edge, radius
-     9 — 26 px tall, so it fits the 26 px head line of its section. */
+  /* Glass with a fine edge, radius 9, 86 × 34 whatever the word. */
   .startknopf {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 8px;
-    height: 26px;
+    width: 86px;
+    height: 34px;
+    flex: none;
     box-sizing: border-box;
-    padding: 4px 14px;
+    padding: 0 10px;
     line-height: 18px;
     border: none;
     border-radius: 9px;

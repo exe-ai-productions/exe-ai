@@ -191,7 +191,8 @@ def test_two_thousand_rows_cost_one_pass_of_each_list_per_change():
     """The failure it pins: with 2000 chats and 2000 jobs every row searched
     the chat list and the job list itself, and a change of the list ran all
     of that again for every row. Each change must now cost a pass of each
-    list, whatever the number of rows."""
+    list, whatever the number of rows. It counts the walks over the long lists
+    instead of timing them, so a busy machine cannot fail it."""
     report = _run(
         """
         const n = 2000
@@ -204,24 +205,44 @@ def test_two_thousand_rows_cost_one_pass_of_each_list_per_change():
           question: i % 13 === 0 ? { frage: 'q?', aufruf_id: 'c' + i } : null,
           created_at: '2026-10-15T00:00:' + String(i % 60).padStart(2, '0'),
         }))
-        const all = () => ids.map((id) => ring.ringFarbe(id))
-        all()
-        // a chat is added: the whole list is a new value and every row asks again
-        const t0 = performance.now()
-        for (let round = 0; round < 3; round++) {
-          zustand.chats = [...zustand.chats, { id: 'new' + round, laeuft: false }]
-          all()
+        const all = () => {
+          const colours = []
+          for (const id of ids) colours.push(ring.ringFarbe(id))
+          return colours
         }
-        const ms = Math.round((performance.now() - t0) / 3)
+        all()
+        // Every walk over a long list is counted: a row that searches a list
+        // itself shows up as one walk per row, a rebuilt set as one per change.
+        let walks = 0
+        const names = ['filter', 'find', 'findIndex', 'some', 'every', 'includes', 'indexOf', 'map', 'forEach', 'reduce', Symbol.iterator]
+        const originals = names.map((name) => [name, Array.prototype[name]])
+        for (const [name, original] of originals) {
+          Array.prototype[name] = function (...args) {
+            if (this.length >= 1000) walks += 1
+            return original.apply(this, args)
+          }
+        }
+        const perChange = []
+        try {
+          // a chat is added: the whole list is a new value and every row asks again
+          for (let round = 0; round < 3; round++) {
+            zustand.chats = [...zustand.chats, { id: 'new' + round, laeuft: false }]
+            walks = 0
+            all()
+            perChange.push(walks)
+          }
+        } finally {
+          for (const [name, original] of originals) Array.prototype[name] = original
+        }
         const tally = all().reduce((m, f) => ((m[f] = (m[f] || 0) + 1), m), {})
-        return { ms, tally }
+        return { perChange, tally }
         """
     )
     assert sum(report["tally"].values()) == 2000
     # What the rows say stays what the rule says: 154 asked (every 13th, the
     # question beats everything), 40 running, the rest by fault and finish.
     assert report["tally"]["gelb"] == 154
-    # Per change: about 150 ms for one pass of each list and the 2000 reads;
-    # the old form needed about a second here and seconds more in the page,
-    # where the rows read reactive proxies on top.
-    assert report["ms"] < 600, report
+    # Per change: a walk over the list that changed and one more for the set
+    # built from it; the other lists keep their sets. The old form walked a
+    # list for every row (4001 walks here), so a handful is the ceiling.
+    assert max(report["perChange"]) <= 8, report

@@ -14,6 +14,7 @@
 <script>
   import { onMount } from 'svelte'
   import { api } from '../lib/api.js'
+  import { pollWithoutOverlap } from '../lib/pollWithoutOverlap.js'
   import { t } from '../lib/texte.svelte.js'
 
   let belegt = $state(null)
@@ -31,15 +32,14 @@
 
   onMount(() => {
     lesen()
-    const takt = setInterval(lesen, 2000)
-    return () => clearInterval(takt)
+    return pollWithoutOverlap(lesen, 2000)
   })
 
 </script>
 
 {#if gesamt != null}
   <span class="wert" title={t('kopf.speicher_titel')}
-    >{belegt != null ? Math.round(belegt) : '—'} / {Math.round(gesamt)} GB</span
+    >{belegt != null ? Math.round(belegt) : '-'} / {Math.round(gesamt)} GB</span
   >
 {/if}
 

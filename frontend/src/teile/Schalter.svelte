@@ -1,17 +1,18 @@
 <script>
   /* The house's switch — one build, used everywhere.
 
-     Two tones, and the difference matters: red says this is an
-     intervention (suspending the system prompt), blue says something is
-     switched on (a skill, a model in the quick picker). Whoever reaches for
-     red should feel that something is being taken away.
+     White and grey, in every look: off, the track is the ink of the look at
+     a sixth of its strength with a quiet knob at the left; on, the track is
+     the ink itself and the knob takes the ground of the look. No blue and no
+     red — an intervention (suspending the system prompt) looks like any
+     other switch, and the word beside it says what it does. The state is
+     read off the knob's side and the track's weight, never off a colour
+     alone.
 
      Its own component so the next switch is not drawn a second time with
      slightly different numbers. */
   let {
     an = false,
-    /* 'eingriff' → red when on, 'vorliebe' → blue. */
-    art = 'vorliebe',
     beschriftung = '',
     gesperrt = false,
     onschalten = null,
@@ -24,7 +25,6 @@
 <button
   {id}
   class="schalter"
-  class:eingriff={art === 'eingriff'}
   role="switch"
   aria-checked={an}
   aria-label={beschriftung}
@@ -45,9 +45,7 @@
        reads as a box the knob happens to sit in. The knob is a circle, and
        the groove it runs in has to be its shape. */
     border-radius: 99px;
-    /* Off, the track is glass with a fine edge; on, it fills (below). */
-    background: var(--glass-button);
-    box-shadow: inset 0 0 0 1px var(--glass-button-edge);
+    background: color-mix(in srgb, var(--text) 16%, transparent);
     cursor: pointer;
     transition: background 0.2s cubic-bezier(0.2, 0.9, 0.3, 1);
   }
@@ -58,25 +56,15 @@
     width: 14px;
     height: 14px;
     border-radius: 50%;
-    background: var(--text-still);
-    transition: transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1);
+    background: var(--text-leise);
+    transition: transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1), background 0.2s;
   }
-  /* On, the track carries the full colour of "switched on": a state is
-     read off a filled track at a glance, off a tinted glass it is not. */
+  /* On, the track is the ink of the look and the knob its ground. */
   .schalter[aria-checked='true'] {
-    background: var(--blau);
-    box-shadow: none;
+    background: var(--text);
   }
-  /* Red is reserved for taking something away, not for taste. */
-  .schalter.eingriff[aria-checked='true'] {
-    background: var(--rot);
-  }
-  /* The knob on the colour is opaque everywhere: white in the light looks
-     (`--knauf-an`, global.css), the ground of the look in the dark ones.
-     The raised ground would not do — a menu page turns it into glass, and a
-     knob one can see through sinks into its track. */
   .schalter[aria-checked='true'] i {
-    background: var(--knauf-an, var(--bg));
+    background: var(--bg);
     transform: translateX(14px);
   }
   .schalter:disabled {

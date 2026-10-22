@@ -26,6 +26,7 @@ from app.providers import MockProvider, mock_endpunkt
 from app.providers.base import Werkzeugaufruf
 from app.tools import hintergrund
 from tests.conftest import provider_setzen
+from tests.fensterquelle import WINDOW_SOURCE
 
 WURZEL = Path(__file__).resolve().parents[1]
 
@@ -273,7 +274,7 @@ def test_das_fenster_zeichnet_die_berichtszeile_nicht_und_fuellt_die_karte():
     """The window's half, pinned at the source: the chat skips report rows,
     the terminal stream writes the ending onto the call's card and hears
     the read mark, and the card wears the dot."""
-    app = (WURZEL / "frontend/src/App.svelte").read_text(encoding="utf-8")
+    app = WINDOW_SOURCE.read_text(encoding="utf-8")
     assert "(nachricht.art ?? 'nachricht') !== 'werkzeugmeldung'" in app
     assert "eintrag.lauf_nummer = ereignis.lauf_nummer" in app
     strom = (WURZEL / "frontend/src/lib/terminalfenster.svelte.js").read_text(encoding="utf-8")

@@ -139,3 +139,40 @@ def test_ein_leerer_skriptordner_ist_kein_fehler(client):
     antwort = client.get("/api/v1/skripte")
     assert antwort.status_code == 200
     assert antwort.json() == []
+
+
+# --- One script's text, for its tile ---------------------------------------
+
+
+def test_a_script_is_answered_as_plain_text_shown_in_place(client, config):
+    ordner = ort(config, "scripts")
+    ordner.mkdir(parents=True, exist_ok=True)
+    (ordner / "alt.rb").write_bytes(b"puts 'hello'\n")
+
+    antwort = client.get("/api/v1/skripte/text", params={"name": "alt.rb"})
+    assert antwort.status_code == 200
+    assert antwort.text == "puts 'hello'\n"
+    assert antwort.headers["content-type"].startswith("text/plain")
+    # No file name, so no download: the text is shown where it is asked for.
+    assert "content-disposition" not in antwort.headers
+
+
+@pytest.mark.parametrize("name", ["../secret.txt", "/etc/passwd", "a/b.sh", "..", " "])
+def test_a_name_that_spells_out_a_path_or_nothing_is_refused(client, name):
+    assert client.get("/api/v1/skripte/text", params={"name": name}).status_code == 400
+
+
+def test_a_script_that_is_not_there_is_not_found(client):
+    assert client.get("/api/v1/skripte/text", params={"name": "weg.sh"}).status_code == 404
+
+
+def test_a_link_that_leads_out_of_the_folder_is_not_served(client, config, tmp_path):
+    ordner = ort(config, "scripts")
+    ordner.mkdir(parents=True, exist_ok=True)
+    geheim = tmp_path / "outside.txt"
+    geheim.write_text("not for the wall\n", encoding="utf-8")
+    (ordner / "notes.txt").symlink_to(geheim)
+
+    antwort = client.get("/api/v1/skripte/text", params={"name": "notes.txt"})
+    assert antwort.status_code == 404
+    assert "not for the wall" not in antwort.text

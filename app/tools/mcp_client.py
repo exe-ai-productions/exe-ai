@@ -19,10 +19,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from typing import Any
 
+from app import child_environment
 from app.no_console import no_window
 from app.tools.mcp_logo import logo_of
 
@@ -83,6 +83,25 @@ def time_limit_sentence(server: str, tool: str, seconds: float) -> str:
         f"MCP server '{server}' did not answer the call to '{tool}' within "
         f"{seconds:g} seconds."
     )
+
+
+def start_time_limit_sentence(server: str, request: str, seconds: float) -> str:
+    """What the log says where a server ran out of the start's time: which of
+    the two requests of the start it did not answer."""
+    return (
+        f"MCP server '{server}' did not answer '{request}' within "
+        f"{seconds:g} seconds."
+    )
+
+
+def start_failure_text(fehler: BaseException) -> str:
+    """The reason a server did not start, for the log: the kind and the text
+    of the error. An ``MCPFehler`` already carries a sentence of its own."""
+    text = str(fehler).strip()
+    if isinstance(fehler, MCPFehler):
+        return text or type(fehler).__name__
+    kind = type(fehler).__name__
+    return f"{kind}: {text}" if text else kind
 
 
 def ergebnis_zu_text(ergebnis: dict[str, Any], quelle: str, bild_senke=None) -> str:
@@ -166,7 +185,9 @@ class MCPStdioClient:
     # --- Connection ------------------------------------------------------
 
     async def starten(self) -> None:
-        umgebung = {**os.environ, **self.env}
+        # Without the keys the service holds: a server gets the one its own
+        # entry names with ${NAME} in ``env``, and no other.
+        umgebung = {**child_environment.without_secrets(), **self.env}
         self._prozess = await asyncio.create_subprocess_exec(
             self.command,
             *self.args,
@@ -183,14 +204,20 @@ class MCPStdioClient:
             **no_window(),
         )
 
-        antwort = await self._aufrufen(
-            "initialize",
-            {
-                "protocolVersion": PROTOKOLL_VERSION,
-                "capabilities": {},
-                "clientInfo": {"name": "exe-ai-terminal", "version": "0.1.0"},
-            },
-        )
+        try:
+            antwort = await self._aufrufen(
+                "initialize",
+                {
+                    "protocolVersion": PROTOKOLL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "exe-ai-terminal", "version": "0.1.0"},
+                },
+                START_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            raise MCPFehler(
+                start_time_limit_sentence(self.name, "initialize", START_TIMEOUT)
+            ) from None
         log.info(
             "MCP server '%s' connected: %s",
             self.name,
@@ -202,21 +229,31 @@ class MCPStdioClient:
         logo = asyncio.ensure_future(logo_of((antwort.get("serverInfo") or {}).get("icons")))
         try:
             self.werkzeuge = await self._werkzeuge_holen()
+        except asyncio.TimeoutError:
+            logo.cancel()
+            raise MCPFehler(
+                start_time_limit_sentence(self.name, "tools/list", START_TIMEOUT)
+            ) from None
         except BaseException:
             logo.cancel()
             raise
         self.logo = await logo
 
-    async def stoppen(self) -> None:
+    async def stoppen(self, frist: float = 5) -> None:
+        """Ends the server's process: asked politely, ``frist`` seconds to
+        end, then killed — and no wait after the kill is unlimited either."""
         if self._prozess is None:
             return
         if self._prozess.returncode is None:
             self._prozess.terminate()
             try:
-                await asyncio.wait_for(self._prozess.wait(), timeout=5)
+                await asyncio.wait_for(self._prozess.wait(), timeout=frist)
             except asyncio.TimeoutError:
                 self._prozess.kill()
-                await self._prozess.wait()
+                try:
+                    await asyncio.wait_for(self._prozess.wait(), timeout=frist)
+                except asyncio.TimeoutError:
+                    log.warning("MCP server '%s' did not end after a kill", self.name)
         self._prozess = None
 
     # --- JSON-RPC --------------------------------------------------------
@@ -286,7 +323,7 @@ class MCPStdioClient:
     # --- Tools -----------------------------------------------------------
 
     async def _werkzeuge_holen(self) -> list[MCPWerkzeug]:
-        ergebnis = await self._aufrufen("tools/list", {})
+        ergebnis = await self._aufrufen("tools/list", {}, START_TIMEOUT)
         return werkzeuge_aus_antwort(ergebnis, self.name)
 
     async def werkzeug_aufrufen(

@@ -17,8 +17,9 @@ from pathlib import Path
 import pytest
 
 from tests.test_hausregeln import _node, _stueck
+from tests.fensterquelle import WINDOW_SOURCE
 
-APP = Path(__file__).resolve().parent.parent / "frontend/src/App.svelte"
+APP = WINDOW_SOURCE
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="no node on this machine")
 

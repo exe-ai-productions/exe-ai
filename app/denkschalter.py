@@ -85,8 +85,8 @@ def zusatz(
     The fields a model row names for one route of its provider
     (:func:`route_fields`) go out with every chat answer and every fold, a
     stage or none: they say where the thinking is delivered, not whether
-    there is any. A job's own rounds send no stage and do not send them
-    yet.
+    there is any. A job's own rounds send a stage only where the agent's
+    file names one (:func:`for_stage`), and nothing otherwise.
 
     ``max_tokens`` is the ceiling THIS request goes out with. Only one
     branch reads it (the Anthropic generation that wants a thinking budget
@@ -236,6 +236,32 @@ def quietest(
     if depths:
         return depths[0]
     return "on" if "on" in profile.stufen else None
+
+
+def for_stage(
+    stage: str | bool | None,
+    zustand,
+    *,
+    modell: str | None = None,
+    abgelehnt: Iterable[str] = (),
+    max_tokens: int | None = None,
+) -> dict[str, Any]:
+    """The request fields a round carries for the stage it was asked with,
+    for the ceiling it has right now. The one answer a chat's round and a
+    job's round both ask for, so the two cannot send different fields for
+    the same stage.
+
+    Off goes out the way the fold sends it (:func:`ausschalten`), which also
+    carries the model's own refusals along. Every other stage keeps asking
+    for the stage and the ceiling together: one provider generation reads a
+    thinking budget that has to stay below the ceiling of that very round.
+    There is no parameter dict to strip at this point in a round, so an empty
+    one goes in for off and its answer is thrown away.
+    """
+    if ist_aus(stage):
+        schalter, _ = ausschalten(zustand, {}, modell=modell, abgelehnt=abgelehnt)
+        return schalter
+    return zusatz(stage, zustand, modell=modell, abgelehnt=abgelehnt, max_tokens=max_tokens)
 
 
 def ist_aus(stufe: str | bool | None) -> bool:

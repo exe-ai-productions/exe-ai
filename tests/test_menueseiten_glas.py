@@ -106,7 +106,7 @@ def test_fixed_surfaces_stay():
 # ring adds no height and the fill stays.
 FIELDS_WITH_OUTLINE = [
     ("Ankreuzliste.svelte", ".suche"), ("BildGeraete.svelte", ".eingabe"),
-    ("Bildmodellwerte.svelte", ".eingabe"), ("Layoutmodus.svelte", ".zahl"),
+    ("Bildmodellwerte.svelte", ".eingabe"),
     ("Parametertafel.svelte", ".zahl"), ("Modellwahl.svelte", ".search"),
     ("Startordnerpillen.svelte", ".pfadfeld"), ("Updatekarte.svelte", ".choice.quiet"),
     ("FolderChip.svelte", ".small"),

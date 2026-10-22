@@ -4,6 +4,7 @@
    window and the catalogue cards read it here; no family list lives in the
    interface itself. Fetched once, again only after a failed attempt. */
 import { api } from './api.js'
+import { bildFamilienMarke } from './anbieterzeichen.js'
 
 export const imageFamilies = $state({ list: [] })
 
@@ -25,4 +26,11 @@ export function loadImageFamilies() {
 
 export function familyOf(name) {
   return imageFamilies.list.find((family) => family.name === name) ?? null
+}
+
+/** The maker's mark of a family (by its name), or null where the house has no
+    vector for it — the caller then shows the file's first letter. */
+export function familyMark(name) {
+  const family = familyOf(name)
+  return family ? bildFamilienMarke(family.name, family.label) : null
 }

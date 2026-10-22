@@ -107,3 +107,39 @@ def test_das_zuletzt_benutzte_modell_ueberlebt_die_route(client):
     assert antwort.status_code == 200, antwort.text
     gelesen = client.get("/api/v1/settings/resolved/modell_zuletzt").json()
     assert gelesen["wert"] == {"id": "lokal/qwen"}
+
+
+# --- A name above the limit ---------------------------------------------------
+
+
+def test_a_name_is_cut_to_the_limit_the_stored_choice_keeps():
+    assert modellwahl.name_kuerzen("x" * 401) == "x" * modellwahl.MAX_LAENGE
+    # Blanks around the cut are not part of the name either.
+    assert modellwahl.name_kuerzen("  " + "x" * 399 + " tail") == "x" * 399
+    # Silence probe: a name below the limit is only trimmed.
+    assert modellwahl.name_kuerzen("  Beta 9B ") == "Beta 9B"
+
+
+def test_a_listed_name_above_the_limit_is_kept_with_the_choice_and_equals_it_again(client):
+    """Falls over without the cut: the list handed out the whole name, the
+    stored choice refused it as too long and kept the id alone, so a client
+    following the listed name found the stored one missing at every start."""
+    zustand = client.app.state.discovery.zustaende["test"]
+    zustand.gemeldeter_name = "n" * 401
+
+    listed = client.get("/api/v1/models").json()[0]
+    assert len(listed["name"]) == modellwahl.MAX_LAENGE
+
+    stored = client.put(
+        "/api/v1/settings/global/modell_zuletzt",
+        json={"wert": {"id": listed["id"], "name": listed["name"]}},
+    )
+    assert stored.status_code == 200, stored.text
+    kept = client.get("/api/v1/settings/resolved/modell_zuletzt").json()["wert"]
+    assert kept == {"id": listed["id"], "name": listed["name"]}
+
+
+def test_silence_probe_a_listed_name_below_the_limit_is_handed_out_whole(client):
+    zustand = client.app.state.discovery.zustaende["test"]
+    zustand.gemeldeter_name = "Beta 9B"
+    assert client.get("/api/v1/models").json()[0]["name"] == "Beta 9B"

@@ -15,6 +15,22 @@ httpx==0.28.1
 # search server (mcp/ddgs_server.py).
 ddgs==9.14.4
 
+# When a process began, read from the system without starting a program of its
+# own (app/own_process.py, cli/service.py): the service writes its start into
+# its note and the client compares it, on Linux, macOS and Windows alike.
+psutil==7.2.2
+
+# The snapshot store of /rollback (app/checkpoints.py): a git written and
+# read in plain Python, so the program needs no git on the computer and never
+# calls the one that may be there. It asks for urllib3 for its HTTP client,
+# which this program does not use.
+dulwich==1.2.17
+urllib3==2.8.0
+
+# The QR code of the web app's address on the settings page, drawn as a
+# vector graphic (app/qr_code.py). Plain Python, no further dependency.
+segno==1.6.6
+
 # Tests
 pytest==8.3.4
 pytest-asyncio==0.25.0

@@ -1,6 +1,6 @@
 """Closing the program stops every server it holds.
 
-The model, embedding, guardian and image-turbo servers each run in their own
+The model, embedding, guardian and image-turbo servers (and the painter's one-picture runner) each run in their own
 session, so a service crash does not take them down — which means a clean
 shutdown must end them by hand, or they orphan and the next launch cannot
 talk to them ("Invalid API-Key"). This guards that the shutdown does.
@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app_erstellen
 
-SERVER = ("modellrunner", "einbettungsrunner", "agentenrunner", "bildturbo")
+SERVER = ("modellrunner", "einbettungsrunner", "agentenrunner", "bildturbo", "bildrunner")
 
 
 def test_shutdown_stoppt_jeden_server(config):
@@ -26,9 +26,9 @@ def test_shutdown_stoppt_jeden_server(config):
             server = getattr(app.state, name)
 
             def merker(n, roh):
-                def wrapper():
+                def wrapper(**kwargs):
                     gestoppt.append(n)
-                    return roh()
+                    return roh(**kwargs)
                 return wrapper
 
             server.stoppen = merker(name, server.stoppen)

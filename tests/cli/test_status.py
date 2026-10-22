@@ -217,7 +217,7 @@ def test_the_free_cells_stand_in_the_quiet_tone_and_not_in_the_line_colour(ctx: 
     assert "class:line" not in [style for style, _ in pieces]
 
 
-@pytest.mark.parametrize("look", ["exe", "darkmatter", "moune", "heaven", "pearl"])
+@pytest.mark.parametrize("look", ["exe", "darkmatter", "moune", "heaven", "pearl", "snow"])
 def test_the_free_cells_stand_out_from_the_ground_of_every_look(ctx: Context, look: str) -> None:
     fill(ctx)
     _, free = bar(ctx)
@@ -401,7 +401,7 @@ def test_a_model_switch_shows_the_new_name_and_its_window(
     assert "Local Model" not in shown
 
 
-@pytest.mark.parametrize("look", ["exe", "darkmatter", "moune", "heaven", "pearl"])
+@pytest.mark.parametrize("look", ["exe", "darkmatter", "moune", "heaven", "pearl", "snow"])
 def test_the_active_server_stands_in_the_blue_of_every_look(ctx: Context, look: str) -> None:
     """The state the window draws blue is blue in each look — also in the
     look whose accent is its text colour, where the old colour was no

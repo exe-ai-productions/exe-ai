@@ -40,7 +40,7 @@ def test_die_breiten_bleiben_in_ihren_grenzen():
     """The same bounds the seam clamps the hand to — a width arriving from
     anywhere else must not put a panel in a shape no drag could produce."""
     geklemmt = layoutwahl.wahl_pruefen({"leiste_breite": 9999, "seitenleiste_breite": 10})
-    assert geklemmt == {"leiste_breite": 900, "seitenleiste_breite": 314}
+    assert geklemmt == {"leiste_breite": 900, "seitenleiste_breite": 285}
 
     geklemmt = layoutwahl.wahl_pruefen({"leiste_breite": 1, "seitenleiste_breite": 9999})
     assert geklemmt == {"leiste_breite": 364, "seitenleiste_breite": 400}
@@ -67,7 +67,7 @@ def test_nur_bekannte_module():
     # still existed must not keep the rail pointing at a panel that is gone —
     # the unknown name is dropped and `aufgeloest` hands out the default.
     assert layoutwahl.wahl_pruefen({"leiste_modul": "waechter"}) is None
-    assert layoutwahl.aufgeloest({"leiste_modul": "waechter"})["leiste_modul"] == "terminal"
+    assert layoutwahl.aufgeloest({"leiste_modul": "waechter"})["leiste_modul"] == "cli"
 
 
 def test_muell_faellt_raus():
@@ -79,24 +79,27 @@ def test_muell_faellt_raus():
 
 
 def test_die_vorgabe_steht_dahinter():
-    """Nothing stored: both panels stand folded, the basic state a fresh
-    installation opens in."""
+    """Nothing stored: the sidebar stands folded and the right column stands
+    open on the CLI tab at the width that draws the whole wordmark."""
     assert layoutwahl.aufgeloest(None) == {
-        "leiste_offen": False,
-        "leiste_modul": "terminal",
-        "leiste_breite": 364,
+        "leiste_offen": True,
+        "leiste_modul": "cli",
+        "leiste_breite": 512,
         "seitenleiste_zu": True,
-        "seitenleiste_breite": 314,
+        "seitenleiste_breite": 285,
     }
 
 
-def test_a_stored_choice_wins_over_the_folded_default():
+def test_a_stored_choice_wins_over_the_default():
     """The silence check: whoever unfolded the sidebar finds it unfolded,
-    and what was never stored beside it still comes from the defaults."""
+    whoever folded the column finds it folded at the width they left it, and
+    what was never stored beside it still comes from the defaults."""
     resolved = layoutwahl.aufgeloest({"seitenleiste_zu": False})
     assert resolved["seitenleiste_zu"] is False
-    assert resolved["leiste_offen"] is False
-    assert layoutwahl.aufgeloest({"leiste_offen": True})["seitenleiste_zu"] is True
+    assert resolved["leiste_offen"] is True
+    folded = layoutwahl.aufgeloest({"leiste_offen": False, "leiste_modul": "bilder", "leiste_breite": 400})
+    assert (folded["leiste_offen"], folded["leiste_modul"], folded["leiste_breite"]) == (False, "bilder", 400)
+    assert folded["seitenleiste_zu"] is True
 
 
 INTERFACE_DEFAULTS = Path(__file__).resolve().parent.parent / "frontend/src/lib/anzeige.js"
@@ -108,6 +111,10 @@ def _literal(value: str) -> bool | int | str:
         return value == "true"
     if value.startswith("'") and value.endswith("'"):
         return value[1:-1]
+    if value == "PANEL_DEFAULT_WIDTH":
+        named = re.search(r"^export const PANEL_DEFAULT_WIDTH = (\d+)$", INTERFACE_DEFAULTS.read_text(encoding="utf-8"), re.M)
+        assert named, "anzeige.js names no PANEL_DEFAULT_WIDTH"
+        return int(named.group(1))
     assert value.isdigit(), f"anzeige.js holds a default this test cannot read: {value}"
     return int(value)
 
@@ -128,20 +135,46 @@ RAIL = Path(__file__).resolve().parent.parent / "frontend/src/lib/arbeitsleiste.
 
 def test_the_service_clamps_the_column_where_the_seam_does():
     """The seam's lower bound is what the row of signs at the column's foot
-    needs. The service clamps to the same number and the default starts on
-    it: a default below it was clamped up at every load without being
-    stored, and the service took a width no drag could produce."""
+    needs. The service clamps to the same number and the default starts at
+    or above it: a default below it was clamped up at every load without
+    being stored, and the service took a width no drag could produce."""
     source = RAIL.read_text(encoding="utf-8")
     lowest = re.search(r"^export const BREITE_MIN = (\d+)$", source, re.M)
     widest = re.search(r"^const BREITE_MAX = (\d+)$", source, re.M)
     assert lowest and widest, "arbeitsleiste.svelte.js names no bounds for the column"
     assert layoutwahl.LEISTE_MIN == int(lowest.group(1)) == 364
-    assert layoutwahl.VORGABE["leiste_breite"] == layoutwahl.LEISTE_MIN
+    assert layoutwahl.LEISTE_MIN <= layoutwahl.VORGABE["leiste_breite"] <= layoutwahl.LEISTE_MAX
     # Silence probes: the upper bound stays, and the sidebar on the left
     # keeps its own, smaller measure.
     assert layoutwahl.LEISTE_MAX == int(widest.group(1)) == 900
-    assert layoutwahl.SEITE_MIN == layoutwahl.VORGABE["seitenleiste_breite"] == 314
+    assert layoutwahl.SEITE_MIN == layoutwahl.VORGABE["seitenleiste_breite"] == 285
     assert layoutwahl.SEITE_MAX == 400
+
+
+STATE = Path(__file__).resolve().parent.parent / "frontend/src/lib/zustand.svelte.js"
+
+
+def test_the_service_clamps_the_sidebar_where_the_seam_does():
+    """The seam of the sidebar clamps the hand to what the row of signs at its
+    foot needs, and the service clamps a width that arrives from anywhere else
+    to the same two numbers; the default starts on the lower one."""
+    source = STATE.read_text(encoding="utf-8")
+    lowest = re.search(r"^const SEITEN_MIN = (\d+)$", source, re.M)
+    widest = re.search(r"^const SEITEN_MAX = (\d+)$", source, re.M)
+    assert lowest and widest, "zustand.svelte.js names no bounds for the sidebar"
+    assert layoutwahl.SEITE_MIN == int(lowest.group(1)) == 285
+    assert layoutwahl.SEITE_MAX == int(widest.group(1)) == 400
+    assert layoutwahl.VORGABE["seitenleiste_breite"] == layoutwahl.SEITE_MIN
+
+
+def test_a_stored_width_of_the_sidebar_between_the_bounds_stays_and_one_below_comes_back_as_the_bound(client):
+    """Silence probe: a layout written while the bound was still 314 keeps its
+    width (nothing is rewritten), and one below the new bound is raised to it."""
+    for stored in (285, 314, 340, 400):
+        answer = client.put("/api/v1/settings/global/layout", json={"wert": {"seitenleiste_breite": stored}})
+        assert answer.json()["wert"] == {"seitenleiste_breite": stored}, stored
+    answer = client.put("/api/v1/settings/global/layout", json={"wert": {"seitenleiste_breite": 250}})
+    assert answer.json()["wert"] == {"seitenleiste_breite": 285}
 
 
 def test_die_route_speichert_und_gibt_zurueck(client):

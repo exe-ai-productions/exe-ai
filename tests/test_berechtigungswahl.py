@@ -202,4 +202,6 @@ def test_beide_kataloge_kennen_das_agentenwort():
     """A missing key would render as the raw key path in the dialog."""
     for datei in ("de.json", "en.json"):
         texte = json.loads((WURZEL / "app/locales" / datei).read_text(encoding="utf-8"))
-        assert texte["berechtigungen"]["modus_agent_manuell"] == "Sandboxed"
+        assert texte["berechtigungen"]["modus_agent_manuell"] == (
+            "In der Sandbox" if datei == "de.json" else "Sandboxed"
+        )

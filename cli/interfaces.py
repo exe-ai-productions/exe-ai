@@ -16,12 +16,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, TypeVar
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from prompt_toolkit.completion import Completer
+    from prompt_toolkit.formatted_text import StyleAndTextTuples
     from prompt_toolkit.key_binding import KeyBindingsBase
     from rich.console import RenderableType
 
@@ -37,7 +38,7 @@ Event = Mapping[str, Any]
 # its classes as ``class:<name>``; the names are the ones ``cli/themes.py``
 # lists, so the same word colours a piece of the status line and a line of
 # the history.
-Fragments = list[tuple[str, str]]
+Fragments: TypeAlias = "StyleAndTextTuples"
 
 # One piece of a line shown above the input field: the name of its style —
 # one of those ``cli/themes.py`` lists, without a prefix — and its text.
@@ -91,6 +92,11 @@ class Screen(Protocol):
         said in that chat yet. Beside a running answer the window is emptied
         at once and the history follows once the answer is over. What is
         kept for ``export`` begins anew with it."""
+        return None
+
+    def tool_finished(self) -> None:
+        """The last open tool call of the running answer is over. A message
+        that waited for it may cut the answer short now."""
         return None
 
     def exit(self) -> None:
@@ -248,6 +254,13 @@ class Asker(Protocol):
         The answer carries ``antwort``."""
         return None
 
+    def can_ask(self) -> bool:
+        """Whether somebody is there to answer a question typed at the
+        terminal. A command run from outside without a terminal has nobody:
+        the questions it could do without are left out, and one it cannot is
+        said and ends the command."""
+        return True
+
     def choose(self, entries: Sequence[Entry], head: str = "") -> int | None:
         """Shows ``entries`` as a selection and returns the position of the
         one the user picked — ``None`` where none was picked: the user
@@ -278,6 +291,7 @@ class Asker(Protocol):
     def typed(self, text: str) -> None:
         """The input field holds ``text`` now. Called on every change; a
         selection that searches takes it up, anything else lets it go."""
+        return None
 
     def check(
         self, entries: Sequence[Entry], head: str = "", checked: Collection[int] = ()
@@ -441,6 +455,10 @@ class Session:
     # True from the moment a message goes out until its answer is over —
     # also in the stretch before the service has named the run.
     answering: bool = False
+    # The tool calls announced and not yet answered with a result: while
+    # there are any, a message typed meanwhile waits instead of cutting the
+    # answer short.
+    open_calls: set[Any] = field(default_factory=set)
     # What the service said about itself at start (``status``, ``version``).
     health: dict[str, Any] = field(default_factory=dict)
     # Set while a command waits for something that takes as long as it

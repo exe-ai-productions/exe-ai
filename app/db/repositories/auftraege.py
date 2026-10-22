@@ -143,6 +143,46 @@ class AuftragRepository(Repository):
         ).fetchall()
         return [Auftrag.aus_zeile(row) for row in rows]
 
+    def open_sent_off(self) -> list[Auftrag]:
+        """Every open run a chat's model sent off with ``start_job``, and
+        every open continuation of one: a run with a chat and neither a run
+        nor a schedule above it, or a run fired by a continuation entry
+        (``ursprung_id``) whose origin is such a run — oldest first."""
+        rows = self.verbindung.execute(
+            "SELECT * FROM auftraege WHERE zustand IN ('laeuft', 'wartet') AND eltern_id IS NULL"
+            " AND ((chat_id IS NOT NULL AND cronjob_id IS NULL)"
+            "  OR cronjob_id IN (SELECT cronjobs.id FROM cronjobs"
+            "   JOIN auftraege AS origin ON origin.id = cronjobs.ursprung_id"
+            "   WHERE origin.chat_id IS NOT NULL AND origin.eltern_id IS NULL"
+            "   AND origin.cronjob_id IS NULL))"
+            " ORDER BY created_at, rowid"
+        ).fetchall()
+        return [Auftrag.aus_zeile(row) for row in rows]
+
+    def sent_off_of_chat(self, chat_id: str) -> list[Auftrag]:
+        """The runs this chat's model sent off that are running, waiting or
+        handed on to a continuation — oldest first. Whether a handed-on one
+        still has work going is for ``open_chain_runs`` and the chain's
+        entries to say."""
+        rows = self.verbindung.execute(
+            "SELECT * FROM auftraege WHERE chat_id = ? AND eltern_id IS NULL"
+            " AND cronjob_id IS NULL AND zustand IN ('laeuft', 'wartet', 'unterbrochen')"
+            " ORDER BY created_at, rowid",
+            (chat_id,),
+        ).fetchall()
+        return [Auftrag.aus_zeile(row) for row in rows]
+
+    def open_chain_runs(self, origin_id: str) -> list[Auftrag]:
+        """The runs of the continuations of one piece of work that are
+        running or waiting — oldest first. ``origin_id`` is the run the work
+        began with, which every continuation entry names."""
+        rows = self.verbindung.execute(
+            "SELECT * FROM auftraege WHERE zustand IN ('laeuft', 'wartet') AND cronjob_id IN"
+            " (SELECT id FROM cronjobs WHERE ursprung_id = ?) ORDER BY created_at, rowid",
+            (origin_id,),
+        ).fetchall()
+        return [Auftrag.aus_zeile(row) for row in rows]
+
     def ids_for_chat(self, chat_id: str) -> list[str]:
         """Every run a chat's work ever had, in any state."""
         rows = self.verbindung.execute(

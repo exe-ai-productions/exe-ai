@@ -16,10 +16,10 @@
          attachment, there is nothing to remove;
        - the truncation notice under an attachment card — it explains a
          cut that only ever happens to an attachment. */
-  import { dateiart, dateiHerunterladen } from '../lib/dateiarten.js'
+  import { ADDRESS_KINDS, OFFICE_KINDS, dateiart, dateiHerunterladen, fileKind } from '../lib/dateiarten.js'
   import { tabEinsortieren } from '../lib/vorschautabs.svelte.js'
   import { zustand } from '../lib/zustand.svelte.js'
-  import { showPage } from '../lib/bildschau.svelte.js'
+  import { bildZeigen, showPage } from '../lib/bildschau.svelte.js'
   import { punktPulsiert } from '../lib/meldewesen.svelte.js'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
 
@@ -71,6 +71,11 @@
   let geladenerInhalt = $derived(inhalt)
 
   const art = $derived(dateiart(sprache))
+  /* What the file is by its ending: a document, code, text — or a picture, a
+     clip or a sound, which have no text and are shown from the file's own
+     address. */
+  const info = $derived(fileKind(sprache))
+  const fromAddress = $derived(ADDRESS_KINDS.includes(info?.kind))
 
   /* Fetches what the card does not hold yet, at most one flight at a time,
      and hands the text back either way. A failed attempt does not latch:
@@ -104,17 +109,18 @@
      rearrange. `tabEinsortieren`, not `tabOeffnen`: the card is SHOWING a
      file, not writing one (lib/vorschautabs.svelte.js). */
   function einsortieren(text) {
-    if (!art || text == null) return
+    if (!info || info.kind === 'pdf' || fromAddress || text == null) return
     if (!chatId || chatId !== zustand.aktiverChat) return
     tabEinsortieren(chatId, { name, art: sprache, inhalt: text, pfad: filePath })
   }
 
-  /* A file shown in a frame is filed the same way and under the same
-     rule — its own chat, and only while that chat is on screen. */
+  /* A file shown from its own address (a PDF in a frame, a picture, a clip,
+     a sound) is filed the same way and under the same rule — its own chat,
+     and only while that chat is on screen. */
   function fileFramed() {
     if (!chatId || chatId !== zustand.aktiverChat) return
     tabEinsortieren(chatId, {
-      name, art: 'pdf', inhalt: '', pfad: filePath, adresse: fileAddress, fakten: fileFacts,
+      name, art: framed ? 'pdf' : sprache, inhalt: '', pfad: filePath, adresse: fileAddress, fakten: fileFacts,
     })
   }
 
@@ -122,6 +128,12 @@
   function oeffnen() {
     if (framed && fileAddress) {
       showPage({ name, adresse: fileAddress, framed: true })
+      fileFramed()
+      return
+    }
+    if (fromAddress && fileAddress) {
+      if (OFFICE_KINDS.includes(info.kind)) showPage({ name, adresse: fileAddress, mediaKind: info.kind })
+      else bildZeigen(fileAddress, { name, mediaKind: info.kind === 'image' ? '' : info.kind })
       fileFramed()
       return
     }

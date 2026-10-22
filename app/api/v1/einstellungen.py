@@ -62,7 +62,7 @@ from app.layoutwahl import wahl_pruefen as layout_pruefen
 from app.moduswahl import SCHLUESSEL as MODUS
 from app.moduswahl import wahl_pruefen as modus_pruefen
 from app.modellwahl import SCHLUESSEL_ZULETZT as MODELL_ZULETZT
-from app.modellwahl import aus_pruefen, wahl_pruefen, zuletzt_pruefen
+from app.modellwahl import KEY_RUNS, aus_pruefen, runs_check, wahl_pruefen, zuletzt_pruefen
 from app.parameter import pruefen
 from app.skillwahl import SCHLUESSEL as SKILLS_AUTO
 from app.skillwahl import schalter_pruefen as skills_auto_pruefen
@@ -103,6 +103,9 @@ from app.weckrundenwahl import SCHLUESSEL as WECK_RUNDEN
 from app.weckrundenwahl import wahl_pruefen as weck_runden_pruefen
 from app.bildschutz import SCHLUESSEL as BILDSCHUTZ
 from app.bildschutz import schalter_pruefen as bildschutz_pruefen
+from app.checkpoint_choice import KEY as CHECKPOINTS
+from app.checkpoint_choice import DEFAULT as CHECKPOINTS_DEFAULT
+from app.checkpoint_choice import check_switch as checkpoints_check
 # The helpers' two limits (app/helper.py): how many at once, how many rounds.
 from app import helper
 
@@ -114,12 +117,13 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 # The two switches of the model choice: a write that is stored goes out over
 # the line, so a second window or device reads them again instead of keeping
 # the state it had when it opened.
-MODEL_SWITCH_KEYS = frozenset({"modelle_aus", "katalog_wahl"})
+MODEL_SWITCH_KEYS = frozenset({"modelle_aus", "katalog_wahl", KEY_RUNS})
 
 PRUEFER: dict[str, Callable[[Any], Any]] = {
     "parameter": pruefen,
     "modelle_aus": aus_pruefen,
     "katalog_wahl": wahl_pruefen,
+    KEY_RUNS: runs_check,
     MODELL_ZULETZT: zuletzt_pruefen,
     WERKZEUGE_AUS: werkzeuge_aus_pruefen,
     WERKZEUG_RUNDEN: werkzeug_runden_pruefen,
@@ -151,6 +155,7 @@ PRUEFER: dict[str, Callable[[Any], Any]] = {
     SCROLLSTELLE: scrollstelle_pruefen,
     FEINEINSTELLUNGEN: feineinstellungen_pruefen,
     BILDSCHUTZ: bildschutz_pruefen,
+    CHECKPOINTS: checkpoints_check,
     helper.AT_ONCE_KEY: helper.limit_check,
     helper.STEPS_KEY: helper.limit_check,
     BERECHTIGUNGSMODUS["chat"]: berechtigungsmodus_pruefen,
@@ -161,7 +166,7 @@ PRUEFER: dict[str, Callable[[Any], Any]] = {
 # permission mode: picking one rewrites the one rule file every chat and
 # every model is judged by, so a value kept at a chat or a model would stand
 # there and apply nowhere.
-GLOBAL_ONLY: frozenset[str] = frozenset(BERECHTIGUNGSMODUS.values())
+GLOBAL_ONLY: frozenset[str] = frozenset({*BERECHTIGUNGSMODUS.values(), CHECKPOINTS})
 
 # Checks on a whole row, old and new side by side, that refuse a write by
 # raising ``WriteRefused`` instead of trimming it.
@@ -273,6 +278,11 @@ def _value_and_origin(
         return repositories.einstellungen.value_and_origin(
             schluessel, modell=modell, chat=chat,
             vorgabe=SCROLL_DEFAULT, pruefen=scrollstelle_pruefen,
+        )
+    if schluessel == CHECKPOINTS:
+        # Off until switched on, and shown that way in a list of all settings.
+        return repositories.einstellungen.value_and_origin(
+            schluessel, modell=modell, chat=chat, vorgabe=dict(CHECKPOINTS_DEFAULT)
         )
     return repositories.einstellungen.value_and_origin(schluessel, modell=modell, chat=chat)
 

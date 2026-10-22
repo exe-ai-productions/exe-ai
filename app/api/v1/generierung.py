@@ -30,7 +30,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, AsyncGenerator, AsyncIterator
+from typing import Any, AsyncGenerator, AsyncIterator, Callable
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -61,7 +61,7 @@ from app.i18n import t
 from app import ablehnungslernen, antwortende, antwortgrenze, denkablehnung, denkschalter, sent_stage
 from app import denkenwahl, denkstufen
 from app import reasoning
-from app import helper, parameter
+from app import checkpoint_hooks, helper, parameter
 from app.speicherorte import ort
 from app.providers import ChatNachricht, Generierungsanfrage, ProviderFehler, openai_responses
 from app.providers.anthropic import THINKING_BLOCKS
@@ -76,14 +76,17 @@ from app.providers.openai_kompatibel import (
     display_model,
 )
 from app.tools import WerkzeugRegistry, WerkzeugVerboten
-from app.tools import auftrag_werkzeug, bild_werkzeug, dateiwerkzeuge, frage_werkzeug, memory
+from app.tools import (
+    auftrag_werkzeug, bild_werkzeug, dateiwerkzeuge, frage_werkzeug, job_werkzeug, memory,
+)
 from app.tools import video_tool, ziel_werkzeug
 from app.tools import agentendock as delivery_tool
 from app.tools import hintergrund, shell, skill
 from app.tools import datei_aendern, datei_schreiben, grenzen
 from app.agenten import agenten_laden
 from app.discovery import denklaenge_erlaubt, refusal_key
-from app import anrede, diktatsprachewahl, dokumentablage, gedaechtnis, grundprompt, ordnerwissen
+from app import anrede, command_line_client, diktatsprachewahl, dokumentablage, gedaechtnis
+from app import grundprompt, ordnerwissen, storage_prompt
 from app import round_end, stop_note, task_images, werkzeugvorpruefung
 from app import skills, skillwahl, tokenmass, werkzeugwahl
 from app import (
@@ -564,6 +567,8 @@ async def _werkzeug_ausfuehren(
     cronjob_id: str | None = None, ziel_gemeldet: bool = False, modellbild=None,
     gedaechtnis_zeigen: bool = False, rules_of: str | None = None,
     antwort_id: str | None = None, abbruch: asyncio.Event | None = None,
+    repositories: Any = None, turn: str | None = None,
+    job_stop: Callable[[Any], None] | None = None,
 ) -> tuple[str, bool, bool, bool]:
     """Executes a tool. Returns (result text, failed, rejected).
 
@@ -611,6 +616,14 @@ async def _werkzeug_ausfuehren(
     that answer's run in the chat, and ``deliver_file``, whose file hangs
     on it.
 
+    ``repositories`` and ``turn`` (the answer or run the call belongs to) are
+    what a snapshot of the working folder needs before a call that changes
+    files (app/checkpoint_hooks.py); left out, no snapshot is taken.
+
+    ``job_stop`` is how a chat ends one of its own runs (``_job_stopper``); only
+    the ``job`` tool reads it, and only a chat hands it over — no other caller
+    has runs of its own to list or stop.
+
     ``rejected`` (the third value) is ``True`` only for a Tor 3 refusal —
     never for a tool that ran and genuinely failed, which is a different
     problem with a different shape. The loop guard
@@ -627,6 +640,22 @@ async def _werkzeug_ausfuehren(
         # this helper shares with a job run (app/api/v1/auftraege.py),
         # which has no card of its own to show a second, localized copy on.
         return t("fehler.werkzeug_verboten", "en", name=aufruf.name), True, True, False
+
+    if (
+        aufruf.name == job_werkzeug.WERKZEUG_NAME
+        and job_stop is not None
+        and chat_id
+        and repositories is not None
+    ):
+        # The chat's own runs, seen and stopped with the chat's world in
+        # hand: nothing here reaches the registry, which has no chat.
+        try:
+            antwort = job_werkzeug.execute(
+                aufruf.argumente, repositories=repositories, chat_id=chat_id, stop=job_stop
+            )
+        except job_werkzeug.JobRefused as fehler:
+            return str(fehler), True, False, False
+        return antwort, False, False, False
 
     zusatz: dict[str, Any] = {}
     if herkunft != "chat":
@@ -655,10 +684,25 @@ async def _werkzeug_ausfuehren(
 
     try:
         log.info("Tool '%s' is running: %s", aufruf.name, aufruf.argumente)
-        return await registry.ausfuehren(
-            aufruf.name, aufruf.argumente, bild_senke, ordner=ordner, chat_id=chat_id,
-            shell_zeitgrenze=shell_zeitgrenze, **zusatz,
-        ), False, False, False
+        pending = await checkpoint_hooks.before(
+            repositories, getattr(getattr(registry, "folder_share", None), "data_dir", None),
+            aufruf.name, aufruf.argumente, ordner, chat_id, turn,
+        )
+        try:
+            ergebnis = await registry.ausfuehren(
+                aufruf.name, aufruf.argumente, bild_senke, ordner=ordner, chat_id=chat_id,
+                shell_zeitgrenze=shell_zeitgrenze, **zusatz,
+            )
+        except WerkzeugVerboten:
+            # Refused before anything ran: nothing changed.
+            raise
+        except (Exception, asyncio.CancelledError):
+            # A command that failed or was stopped half way has still
+            # changed files.
+            await checkpoint_hooks.after(pending, ran=False)
+            raise
+        await checkpoint_hooks.after(pending, ran=True)
+        return ergebnis, False, False, False
     except WerkzeugVerboten as fehler:
         # The first paragraph only: a refusal of memory_save carries the
         # stored entries after it, and those do not belong in a log file.
@@ -667,6 +711,18 @@ async def _werkzeug_ausfuehren(
     except Exception as fehler:  # noqa: BLE001 - a broken tool must not shoot down the chat
         log.exception("Tool '%s' failed", aufruf.name)
         return f"Error in '{aufruf.name}': {fehler}", True, False, False
+
+
+def _job_stopper(repositories: Any, generierungen: Generierungsverwaltung) -> Callable[[Any], None]:
+    """The stop of a run, for the ``job`` tool: the stop button's own code.
+    Imported where it is used — the jobs module imports this one."""
+
+    def stop(auftrag: Any) -> None:
+        from app.api.v1.auftraege import stop_job
+
+        stop_job(repositories, generierungen, auftrag)
+
+    return stop
 
 
 async def _auf_entscheidung_warten(
@@ -1072,6 +1128,13 @@ def _system_bauen(
     own_folder = dokumentablage.own_folder_in(
         config.datenverzeichnis, chat.id, chat.working_dirs, ordner_offen
     )
+    # The folders Exe AI keeps its files in, as they stand now, and the
+    # command of the command line client where this run may start it. Both
+    # change by something the user does (moving a folder, a mode), so both
+    # are part of the fingerprint below.
+    storage = storage_prompt.block(config, ordner_offen)
+    command_line = command_line_client.for_prompt(shell_offered=befehle_da, zugriff=zugriff)
+    agents_dir, scripts_dir = grundprompt.setup_folders(config)
     # The maintenance duty names write_file and edit_file, so it only rides
     # along when both are actually on the table — and only where there is a
     # folder to keep notes about.
@@ -1105,6 +1168,10 @@ def _system_bauen(
         tuple(ordner_offen),
         own_folder,
         zugriff,
+        storage,
+        command_line,
+        agents_dir,
+        scripts_dir,
         lokal,
         self_pick,
         # The memory as the user edited it in the window — their change, at
@@ -1203,6 +1270,10 @@ def _system_bauen(
         provider_name=provider_label,
         tool_names=angeboten,
         memory_travels=gedaechtnis_da,
+        storage=storage,
+        command_line=command_line,
+        agents_dir=agents_dir,
+        scripts_dir=scripts_dir,
     )
     text = anrede.anhaengen(
         gedaechtnis.anhaengen(
@@ -1662,17 +1733,7 @@ async def _antwort_aufsetzen(
         every other stage keeps asking for the stage and the ceiling
         together, the way a round's thinking budget has always depended on
         how much room the round has left."""
-        if denkschalter.ist_aus(denkstufe):
-            # The same switch `ausschalten` builds — asked for it directly
-            # rather than re-deriving it here, so the two cannot drift.
-            # There is no parameter dict to strip a second time at this
-            # point in a round, so an empty one goes in and its answer is
-            # thrown away.
-            schalter, _ = denkschalter.ausschalten(
-                zustand, {}, modell=modellname, abgelehnt=denken_abgelehnt
-            )
-            return schalter
-        return denkschalter.zusatz(
+        return denkschalter.for_stage(
             denkstufe,
             zustand,
             modell=modellname,
@@ -3760,11 +3821,11 @@ async def _antwort_aufsetzen(
                                         agent_objekt.runden,
                                         extra={"ereignis": "helper_started", "chat": chat.id},
                                     )
-                                ergebnis = (
-                                    f"Job started: agent '{agent_name}', ID {auftrag.id}. It "
-                                    "runs independently. When it finishes, its report will "
-                                    "return to this chat, and you will be asked to summarize "
-                                    "it for the user."
+                                ergebnis = auftrag_werkzeug.started_text(
+                                    agent_name,
+                                    auftrag.id,
+                                    with_job_tool=job_werkzeug.WERKZEUG_NAME
+                                    not in getattr(registry, "abgeschaltet", ()),
                                 )
                                 # One string for both readers here: what
                                 # this tool answers is the program's own
@@ -3884,6 +3945,8 @@ async def _antwort_aufsetzen(
                             # The run's stop: a picture being drawn ends with
                             # the run instead of drawing on for nobody.
                             abbruch=generierung.signal,
+                            repositories=repositories, turn=platzhalter.id,
+                            job_stop=_job_stopper(repositories, generierungen),
                         )
                         # A run's own result is already the model's copy —
                         # it never carried a second, localized sentence to
@@ -4256,6 +4319,14 @@ async def _antwort_aufsetzen(
 
             messwerte = dict(messwerte or {})
             messwerte["abgebrochen"] = abgebrochen
+            if abgebrochen:
+                # A run that was stopped has no speed: the rounds that ran
+                # and the one cut off count tokens over unequal stretches,
+                # and the sum of those is a number nobody measured (a stopped
+                # cloud answer read 1987 tok/s). The window, the stored row
+                # and the terminal show what is stored, so it is left out
+                # here, once.
+                messwerte = without_tempo(messwerte)
             if fehlertext:
                 messwerte["fehler"] = fehlertext
             if antwortlaenge_zu_gross:

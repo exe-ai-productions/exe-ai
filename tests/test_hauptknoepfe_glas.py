@@ -17,14 +17,19 @@ from pathlib import Path
 TEILE = Path(__file__).resolve().parent.parent / "frontend/src/teile"
 # The files whose main button is a rule of their own. The foot buttons of the
 # settings, the server mask and the provider mask are the house button of
-# the global stylesheet (below).
+# the global stylesheet (below); the foot of the settings' text pages is two
+# signs (see `test_the_foot_of_the_text_pages_is_two_signs`); the foot of the
+# skill form is two signs as well (tests/test_skillseite.py).
 DATEIEN = [
-    "Modellkarte.svelte", "Modelldetail.svelte", "Modellserver.svelte",
-    "Skillmaske.svelte", "Frage.svelte", "Protokollfenster.svelte",
+    "Modellserver.svelte", "Frage.svelte", "Protokollfenster.svelte",
 ]
+# The cards and rows of the catalogue have no text button any more: their main
+# button is a sign button (download, cancel), button glass as well; the one
+# component that draws them is the download row.
+SIGN_BUTTONS = ["DownloadRow.svelte"]
 GLOBAL = TEILE.parent / "stil" / "global.css"
 HOUSE_BUTTON_FILES = [
-    "SystemPrompt.svelte", "MCPMaske.svelte", "Anbietermaske.svelte",
+    "MCPMaske.svelte", "Anbietermaske.svelte",
     "Auftragfenster.svelte", "AuftragStarten.svelte", "Erststart.svelte",
 ]
 
@@ -51,6 +56,18 @@ def test_jeder_hauptknopf_ist_knopfglas():
         assert any("color: var(--text)" in b for b in ground), name
 
 
+def test_the_sign_button_of_the_catalogue_is_button_glass():
+    for name in SIGN_BUTTONS:
+        css = (TEILE / name).read_text(encoding="utf-8").split("<style>", 1)[1]
+        rules = _rules(css, r"\.sign-button(?![-\w:])")
+        assert rules, name
+        for body in rules:
+            assert "background: var(--text)" not in body, (name, body)
+        assert any("background: var(--glass-button)" in b for b in rules), name
+        assert any("var(--glass-button-edge)" in b for b in rules), name
+        assert any("color: var(--text)" in b for b in rules), name
+
+
 def _global_rule(selector: str) -> str:
     """The declarations of the one global rule with exactly this selector."""
     css = GLOBAL.read_text(encoding="utf-8")
@@ -67,7 +84,7 @@ def test_the_house_button_is_button_glass_in_both_forms():
     assert "border: none" in quiet
     assert "box-shadow: inset 0 0 0 1px var(--feldstrich)" in quiet
     # The whole face in one line: weight, size and family, nothing inherited.
-    assert "font: 400 13px var(--schrift)" in quiet
+    assert "font: 400 13px/1.19 var(--schrift)" in quiet
     main = _global_rule(".button.primary")
     assert "box-shadow: inset 0 0 0 1px var(--glass-button-edge)" in main
     assert "font-weight: 500" in main
@@ -77,7 +94,7 @@ def test_the_house_button_is_button_glass_in_both_forms():
     assert "opacity: 0.5" in _global_rule(".button:disabled")
 
 
-def test_the_six_masks_use_the_house_button_and_keep_no_copy():
+def test_the_masks_use_the_house_button_and_keep_no_copy():
     for name in HOUSE_BUTTON_FILES:
         source = (TEILE / name).read_text(encoding="utf-8")
         markup, css = source.split("<style>", 1)
@@ -90,11 +107,26 @@ def test_the_six_masks_use_the_house_button_and_keep_no_copy():
         assert not _rules(css, r"\.knopf(?![-\w])"), name
         assert not _rules(css, r"\.wichtig(?![-\w])"), name
         assert "background: var(--text)" not in css, name
-    # Each of the six shows a main button except the job-start form, whose
+    # Each of them shows a main button except the job-start form, whose
     # own two are the quiet ways to what is missing.
     for name in HOUSE_BUTTON_FILES:
         markup = (TEILE / name).read_text(encoding="utf-8").split("<style>", 1)[0]
         assert ('class="button primary"' in markup) == (name != "AuftragStarten.svelte"), name
+
+
+def test_the_foot_of_the_text_pages_is_two_signs():
+    """On the desktop the foot's Cancel and Save are a cross and a disk with
+    their word as tooltip and label; no word button is left there. (The phone
+    keeps its own word buttons.)"""
+    source = (TEILE / "SystemPrompt.svelte").read_text(encoding="utf-8")
+    markup, css = source.split("<style>", 1)
+    foot = markup.split('<div class="rechts">', 1)[1].split("</div>", 1)[0]
+    assert "{#if bearbeitet}" in foot
+    for word, sign in (("abbrechen", "kreuz"), ("sichern", "save")):
+        assert f"aria-label={{t('app.{word}')}} title={{t('app.{word}')}}" in foot
+        assert f'<Hauszeichen zeichen="{sign}"' in foot
+    assert not re.search(r'class="button(?: primary)?"', markup)
+    assert not _rules(css, r"\.button(?![-\w])")
 
 
 def test_senden_bleibt_gefuellt():
@@ -131,25 +163,22 @@ def test_the_quiet_words_beside_them_are_as_they_were():
     assert rows and "background: none" in rows[0] and "var(--linie-stark)" in rows[0]
 
 
-def test_the_switch_is_glass_when_off_and_filled_when_on():
+def test_the_switch_is_a_grey_track_when_off_and_the_ink_when_on():
+    """White and grey in every look: off, the ink at a sixth of its strength;
+    on, the ink itself — no blue, no red, no edge."""
     css = _style("Schalter.svelte")
-    assert "background: var(--text)" not in css
     off = _rules(css, r"^\.schalter$")
-    assert off and "background: var(--glass-button)" in off[0]
-    assert "inset 0 0 0 1px var(--glass-button-edge)" in off[0]
-    # On: the colour of "switched on", full, with no edge around it.
+    assert off and "background: color-mix(in srgb, var(--text) 16%, transparent)" in off[0]
     on = _rules(css, r"^\.schalter\[aria-checked='true'\]$")
-    assert on and "background: var(--blau)" in on[0] and "box-shadow: none" in on[0]
-    # Taking something away keeps its red.
-    taking = _rules(css, r"^\.schalter\.eingriff\[aria-checked='true'\]$")
-    assert taking and "background: var(--rot)" in taking[0]
-    # The knob: quiet on the glass; on the colour opaque — white in the light
-    # looks (`--knauf-an`), else the ground of the look, never the raised
-    # ground a menu page turns into glass. It travels.
+    assert on and "background: var(--text)" in on[0]
+    for forbidden in ("var(--blau)", "var(--rot)", "var(--glass-button", "eingriff"):
+        assert forbidden not in css, forbidden
+    # The knob: the quiet ink on the grey track, the ground of the look on the
+    # ink. It travels.
     knob_off = _rules(css, r"^\.schalter i$")
-    assert knob_off and "background: var(--text-still)" in knob_off[0]
+    assert knob_off and "background: var(--text-leise)" in knob_off[0]
     knob_on = _rules(css, r"^\.schalter\[aria-checked='true'\] i$")
-    assert knob_on and "background: var(--knauf-an, var(--bg))" in knob_on[0]
+    assert knob_on and "background: var(--bg)" in knob_on[0]
     assert "translateX(14px)" in knob_on[0]
     assert "var(--bg-hoch)" not in css
 

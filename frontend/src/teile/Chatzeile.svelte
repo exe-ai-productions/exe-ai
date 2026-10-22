@@ -172,7 +172,7 @@
   }
   /* A touch screen has no hover: there the dots stay in sight, or a tap at
      the row's right edge would open a menu nobody saw. */
-  @media (hover: none) {
+  @media (hover: none), (any-pointer: coarse) {
     .mehr {
       opacity: 1;
     }

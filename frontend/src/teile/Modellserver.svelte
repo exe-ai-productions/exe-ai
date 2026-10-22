@@ -17,9 +17,17 @@
      model's family AND its parameter count, so a 12B module never drafts a
      31B model. */
   import { api } from '../lib/api.js'
-  import { t } from '../lib/texte.svelte.js'
+  import { pollWithoutOverlap } from '../lib/pollWithoutOverlap.js'
+  import { t, texte } from '../lib/texte.svelte.js'
+  import { formatNumber } from '../lib/numberDisplay.js'
+  import { entryMark, entrySize } from '../lib/modelEntry.js'
+  import Wortmarke from './Wortmarke.svelte'
   import { katalogOeffnen, melde, modelleLaden, zustand } from '../lib/zustand.svelte.js'
-  import { isEightBitCache, serverAnteil } from '../lib/speicherschaetzung.js'
+  import {
+    editTemplate, revealTemplate, templateChosen,
+    resetTemplate,
+  } from '../lib/chatTemplate.js'
+  import { kvShare, serverAnteil } from '../lib/speicherschaetzung.js'
   import { empfehlungFuer } from '../lib/modellempfehlungen.js'
   import { FEINEINSTELLUNGEN } from '../lib/feineinstellungen.js'
   import { nurGeaendert } from '../lib/nurgeaendert.js'
@@ -32,9 +40,10 @@
     werteSetzen,
   } from '../lib/runnermodell.svelte.js'
   import { HAUPTMODELL } from '../lib/agentenserver.svelte.js'
+  import ChatTemplateRow from './ChatTemplateRow.svelte'
   import Servertafel from './Servertafel.svelte'
+  import { serverHead } from '../lib/serverHead.svelte.js'
   import Serverregler from './Serverregler.svelte'
-  import Startknopf from './Startknopf.svelte'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import Serverreihe from './Serverreihe.svelte'
   import Serverlogkopf from './Serverlogkopf.svelte'
@@ -44,6 +53,10 @@
     oeffneProtokoll,
     setzeProtokollZeilen,
   } from '../lib/protokollfenster.svelte.js'
+
+  /* What this page hands up to the page head (ModelleLokal.svelte), which draws
+     it: the start button, the short line beside the name and the port. */
+  let { head = $bindable(null) } = $props()
 
   let auskunft = $state(null)
   let protokoll = $state([])
@@ -72,7 +85,7 @@
     }
     messung = neu ? { geladen: neu.geladen, zeit: jetzt } : null
   }
-  const mbs = $derived(tempo > 50_000 ? (tempo / 1e6).toFixed(1) + ' MB/s' : '')
+  const mbs = $derived(tempo > 50_000 ? formatNumber(tempo / 1e6, 1, texte.sprache) + ' MB/s' : '')
 
   $effect(() => {
     void protokoll
@@ -142,41 +155,15 @@
       modell,
       kontext,
       drafter,
-      eightBit: isEightBitCache(fein.kv_cache),
+      kvShare: kvShare(fein.kv_cache),
       vision,
       projectors: auskunft?.projector_size_gb,
     }),
   )
-  /* This server's entry in the head's figure, live while the page is open —
-     the hand moves the window slider here, and the head must move with it
-     rather than wait for the next poll. The head fills this entry itself
-     while the page is closed, from the same stored choice this form reads
-     back on opening, so the number does not change when the page does.
-
-     While it RUNS, this entry is what the process actually holds, measured.
-     Nothing was the old answer, on the reasoning that a running server's
-     hold already stands on its own card — but the head's figure is what says
-     whether the NEXT start fits, and the commonest way through is to start
-     the main model first and the agent slot after it. So the number that had
-     to carry the pair carried one of them: 20.4 GB shown where the truth was
-     68.4, the start then failed, and the line had said nothing. Measured and
-     planned are both real gigabytes off the same machine, and the row is
-     headed "memory", not "expected". */
-  $effect(() => {
-    zustand.serverPlan.modell = laeuft
-      ? (auskunft?.belegt_gb ? { gesamt: auskunft.belegt_gb, gemessen: true } : null)
-      : schaetzung
-    /* Handed back when the page goes away — the head then works the entry
-       out for itself. Left standing instead, a stale plan would outlive the
-       choice that made it, and the head would be right only by luck. */
-    return () => (zustand.serverPlan.modell = null)
-  })
-
   const laeuft = $derived(Boolean(auskunft?.laeuft))
 
-  /* The window's one deed, handed to the modules group's head line — the
-     button stands in the line of the first group, flush with the
-     card below it, not up in the head card. */
+  /* The server's one deed. The page head (ModelleLokal.svelte) draws its
+     button; the page keeps what the button says and does. */
   const tat = $derived({
     text: laeuft ? t('modell.server_anhalten') : t('modell.server_starten'),
     punkt: laeuft ? 'gruen' : 'still',
@@ -187,9 +174,13 @@
   const hatProgramm = $derived(Boolean(auskunft?.programm))
   const hatModelle = $derived((auskunft?.modelle?.length ?? 0) > 0)
   const maschineGb = $derived(auskunft?.speicher_gb ?? null)
+  /* Whether the service has answered yet. Until it has, nothing is known
+     about the program or the folder: the page says it is loading, and only
+     an answer decides whether a model is missing. */
+  const answered = $derived(auskunft !== null)
   /* The first-run guidance stands in place of the form until a model lies
      in the folder. */
-  const erststart = $derived(!laeuft && !hatModelle)
+  const erststart = $derived(answered && !laeuft && !hatModelle)
   const vorschlag = $derived(maschineGb ? empfehlungFuer(maschineGb) : null)
 
   const kurzK = (n) => (n ? Math.round(n / 1024) + 'k' : '')
@@ -215,15 +206,18 @@
      first answer arrives. */
   const MAX_FAEDEN = $derived(auskunft?.kerne ?? 8)
 
-  /* flash_attention is deliberately NOT in here any more: there is no
-     control for it, the engine's "auto" decides — and a stored "off" from
-     an older version must not keep riding along with every start. */
   const FEIN_VORGABE = {
     kv_cache: 'f16',
+    flash_attention: 'auto',
+    /* The chat template: the model's own, or the edited copy named next to it. */
+    chat_template: 'model',
+    chat_template_file: '',
     moe_auf_cpu: false,
     festnageln: false,
     /* On: the slots share one cache of the window's size (`--kv-unified`). */
     kv_unified: true,
+    // Minutes without a request after which the server frees its model; empty is never.
+    idle_minutes: null,
   }
   let fein = $state({ ...FEIN_VORGABE })
   /* Kept as plain numbers here because the number field speaks numbers; 0
@@ -314,13 +308,14 @@
 
   function feinUebernehmen(daten) {
     fein = {
-      /* The step an older version offered maps to the surviving saving
-         step — whoever stored q4_0 was saving memory on purpose. Same rule
-         as the backend's KV_ALT. */
-      kv_cache: daten.kv_cache === 'q4_0' ? 'q8_0' : (daten.kv_cache ?? fein.kv_cache),
+      kv_cache: daten.kv_cache ?? fein.kv_cache,
+      flash_attention: daten.flash_attention ?? fein.flash_attention,
+      chat_template: daten.chat_template ?? fein.chat_template,
+      chat_template_file: daten.chat_template_file ?? fein.chat_template_file,
       moe_auf_cpu: Boolean(daten.moe_auf_cpu),
       festnageln: Boolean(daten.festnageln),
       kv_unified: daten.kv_unified !== false,
+      idle_minutes: daten.idle_minutes ?? null,
     }
     faeden = daten.faeden || 0
     /* The stored kinds of "all experts on the CPU": the older switch
@@ -387,14 +382,19 @@
      one running fact the form below does not repeat while locked. */
   const laufzeile = $derived.by(() => {
     if (!laeuft) return ''
-    const teile = [
-      t('modell.laeuft_port', { port: auskunft.port }),
-      t('modell.kontext_kurz', { n: kurzK(auskunft.kontext) }),
-    ]
+    const teile = [t('modell.kontext_kurz', { n: kurzK(auskunft.kontext) })]
     if (auskunft.drafter) teile.push(`${t('modell.mtp_label')}: ${auskunft.drafter}`)
     if (auskunft.belegt_gb) teile.push(t('modell.im_speicher', { gb: auskunft.belegt_gb }))
     return teile.join(' · ')
   })
+
+  // The first-run steps carry their own greyed start; the head has none then,
+  // nor before the first answer.
+  serverHead('server', (value) => (head = value), () => ({
+    tat: erststart || !answered ? null : tat,
+    line: erststart || !answered ? '' : laufzeile || t('modell.nichts_laeuft'),
+    port: laeuft ? auskunft.port : null,
+  }))
 
   /* The candidate rule above narrows what this row SUGGESTS. It never was an
      answer about what is attached: what a start really drafts against is
@@ -412,9 +412,13 @@
   const drafterauswahl = $derived([
     { wert: '', text: t('modell.drafter_keiner') },
     ...(drafter && !drafterKandidaten.some((m) => m.name === drafter)
-      ? [{ wert: drafter, text: drafter }]
+      ? [{ wert: drafter, text: drafter, ...entryMark(drafter) }]
       : []),
-    ...drafterKandidaten.map((m) => ({ wert: m.name, text: `${m.name} · ${m.groesse_gb} GB` })),
+    ...drafterKandidaten.map((m) => ({
+      wert: m.name,
+      text: `${m.name} · ${entrySize(m.groesse_gb)}`,
+      ...entryMark(m.name),
+    })),
   ])
 
   /* Every projector in the vision folder, "without" first. Not narrowed by
@@ -422,7 +426,7 @@
      cannot pair — so the choice is the user's, across the full list. */
   const visionauswahl = $derived([
     { wert: '', text: t('modell.vision_keiner') },
-    ...(auskunft?.mmproj ?? []).map((name) => ({ wert: name, text: name })),
+    ...(auskunft?.mmproj ?? []).map((name) => ({ wert: name, text: name, ...entryMark(name) })),
   ])
 
   /* An empty choice at the top, like the three module rows have: a fresh
@@ -430,7 +434,11 @@
      nothing would make "no model" a state only the first start ever sees. */
   const modellauswahl = $derived([
     { wert: '', text: t('modell.modell_keiner') },
-    ...(auskunft?.modelle ?? []).map((m) => ({ wert: m.name, text: `${m.name} · ${m.groesse_gb} GB` })),
+    ...(auskunft?.modelle ?? []).map((m) => ({
+      wert: m.name,
+      text: `${m.name} · ${entrySize(m.groesse_gb)}`,
+      ...entryMark(m.name),
+    })),
   ])
 
   /* The stored numbers, into the form. Taken once — this runs on a
@@ -604,8 +612,7 @@
 
   $effect(() => {
     laden()
-    const takt = setInterval(laden, 2000)
-    return () => clearInterval(takt)
+    return pollWithoutOverlap(laden, 2000)
   })
 
   /* Written when the numbers come to rest, not on every drag of a slider —
@@ -686,6 +693,8 @@
        would not survive its own row. The empty string is a remembered
        "none", exactly as it is for the modules below. */
     werteSetzen({ modell }).catch(() => {})
+    // The copy of a template was made of the model before.
+    resetTemplate(fein)
     const modul = modulFuer(modell)
     drafter =
       modul.drafter !== null ? modul.drafter : (auskunft?.zuordnung?.[modell]?.mtp ?? '')
@@ -780,7 +789,9 @@
 
 </script>
 
-{#if erststart}
+{#if !answered}
+  <p class="laedt">{t('bilder.laedt')}</p>
+{:else if erststart}
   <div class="erstetafel">
     <!-- The three steps to a first model: fetch the engine, pick a model,
          start it. The status card above says honestly where one stands. -->
@@ -795,8 +806,8 @@
     </div>
 
     <div class="reisekarten">
-      <div class="reisekarte" class:fertig={hatProgramm} class:dran={!hatProgramm}>
-        <div class="nr">{#if hatProgramm}✓{:else}1{/if}</div>
+      <div class="reisekarte">
+        <div class="nr nr-1" aria-hidden="true"><Wortmarke mitText={false} /></div>
         <h3>{t('modell.server_holen')}</h3>
         <div class="rsatz">{t('modell.reise_server_satz')}</div>
         {#if hatProgramm}
@@ -811,8 +822,8 @@
         {/if}
       </div>
 
-      <div class="reisekarte" class:dran={hatProgramm}>
-        <div class="nr">2</div>
+      <div class="reisekarte">
+        <div class="nr nr-2" aria-hidden="true"><Wortmarke mitText={false} /></div>
         <h3>{t('modell.reise_modell_titel')}</h3>
         <div class="rsatz">
           {vorschlag
@@ -825,7 +836,7 @@
       </div>
 
       <div class="reisekarte">
-        <div class="nr">3</div>
+        <div class="nr nr-3" aria-hidden="true"><Wortmarke mitText={false} /></div>
         <h3>{t('modell.reise_start')}</h3>
         <div class="rsatz">{t('modell.reise_start_satz')}</div>
         <span class="knopf still gesperrt">{t('modell.server_starten_kurz')}</span>
@@ -836,12 +847,8 @@
     <!-- The house's server shape (Servertafel.svelte), in two rows: models beside the modules, storage beside the
          advanced drawer, the log at the foot. -->
     <Servertafel
-      titel={t('modell.server')}
-      zeichen="server"
-      unter={laufzeile || t('modell.nichts_laeuft')}
-      standfarbe={laeuft ? 'gruen' : 'still'}
-      standtext={laeuft ? t('status.aktiv') : t('status.inaktiv')}
       modelle={modellauswahl}
+      throughput="model"
       bind:gewaehlt={modell}
       modellBeschriftung={t('modell.feld_modell')}
       modellGesperrt={laeuft}
@@ -849,7 +856,20 @@
       leerText={t('modell.kein_modell_da')}
       katalogTat={() => katalogOeffnen('chat')}
       speicherort="models"
+      modellGewicht={modell ? 3 : 2}
     >
+      {#snippet belowModel()}
+        {#if modell}
+          <ChatTemplateRow
+            {modell}
+            bind:wert={fein.chat_template}
+            gesperrt={laeuft}
+            onchoose={(neu) => templateChosen(neu, fein, modell, api.runnerChatTemplateEdit)}
+            onedit={() => editTemplate(fein, modell, api.runnerChatTemplateEdit)}
+            onreveal={() => revealTemplate(modell, api.runnerChatTemplateReveal)}
+          />
+        {/if}
+      {/snippet}
       {#snippet inhalt(modellkarte)}
         <Serverreihe>
           {#snippet links()}{@render modellkarte()}{/snippet}
@@ -864,11 +884,7 @@
               bind:vision
               {visionauswahl}
               {visionGewaehlt}
-            >
-              {#snippet kopfrechts()}
-                <Startknopf text={tat.text} punkt={tat.punkt} gesperrt={tat.gesperrt} onTat={tat.onTat} />
-              {/snippet}
-            </Serverregler>
+            />
           {/snippet}
         </Serverreihe>
         <Serverreihe>
@@ -902,9 +918,12 @@
               teil="fein"
               gesperrt={laeuft}
               bind:vorladen
+              useForRuns={runnermodell.use_for_runs ?? auskunft?.vorgaben?.use_for_runs ?? true}
+              onuseforruns={(neu) => werteSetzen({ use_for_runs: neu }).catch(() => {})}
               bind:fein
               bind:parallel
               maxParallel={MAX_PARALLEL}
+              bind:idle={fein.idle_minutes}
               bind:port
             />
           {/snippet}
@@ -919,7 +938,7 @@
                          onumschalten={() => (protokollAuf = !protokollAuf)}
                          onauskoppeln={() => oeffneProtokoll(t('modell.protokoll_titel'))} />
           {#if protokollAuf}
-            <pre class="protokoll" use:rollfade bind:this={protokollKasten}>{protokoll.join('\n') || '—'}</pre>
+            <pre class="protokoll" use:rollfade bind:this={protokollKasten}>{protokoll.join('\n') || '-'}</pre>
           {/if}
         </div>
       {/snippet}
@@ -927,6 +946,8 @@
 {/if}
 
 <style>
+  .laedt { color: var(--text-still); font-size: 13px; padding: 6px 10px; }
+
   /* Only the first-run journey still brings its own frame; the panel proper
      stands in the shared one. */
   .erstetafel {
@@ -967,7 +988,7 @@
 
   .start-error {
     margin: 0;
-    color: var(--rot);
+    color: var(--rot-text);
     font-size: 13px;
   }
 
@@ -1005,25 +1026,27 @@
     flex-direction: column;
     align-items: flex-start;
   }
+  /* The three steps carry the house's mark, not a number: one drawing in
+     three strengths, faint to full, so the row reads as a way to a goal.
+     Pure decoration — the step's title says which step it is. */
   .reisekarte .nr {
-    width: 26px;
-    height: 26px;
-    border-radius: 99px;
-    border: 1.5px solid var(--linie-stark);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font: 600 12px var(--schrift-fest);
-    color: var(--text-still);
+    width: 32px;
+    height: 25.6px;
     margin-bottom: 10px;
+    color: var(--text);
   }
-  .reisekarte.fertig .nr {
-    border-color: var(--gruen);
-    color: var(--gruen);
+  .reisekarte .nr :global(.marke) {
+    width: 100%;
+    height: 100%;
   }
-  .reisekarte.dran .nr {
-    border-color: var(--blau);
-    color: var(--blau);
+  .nr-1 {
+    opacity: 0.4;
+  }
+  .nr-2 {
+    opacity: 0.7;
+  }
+  .nr-3 {
+    opacity: 1;
   }
   .reisekarte h3 {
     font-size: 13.5px;
@@ -1072,7 +1095,7 @@
     color: var(--text-still);
   }
   .pille.gruen {
-    color: var(--gruen);
+    color: var(--gruen-text);
     border-color: color-mix(in srgb, var(--gruen) 45%, transparent);
   }
   .knopf {

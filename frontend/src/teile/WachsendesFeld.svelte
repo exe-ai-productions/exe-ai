@@ -76,20 +76,19 @@
 </div>
 
 <style>
-  /* Its own box with air all around, not a borderless band. Border,
-     rounding and behavior like the input bar at the bottom of the
-     window. */
+  /* Its own box with air all around, the field of the house: glass with the
+     field outline and a radius of 9, as every other field carries it. The
+     outline stays while one writes; the glass takes a touch of the text
+     colour. The surface is the one of the cards. */
   .feld {
-    border: 1px solid transparent;
-    /* 12 — it is a surface, and the palette gives surfaces 12. */
+    border: 1px solid var(--feldstrich);
     border-radius: 9px;
-    background: var(--bg-hoch);
+    background: var(--glass-card);
     padding: 4px;
-    transition: border-color 0.15s, opacity 0.18s;
+    transition: background-color 0.15s, opacity 0.18s;
   }
   .feld:focus-within {
-    border-color: transparent;
-    background: color-mix(in srgb, var(--text) 4%, var(--bg-hoch));
+    background: color-mix(in srgb, var(--text) 5%, var(--glass-card));
   }
   .feld.gedimmt {
     opacity: 0.35;
@@ -118,7 +117,6 @@
   }
   .feld.knapp {
     padding: 0;
-    border: none;
   }
   .knapp textarea {
     padding: 10px 12px;

@@ -69,6 +69,8 @@ def drawn(
     stub: StubService, wire: Callable[[httpx.Client], Context], stub_http: httpx.Client
 ) -> Context:
     stub.models = [model("local", "Local Model")]
+    stub.image.files = [{"name": "draw.safetensors", "groesse_gb": 3.4}]
+    stub.settings["global"] = {"bild_standardmodell": "draw.safetensors"}
     stub.chats[CHAT] = {"id": CHAT, "title": "A chat", "working_dirs": [], "project_id": None}
     context = wire(stub_http)
     context.asker = Asking()
@@ -168,3 +170,27 @@ def test_closing_the_offer_of_the_program_draws_nothing(drawn, stub):
     drawn.asker.queue = [None]
     drawn.commands.run("/image a lighthouse")
     assert stub.image.program_posts == [] and stub.image.draws == []
+
+
+def test_without_a_default_model_nothing_is_offered_nothing_is_sent_and_the_sentence_says_where(drawn, stub):
+    stub.settings["global"] = {}
+    stub.image.program = False
+    drawn.commands.run("/image a lighthouse")
+    assert drawn.renderer.notices == [texts().t("cli.no_image_model")]
+    assert drawn.renderer.errors == []
+    assert drawn.asker.shown == []
+    assert stub.image.program_posts == [] and stub.image.draws == []
+    assert not [request for request in stub.requests if "bild/satz" in request or "bild/programm" in request]
+
+
+def test_without_a_default_model_a_sentence_typed_afterwards_sends_nothing(drawn, stub):
+    stub.settings["global"] = {}
+    drawn.asker.typed = ["a lighthouse"]
+    drawn.commands.run("/image")
+    assert drawn.renderer.notices == [texts().t("cli.no_image_model")]
+    assert stub.image.draws == []
+
+
+def test_the_sentence_of_the_command_names_the_server_and_not_a_page_of_the_window():
+    assert Texts("en").t("cli.no_image_model") == "No image model selected. Choose one with /server image."
+    assert Texts("de").t("cli.no_image_model") == "Kein Bildmodell ausgewählt. Bitte mit /server image eines auswählen."

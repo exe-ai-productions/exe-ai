@@ -129,14 +129,24 @@ def test_hin_und_zurueck():
     assert Feineinstellungen.aus_daten(e.als_daten()).als_daten() == e.als_daten()
 
 
-def test_altes_flash_on_off_wird_zu_auto_geklammert():
-    """There is no flash switch any more; a value stored under an older
-    version must not keep riding along with every start."""
-    for alt in ("on", "off"):
-        assert Feineinstellungen.aus_daten({"flash_attention": alt}).flash_attention == "auto"
+def test_flash_attention_takes_auto_on_and_off_and_nothing_else():
+    for wert in ("auto", "on", "off"):
+        assert Feineinstellungen.aus_daten({"flash_attention": wert}).flash_attention == wert
+    assert Feineinstellungen.aus_daten({"flash_attention": "erfunden"}).flash_attention == "auto"
 
 
-def test_altes_q4_0_faellt_auf_die_naechste_sparstufe():
-    """Whoever stored q4_0 was saving memory on purpose — the fallback is
-    the surviving saving step, never the biggest cache."""
-    assert Feineinstellungen.aus_daten({"kv_cache": "q4_0"}).kv_cache == "q8_0"
+def test_flash_off_with_a_smaller_cache_becomes_auto():
+    """A quantized cache needs flash attention: the pair that cannot run is
+    brought back to a pair that can, never passed to the engine."""
+    for kv in ("q8_0", "q5_0", "q4_0"):
+        e = Feineinstellungen.aus_daten({"kv_cache": kv, "flash_attention": "off"})
+        assert (e.kv_cache, e.flash_attention) == (kv, "auto")
+    # With the 16-bit cache "off" stands, and "on" stands with any cache.
+    assert Feineinstellungen.aus_daten({"flash_attention": "off"}).flash_attention == "off"
+    assert Feineinstellungen.aus_daten({"kv_cache": "q4_0", "flash_attention": "on"}).flash_attention == "on"
+
+
+def test_all_four_cache_stages_stay_as_stored():
+    """A stored q4_0 is 4 bit now — no step is mapped onto another."""
+    for kv in ("f16", "q8_0", "q5_0", "q4_0"):
+        assert Feineinstellungen.aus_daten({"kv_cache": kv}).kv_cache == kv

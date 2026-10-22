@@ -23,10 +23,11 @@
   a run knows its number, a call knows only its place in the conversation,
   and there is no clock both of them read.
 
-  No imports on purpose: this is a pure function of two lists, which makes
-  it readable in one piece and runnable in a test without the interface
-  standing up around it.
+  Its one import is a pure helper (paths.js), so this stays readable in one
+  piece and runnable in a test without the interface standing up around it.
 */
+
+import { displayPath } from './paths.js'
 
 /* Tools whose story a run already tells. */
 const ALS_LAUF = new Set(['run_command'])
@@ -51,22 +52,37 @@ function gedeckelt(text) {
   return text.slice(0, VOLL_DECKEL) + '…'
 }
 
-/* One readable word for what a call was about.
+/* The arguments that say what a call touches, in the order they are looked
+   for. A file tool lists its text before its path (`content` comes first
+   for a write), so the first text of the call would be the file's body.
+   The first three name a place and are shown the way every path is. */
+const PATH_KEYS = ['path', 'file_path', 'pfad']
+const MAIN_KEYS = [...PATH_KEYS, 'command', 'query', 'url', 'name']
 
-   The first argument that carries something is the right one often enough
-   to be worth it: a path for the file tools, a query for a search, a
-   command for the shell. A tool whose arguments say nothing gets no
-   subtitle rather than an invented one. */
-export function kurzargument(argumente) {
+/* The one argument a call is about, as a line of text: the first of the
+   keys above that carries something, otherwise the first argument that does.
+   A path is shown with slashes. A tool whose arguments say nothing gets an
+   empty string rather than an invented one. */
+export function mainArgument(argumente) {
   if (!argumente || typeof argumente !== 'object') return ''
-  for (const wert of Object.values(argumente)) {
-    if (typeof wert === 'string' && wert.trim()) {
-      const knapp = wert.trim().replace(/\s+/g, ' ')
-      return knapp.length > ARGUMENT_LAENGE ? knapp.slice(0, ARGUMENT_LAENGE) + '…' : knapp
+  for (const key of MAIN_KEYS) {
+    const value = argumente[key]
+    if (typeof value === 'string' && value.trim()) {
+      return PATH_KEYS.includes(key) ? displayPath(value.trim()) : value.trim()
     }
-    if (typeof wert === 'number' || typeof wert === 'boolean') return String(wert)
+  }
+  for (const value of Object.values(argumente)) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   }
   return ''
+}
+
+/* One readable word for what a call was about: the main argument, cut to
+   one short line. */
+export function kurzargument(argumente) {
+  const knapp = mainArgument(argumente).replace(/\s+/g, ' ')
+  return knapp.length > ARGUMENT_LAENGE ? knapp.slice(0, ARGUMENT_LAENGE) + '…' : knapp
 }
 
 /* The calls one message recorded.
@@ -96,6 +112,10 @@ function alsZeile(aufruf, schluessel) {
        each time) and gone with its message, so the rail can remember the
        one call somebody looked at by name rather than by counting. */
     schluessel,
+    /* The number of the run this call started, kept so that the chat's name
+       for a shell call (`l` and the number, teile/Nachricht.svelte) still
+       finds its line after the service was restarted and the run is gone. */
+    lauf_nummer: aufruf.lauf_nummer ?? null,
     name: aufruf.name,
     server: aufruf.server || '',
     kurz: kurzargument(aufruf.argumente),

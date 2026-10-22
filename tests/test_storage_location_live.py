@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app.modellrunner import Modellrunner
+from app.modellrunner import Lauf, Modellrunner
 from app.speicherorte import LiveFolders, setzen
 
 SPEICHERORTE = "/api/v1/speicherorte"
@@ -71,7 +71,7 @@ def test_the_note_of_a_running_server_is_dropped_where_it_was_written(tmp_path):
     aktuell = {"ordner": alt}
     runner = Modellrunner(lambda: aktuell["ordner"])
 
-    runner._pid_merken(4242)
+    runner._pid_merken(4242, Lauf(modell="klein.gguf", kontext=4096, schichten=None, port=8080))
     assert json.loads((alt / runner._pid_datei).read_text())["pid"] == 4242
     aktuell["ordner"] = neu
     runner._pid_vergessen()

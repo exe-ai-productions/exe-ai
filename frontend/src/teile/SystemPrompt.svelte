@@ -1,5 +1,4 @@
 <script>
-  import Klappwahl from './Klappwahl.svelte'
   /* The settings page — one page, grouped like a real settings app.
 
      The left column holds named groups of rows on the page ground:
@@ -24,48 +23,45 @@
   import { tick, untrack } from 'svelte'
   import Seitenrahmen from './Seitenrahmen.svelte'
   import Menueseite from './Menueseite.svelte'
-  import Updatezeile from './Updatezeile.svelte'
   import Werkzeuge from './Werkzeuge.svelte'
-  import { handbuchOeffnen } from '../lib/handbuch.js'
-  import { werkzeugeLaden, anzahlAlle, anzahlAn, serverStand } from '../lib/werkzeuge.svelte.js'
+  import { aktivStand } from '../lib/werkzeuge.svelte.js'
+  import { chooseRow } from '../lib/settingsrow.js'
+  import { settingsState } from '../lib/settingsState.svelte.js'
   import WachsendesFeld from './WachsendesFeld.svelte'
   import Hauszeichen from './Hauszeichen.svelte'
-  import Menuezeile from './Menuezeile.svelte'
+  import InfoMark from './InfoMark.svelte'
+  import SettingsNav from './SettingsNav.svelte'
+  import { SEITEN, zeile as listenZeile } from '../lib/einstellungsliste.js'
+  import { schalterAnspringen } from '../lib/einstellungssuche.js'
   import Auswahlfeld from './Auswahlfeld.svelte'
+  import Looktafel from './Looktafel.svelte'
+  import { eigenVorschau } from '../lib/looksvorschau.js'
+  import { farbtonDrehen } from '../lib/agentenfarbe.svelte.js'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
   import SettingsCronjobs from './SettingsCronjobs.svelte'
+  import SettingsWebApp from './SettingsWebApp.svelte'
   import SettingsAgents from './SettingsAgents.svelte'
   import Agentenmaske from './Agentenmaske.svelte'
   import Skriptordner from './Skriptordner.svelte'
   import Skillmaske from './Skillmaske.svelte'
   import Standpille from './Standpille.svelte'
+  import Werkzeugzeichen from './Werkzeugzeichen.svelte'
+  import { serverLogo } from '../lib/serverlogo.svelte.js'
   import Verbindungen from './Verbindungen.svelte'
   import Meldewahl from './Meldewahl.svelte'
+  import { useSettingsValues } from '../lib/settingsvalues.svelte.js'
+  import { spracheStellen } from '../lib/sprachwahl.svelte.js'
+  import { CODE_PACKS, blasenStandard } from '../lib/darstellungswerte.js'
   import Shortcuts from './Shortcuts.svelte'
-  import { diktat, standLaden as diktatStandLaden } from '../lib/diktat.svelte.js'
-  import { DEFAULT_KEY, showCombo } from '../lib/microphoneKey.js'
-  import { layout } from '../lib/keyboardLayout.svelte.js'
-  import { keyNames } from '../lib/keyNames.js'
+  import { standLaden as diktatStandLaden } from '../lib/diktat.svelte.js'
   import Zahlenfeld from './Zahlenfeld.svelte'
-  import { klangwahl } from '../lib/klaenge.svelte.js'
   import Schalter from './Schalter.svelte'
   import { api } from '../lib/api.js'
-  import { zustand, aktuellerChat, chatAendern, codefarbenSetzen, blasenfarbeSetzen, verlaufSetzen, lookFuer, vorgabenFuer, winkelVorgabeFuer, tonVorgabeFuer, EIGENER_VERLAUF, melde, frage, modelleLaden, seitenSchliessen, layoutModusOeffnen } from '../lib/zustand.svelte.js'
+  import { zustand, aktuellerChat, promptAusgesetzt, codefarbenSetzen, blasenfarbeSetzen, verlaufSetzen, lookFuer, vorgabenFuer, winkelVorgabeFuer, tonVorgabeFuer, EIGENER_VERLAUF, melde, frage, seitenSchliessen, layoutModusOeffnen } from '../lib/zustand.svelte.js'
   import { meldeText } from '../lib/meldewesen.svelte.js'
 
-  function blasenStandard() {
-    // The picker's "current default" swatch must match what an untouched
-    // bubble actually shows — a theme may ship its own default (Dark Matter's
-    // lavender), so prefer that over the plain house bubble.
-    const stil = getComputedStyle(document.documentElement)
-    const wert = (
-      stil.getPropertyValue('--blase-eigen-standard').trim() ||
-      stil.getPropertyValue('--blase').trim()
-    )
-    return /^#[0-9a-fA-F]{6}$/.test(wert) ? wert : '#232320'
-  }
   import {
-    t, texte, spracheWaehlen, spracheZuruecksetzen,
+    t, texte,
   } from '../lib/texte.svelte.js'
   import { begruessung, anredeSpeichern } from '../lib/begruessung.svelte.js'
 
@@ -89,13 +85,20 @@
      true after a save and must not be said over a load. */
   let unlesbar = $state(null)
   let platzhalter = $state([]) // tools only
+  /* What a save of a file page (credentials, configuration, tools file)
+     answers with: the catalogue key of its sentence, whether it is the
+     caution that the file was saved but not applied, and the text that was
+     saved. It stands left in the foot, in the line of the two signs, while
+     the field holds that text, and goes when another page opens — nothing is
+     said above the chat for these pages. */
+  let saveNote = $state(null)
   let lese = $state(null) // GET /tools live readout
   let feld = $state(null)
   let laedt = $state(false)
   /* The cronjob page, so the head's "New cronjob" can open its form. */
 
   const chat = $derived(aktuellerChat())
-  const ausgesetzt = $derived(Boolean(chat?.prompt_aus))
+  const ausgesetzt = $derived(promptAusgesetzt())
   const istSprache = $derived(art === 'sprache')
   const istDarstellung = $derived(art === 'darstellung')
   const istMeldungen = $derived(art === 'meldungen')
@@ -108,14 +111,60 @@
   const istTools = $derived(art === 'tools_datei')
   const istAgent = $derived(art === 'agent')
   const istWerkzeuge = $derived(art === 'werkzeuge')
+  const isWebApp = $derived(art === 'web_app')
   const istDatei = $derived(art === 'konfiguration' || art === 'zugangsdaten')
-  /* The credentials and the tools file stand in a block of a fixed height,
-     like an agent's instruction; the other text pages fill the page. */
-  const istZugangsdaten = $derived(art === 'zugangsdaten')
+  /* The two pages of a file the service checks, the configuration and the
+     tools file: their warning stands over the field, under the head. */
+  const filePage = $derived(istDatei || istTools)
   /* The agent page has two faces: the list of agents, and the editor for
      one of them. A name means the editor is open. */
   const agentBearbeiten = $derived(istAgent && agentName !== '')
+  /* The agents' list with the chosen agent beside it: it stands as tall as
+     the page and scrolls inside itself, like the tools list. */
+  const agentList = $derived(istAgent && !maske && !agentBearbeiten)
   const bearbeitet = $derived(istSystem || istGedaechtnis || istDatei || istTools || agentBearbeiten)
+  /* The note stands only over a field that still holds what was saved. */
+  const shownNote = $derived(saveNote && saveNote.saved === text ? saveNote : null)
+
+  /* The sample under the settings of the look: a function of 23 lines, each
+     line a list of pieces, a plain string or `[class, word]` with the class
+     the highlighter would give the word, so the chosen colour pack paints it
+     the way it paints a code block in the chat. */
+  const kw = (word) => ['hljs-keyword', word]
+  const fn = (word) => ['hljs-title function_', word]
+  const str = (word) => ['hljs-string', word]
+  const num = (word) => ['hljs-number', word]
+  const lit = (word) => ['hljs-literal', word]
+  const CODE_SAMPLE_LINES = [
+    [['hljs-comment', '// Ask every server for its models and keep the fastest one.']],
+    [kw('async'), ' ', kw('function'), ' ', fn('pickServer'), '(servers, timeoutMs = ', num('3000'), ') {'],
+    ['  ', kw('const'), ' results = [];'],
+    [],
+    ['  ', kw('for'), ' (', kw('const'), ' server ', kw('of'), ' servers) {'],
+    ['    ', kw('const'), ' started = performance.', fn('now'), '();'],
+    [],
+    ['    ', kw('try'), ' {'],
+    ['      ', kw('const'), ' reply = ', kw('await'), ' ', fn('fetch'), '(', str('`${server.url}/v1/models`'), ', {'],
+    ['        signal: AbortSignal.', fn('timeout'), '(timeoutMs),'],
+    ['      });'],
+    ['      ', kw('if'), ' (!reply.ok) ', kw('continue'), ';'],
+    [],
+    ['      ', kw('const'), ' { data } = ', kw('await'), ' reply.', fn('json'), '();'],
+    ['      results.', fn('push'), '({ server, models: data.length, ms: performance.', fn('now'), '() - started });'],
+    ['    } ', kw('catch'), ' (error) {'],
+    ['      console.', fn('warn'), '(', str('`${server.name} did not answer:`'), ', error.message);'],
+    ['    }'],
+    ['  }'],
+    [],
+    ['  results.', fn('sort'), '((a, b) => a.ms - b.ms);'],
+    ['  ', kw('return'), ' results[', num('0'), '] ?? ', lit('null'), ';'],
+    ['}'],
+  ]
+  /* One flat run of pieces with the line breaks between them. */
+  const CODE_SAMPLE = CODE_SAMPLE_LINES.flatMap((line, i) => [
+    ...line.map((piece) => (typeof piece === 'string' ? ['', piece] : piece)),
+    ['', i < CODE_SAMPLE_LINES.length - 1 ? '\n' : ''],
+  ])
 
   const MODI = [
     ['auto', 'einstellungen.auto'],
@@ -124,6 +173,7 @@
     ['darkmatter', 'einstellungen.darkmatter'],
     ['heaven', 'einstellungen.heaven'],
     ['moune', 'einstellungen.moune'],
+    ['snow', 'einstellungen.snow'],
     ['eigen', 'einstellungen.eigen'],
   ]
 
@@ -167,6 +217,9 @@
       if (rahmenWinkel !== winkel) rahmenWinkel = winkel
     })
   })
+  /* The card of the own gradient draws what the user has set, or the
+     gradient's start. */
+  const eigenBild = $derived(eigenVorschau(zustand.verlauf[EIGENER_VERLAUF], farbtonDrehen))
   const rahmenGeaendert = $derived(Boolean(zustand.verlauf[rahmenSchema]))
   /* The bubble's default follows the look — and the own gradient turns
      light or dark with its colours — so it is read again after every
@@ -208,246 +261,16 @@
     rahmenFarben = farben
     rahmenSetzen({ farben })
   }
-  /* The code colour packs in the order the list offers them: the house
-     pack first, then the eight editor packs (stil/codefarben.css). */
-  const CODE_PACKS = [
-    ['exe', 'einstellungen.codefarben_exe'],
-    ['tokyo', 'einstellungen.codefarben_tokyo'],
-    ['onelight', 'einstellungen.codefarben_onelight'],
-    ['github', 'einstellungen.codefarben_github'],
-    ['githubdark', 'einstellungen.codefarben_githubdark'],
-    ['dracula', 'einstellungen.codefarben_dracula'],
-    ['nord', 'einstellungen.codefarben_nord'],
-    ['solarizedlight', 'einstellungen.codefarben_solarizedlight'],
-    ['solarizeddark', 'einstellungen.codefarben_solarizeddark'],
-  ]
+  /* The plain values of the settings (the memory switches, the picture
+     protection, the numbers) are the shared module's: the phone page reads
+     the same ones. */
+  const values = useSettingsValues()
+  const {
+    gedaechtnisSchalten, bildschutzSchalten, helpersAtOnce, helperSteps,
+  } = values
+  const gedaechtnisSchalter = $derived(values.gedaechtnisSchalter)
+  const bildschutzSchalter = $derived(values.bildschutzSchalter)
 
-  /* The switches that decide whether the memory travels. */
-  let gedaechtnisSchalter = $state({ lokal: true, cloud: false })
-  async function gedaechtnisStandLaden() {
-    try {
-      const stand = await api.einstellungAufgeloest('gedaechtnis')
-      if (stand?.wert && typeof stand.wert === 'object') {
-        gedaechtnisSchalter = { ...gedaechtnisSchalter, ...stand.wert }
-      }
-    } catch {
-      /* Leaves the default standing — it is the careful one. */
-    }
-  }
-  async function gedaechtnisSchalten(seite, an) {
-    const vorher = gedaechtnisSchalter
-    gedaechtnisSchalter = { ...vorher, [seite]: an }
-    try {
-      await api.einstellungSetzen('global', 'gedaechtnis', gedaechtnisSchalter)
-    } catch {
-      gedaechtnisSchalter = vorher
-      melde(t('fehler.allgemein'), 'fehler')
-    }
-  }
-
-  /* The switch that strips a picture of everything but its pixels — uploaded
-     and generated alike. Shipped on: a picture leaves no trail unless this is
-     turned off on purpose. Stored as a set of one, like the memory switches,
-     so "off" is a truthy value the settings route keeps rather than discards. */
-  let bildschutzSchalter = $state({ an: true })
-  async function bildschutzStandLaden() {
-    try {
-      const stand = await api.einstellungAufgeloest('bildmetadaten')
-      if (stand?.wert && typeof stand.wert === 'object') {
-        bildschutzSchalter = { ...bildschutzSchalter, ...stand.wert }
-      }
-    } catch {
-      /* Leaves the default standing — it is the careful one. */
-    }
-  }
-  async function bildschutzSchalten(an) {
-    const vorher = bildschutzSchalter
-    bildschutzSchalter = { an }
-    try {
-      await api.einstellungSetzen('global', 'bildmetadaten', bildschutzSchalter)
-    } catch {
-      bildschutzSchalter = vorher
-      melde(t('fehler.allgemein'), 'fehler')
-    }
-  }
-
-  /* Two settings that are plain numbers, and both of them have a state
-     that is not a number: nothing set here, the shipped default applies.
-     That used to be reached by emptying the field, which nothing on
-     screen said and nothing on screen showed afterwards — an unset
-     setting and one deliberately set to the default looked the same.
-
-     So both are number fields with the house's own steppers, and their
-     zero is a word rather than a count. Setting it clears the override;
-     an unset setting comes back as that word instead of as a number
-     somebody might think they chose.
-
-     Writing goes out once the hand has come to rest. The steppers fire on
-     every click and typing fires per digit, which against the service
-     would be a request each. */
-  const ZAHL_RUHE_MS = 400
-  const zahlUhren = new Map()
-
-  function zahlSpeichern(schluessel, wert, zuruecknehmen) {
-    clearTimeout(zahlUhren.get(schluessel))
-    zahlUhren.set(
-      schluessel,
-      setTimeout(async () => {
-        try {
-          await api.einstellungSetzen(
-            'global', schluessel, wert >= 1 ? Math.floor(wert) : null,
-          )
-        } catch {
-          zuruecknehmen()
-          melde(t('fehler.allgemein'), 'fehler')
-        }
-      }, ZAHL_RUHE_MS),
-    )
-  }
-
-  /* How many tool rounds one answer may run. A setting now, not a number
-     baked into the code: a task across many files needs more than the old
-     ten, where it was cut off after three. Shipped at 50; the field takes
-     any whole number from one up, with no ceiling — a long run is meant by
-     whoever types it.
-
-     What that shipped number IS lives on the service (VORGABE,
-     app/werkzeugrundenwahl.py) and in the sentence under the field. It is
-     deliberately not repeated here as a constant: this window no longer
-     falls back to it — the field shows the word instead — and a third copy
-     would be a third place to forget. */
-  /* Empty = nothing set, the shipped default applies — the field says
-     "Auto" for it. The companion `…Stand` starts as `undefined` for "not
-     loaded yet", because `null` is now a value the field itself can hold. */
-  let werkzeugRunden = $state(null)
-  let rundenStand = $state(undefined)
-  async function werkzeugRundenLaden() {
-    let wert = null
-    try {
-      const stand = await api.einstellungAufgeloest('werkzeug_runden')
-      if (Number.isInteger(stand?.wert) && stand.wert >= 1) wert = stand.wert
-    } catch {
-      /* Leaves the field on "Auto". */
-    }
-    werkzeugRunden = wert
-    rundenStand = wert
-  }
-  $effect(() => {
-    const wert = werkzeugRunden
-    if (rundenStand === undefined || wert === rundenStand) return
-    const vorher = rundenStand
-    rundenStand = wert
-    zahlSpeichern('werkzeug_runden', wert, () => {
-      werkzeugRunden = vorher
-      rundenStand = vorher
-    })
-  })
-
-  /* The helpers' two limits (app/helper.py): how many may run at the same
-     time, and how many tool rounds one of them may take. They stand once,
-     here beside the agents, and hold for every helper. Empty is the shipped
-     value, and the field says "Auto" for it, as the fields above do; a
-     count starts at 1, so a typed zero cannot stand there meaning Auto. One
-     small field object per limit, so the load, the save and its rollback
-     are written once for both. */
-  function countSetting(key) {
-    const field = $state({ value: null, stored: undefined })
-    $effect(() => {
-      const value = field.value
-      if (field.stored === undefined || value === field.stored) return
-      const before = field.stored
-      field.stored = value
-      zahlSpeichern(key, value, () => {
-        field.value = before
-        field.stored = before
-      })
-    })
-    return field
-  }
-  const helpersAtOnce = countSetting('helpers_at_once')
-  const helperSteps = countSetting('helper_steps')
-  async function helperLimitsLoad() {
-    let read = {}
-    try {
-      read = await api.einstellungAufgeloestViele(['helpers_at_once', 'helper_steps'])
-    } catch {
-      /* Leaves both fields on "Auto". */
-    }
-    for (const [field, key] of [[helpersAtOnce, 'helpers_at_once'], [helperSteps, 'helper_steps']]) {
-      const value = read[key]?.wert
-      field.value = Number.isInteger(value) && value >= 1 ? value : null
-      field.stored = field.value
-    }
-  }
-
-  /* How many seconds one shell command may run before it is stopped. The
-     same story as the tool rounds right above: a number that used to be
-     baked into the code (120), which a model download simply dies against.
-     Shipped at 120 — whoever sets nothing keeps exactly the old behaviour.
-     Any whole number from one up, no ceiling. The number itself lives on
-     the service (VORGABE, app/befehlszeitwahl.py), for the same reason as
-     above. */
-  let befehlZeit = $state(null)
-  let zeitStand = $state(undefined)
-  async function befehlZeitLaden() {
-    let wert = null
-    try {
-      const stand = await api.einstellungAufgeloest('befehl_zeitgrenze')
-      if (Number.isInteger(stand?.wert) && stand.wert >= 1) wert = stand.wert
-    } catch {
-      /* Leaves the field on "Auto". */
-    }
-    befehlZeit = wert
-    zeitStand = wert
-  }
-  $effect(() => {
-    const wert = befehlZeit
-    if (zeitStand === undefined || wert === zeitStand) return
-    const vorher = zeitStand
-    zeitStand = wert
-    zahlSpeichern('befehl_zeitgrenze', wert, () => {
-      befehlZeit = vorher
-      zeitStand = vorher
-    })
-  })
-
-  /* At what share of the context a chat folds its settled middle into one
-     summary. The same story as the two above: a number that was baked into
-     the code (50), and that has to be wrong for somebody — a chat of short
-     questions can run most of the way full before a summary is worth the
-     request it costs, one that reads large files wants the room long
-     before. The band and the shipped value live on the service
-     (app/verdichtungswahl.py), not here, so there is one place to change
-     them. An empty field means "Auto", exactly like the fields above. */
-  let verdichtungSchwelle = $state(null)
-  let schwelleStand = $state(undefined)
-  async function verdichtungSchwelleLaden() {
-    let wert = null
-    try {
-      const stand = await api.einstellungAufgeloest('verdichtung_schwelle')
-      if (Number.isInteger(stand?.wert) && stand.wert >= 1) wert = stand.wert
-    } catch {
-      /* Leaves the field on "Auto". */
-    }
-    verdichtungSchwelle = wert
-    schwelleStand = wert
-  }
-  $effect(() => {
-    const wert = verdichtungSchwelle
-    if (schwelleStand === undefined || wert === schwelleStand) return
-    const vorher = schwelleStand
-    schwelleStand = wert
-    zahlSpeichern('verdichtung_schwelle', wert, () => {
-      verdichtungSchwelle = vorher
-      schwelleStand = vorher
-    })
-  })
-
-
-  /* Which attempt is the current one: a click made while an earlier one is
-     still on its way takes over, and the earlier one must not report a
-     failure for a switch nobody is waiting for anymore. */
-  let sprachversuch = 0
   /* The pill shows the stored choice: `texte.wahl` is reactive, and a
      switch writes it once its catalogue has arrived (`texte.svelte.js`), so
      the pill follows the texts — the return to "auto" included. The field is
@@ -459,69 +282,25 @@
     { wert: 'en', text: t('einstellungen.sprache_englisch') },
     { wert: 'de', text: t('einstellungen.sprache_deutsch') },
   ])
-  async function spracheStellen(wert) {
-    const meiner = ++sprachversuch
-    try {
-      if (wert === 'auto') await spracheZuruecksetzen()
-      else await spracheWaehlen(wert)
-      await modelleLaden()
-    } catch {
-      if (meiner === sprachversuch) melde(t('fehler.allgemein'), 'fehler')
-    }
-  }
-
-  /* The live state behind the subtitles — fetched once when the window
-     opens, so a glance at the list shows where everything stands. */
-  let stand = $state({
-    skills: 0, skillsAngeboten: 0, skillsAuto: true,
-    cronjobs: 0, cronjobsAktiv: 0,
+  /* The figures behind the subtitles of the list live in one place the
+     other pages that carry the list read as well (lib/settingsState.svelte.js).
+     What this window holds as its own state is written in as it changes. */
+  $effect(() => {
+    settingsState.look = modus
   })
-  async function standLaden() {
-    werkzeugeLaden()
-    api.skillsVerwaltung().then((z) => {
-      stand.skills = z.length
-      stand.skillsAngeboten = z.filter((e) => e.auto).length
-    }).catch(() => {})
-    api.cronjobs().then((z) => {
-      stand.cronjobs = z.length
-      stand.cronjobsAktiv = z.filter((e) => e.aktiv).length
-    }).catch(() => {})
-    api.einstellungAufgeloest('skills_auto').then((s) => {
-      if (s?.wert && typeof s.wert.an === 'boolean') stand.skillsAuto = s.wert.an
-    }).catch(() => {})
-    gedaechtnisStandLaden()
-    bildschutzStandLaden()
-    werkzeugRundenLaden()
-    befehlZeitLaden()
-    verdichtungSchwelleLaden()
-    helperLimitsLoad()
+  $effect(() => {
+    settingsState.memoryLocal = gedaechtnisSchalter.lokal
+  })
+  $effect(() => {
+    settingsState.agents = dateien.length
+  })
+  function standLaden() {
+    values.loadAll()
   }
 
-  /* The grouped nav: each box a group, each entry a sign, a title and a
-     live-state subtitle. */
-  const EINTRAEGE = {
-    sprache: { zeichen: 'sprache', titel: 'editor.quelle_sprache' },
-    darstellung: { zeichen: 'palette', titel: 'editor.quelle_darstellung' },
-    meldungen: { zeichen: 'glocke', titel: 'meldewesen.quelle' },
-    shortcuts: { zeichen: 'keyboard', titel: 'shortcuts.title' },
-    memory: { zeichen: 'speicherriegel', titel: 'gedaechtnis.quelle' },
-    skills: { zeichen: 'buch', titel: 'skills.quelle' },
-    cronjobs: { zeichen: 'stopwatch', titel: 'cronjobs.quelle' },
-    system: { zeichen: 'feder', titel: 'agenten.quelle_system' },
-    agent: { zeichen: 'person', titel: 'editor.quelle_agenten' },
-    tools: { zeichen: 'plug', titel: 'editor.quelle_tools' },
-    werkzeuge: { zeichen: 'werkzeug', titel: 'werkzeuge.titel' },
-    zugangsdaten: { zeichen: 'schluessel', titel: 'editor.quelle_zugangsdaten' },
-    konfiguration: { zeichen: 'dokument', titel: 'editor.quelle_konfiguration' },
-    tools_datei: { zeichen: 'dokument_pfeil', titel: 'editor.quelle_tools_datei' },
-  }
-  const GRUPPEN = [
-    { name: 'general', titel: 'editor.gruppe_general', eintraege: ['sprache', 'darstellung', 'meldungen', 'shortcuts'] },
-    { name: 'verhalten', titel: 'editor.gruppe_verhalten', eintraege: ['memory', 'skills', 'cronjobs'] },
-    { name: 'prompts', titel: 'editor.gruppe_prompts', eintraege: ['system', 'agent'] },
-    { name: 'verbindungen', titel: 'editor.gruppe_verbindungen', eintraege: ['tools', 'werkzeuge', 'zugangsdaten'] },
-    { name: 'dateien', titel: 'editor.gruppe_dateien', eintraege: ['konfiguration', 'tools_datei'] },
-  ]
+  /* The pages of this window: each a sign and a title, as the list that
+     leads to them names them (lib/einstellungsliste.js). */
+  const EINTRAEGE = SEITEN
 
   // The shortcuts entry names the microphone key under its title, so the
   // stored key is read as soon as the settings are open.
@@ -529,81 +308,38 @@
     diktatStandLaden()
   })
 
-  // The shortcut entry shows the key by the character the switched-on
-  // layout writes on it ("⌘Ö" on a German layout) — the one holder the
-  // Shortcuts page and the recogniser read as well, so both name the same
-  // key (lib/keyboardLayout.svelte.js) — and, off the Mac, in the words
-  // printed on the keys, as that page does (lib/keyNames.js).
-
-
-  const spracheName = $derived(
-    texte.sprache === 'de' ? t('einstellungen.sprache_deutsch') : t('einstellungen.sprache_englisch'),
-  )
-
-  function unterText(key) {
-    switch (key) {
-      case 'sprache':
-        return spracheName
-      case 'meldungen':
-        return t(klangwahl.aus ? 'einstellungen.toene_aus' : 'einstellungen.toene_an')
-      case 'darstellung':
-        return t('einstellungen.' + modus)
-      case 'shortcuts':
-        return `${t('shortcuts.group_microphone')} ${showCombo(diktat.microphone_key || DEFAULT_KEY, layout.map, keyNames())}`
-      // The row's dot already says on or off; a sentence beside it said it twice.
-      case 'memory':
-        return ''
-      case 'skills':
-        // The skills the model is offered by itself, of all there are.
-        return `${stand.skillsAuto ? stand.skillsAngeboten : 0}/${stand.skills}`
-      case 'cronjobs':
-        return `${stand.cronjobsAktiv}/${stand.cronjobs}`
-      case 'system':
-        return ''
-      case 'agent':
-        return String(dateien.length)
-      case 'tools':
-        return `${serverStand().aktiv}/${serverStand().alle}`
-      case 'werkzeuge':
-        return `${anzahlAn()}/${anzahlAlle()}`
-      case 'zugangsdaten':
-        return ''
-      case 'konfiguration':
-        return ''
-      case 'tools_datei':
-        return ''
-      default:
-        return ''
-    }
-  }
-  /* An entry carries a status lamp only where there is a state worth one. */
-  function ampelFarbe(key) {
-    switch (key) {
-      case 'memory':
-        return gedaechtnisSchalter.lokal ? 'gruen' : 'still'
-      case 'skills':
-        return stand.skillsAuto ? 'gruen' : 'still'
-      case 'cronjobs':
-        return stand.cronjobsAktiv > 0 ? 'gruen' : 'still'
-      case 'tools':
-        return serverStand().aktiv > 0 ? 'gruen' : 'still'
-      default:
-        return null
-    }
-  }
-  function istAktiv(key) {
-    return art === key
-  }
   function navZiel(key) {
     // The agent entry always opens the list first, never the last file.
     if (key === 'agent') return wechseln('agent', '')
     return wechseln(key)
   }
+  /* The list of the settings (SettingsNav.svelte): its row "Updates" asks for
+     a newer version and shows what came of it. */
+  let nav = $state(null)
+  /* What a row of the list does (lib/settingsrow.js). A page of this window is
+     switched to, and asks first if an edit stands unsaved; the other menus
+     open with the part the row names, which the page there reads once; the
+     manual and the row of the updates do what their names say. */
+  function zeileGewaehlt(zeile) {
+    return chooseRow(zeile, { page: navZiel, look: () => nav?.look() })
+  }
+
+  /* A switch found by the search: its page opens like its row would open it,
+     then the page scrolls to the switch. */
+  let anspringenStopp = null
+  async function schalterGewaehlt(feld) {
+    const zeile = listenZeile(feld.zeile)
+    anspringenStopp?.()
+    await zeileGewaehlt(zeile)
+    // A page the question "discard?" kept in place is not the page of the switch.
+    if (zeile.ziel.art && art !== zeile.ziel.art) return
+    anspringenStopp = schalterAnspringen(t(feld.titel))
+  }
 
   $effect(() => {
     if (!offen) return
     const start = zustand.promptStart
-    const [ziel, name] = start === 'darstellung'
+    const [ziel, name] = Object.hasOwn(EINTRAEGE, start)
       ? [start, '']
       : start?.startsWith?.('agent:') ? ['agent', start.slice(6)] : ['system', '']
     untrack(() => {
@@ -652,7 +388,7 @@
 
   /* File-less pages carry no text to fetch or discard. The agent LIST is
      one of them; only an agent with a name loads a file. */
-  const OHNE_DATEI = ['sprache', 'darstellung', 'meldungen', 'shortcuts', 'tools', 'werkzeuge', 'skills', 'cronjobs']
+  const OHNE_DATEI = ['sprache', 'darstellung', 'meldungen', 'shortcuts', 'tools', 'werkzeuge', 'web_app', 'skills', 'cronjobs']
 
   async function laden(neueArt, name = '') {
     if (OHNE_DATEI.includes(neueArt) || (neueArt === 'agent' && !name)) {
@@ -662,12 +398,14 @@
       geladen = ''
       kaputt = null
       unlesbar = null
+      saveNote = null
       platzhalter = []
       return
     }
     laedt = true
     kaputt = null
     unlesbar = null
+    saveNote = null
     platzhalter = []
     try {
       if (neueArt === 'system') {
@@ -676,7 +414,7 @@
       } else if (neueArt === 'memory') {
         const daten = await api.gedaechtnis()
         text = daten.text
-        gedaechtnisStandLaden()
+        values.gedaechtnisStandLaden()
       } else if (neueArt === 'tools_datei') {
         const daten = await api.werkzeugKonfiguration()
         text = daten.content
@@ -757,6 +495,10 @@
      typed while the save was on its way, which stays and stays unsaved. */
   async function sichern() {
     const gesendet = text
+    const savedPage = art
+    /* A save in flight takes the last answer down: a failure must not stand
+       beside "saved", and a second save shows its answer anew. */
+    saveNote = null
     try {
       if (istSystem) {
         const daten = await api.systemPromptSichern(text)
@@ -774,14 +516,18 @@
         geladen = daten.inhalt
         if (text === gesendet) text = geladen
         kaputt = daten.kaputt
-        melde(t(kaputt ? 'dateien.gesichert_kaputt' : 'dateien.gesichert'), kaputt ? 'hinweis' : 'erfolg')
+        if (art === savedPage) {
+          saveNote = { key: kaputt ? 'dateien.gesichert_kaputt' : 'dateien.gesichert', caution: Boolean(kaputt), saved: geladen }
+        }
       } else if (istTools) {
         const daten = await api.werkzeugKonfigurationSichern(text)
         geladen = daten.content
         if (text === gesendet) text = geladen
         kaputt = daten.kaputt
         platzhalter = daten.platzhalter
-        melde(kaputt ? t('werkzeuge.gesichert_kaputt') : t('werkzeuge.gesichert'), kaputt ? 'hinweis' : 'erfolg')
+        if (art === savedPage) {
+          saveNote = { key: kaputt ? 'werkzeuge.gesichert_kaputt' : 'werkzeuge.gesichert', caution: Boolean(kaputt), saved: geladen }
+        }
         if (!kaputt) {
           setTimeout(leseanzeigeLaden, 1500)
           setTimeout(leseanzeigeLaden, 5000)
@@ -810,7 +556,7 @@
   /* ``name`` is the agent open in the editor, or one chosen on the list:
      an agent never saved (``geladen`` null) has no file to remove. */
   async function agentLoeschen(name = agentName) {
-    if (!(await frage(t('agenten.loeschen_frage', { name })))) return
+    if (!(await frage(t('agenten.loeschen_frage', { name }), { danger: true, okSchluessel: 'agenten.delete_button' }))) return
     try {
       if (name !== agentName || geladen !== null) await api.agentLoeschen(name)
       meldeText('agenten.geloescht', { name }, 'erfolg')
@@ -821,20 +567,15 @@
     }
   }
 
-  async function aussetzen(an) {
-    if (!chat) {
-      melde(t('chat.erst_oeffnen'))
-      return
-    }
-    try {
-      await chatAendern(chat.id, { prompt_aus: an })
-    } catch {
-      melde(t('systemprompt.schalter_fehler'), 'fehler')
-    }
-  }
-
   const kopfEintrag = $derived(agentBearbeiten ? EINTRAEGE.agent : EINTRAEGE[art] ?? EINTRAEGE.system)
 </script>
+
+{#snippet warningBox()}
+  <div class="warnung" class:above={filePage} transition:fade={{ duration: 120 }}>
+    {#if filePage}<Leuchtpunkt farbe="rot" groesse={10} />{/if}
+    <span>{unlesbar ?? t(filePage ? 'werkzeuge.kaputt' : 'agenten.kaputt', { grund: kaputt })}</span>
+  </div>
+{/snippet}
 
 <Seitenrahmen {offen} beschriftung={t('editor.titel')}>
   <!-- The parts are built fresh each time the page opens, as in the window
@@ -842,45 +583,26 @@
        outlive the page. What was typed stays all the same — it lives in this
        file, not in the parts. -->
   {#if offen}
-  <Menueseite beschriftung={t('editor.titel')} fuellen festeHoehe={istWerkzeuge || istCronjobs} fillsFoot={istCronjobs}>
+  <Menueseite beschriftung={t('editor.titel')} fuellen festeHoehe={istWerkzeuge || istCronjobs || agentList || istDatei} fillsFoot={istCronjobs || agentList}>
     {#snippet liste()}
-      {#each GRUPPEN as g (g.name)}
-        <div class="menuegruppe">{t(g.titel)}</div>
-        <div class="s2-box">
-          {#each g.eintraege as key (key)}
-            <Menuezeile
-              titel={t(EINTRAEGE[key].titel)}
-              wert={unterText(key)}
-              punkt={ampelFarbe(key)}
-              gewaehlt={istAktiv(key)}
-              onclick={() => navZiel(key)}
-            >
-              {#snippet zeichen()}<Hauszeichen zeichen={EINTRAEGE[key].zeichen} groesse="gross" />{/snippet}
-            </Menuezeile>
-          {/each}
-        </div>
-      {/each}
-      <!-- The manual, set apart at the foot of the list: not a setting, but
-           the place a question about one leads to. -->
-      <div class="abgesetzt">
-        <Menuezeile titel={t('menue.hilfe')} onclick={handbuchOeffnen}>
-          {#snippet zeichen()}
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M9.2 9a2.8 2.8 0 1 1 4 2.55c-.9.42-1.2 1.05-1.2 2.05v.4" /><path d="M12 17.6 V17.7" />
-            </svg>
-          {/snippet}
-        </Menuezeile>
-      </div>
-      <!-- The program's version and the look for a newer one, at the very
-           foot: about the program itself, not one of its settings. -->
-      <Updatezeile />
+      <SettingsNav bind:this={nav} current={art} pick={zeileGewaehlt} jump={schalterGewaehlt} own />
     {/snippet}
 
     {#snippet kopf()}
       <div class="set-kopf">
-        <span class="s2-zeichen gross"><Hauszeichen zeichen={kopfEintrag.zeichen} groesse="gross" /></span>
-        <h3>{t(kopfEintrag.titel)}</h3>
+        <span class="s2-zeichen gross"><Hauszeichen zeichen={kopfEintrag.zeichen} groesse={22} /></span>
+        {#if istCronjobs}
+          <!-- Only this page has a sentence at its title: the mark stands 6 px
+               after the name and its sentence opens under the title. -->
+          <div class="titelzelle"><h3>{t(kopfEintrag.titel)}</h3><InfoMark text={t('cronjobs.info_page')} /></div>
+        {:else}
+          <h3>{t(kopfEintrag.titel)}</h3>
+        {/if}
+        {#if istWerkzeuge}
+          <!-- How many tools reach the model, from how many sources: a figure
+               in words at the title, not a line above the list. -->
+          <span class="zahlpille"><Standpille farbe="count">{t('werkzeuge.aktiv_zahl', aktivStand())}</Standpille></span>
+        {/if}
         {#if istAgent && !agentBearbeiten && !maske}
           <button class="neu" onclick={() => neuerAgent()}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -892,6 +614,9 @@
     {/snippet}
 
     {#snippet inhalt()}
+      {#if filePage && (kaputt || unlesbar)}
+        {@render warningBox()}
+      {/if}
       {#if istSprache}
         <div class="kachelliste">
           <div class="einstellkachel">
@@ -918,37 +643,16 @@
       {:else if istShortcuts}
         <Shortcuts />
       {:else if istDarstellung}
-        <div class="kachelliste">
-          <!-- The chat layout is not set here but over the real chat,
-               where every change can be seen: the button closes the
-               settings and opens the layout mode. -->
-          <div class="einstellkachel">
-            <button class="layoutknopf" onclick={layoutModusOeffnen}>
-              <Hauszeichen zeichen="ecken" groesse={24} />
-              {t('einstellungen.layout_modus')}
-            </button>
-          </div>
-          <div class="einstellkachel">
-            <div class="zeilentext">
-              {t('einstellungen.erscheinungsbild')}
-            </div>
-            <Klappwahl
-              optionen={MODI.map(([wert, schluessel]) => [wert, t(schluessel)])}
-              bind:wert={modus}
-              beschriftung={t('einstellungen.erscheinungsbild')}
-            />
-          </div>
-          <div class="einstellkachel">
-            <div class="zeilentext">
-              {t('einstellungen.codefarben')}
-            </div>
-            <Klappwahl
-              optionen={CODE_PACKS.map(([wert, schluessel]) => [wert, t(schluessel)])}
-              wert={zustand.codefarben}
-              aufWahl={(neu) => codefarbenSetzen(neu)}
-              beschriftung={t('einstellungen.codefarben')}
-            />
-          </div>
+        <h4 class="tafelkopf abschnitt">{t('einstellungen.erscheinungsbild')}</h4>
+        <!-- The looks are always in sight, never behind a list: one card
+             each, the chosen one marked. -->
+        <Looktafel
+          optionen={MODI.map(([wert, schluessel]) => [wert, t(schluessel)])}
+          bind:wert={modus}
+          beschriftung={t('einstellungen.erscheinungsbild')}
+          eigen={eigenBild}
+        />
+        <div class="kachelliste unterteil">
           <div class="einstellkachel">
             <div class="zeilentext">
               {t('einstellungen.blase')}
@@ -959,6 +663,17 @@
               {/if}
               <input type="color" aria-label={t('einstellungen.blase')}
                      value={zustand.blasenfarbe || blasenVorgabe} oninput={(e) => blasenfarbeSetzen(e.currentTarget.value)} />
+            </div>
+          </div>
+          <div class="einstellkachel">
+            <div class="zeilentext">{t('einstellungen.codefarben')}</div>
+            <div class="auswahl">
+              <Auswahlfeld
+                bind:wert={() => zustand.codefarben, () => {}}
+                eintraege={CODE_PACKS.map(([wert, schluessel]) => ({ wert, text: t(schluessel) }))}
+                beschriftung={t('einstellungen.codefarben')}
+                gewaehlt={(neu) => codefarbenSetzen(neu)}
+              />
             </div>
           </div>
           <!-- Only the own gradient is the user's to paint: every other
@@ -998,14 +713,30 @@
                    oninput={(e) => { rahmenWinkel = Number(e.currentTarget.value); rahmenSetzen({ winkel: rahmenWinkel }) }} />
           </div>
           {/if}
+          <!-- The chat layout is not set here but over the real chat,
+               where every change can be seen: the button closes the
+               settings and opens the layout mode. It stands last. -->
+          <div class="einstellkachel">
+            <div class="zeilentext">
+              {t('einstellungen.layout_modus')}
+            </div>
+            <button class="symbolknopf" onclick={layoutModusOeffnen}
+                    aria-label={t('einstellungen.layout_modus')}
+                    title={t('einstellungen.layout_modus')}>
+              <Hauszeichen zeichen="ecken" groesse={22} />
+            </button>
+          </div>
         </div>
+        <!-- A function in the chosen colours, set the way a code block in the
+             chat is set, over the whole width under the settings. -->
+        <pre class="code-sample hljs" aria-hidden="true"><code>{#each CODE_SAMPLE as [klasse, wort], i (i)}<span class={klasse}>{wort}</span>{/each}</code></pre>
       {:else if istSkills}
         <Skillmaske />
       {:else if istCronjobs}
         <!-- The page itself stands still: the schedules scroll in their own
              room and the scripts stay at the foot. -->
         <div class="cronjobseite">
-          <SettingsCronjobs onzahlen={(aktiv, gesamt) => { stand.cronjobsAktiv = aktiv; stand.cronjobs = gesamt }} />
+          <SettingsCronjobs onzahlen={(aktiv, gesamt) => { settingsState.cronjobsAktiv = aktiv; settingsState.cronjobs = gesamt }} />
           <!-- Where the scripts a schedule may start live, under the
                schedules; a script clicked opens the form above with it. -->
           <div class="skriptteil">
@@ -1017,6 +748,8 @@
         <Verbindungen
           zuWerkzeugen={() => navZiel('werkzeuge')}
         />
+      {:else if isWebApp}
+        <SettingsWebApp />
       {:else if istWerkzeuge}
         <!-- The tools, once a window of their own, right under the servers
              they come from. Their one way out leads next door. -->
@@ -1038,7 +771,7 @@
              (WachsendesFeld): where the page gives no height to share out (a
              narrow window stacks everything into one column), it would
              otherwise shrink to its single row. -->
-        <div class="editorboden">
+        <div class="editorboden" class:file={istDatei} class:tools={istTools}>
         <WachsendesFeld
           bind:this={feld}
           bind:wert={text}
@@ -1047,26 +780,34 @@
           quelle={istDatei || istTools || agentBearbeiten}
           platzhalter={istSystem ? t('systemprompt.platzhalter') : ''}
           beschriftung={t('editor.titel')}
-          block={istZugangsdaten || istTools}
-          volleHoehe={!(istZugangsdaten || istTools)}
+          block={istTools}
+          volleHoehe={!istTools}
         />
         </div>
       {/if}
 
-      {#if kaputt || unlesbar}
-        <div class="warnung" transition:fade={{ duration: 120 }}>
-          {unlesbar ?? t(istTools || istDatei ? 'werkzeuge.kaputt' : 'agenten.kaputt', { grund: kaputt })}
-        </div>
+      {#if !filePage && (kaputt || unlesbar)}
+        {@render warningBox()}
       {/if}
 
       {#if istTools && platzhalter.length}
-        <div class="ampeln">
-          {#each platzhalter as eintrag (eintrag.name)}
-            <span class="ampelzeile" class:fehlt={!eintrag.gesetzt}>
-              <Leuchtpunkt farbe={eintrag.gesetzt ? 'gruen' : 'still'} groesse={11} />
-              {eintrag.name} — {t(eintrag.gesetzt ? 'werkzeuge.platzhalter_gesetzt' : 'werkzeuge.platzhalter_fehlt')}
-            </span>
-          {/each}
+        <div class="keys">
+          <div class="keys-title tafelkopf">{t('werkzeuge.keys_heading')}</div>
+          <div class="keys-card">
+            {#each platzhalter as eintrag (eintrag.name)}
+              <div class="key-row">
+                <Leuchtpunkt farbe={eintrag.gesetzt ? 'gruen' : 'rot'} groesse={10} />
+                <span class="key-name">{'${' + eintrag.name + '}'}</span>
+                <span class="key-state" class:set={eintrag.gesetzt} class:missing={!eintrag.gesetzt}>
+                  {t(eintrag.gesetzt ? 'werkzeuge.platzhalter_gesetzt' : 'werkzeuge.platzhalter_fehlt')}
+                  <!-- The sign says the state for a reader that cannot see it. -->
+                  <span class="key-sign" role="img" aria-label={t(eintrag.gesetzt ? 'modell.schluessel_gesetzt' : 'modell.schluessel_fehlt')}>
+                    <Hauszeichen zeichen={eintrag.gesetzt ? 'haken' : 'kreuz'} groesse={14} />
+                  </span>
+                </span>
+              </div>
+            {/each}
+          </div>
         </div>
       {/if}
 
@@ -1076,93 +817,96 @@
           {#if lese && !lese.aktiv}
             <span class="leseleer">{t('werkzeuge.abgeschaltet')}</span>
           {:else if lese}
-            {#each lese.server as server (server)}
-              <span class="server"><Leuchtpunkt farbe="gruen" groesse={11} />{server}</span>
-            {/each}
-            {#if lese.werkzeuge.length}
-              <div class="werkzeugpillen">
-                {#each lese.werkzeuge as werkzeug (werkzeug.name)}
-                  <Standpille farbe="werkzeug">{werkzeug.anzeige ?? werkzeug.name}</Standpille>
-                {/each}
-              </div>
+            {#if lese.server.length}
+            <div class="live-card">
+              {#each lese.server as server (server)}
+                <div class="live-row">
+                  <span class="server"><Leuchtpunkt farbe="gruen" groesse={10} />{server}</span>
+                  <div class="werkzeugpillen">
+                    {#each lese.werkzeuge.filter((w) => !w.builtin && w.server === server) as werkzeug (werkzeug.name)}
+                      <span class="werkzeugpille">
+                        <span class="pillenzeichen">
+                          <Werkzeugzeichen name={werkzeug.name} server={werkzeug.server} eingebaut={false}
+                                           logo={serverLogo(werkzeug.server)} />
+                        </span>
+                        <span class="pillenname">{werkzeug.anzeige ?? werkzeug.name}</span>
+                      </span>
+                    {/each}
+                  </div>
+                </div>
+              {/each}
+            </div>
             {/if}
           {/if}
         </div>
       {/if}
 
       {#if istGedaechtnis}
-        <div class="schalterzeile">
-          <div class="beschriftung">
-            {t('gedaechtnis.an_lokal')}
+        <div class="row-tiles">
+          <div class="schalterzeile">
+            <div class="beschriftung mitmarke">{t('gedaechtnis.an_lokal')}<InfoMark text={t('gedaechtnis.info_an_lokal')} /></div>
+            <Schalter an={gedaechtnisSchalter.lokal} beschriftung={t('gedaechtnis.an_lokal')} onschalten={(an) => gedaechtnisSchalten('lokal', an)} />
           </div>
-          <Schalter an={gedaechtnisSchalter.lokal} beschriftung={t('gedaechtnis.an_lokal')} onschalten={(an) => gedaechtnisSchalten('lokal', an)} />
-        </div>
-        <div class="schalterzeile">
-          <div class="beschriftung">
-            {t('gedaechtnis.an_cloud')}
+          <div class="schalterzeile">
+            <div class="beschriftung mitmarke">{t('gedaechtnis.an_cloud')}<InfoMark text={t('gedaechtnis.info_an_cloud')} /></div>
+            <Schalter an={gedaechtnisSchalter.cloud} beschriftung={t('gedaechtnis.an_cloud')} onschalten={(an) => gedaechtnisSchalten('cloud', an)} />
           </div>
-          <Schalter an={gedaechtnisSchalter.cloud} beschriftung={t('gedaechtnis.an_cloud')} onschalten={(an) => gedaechtnisSchalten('cloud', an)} />
-        </div>
-        <div class="schalterzeile">
-          <div class="beschriftung">
-            {t('bildschutz.titel')}
+          <div class="schalterzeile">
+            <div class="beschriftung mitmarke">{t('bildschutz.titel')}<InfoMark text={t('bildschutz.info_titel')} /></div>
+            <Schalter an={bildschutzSchalter.an} beschriftung={t('bildschutz.titel')} onschalten={(an) => bildschutzSchalten(an)} />
           </div>
-          <Schalter an={bildschutzSchalter.an} beschriftung={t('bildschutz.titel')} onschalten={(an) => bildschutzSchalten(an)} />
         </div>
       {/if}
 
       {#if istSystem}
-        <div class="schalterzeile">
-          <div class="beschriftung">{t('editor.werkzeugrunden_titel')}
+        <div class="row-tiles">
+          <div class="schalterzeile">
+            <div class="beschriftung">{t('editor.anrede_titel')}
+            </div>
+            <input class="anredefeld" value={begruessung.name} placeholder={begruessung.vorschlag}
+                   aria-label={t('editor.anrede_titel')}
+                   onchange={(e) => anredeSpeichern(e.currentTarget.value, begruessung.an)} />
           </div>
-          <div class="zahlfeld">
-            <Zahlenfeld bind:wert={werkzeugRunden} min={0} ganzzahlig
-                        nullwort={t('parameter.auto')} />
+          <div class="schalterzeile">
+            <div class="beschriftung mitmarke">{t('editor.anrede_schalter')}<InfoMark text={t('editor.info_anrede_schalter')} /></div>
+            <Schalter an={begruessung.an} beschriftung={t('editor.anrede_schalter')}
+                      onschalten={(an) => anredeSpeichern(begruessung.name, an)} />
           </div>
-        </div>
-        <div class="schalterzeile">
-          <div class="beschriftung">{t('editor.befehlszeit_titel')}
+          <div class="schalterzeile">
+            <div class="beschriftung">{t('editor.werkzeugrunden_titel')}
+            </div>
+            <div class="zahlfeld">
+              <Zahlenfeld bind:wert={values.werkzeugRunden} min={0} ganzzahlig
+                          nullwort={t('parameter.auto')} />
+            </div>
           </div>
-          <div class="zahlfeld">
-            <Zahlenfeld bind:wert={befehlZeit} min={0} ganzzahlig
-                        nullwort={t('parameter.auto')} />
+          <div class="schalterzeile">
+            <div class="beschriftung">{t('editor.befehlszeit_titel')}
+            </div>
+            <div class="zahlfeld">
+              <Zahlenfeld bind:wert={values.befehlZeit} min={0} ganzzahlig
+                          nullwort={t('parameter.auto')} />
+            </div>
           </div>
-        </div>
-        <div class="schalterzeile">
-          <div class="beschriftung">{t('editor.kontextkomprimierung_titel')}
+          <div class="schalterzeile">
+            <div class="beschriftung">{t('editor.kontextkomprimierung_titel')}
+            </div>
+            <div class="zahlfeld">
+              <!-- `max` matters here in a way it does not for the two
+                   fields above: those have no ceiling on the service side,
+                   this one is refused above 85 (app/verdichtungswahl.py),
+                   and a refused value is filed as "nothing set" with a
+                   plain 200. Typing 90 therefore left the field showing 90,
+                   nothing complaining, and the threshold quietly still at
+                   its default. Clamped here, the field shows at once what
+                   was actually stored.
+                   The floor needs no clamp: the service takes anything from
+                   1 up, which is exactly what this field can offer once 0
+                   is spoken for by "default". -->
+              <Zahlenfeld bind:wert={values.verdichtungSchwelle} min={0} max={85} ganzzahlig
+                          nullwort={t('parameter.auto')} />
+            </div>
           </div>
-          <div class="zahlfeld">
-            <!-- `max` matters here in a way it does not for the two
-                 fields above: those have no ceiling on the service side,
-                 this one is refused above 85 (app/verdichtungswahl.py),
-                 and a refused value is filed as "nothing set" with a
-                 plain 200. Typing 90 therefore left the field showing 90,
-                 nothing complaining, and the threshold quietly still at
-                 its default. Clamped here, the field shows at once what
-                 was actually stored.
-                 The floor needs no clamp: the service takes anything from
-                 1 up, which is exactly what this field can offer once 0
-                 is spoken for by "default". -->
-            <Zahlenfeld bind:wert={verdichtungSchwelle} min={0} max={85} ganzzahlig
-                        nullwort={t('parameter.auto')} />
-          </div>
-        </div>
-        <div class="schalterzeile">
-          <div class="beschriftung">{t('editor.anrede_titel')}
-          </div>
-          <input class="anredefeld" value={begruessung.name} placeholder={begruessung.vorschlag}
-                 aria-label={t('editor.anrede_titel')}
-                 onchange={(e) => anredeSpeichern(e.currentTarget.value, begruessung.an)} />
-        </div>
-        <div class="schalterzeile">
-          <div class="beschriftung">{t('editor.anrede_schalter')}
-          </div>
-          <Schalter an={begruessung.an} beschriftung={t('editor.anrede_schalter')}
-                    onschalten={(an) => anredeSpeichern(begruessung.name, an)} />
-        </div>
-        <div class="schalterzeile">
-          <div class="beschriftung">{t('systemprompt.aussetzen')}</div>
-          <Schalter an={ausgesetzt} art="eingriff" beschriftung={t('systemprompt.aussetzen')} onschalten={(an) => aussetzen(an)} />
         </div>
       {/if}
 
@@ -1172,12 +916,21 @@
         {:else if agentBearbeiten}
           <button class="textknopf gefahr" onclick={() => agentLoeschen()}>{t('agenten.loeschen')}</button>
         {:else}
-          <span></span>
+          <!-- The answer of a save, where the signs stand: it may take two
+               lines, the signs stay at the right. The live region is always
+               there, so a screen reader announces what comes into it. -->
+          <span class="save-note" class:caution={shownNote?.caution} role="status">{#if shownNote}{t(shownNote.key)}{/if}</span>
         {/if}
         <div class="rechts">
           {#if bearbeitet}
-            <button class="button" onclick={abbrechen}>{t('app.abbrechen')}</button>
-            <button class="button primary" onclick={sichern}>{t('app.sichern')}</button>
+            <button class="symbolknopf" onclick={abbrechen}
+                    aria-label={t('app.abbrechen')} title={t('app.abbrechen')}>
+              <Hauszeichen zeichen="kreuz" groesse={18} />
+            </button>
+            <button class="symbolknopf" onclick={sichern}
+                    aria-label={t('app.sichern')} title={t('app.sichern')}>
+              <Hauszeichen zeichen="save" groesse={18} />
+            </button>
           {/if}
         </div>
       </div>
@@ -1187,35 +940,48 @@
 </Seitenrahmen>
 
 <style>
-  .s2-box {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
+  /* The page's mark: the sign in a 40 px box of button glass. */
   .s2-zeichen.gross {
-    width: 24px;
-    height: 24px;
+    width: 40px;
+    height: 40px;
     flex: none;
     display: flex;
     align-items: center;
     justify-content: center;
+    border-radius: 9px;
+    /* The glass of a button with its fine line, drawn inside the box. */
+    background: var(--glass-button);
+    box-shadow: inset 0 0 0 1px var(--glass-button-edge);
     color: var(--text);
-  }
-  /* The manual, apart from the groups: air above it, no line. */
-  .abgesetzt {
-    margin-top: 24px;
   }
   .set-kopf {
     flex: 1;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 14px;
+  }
+  .titelzelle {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .titelzelle :global(.mark) {
+    margin-left: 0;
   }
   .set-kopf h3 {
     font-size: var(--schrift-seitentitel);
-    font-weight: 600;
-    letter-spacing: -0.01em;
+    font-weight: 400;
+    line-height: 1.3;
+    color: var(--text);
     margin: 0;
+  }
+  /* 12 px from the title: the head's gap less two. */
+  .zahlpille {
+    display: inline-flex;
+    margin-left: -2px;
   }
 
   /* "New agent" / "New cronjob" at the far end of the head. */
@@ -1250,82 +1016,209 @@
     line-height: 1.5;
     padding: 8px 12px;
   }
-
-  .ampeln {
+  /* On the pages of a file the box stands under the head, over the field: no
+     ground, a red edge, the red dot at the start of the sentence, the
+     sentence in the quiet ink. */
+  .warnung.above {
+    flex: none;
+    box-sizing: border-box;
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px 16px;
-    margin-top: 10px;
-  }
-  .ampelzeile {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 0 0 32px;
+    padding: 12px 16px;
+    border: 1px solid var(--rot);
+    background: none;
     color: var(--text-leise);
+    font-size: var(--schrift-hinweis);
+    line-height: 1.2;
   }
-  .ampelzeile.fehlt {
-    color: var(--text-still);
+  /* A long word in the service's reason breaks inside the box, not through its edge. */
+  .warnung.above > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
-  .lese {
-    margin-top: 12px;
-    padding-top: 12px;
+  /* The keys the tools file names: a heading over one field of button glass, a
+     row for each, its name in the `${NAME}` notation (a key named by
+     `api_key_env` is read the same way) on the left and on the right
+     the file that holds the value, green with a check where it is there and red
+     with a cross where it is not. The sign says it as well, so the colour is
+     never the only mark. */
+  .keys {
+    margin-top: 32px;
   }
-  /* Text itself: global.css, .tafelkopf. */
+  /* Text itself: global.css, .tafelkopf. A heading is a band of 34 with its
+     line in the middle, and the next block stands 32 below it. */
+  .keys-title,
   .lesetitel {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 6px;
+    height: 34px;
+    margin-bottom: 32px;
+    line-height: 1.35;
   }
-  .lesetitel::after {
-    content: '';
+  .keys-card,
+  .live-card {
+    padding: 0 16px;
+    border: 1px solid var(--feldstrich);
+    border-radius: 9px;
+    background: var(--glass-card);
+  }
+  .key-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    /* 16 px of content between two paddings of 12: the row is 40 high, and the
+       line between two rows comes on top of that. */
+    box-sizing: content-box;
+    padding: 12px 0;
+    min-height: 16px;
+  }
+  .key-row + .key-row {
+    border-top: 1px solid var(--feldstrich);
+  }
+  .key-name {
     flex: 1;
-    border-top: 1px solid var(--linie);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--schrift-fest);
+    font-size: 12px;
+    color: var(--text-leise);
+  }
+  .key-state {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+  }
+  .key-sign {
+    display: inline-flex;
+  }
+  .key-state.set {
+    color: var(--gruen-text);
+  }
+  .key-state.missing {
+    color: var(--rot-text);
+  }
+  /* The tick and the cross are signs, not words: the colour of the shape. */
+  .key-state.set .key-sign {
+    color: var(--gruen);
+  }
+  .key-state.missing .key-sign {
+    color: var(--rot);
+  }
+
+  /* What is live: a field like the key list, a row for each connected
+     server with its dot, its name and, at the right, its tools as pills. */
+  .lese {
+    margin-top: 32px;
+  }
+  .live-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    /* The pill is 28 high between two paddings of 12: the row is 52 high. */
+    box-sizing: content-box;
+    padding: 12px 0;
+    min-height: 28px;
+  }
+  .live-row + .live-row {
+    border-top: 1px solid var(--feldstrich);
   }
   .server {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    font-size: 12.5px;
-    margin-right: 14px;
+    gap: 8px;
+    flex: 0 0 auto;
+    max-width: 40%;
+    overflow-wrap: anywhere;
+    font-family: var(--schrift-fest);
+    font-size: 12px;
+    color: var(--text-leise);
   }
   .werkzeugpillen {
     display: flex;
+    flex: 0 1 auto;
     flex-wrap: wrap;
-    gap: 4px;
-    margin-top: 6px;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-left: auto;
+    min-width: 0;
+  }
+  /* A tool of the server: its mark and the name the server gives it, in the
+     tool face; 1 px rim, so the pill is 28 high with a line of 16. */
+  .werkzeugpille {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 11px 5px 10px;
+    border: 1px solid var(--linie);
+    border-radius: 9px;
+    background: var(--glass-button);
+    font-family: var(--schrift-fest);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    color: var(--text);
+    white-space: nowrap;
+    max-width: 100%;
+  }
+  /* A name longer than the room of the row is cut with dots, so the pill
+     never leaves the field. */
+  .pillenname {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pillenzeichen {
+    --wz-groesse: 14px;
+    display: inline-flex;
+    flex: none;
+    width: 14px;
+    height: 14px;
   }
   .leseleer {
     font-size: 12px;
     color: var(--text-still);
   }
 
-  /* The switches under an editor: one card, a hairline between its rows —
-     the first row after anything else opens the card, the last before the
-     foot closes it. */
+  /* The settings under an editor as a row of tiles, each a card of glass
+     with its fine line: equally wide, as high as the tallest of them, 12 px
+     apart; where the room runs out they wrap into a second row. */
+  .row-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+  }
   .schalterzeile {
     display: flex;
     align-items: center;
     gap: 14px;
     padding: 12px 16px;
     background: var(--glass-card);
-    border-top: 1px solid var(--linie);
-  }
-  :global(*:not(.schalterzeile)) + .schalterzeile {
-    margin-top: 14px;
-    border-top-color: transparent;
-    border-radius: 9px 9px 0 0;
-  }
-  .schalterzeile:has(+ .fuss) {
-    border-bottom-left-radius: 9px;
-    border-bottom-right-radius: 9px;
+    border-radius: 9px;
+    box-shadow: inset 0 0 0 1px var(--glass-card-line);
   }
   .beschriftung {
     flex: 1;
     min-width: 0;
     font-size: 13px;
+  }
+  /* The mark right after the name, 6 px away, and its sentence on a line of
+     its own below the name when it is open. */
+  .mitmarke {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .mitmarke :global(.mark) {
+    margin-left: 0;
   }
 
   /* A page's settings as one card, a hairline between its rows. */
@@ -1412,19 +1305,51 @@
   .ruecksetzer:hover {
     color: var(--text);
   }
-  .layoutknopf {
+  /* The heading over the row of looks. */
+  .abschnitt {
+    margin: 0 0 10px;
+  }
+  .unterteil {
+    margin-top: 20px;
+  }
+  /* The sample under the settings of the look: a block of code on the
+     ground the chosen colour pack gives it, over the whole width. */
+  .code-sample {
+    box-sizing: border-box;
+    margin: 16px 0 0;
+    padding: 20px 24px;
+    border-radius: 9px;
+    background: var(--code-grund);
+    font: 13px/1.65 var(--schrift-fest);
+    overflow: auto;
+  }
+  .code-sample code {
+    white-space: pre;
+  }
+  /* A button with a sign and no word: the layout mode's way in and the foot
+     of the text pages (cancel, save). */
+  .symbolknopf {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
-    font: inherit;
-    font-size: 13px;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
     color: var(--text);
     background: var(--glass-button);
     box-shadow: inset 0 0 0 1px var(--feldstrich);
     border: none;
     border-radius: 9px;
-    padding: 8px 12px;
     cursor: pointer;
+  }
+  .symbolknopf:hover {
+    background: var(--glass-hover);
+  }
+  .symbolknopf:active {
+    transform: scale(0.95);
+  }
+  .symbolknopf:focus-visible {
+    outline: 2px solid var(--text);
+    outline-offset: 2px;
   }
   /* The reset's place is held from the start: the entry it clears is made
      mid-drag, and a button inserted in that moment would shift the track
@@ -1441,6 +1366,20 @@
     display: flex;
     flex-direction: column;
   }
+  /* The configuration and the credentials fill the page down to the foot,
+     and the field ends this far above it. */
+  .editorboden.file {
+    margin-bottom: 18px;
+  }
+  /* The tools file: a field of 420 that scrolls in itself (4 of padding and
+     1 of rim on each side of the text area), and the room that is left stands
+     at the foot, where more keys will come. */
+  .editorboden.tools {
+    flex: none;
+  }
+  .editorboden.tools :global(.feld.block textarea) {
+    height: 410px;
+  }
   .fuss {
     display: flex;
     align-items: center;
@@ -1452,12 +1391,22 @@
   .rechts {
     display: flex;
     gap: 8px;
+    flex: none;
   }
-  /* The foot's buttons are the house button (`.button`, stil/global.css);
-     only the press is this page's own. */
-  .button:active:not(:disabled) {
-    transform: scale(0.975);
+  /* The answer of a save in the foot: quiet text, brightness only; the
+     caution (saved but not applied) takes the quiet yellow of the house. */
+  .save-note {
+    flex: 1;
+    min-width: 0;
+    padding-right: 16px;
+    font-size: 12.5px;
+    line-height: 1.4;
+    color: var(--text-leise);
   }
+  .save-note.caution {
+    color: var(--gelb-text);
+  }
+
   .textknopf {
     border: none;
     background: none;

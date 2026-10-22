@@ -108,6 +108,11 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    /* The mark is out of the flow, so the gap above does not reach it. Its
+       outer form ends 6.2 px left of where the row's content begins (24 px
+       wide from -29 px, the frame runs to 76 of 80); 6.8 px of padding make
+       up the 13 px a dot of the line keeps from its text. */
+    padding-left: 6.8px;
     height: 20px;
     font-size: 12.5px;
     line-height: 20px;

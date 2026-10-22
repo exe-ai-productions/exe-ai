@@ -45,7 +45,7 @@
     </div>
   {:else}
     <div class="kopf tafelkopf">
-      <span>{titel}</span>
+      <span class="kopftitel">{titel}</span>
       {#if rechts}
         <span class="kopfknoepfe">{@render rechts()}</span>
       {/if}
@@ -72,7 +72,16 @@
     gap: 8px;
     min-width: 0;
   }
+  /* A head is one line: the title ends with an ellipsis when the buttons
+     leave it too little room, and the buttons stay whole. */
+  .kopftitel {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .kopfknoepfe {
+    flex: none;
     margin-left: auto;
     display: inline-flex;
     align-items: center;
@@ -328,6 +337,6 @@
   }
   /* Colour means state: the house's "caution" tone for a known crash. */
   .karte :global(.hinweis.vorsicht) {
-    color: var(--gelb);
+    color: var(--gelb-text);
   }
 </style>

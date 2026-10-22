@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from itertools import islice
 from typing import Any, AsyncIterator, Callable, Iterable
 
-from app import prozessstopp
+from app import prozessstopp, shutdown
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +65,9 @@ MAX_EREIGNISSE = 5_000
 # drop the connection. Read inside zuschauen() itself —
 # see the docstring there for why it cannot live in the caller instead.
 HERZSCHLAG_SEKUNDEN = 20.0
+
+# Put to every watcher when the service begins to end (see ``close_watchers``).
+_ENDE = object()
 
 # How long a background run may take before it is stopped. The foreground has
 # two minutes; a background run is meant for the long things, but not for
@@ -468,6 +471,8 @@ class Laufverwaltung:
         try/except around one ``await`` — nothing above it is ever touched,
         and the loop simply continues.
         """
+        if shutdown.begun():
+            return
         schlange: asyncio.Queue = asyncio.Queue()
         self._zuschauer.setdefault(chat_id, set()).add(schlange)
         verlauf = self._ereignisse.get(chat_id, ())
@@ -482,13 +487,24 @@ class Laufverwaltung:
                 yield ereignis
             while True:
                 try:
-                    yield await asyncio.wait_for(
+                    ereignis = await asyncio.wait_for(
                         schlange.get(), timeout=herzschlag_sekunden
                     )
                 except asyncio.TimeoutError:
                     yield None
+                    continue
+                if ereignis is _ENDE:
+                    return
+                yield ereignis
         finally:
             self._zuschauer.get(chat_id, set()).discard(schlange)
+
+    def close_watchers(self) -> None:
+        """The service begins to end: every line ends now (see
+        ``Ereignisstrom.close_watchers``)."""
+        for gruppe in self._zuschauer.values():
+            for schlange in list(gruppe):
+                schlange.put_nowait(_ENDE)
 
     # --- The kill switch --------------------------------------------------
 

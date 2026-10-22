@@ -62,7 +62,7 @@
   <div class="innen">
     <div class="liste">
       {#each stile.liste as eintrag, i (eintrag.id)}
-        <button class:an={i === gewaehlt} onclick={() => (gewaehlt = i)}>{eintrag.name || '—'}</button>
+        <button class:an={i === gewaehlt} onclick={() => (gewaehlt = i)}>{eintrag.name || '-'}</button>
       {/each}
       <!-- Nothing is added to a list that could not be read. -->
       <button class="neu" onclick={neu} disabled={!stile.geladen}>

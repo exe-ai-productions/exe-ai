@@ -1202,7 +1202,7 @@ def test_die_weiche_lesung_ist_benannt():
       knows: `antwort.ergebnis`, `gespraechZustand`, `index`, `uuid4()`,
       `kennung.toUpperCase()`
     * a parameter the CALLERS fill (`grund`, `fall`, `code`, `sorte`, `wert`,
-      `bereich`, `eintrag`, `name`, `key` in the switch helpers — the switch
+      `bereich`, `eintrag`, `name`, `stand` of the MCP cards, `key` in the switch helpers — the switch
       keys themselves are read strictly, over `bild.sw_${row.key}`;
       `serverName`, whose lines test_serverkatalog.py holds against the
       shipped servers name by name)
@@ -1239,6 +1239,7 @@ def test_die_weiche_lesung_ist_benannt():
         "sprache.gespraech_${gespraechZustand}",
         "sprache.name_${code}",
         "systemprompt.${fall}",
+        "verbindungen.stand_${stand}",
         "verbindungen.zweck.${serverName}",
         "werkzeuge.${fall}",
     ]

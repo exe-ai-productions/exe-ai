@@ -17,26 +17,26 @@ deprecated in the build we ship and `--load-mode mlock` is what replaced it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
-# What the KV cache may be stored as. Just the engine's own default and the
-# one quantized step worth taking: q8_0 halves the cache at essentially no
-# quality loss once flash attention is on, which it always is now (auto).
-# bf16/f32 buy nothing, and q4_0 loses more than the halving is worth — so
-# there is no third step to choose between, only a switch.
-KV_TYPEN = ("f16", "q8_0")
+# What the KV cache may be stored as: the engine's own default (16 bit) and
+# the three quantized steps it offers for K and V together. A smaller cache
+# fits a longer window on the same memory and costs some quality the further
+# down it goes; the choice is the user's, so every step is there.
+KV_TYPEN = ("f16", "q8_0", "q5_0", "q4_0")
 KV_VORGABE = "f16"
 
-# Flash attention has no control in the window any more — the engine's
-# "auto" decides. Keeping only "auto" valid means a stored "on"/"off" from
-# an older version is clamped away by aus_daten instead of riding along
-# forever with no switch left to change it.
-FA_WERTE = ("auto",)
+# Flash attention: the engine decides ("auto", the default), or it is forced
+# on or off. A quantized V cache needs it, so "off" only stands with the
+# 16-bit cache — `aus_daten` brings the pair into agreement.
+FA_WERTE = ("auto", "on", "off")
 FA_VORGABE = "auto"
 
-# The cache step an older version offered and this one does not: whoever
-# stored it was saving memory on purpose, so it maps to the surviving
-# saving step, not to the biggest cache.
-KV_ALT = {"q4_0": "q8_0"}
+# Where the chat template of a model comes from: the template the model file
+# carries (the default, nothing is passed), or a copy of it the user edited
+# (`--chat-template-file`).
+VORLAGE_WERTE = ("model", "file")
+VORLAGE_VORGABE = "model"
 
 # A thread count nobody would type on purpose. Above this the engine is being
 # asked to fight itself for cores.
@@ -48,6 +48,12 @@ MAX_FAEDEN = 256
 # the shipped build: unset, the server picks its own count ("auto").
 MAX_PARALLEL = 64
 
+# The idle time (`--sleep-idle-seconds`) is a whole number of seconds the
+# engine reads as a 32-bit integer: 2147483647 starts, 2147483648 is refused
+# (measured on the shipped build). The page says minutes, so the ceiling is
+# the last whole minute below it.
+MAX_IDLE_MINUTES = 2147483647 // 60
+
 
 @dataclass
 class Feineinstellungen:
@@ -55,6 +61,10 @@ class Feineinstellungen:
 
     kv_cache: str = KV_VORGABE
     flash_attention: str = FA_VORGABE
+    # The chat template: the model's own, or the edited copy named below. The
+    # copy is only passed while it exists.
+    chat_template: str = VORLAGE_VORGABE
+    chat_template_file: str = ""
     # None means: let the engine decide, which is what it does best.
     faeden: int | None = None
     # How many layers' worth of Mixture-of-Experts weights stay on the CPU.
@@ -74,6 +84,11 @@ class Feineinstellungen:
     # Only said on the command line together with a slot count: with the
     # engine's own "auto" count it switches itself on.
     kv_unified: bool = True
+    # Minutes without a request after which the server frees its model
+    # (`--sleep-idle-seconds`); the process stays and the next request loads
+    # it again. None means never — what every start did before this lever
+    # existed.
+    idle_minutes: int | None = None
 
     @classmethod
     def aus_daten(cls, daten: dict | None) -> "Feineinstellungen":
@@ -87,8 +102,17 @@ class Feineinstellungen:
         """
         d = daten or {}
         kv = str(d.get("kv_cache") or KV_VORGABE)
-        kv = KV_ALT.get(kv, kv)
+        kv = kv if kv in KV_TYPEN else KV_VORGABE
         fa = str(d.get("flash_attention") or FA_VORGABE)
+        fa = fa if fa in FA_WERTE else FA_VORGABE
+        # Off with a quantized cache is a command the engine refuses to
+        # start with: the pair is brought back to what can run.
+        if fa == "off" and kv != KV_VORGABE:
+            fa = FA_VORGABE
+        vorlage = str(d.get("chat_template") or VORLAGE_VORGABE)
+        vorlage = vorlage if vorlage in VORLAGE_WERTE else VORLAGE_VORGABE
+        datei = d.get("chat_template_file")
+        datei = datei if isinstance(datei, str) else ""
         faeden = d.get("faeden")
         try:
             faeden = None if faeden in (None, "", 0) else max(1, min(MAX_FAEDEN, int(faeden)))
@@ -108,29 +132,44 @@ class Feineinstellungen:
             )
         except (TypeError, ValueError):
             parallel = None
+        idle = d.get("idle_minutes")
+        try:
+            idle = (
+                None
+                if idle in (None, "", 0)
+                else max(1, min(MAX_IDLE_MINUTES, int(idle)))
+            )
+        except (TypeError, ValueError):
+            idle = None
         # Missing is the shipped answer (on); only a stored false turns it off.
         unified = d.get("kv_unified")
         return cls(
-            kv_cache=kv if kv in KV_TYPEN else KV_VORGABE,
-            flash_attention=fa if fa in FA_WERTE else FA_VORGABE,
+            kv_cache=kv,
+            flash_attention=fa,
+            chat_template=vorlage,
+            chat_template_file=datei,
             faeden=faeden,
             moe_auf_cpu=bool(d.get("moe_auf_cpu")),
             moe_schichten=schichten,
             festnageln=bool(d.get("festnageln")),
             parallel=parallel,
             kv_unified=True if unified is None else bool(unified),
+            idle_minutes=idle,
         )
 
     def als_daten(self) -> dict:
         return {
             "kv_cache": self.kv_cache,
             "flash_attention": self.flash_attention,
+            "chat_template": self.chat_template,
+            "chat_template_file": self.chat_template_file,
             "faeden": self.faeden,
             "moe_auf_cpu": self.moe_auf_cpu,
             "moe_schichten": self.moe_schichten,
             "festnageln": self.festnageln,
             "parallel": self.parallel,
             "kv_unified": self.kv_unified,
+            "idle_minutes": self.idle_minutes,
         }
 
 
@@ -148,6 +187,16 @@ def flags(einstellungen: Feineinstellungen | None) -> list[str]:
 
     if einstellungen.flash_attention != FA_VORGABE:
         zeile += ["--flash-attn", einstellungen.flash_attention]
+
+    # The edited copy of the template, while it is there: a path that has
+    # gone makes the engine refuse to start, so a missing copy falls back to
+    # the template of the model file.
+    if (
+        einstellungen.chat_template == "file"
+        and einstellungen.chat_template_file
+        and Path(einstellungen.chat_template_file).is_file()
+    ):
+        zeile += ["--chat-template-file", einstellungen.chat_template_file]
 
     if einstellungen.faeden:
         zeile += ["--threads", str(einstellungen.faeden)]
@@ -171,6 +220,10 @@ def flags(einstellungen: Feineinstellungen | None) -> list[str]:
             "--parallel", str(einstellungen.parallel),
             "--kv-unified" if einstellungen.kv_unified else "--no-kv-unified",
         ]
+
+    # Unset stays unsaid: the server then never frees its model by itself.
+    if einstellungen.idle_minutes:
+        zeile += ["--sleep-idle-seconds", str(einstellungen.idle_minutes * 60)]
 
     return zeile
 

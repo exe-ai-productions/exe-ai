@@ -465,9 +465,12 @@ def _geprueft(argumente: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         elif aussen == "steps":
             geprueft = bildwahlen.schritte_pruefen(roh)
         elif aussen == "sampler":
-            geprueft = bildwahlen.sampler_pruefen(str(roh)) or None
+            # A name the program does not know is refused, never swapped for
+            # another: the picture route falls back to its own, the model
+            # would not hear of it.
+            geprueft = str(roh) if str(roh) in bildwahlen.SAMPLER else None
         elif aussen == "scheduler":
-            geprueft = bildwahlen.scheduler_pruefen(str(roh)) or None
+            geprueft = str(roh) if str(roh) in bildwahlen.SCHEDULER else None
         elif aussen == "seed":
             try:
                 geprueft = int(roh)
@@ -521,12 +524,18 @@ async def draw_with_window(
     # route clamping the same value again changes nothing).
     werte, unbrauchbar = _geprueft(argumente)
     if unbrauchbar:
-        return (
+        refusal = (
             "The image was not generated because these values were invalid: "
             + ", ".join(unbrauchbar)
             + ". Provide numbers and a supported sampler or scheduler, or omit them to use "
               "the image model's start values."
         )
+        # The valid names of a refused field, so the next try can be right.
+        if "sampler" in unbrauchbar:
+            refusal += " Supported samplers: " + ", ".join(bildwahlen.SAMPLER) + "."
+        if "scheduler" in unbrauchbar:
+            refusal += " Supported schedulers: " + ", ".join(bildwahlen.SCHEDULER) + "."
+        return refusal
 
     # Every sentence this tool reads back comes from the picture route, and
     # the picture route writes them in the language the interface is set to
@@ -895,6 +904,8 @@ async def _draw(
         koerper["vae_format"] = start.vae_format
     if start.rng:
         koerper["rng"] = start.rng
+    if start.sigmas:
+        koerper["sigmas"] = start.sigmas
     if start.switches:
         koerper["switches"] = dict(start.switches)
     # What belongs to the model itself goes along; its kit the draw route
@@ -931,6 +942,11 @@ async def _draw(
         if name is None:
             return refusal
         koerper[field] = [name] if field == "ref_bilder" else name
+        if field == "startbild":
+            # Left to the route's own value the start picture would be
+            # painted over completely and the result would have nothing to
+            # do with it.
+            koerper["staerke"] = bildwahlen.PICTURE_STRENGTH
     # Every request goes through the prompt preparation, the same one the
     # studio's button asks: a language model writes the prompt for
     # this family. When it does not answer, the picture is drawn with the

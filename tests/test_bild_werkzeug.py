@@ -7,9 +7,11 @@ import asyncio
 import httpx
 import pytest
 
+from app import bildwahlen
 from app.tools import bild_werkzeug
 from app.tools.registry import WerkzeugRegistry
 from tests.conftest import NOT_JSON, Antwort, Bilddienst
+from tests.test_draw_image_in_chat import _draw_from
 
 
 def test_registry_bietet_draw_image_mit_zugang(tmp_path):
@@ -828,7 +830,7 @@ class _ZeichnetBisStopp(Bilddienst):
             self.gezeichnet.append(json)
             self.angefangen.set()
             await self._beendet.wait()
-            return Antwort({"detail": "Image generation cancelled"}, 499)
+            return Antwort({"detail": "Image generation canceled"}, 499)
         return await super().post(url, json=json, **_)
 
 
@@ -857,14 +859,14 @@ def test_a_stop_during_the_drawing_ends_the_picture(tmp_path, monkeypatch):
     the tool does not wait out the picture for a run that is over."""
     dienst = _ZeichnetBisStopp()
     text = _zeichnen_und_stoppen(tmp_path, monkeypatch, dienst)
-    assert text == "The image could not be generated: Image generation cancelled"
+    assert text == "The image could not be generated: Image generation canceled"
     assert dienst.stopps == 1
 
 
 def test_a_stop_that_came_before_the_painter_started_is_sent_again(tmp_path, monkeypatch):
     dienst = _ZeichnetBisStopp(stopps_noetig=3)
     text = _zeichnen_und_stoppen(tmp_path, monkeypatch, dienst)
-    assert text == "The image could not be generated: Image generation cancelled"
+    assert text == "The image could not be generated: Image generation canceled"
     assert dienst.stopps == 3
 
 
@@ -879,7 +881,7 @@ def test_a_stop_before_the_request_draws_nothing(tmp_path, monkeypatch):
             chat_id="c1", abbruch=abbruch,
         )
     )
-    assert text == "The image could not be generated: Image generation cancelled"
+    assert text == "The image could not be generated: Image generation canceled"
     assert dienst.gezeichnet == []
     assert dienst.stopps == 0
 
@@ -927,7 +929,7 @@ def test_a_stop_during_the_prompt_preparation_ends_the_run_at_once(tmp_path, mon
         abbruch.set()
         return await asyncio.wait_for(aufgabe, timeout=5)
 
-    assert asyncio.run(lauf()) == "The image could not be generated: Image generation cancelled"
+    assert asyncio.run(lauf()) == "The image could not be generated: Image generation canceled"
     assert dienst.gezeichnet == []
 
 
@@ -1072,3 +1074,45 @@ def test_in_a_chat_the_result_says_the_picture_hangs_on_the_answer_already(tmp_p
     assert ".png" in in_chat.split("saved as ", 1)[1]
     # Silence probe: the job's result is as it was.
     assert sentence not in in_job
+
+
+# --- The strength an input picture goes out with --------------------------------
+
+
+def _drawn_body(tmp_path, monkeypatch, *, family: str, with_picture: bool = True) -> dict:
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "dog.png").write_bytes(b"PNG-bytes-of-a-dog")
+    named = str(shared / "dog.png") if with_picture else ""
+    dienst, call = _draw_from(tmp_path, monkeypatch, named, folders=[shared], family=family)
+    asyncio.run(call())
+    return dienst.gezeichnet[-1]
+
+
+def test_an_input_picture_goes_out_with_the_studio_strength(tmp_path, monkeypatch):
+    """A family that draws picture to picture starts from the picture; it goes
+    out at the strength the studio gives a picture in its area, not at 1."""
+    body = _drawn_body(tmp_path, monkeypatch, family="sdxl")
+    assert body["startbild"] == "handed-in.png"
+    assert body["staerke"] == 0.6 == bildwahlen.PICTURE_STRENGTH
+
+
+def test_an_unknown_family_counts_as_one_that_starts_from_the_picture(tmp_path, monkeypatch):
+    body = _drawn_body(tmp_path, monkeypatch, family="a-family-nobody-knows")
+    assert body["startbild"] == "handed-in.png"
+    assert body["staerke"] == 0.6
+
+
+def test_silence_probe_an_editing_family_gets_a_reference_and_no_strength(tmp_path, monkeypatch):
+    body = _drawn_body(tmp_path, monkeypatch, family="flux2")
+    assert body["ref_bilder"] == ["handed-in.png"]
+    assert "staerke" not in body and "startbild" not in body
+
+
+def test_silence_probe_without_an_input_picture_no_strength_travels(tmp_path, monkeypatch):
+    body = _drawn_body(tmp_path, monkeypatch, family="sdxl", with_picture=False)
+    assert "staerke" not in body and "startbild" not in body
+
+
+def test_silence_probe_the_route_default_stays_one():
+    assert bildwahlen.STAERKE_VORGABE == 1.0

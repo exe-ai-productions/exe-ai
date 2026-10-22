@@ -186,21 +186,18 @@ def test_the_guidance_follows_the_model_and_the_tools():
 def test_the_execution_lines_name_only_this_runs_tools():
     """A line whose tool is not in this run is dropped, and the names are
     this program's — never a foreign terminal or execute_code."""
-    read_only = grundprompt.execution_discipline({"read_file"}, memory_travels=False)
+    read_only = grundprompt.execution_discipline({"read_file"})
     assert "run_command" not in read_only
     assert "get_current_time" not in read_only
     assert "terminal" not in read_only and "execute_code" not in read_only
     assert "use read_file" in read_only
-    assert "memory describes the USER" not in read_only
     # Silence probe: the full set keeps every line.
     full = grundprompt.execution_discipline(
-        {"read_file", "search_files", "run_command", "get_current_time", "web_search"},
-        memory_travels=True,
+        {"read_file", "search_files", "run_command", "get_current_time", "web_search"}
     )
     assert "use read_file, search_files, or run_command" in full
     assert "→ use get_current_time" in full
     assert "use a web search tool" in full
-    assert "memory describes the USER" in full
 
 
 def test_the_overview_names_only_this_runs_tools():

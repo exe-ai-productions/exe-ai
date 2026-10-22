@@ -19,6 +19,7 @@ from app.api.v1 import (
     bild,
     bilder,
     bildprompt,
+    checkpoints,
     dateien,
     dateisystem,
     auftraege,
@@ -45,6 +46,8 @@ from app.api.v1 import (
     speicherorte,
     sprachserver,
     systemprompt,
+    throughput,
+    web_app,
     werkzeuge,
 )
 
@@ -64,6 +67,8 @@ router.include_router(einbettungsserver.router)
 router.include_router(sprachserver.router)
 router.include_router(bereinigungsserver.router)
 router.include_router(agentenserver.router)
+router.include_router(throughput.router)
+router.include_router(web_app.router)
 router.include_router(werkzeuge.router)
 router.include_router(berechtigungen.router)
 router.include_router(dateien.router)
@@ -91,5 +96,6 @@ router.include_router(ordnerwissen.router)
 router.include_router(agentendock.router)
 router.include_router(auftraege.router)
 router.include_router(cronjobs.router)
+router.include_router(checkpoints.router)
 
 __all__ = ["router"]

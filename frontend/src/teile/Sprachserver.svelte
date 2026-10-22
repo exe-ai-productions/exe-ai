@@ -17,16 +17,18 @@
      (app/diktatsprachewahl.py) — the service is what uses them, on every
      single request, and a copy kept in this page would be read by nobody. */
   import { api } from '../lib/api.js'
+  import { pollWithoutOverlap } from '../lib/pollWithoutOverlap.js'
   import { t, texte } from '../lib/texte.svelte.js'
   import { fractionDigits, formatNumber } from '../lib/numberDisplay.js'
-  import { katalogOeffnen, melde } from '../lib/zustand.svelte.js'
+  import { katalogOeffnen, melde, frage } from '../lib/zustand.svelte.js'
   import { diktat, schreibenAbwarten, standLaden, werteSetzen } from '../lib/diktat.svelte.js'
   import { createDelayedWriter } from '../lib/delayedWriter.js'
+  import { aufnahme, starten as aufnahmeStarten, stoppen as aufnahmeStoppen, fehlerschluessel } from '../lib/aufnahme.svelte.js'
   import { SPRACHEN } from '../lib/diktatsprachen.js'
   import { STIMMSPRACHEN } from '../lib/stimmsprachen.js'
   import Servertafel from './Servertafel.svelte'
+  import { serverHead } from '../lib/serverHead.svelte.js'
   import Serverregler from './Serverregler.svelte'
-  import Startknopf from './Startknopf.svelte'
   import Startfehler from './Startfehler.svelte'
   import Hauszeichen from './Hauszeichen.svelte'
   import Serverabschnitt from './Serverabschnitt.svelte'
@@ -44,6 +46,8 @@
     oeffneProtokoll,
     setzeProtokollZeilen,
   } from '../lib/protokollfenster.svelte.js'
+  import { entryMark, entrySize } from '../lib/modelEntry.js'
+  import { serverAnteil } from '../lib/speicherschaetzung.js'
 
   const kontextstufen = [2048, 4096, 8192, 16384, 32768]
   const MAX_SCHICHTEN = 99
@@ -86,6 +90,10 @@
     strafe: t('sprachserver.feld_strafe'),
   })
 
+  /* What this page hands up to the page head (ModelleLokal.svelte), which draws
+     it: the start button, the short line beside the name and the port. */
+  let { head = $bindable(null) } = $props()
+
   let auskunft = $state(null)
   let gewaehlt = $state('')
   let arbeitet = $state(false)
@@ -106,6 +114,8 @@
   /* `null` is "Auto": no layer count is sent. */
   let schichten = $state(null)
   let faeden = $state(0)
+  // Minutes without a request after which the server frees its model; null is never.
+  let idle = $state(null)
   let werteGesetzt = false
 
   /* The dictation fields, mirrored into the page so the controls can bind to
@@ -124,6 +134,10 @@
   /* Seconds of silence before a spoken sentence is sent. `null`: nothing
      stored, the field says "Auto" and the service goes by its works number. */
   let pauseSeconds = $state(null)
+  /* Seconds a round of the conversation waits for the first word, and how
+     many rounds without one end it; `null` likewise means the works number. */
+  let waitSeconds = $state(null)
+  let silentRoundsCount = $state(null)
   let automatikwahl = $state(false)
   let stimmewahl = $state('')
   let stimmprobewahl = $state('')
@@ -136,6 +150,10 @@
      and a value read from it while the hand is on a slider would move under
      it. */
   let stimmregler = $state({ temperatur: 0.9, top_k: 50, top_p: 1, min_p: 0, strafe: 1.05 })
+  /* "Auto" is `null` in the field and the word in the setting: the program of
+     the voice takes its own value, and the slider rests where that value is
+     (`werkAuto`, from the service). */
+  let werkAuto = $state({ temperatur: 0.8, top_k: 40, top_p: 0.95, min_p: 0.05, strafe: 1.05 })
   let stimmSchichten = $state(null)
   let stimmFaeden = $state(0)
   let werkStimm = null
@@ -147,43 +165,65 @@
   let werkStart = {}
   let gespiegelt = false
 
+  /* A voice value as the field shows it: what is stored, else the works
+     answer; the stored word "auto" is an empty field. */
+  function reglerWert(gespeichert, werk) {
+    return gespeichert === 'auto' ? null : (gespeichert ?? werk)
+  }
+  function reglerAusSpeicher() {
+    return {
+      temperatur: reglerWert(diktat.stimmtemperatur, werkStimm.temperatur),
+      top_k: reglerWert(diktat.stimmtop_k, werkStimm.top_k),
+      top_p: reglerWert(diktat.stimmtop_p, werkStimm.top_p),
+      min_p: reglerWert(diktat.stimmmin_p, werkStimm.min_p),
+      strafe: reglerWert(diktat.stimmstrafe, werkStimm.strafe),
+    }
+  }
+
+  /* What a failed read reported last, so a failure that lasts is said once
+     and not every few seconds; a read that gets through clears it, so the
+     same failure returning later is news again. The answer before it stays
+     on the page — a server shown as stopped because one read failed is a
+     wrong picture, not a quiet one. */
+  let letzterFehler = null
+
   async function laden() {
     try {
       auskunft = await api.spracheAuskunft()
-    } catch {
-      auskunft = null
-      return
-    }
-    if (!gewaehlt || !auskunft.modelle.some((m) => m.name === gewaehlt)) {
-      gewaehlt = auskunft.modell || auskunft.modelle[0]?.name || ''
-    }
-    /* From whatever is running, because that is the truth about this server;
-       otherwise once, from the works answers it sends along. Re-reading on
-       every poll would pull a slider out from under the hand. */
-    if (auskunft.laeuft) {
-      port = auskunft.port ?? port
-      kontext = auskunft.kontext ?? kontext
-      schichten = auskunft.schichten ?? null
-      faeden = auskunft.threads ?? 0
-      werteGesetzt = true
-    } else if (!werteGesetzt) {
-      const v = auskunft.vorgaben ?? {}
-      port = auskunft.port ?? port
-      kontext = v.kontext ?? kontext
-      schichten = v.schichten ?? null
-      faeden = v.threads ?? 0
-      werteGesetzt = true
-    }
-    if (protokollAuf || protokollOffen()) {
-      protokoll = await api.spracheProtokoll()
+      if (!gewaehlt || !auskunft.modelle.some((m) => m.name === gewaehlt)) {
+        gewaehlt = auskunft.modell || auskunft.modelle[0]?.name || ''
+      }
+      /* From whatever is running, because that is the truth about this server;
+         otherwise once, from the works answers it sends along. Re-reading on
+         every poll would pull a slider out from under the hand. */
+      if (auskunft.laeuft) {
+        port = auskunft.port ?? port
+        kontext = auskunft.kontext ?? kontext
+        schichten = auskunft.schichten ?? null
+        faeden = auskunft.threads ?? 0
+        werteGesetzt = true
+      } else if (!werteGesetzt) {
+        const v = auskunft.vorgaben ?? {}
+        port = auskunft.port ?? port
+        kontext = v.kontext ?? kontext
+        schichten = v.schichten ?? null
+        faeden = v.threads ?? 0
+        werteGesetzt = true
+      }
+      if (protokollAuf || protokollOffen()) {
+        protokoll = await api.spracheProtokoll()
+      }
+      letzterFehler = null
+    } catch (fehler) {
+      if (fehler.message !== letzterFehler) melde(fehler.message, 'fehler')
+      letzterFehler = fehler.message
     }
   }
 
   $effect(() => {
     standLaden()
     laden()
-    const takt = setInterval(laden, 3000)
-    return () => clearInterval(takt)
+    return pollWithoutOverlap(laden, 3000)
   })
 
   /* Both halves have to be in before the fields can be filled: the stored
@@ -202,8 +242,12 @@
     // The service says what the works answer is (off on a small machine); nothing is assumed here.
     keepModelLoaded = diktat.keep_model_in_memory ?? werk.keep_model_in_memory ?? false
     pauseSeconds = diktat.conversation_pause_seconds
+    waitSeconds = diktat.conversation_wait_seconds
+    silentRoundsCount = diktat.conversation_silent_rounds
     automatikwahl = diktat.automatik ?? werk.automatik ?? false
-    stimmewahl = diktat.stimme ?? ''
+    // `??`: a stored empty choice ("-") is an answer, nothing stored is the
+    // voice of the system this machine starts with.
+    stimmewahl = diktat.stimme ?? werk.stimme ?? ''
     stimmprobewahl = diktat.stimmprobe ?? ''
     stimmsprachwahl = diktat.stimmsprache ?? ''
     gespraechsanweisungstext = diktat.gespraechsanweisung || werk.gespraechsanweisung || ''
@@ -216,13 +260,15 @@
     }
     werkSchichten = werk.stimmschichten ?? null
     werkFaeden = werk.stimmfaeden
-    stimmregler = {
-      temperatur: diktat.stimmtemperatur ?? werkStimm.temperatur,
-      top_k: diktat.stimmtop_k ?? werkStimm.top_k,
-      top_p: diktat.stimmtop_p ?? werkStimm.top_p,
-      min_p: diktat.stimmmin_p ?? werkStimm.min_p,
-      strafe: diktat.stimmstrafe ?? werkStimm.strafe,
+    const auto = werk.stimmauto ?? {}
+    werkAuto = {
+      temperatur: auto.stimmtemperatur ?? werkAuto.temperatur,
+      top_k: auto.stimmtop_k ?? werkAuto.top_k,
+      top_p: auto.stimmtop_p ?? werkAuto.top_p,
+      min_p: auto.stimmmin_p ?? werkAuto.min_p,
+      strafe: auto.stimmstrafe ?? werkAuto.strafe,
     }
+    stimmregler = reglerAusSpeicher()
     stimmSchichten = diktat.stimmschichten ?? werkSchichten
     stimmFaeden = diktat.stimmfaeden ?? werkFaeden
     /* The server's start values: what is stored, else the works answer. A
@@ -235,12 +281,14 @@
       speech_gpu_layers: v.schichten ?? null,
       speech_threads: v.threads ?? 0,
       speech_port: auskunft.port ?? 8084,
+      speech_idle_minutes: null,
     }
     if (!auskunft.laeuft) {
       port = diktat.speech_port ?? werkStart.speech_port
       kontext = diktat.speech_context ?? werkStart.speech_context
       schichten = diktat.speech_gpu_layers ?? werkStart.speech_gpu_layers
       faeden = diktat.speech_threads ?? werkStart.speech_threads
+      idle = diktat.speech_idle_minutes ?? werkStart.speech_idle_minutes
       if (diktat.speech_model && auskunft.modelle.some((m) => m.name === diktat.speech_model)) {
         gewaehlt = diktat.speech_model
       }
@@ -310,7 +358,8 @@
     writer.plan('stimmregler', () => {
       const nachtrag = {}
       for (const { knopf, schluessel } of PARAMETER) {
-        const wert = stimmregler[knopf]
+        // An empty field is "Auto", stored as the word.
+        const wert = stimmregler[knopf] ?? 'auto'
         if (wert === diktat[schluessel]) continue
         if (diktat[schluessel] === null && wert === werkStimm[knopf]) continue
         nachtrag[schluessel] = wert
@@ -320,13 +369,7 @@
         melde(t('fehler.einstellung_speichern'), 'fehler')
         // Back to what is stored: left standing, the value would differ
         // from the store again and the effect would retry for ever.
-        stimmregler = {
-          temperatur: diktat.stimmtemperatur ?? werkStimm.temperatur,
-          top_k: diktat.stimmtop_k ?? werkStimm.top_k,
-          top_p: diktat.stimmtop_p ?? werkStimm.top_p,
-          min_p: diktat.stimmmin_p ?? werkStimm.min_p,
-          strafe: diktat.stimmstrafe ?? werkStimm.strafe,
-        }
+        stimmregler = reglerAusSpeicher()
       })
     })
   })
@@ -378,6 +421,36 @@
     )
   })
 
+  /* How long a round waits and how many silent rounds end the conversation,
+     written the same way: an empty field takes the stored number away. */
+  $effect(() => {
+    const value = waitSeconds
+    writer.cancel('wait')
+    if (!gespiegelt || value === diktat.conversation_wait_seconds) return
+    if (value !== null && Math.round(value * 10) / 10 !== value) {
+      waitSeconds = Math.round(value * 10) / 10
+      return
+    }
+    writer.plan('wait', () =>
+      werteSetzen({ conversation_wait_seconds: value }).catch(() => {
+        melde(t('fehler.einstellung_speichern'), 'fehler')
+        waitSeconds = diktat.conversation_wait_seconds
+      }),
+    )
+  })
+
+  $effect(() => {
+    const value = silentRoundsCount
+    writer.cancel('rounds')
+    if (!gespiegelt || value === diktat.conversation_silent_rounds) return
+    writer.plan('rounds', () =>
+      werteSetzen({ conversation_silent_rounds: value }).catch(() => {
+        melde(t('fehler.einstellung_speichern'), 'fehler')
+        silentRoundsCount = diktat.conversation_silent_rounds
+      }),
+    )
+  })
+
   /* The server's start values — its file, context, GPU layers, threads and
      port — written as they are touched, one key each, so the next start and
      the next opening of this window find them. Only while the server is
@@ -390,6 +463,7 @@
     speech_gpu_layers: { aus: () => schichten, zurueck: (w) => (schichten = w) },
     speech_threads: { aus: () => faeden, zurueck: (w) => (faeden = w) },
     speech_port: { aus: () => port, zurueck: (w) => (port = w) },
+    speech_idle_minutes: { aus: () => idle, zurueck: (w) => (idle = w) },
   }
   $effect(() => {
     const jetzt = Object.fromEntries(Object.entries(STARTWERTE).map(([name, f]) => [name, f.aus()]))
@@ -422,6 +496,147 @@
     }
   }
 
+  /* ——— The voice sample: recorded, played and deleted from here ———
+     A recording is made with the dictation's own recorder
+     (lib/aufnahme.svelte.js) and kept by the service in the speech model
+     folder, which also chooses it. While the dictation holds the microphone
+     the record button is locked. */
+  let probeNimmtAuf = $state(false)
+  /* True from the moment the recorder really runs for us. */
+  let probeBegonnen = $state(false)
+  let probeSpielt = $state(false)
+  let probeAudio = null
+  let probeUrl = null
+  const diktatBelegt = $derived(aufnahme.laeuft && !probeNimmtAuf)
+  const probeName = $derived(stimmprobewahl && (auskunft?.stimmproben ?? []).includes(stimmprobewahl) ? stimmprobewahl : '')
+
+  /** Seconds as m:ss. */
+  function minutenSekunden(sekunden) {
+    const ganz = Math.round(sekunden)
+    return `${Math.floor(ganz / 60)}:${String(ganz % 60).padStart(2, '0')}`
+  }
+
+  const probeZeile = $derived(
+    probeNimmtAuf
+      ? minutenSekunden(aufnahme.sekunden)
+      : probeName
+        ? `${probeName}${auskunft?.stimmproben_dauer?.[probeName] != null ? ` · ${minutenSekunden(auskunft.stimmproben_dauer[probeName])}` : ''}`
+        : '-',
+  )
+
+  function probeGewaehlt(name) {
+    stimmprobewahl = name
+    diktat.stimmprobe = name
+  }
+
+  async function probeAufnehmen() {
+    if (probeNimmtAuf || probeSpielt || diktatBelegt) return
+    probeNimmtAuf = true
+    try {
+      await aufnahmeStarten(probeBeenden)
+    } catch (fehler) {
+      probeNimmtAuf = false
+      melde(t(fehlerschluessel(fehler)), 'fehler')
+      return
+    }
+    /* The recorder does nothing, without a word, while somebody else is
+       just starting it: then no recording of ours runs. */
+    if (aufnahme.laeuft) probeBegonnen = true
+    else probeNimmtAuf = false
+  }
+
+  /* `ausserGrenze` is what the recorder hands over when it stops itself at
+     its ceiling (the recording is already ended then); a press of the stop
+     button hands over nothing. */
+  async function probeBeenden(ausserGrenze) {
+    if (!probeNimmtAuf) return
+    const wav = ausserGrenze !== undefined ? ausserGrenze : aufnahmeStoppen()
+    probeNimmtAuf = false
+    probeBegonnen = false
+    if (!wav) {
+      melde(t('fehler.aufnahme_leer'), 'fehler')
+      return
+    }
+    try {
+      const gesichert = await api.voiceSampleSave(wav)
+      probeGewaehlt(gesichert.name)
+      await laden()
+    } catch (fehler) {
+      melde(String(fehler.message || fehler), 'fehler')
+    }
+  }
+
+  /* A recording that ended elsewhere — the dictation took the microphone
+     and its own stop ended ours — leaves no running timer behind. */
+  $effect(() => {
+    if (probeBegonnen && !aufnahme.laeuft) {
+      probeNimmtAuf = false
+      probeBegonnen = false
+    }
+  })
+
+  /* Counts the starts and stops of playing: an answer of the service that
+     arrives after the stop button was pressed must not start the sound. */
+  let probeLauf = 0
+
+  function probeAbspielenEnde() {
+    probeLauf += 1
+    probeSpielt = false
+    probeAudio = null
+    if (probeUrl) URL.revokeObjectURL(probeUrl)
+    probeUrl = null
+  }
+
+  async function probeAbspielen() {
+    if (!probeName || probeSpielt || probeNimmtAuf) return
+    probeSpielt = true
+    const lauf = ++probeLauf
+    try {
+      const blob = await api.voiceSampleBlob(probeName)
+      if (lauf !== probeLauf) return
+      probeUrl = URL.createObjectURL(blob)
+      probeAudio = new Audio(probeUrl)
+      probeAudio.addEventListener('ended', probeAbspielenEnde)
+      await probeAudio.play()
+    } catch (fehler) {
+      if (lauf === probeLauf) probeAbspielenEnde()
+      melde(String(fehler.message || fehler), 'fehler')
+    }
+  }
+
+  /** The stop button ends what runs: the recording, or the playback. */
+  function probeStoppen() {
+    if (probeNimmtAuf) {
+      probeBeenden()
+    } else if (probeSpielt) {
+      probeAudio?.pause()
+      probeAbspielenEnde()
+    }
+  }
+
+  async function probeLoeschen() {
+    if (!probeName) return
+    if (!(await frage(t('sprachserver.sample_delete_question')))) return
+    const name = probeName
+    probeStoppen()
+    try {
+      auskunft = await api.voiceSampleDelete(name)
+      probeGewaehlt('')
+    } catch (fehler) {
+      melde(String(fehler.message || fehler), 'fehler')
+    }
+  }
+
+  $effect(() => () => {
+    probeAudio?.pause()
+    if (probeUrl) URL.revokeObjectURL(probeUrl)
+    if (probeNimmtAuf) aufnahmeStoppen()
+  })
+
+  /* The parameters stand folded: only the temperature shows until the row
+     is opened. */
+  let parameterOffen = $state(false)
+
   async function ordnerZeigen() {
     try {
       await api.spracheOrdnerOeffnen()
@@ -450,10 +665,19 @@
   const laeuft = $derived(Boolean(auskunft?.laeuft))
   const bereit = $derived(Boolean(gewaehlt) && Boolean(auskunft?.programm))
   const projektor = $derived(auskunft?.projektoren?.[gewaehlt] ?? null)
+  /* What the start of the model that hears is planned to take: its file, the
+     projector that belongs to it and the context that is set. */
+  const schaetzung = $derived(
+    serverAnteil(auskunft?.modelle, [], {
+      modell: gewaehlt,
+      kontext,
+      vision: projektor ?? '',
+      projectors: auskunft?.projector_size_gb,
+    }),
+  )
 
-  /* The window's one deed, handed to the dictation group's head line — the
-     button stands in the line of the first group of the right
-     column, flush with the card below it, not up in the head card. */
+  /* The server's one deed. The page head (ModelleLokal.svelte) draws its
+     button; the page keeps what the button says and does. */
   const tat = $derived({
     text: laeuft ? t('modell.server_anhalten') : t('modell.server_starten'),
     punkt: laeuft ? 'gruen' : 'still',
@@ -461,25 +685,49 @@
     onTat: schalten,
   })
 
+  serverHead('sprache', (value) => (head = value), () => ({
+    tat, line: '', port: laeuft ? auskunft.port : null,
+  }))
+
   const modellauswahl = $derived(
     (auskunft?.modelle ?? []).map((m) => ({
       wert: m.name,
-      text: `${m.name} · ${m.groesse_gb} GB`,
+      text: `${m.name} · ${entrySize(m.groesse_gb)}`,
+      ...entryMark(m.name),
     })),
   )
 
+  /* A voice is a voice model of the speech folder or a voice of the system;
+     which one speaks follows from the chosen name, so both stand in the one
+     list, the voices of the system after the models, each with its language
+     as the system names it. */
   const stimmeauswahl = $derived([
-    { wert: '', text: t('sprachserver.stimme_keine') },
+    { wert: '', text: '-' },
     ...modellauswahl,
+    ...(auskunft?.system_voices ?? []).map((v) => ({ wert: v.name, text: `${v.name} · ${v.language}` })),
   ])
+  /* A stored name the lists no longer carry (a voice that was uninstalled, a
+     file that was moved away) still stands in the field under its own name,
+     so the field never shows empty while a voice is stored. */
+  const stimmeeintraege = $derived(
+    stimmewahl && !stimmeauswahl.some((e) => e.wert === stimmewahl)
+      ? [...stimmeauswahl, { wert: stimmewahl, text: stimmewahl }]
+      : stimmeauswahl,
+  )
+
+  /* While a voice of the system is chosen the fields that act on a voice
+     model — sample, language, the five values, layers and threads — stay
+     visible but cannot be moved; they act again as soon as a voice model is
+     chosen. */
+  const systemStimme = $derived((auskunft?.system_voices ?? []).some((v) => v.name === stimmewahl))
 
   const stimmprobeauswahl = $derived([
-    { wert: '', text: t('sprachserver.stimme_keine') },
+    { wert: '', text: '-' },
     ...(auskunft?.stimmproben ?? []).map((name) => ({ wert: name, text: name })),
   ])
 
   const stimmsprachauswahl = $derived([
-    { wert: '', text: t('sprachserver.stimme_keine') },
+    { wert: '', text: '-' },
     ...STIMMSPRACHEN.map((code) => ({ wert: code, text: t(`sprache.name_${code}`) })),
   ])
 
@@ -532,12 +780,8 @@
      the voice and its storage beside the conversation; the sampling values
      of the voice across the full width; the log at the foot. -->
 <Servertafel
-  titel={t('sprachserver.titel')}
-  zeichen="sprache_welle"
-  unter={laeuft ? t('sprachserver.laeuft', { port: auskunft.port }) : ''}
-  standfarbe={laeuft ? 'gruen' : 'still'}
-  standtext={laeuft ? t('status.aktiv') : t('status.inaktiv')}
   modelle={modellauswahl}
+  throughput="speech"
   bind:gewaehlt
   modellBeschriftung={t('sprachserver.modell')}
   modellGesperrt={laeuft}
@@ -578,16 +822,15 @@
           maxSchichten={MAX_SCHICHTEN}
           bind:faeden
           maxFaeden={auskunft?.kerne ?? 8}
+          {schaetzung}
         />
         <Serverregler kennung="sp" teil="netzwerk" gesperrt={laeuft} bind:port />
+        <Serverregler kennung="sp" teil="leerlauf" gesperrt={laeuft} bind:idle />
       {/snippet}
       {#snippet rechts()}
         <Serverabschnitt zeichen="sprache" titel={t('sprachserver.gruppe_diktat')}>
-          {#snippet rechts()}
-            <Startknopf text={tat.text} punkt={tat.punkt} gesperrt={tat.gesperrt} onTat={tat.onTat} />
-          {/snippet}
           <div class="zeile">
-            <label class="name" for="sp-diktatsprache">{t('sprachserver.feld_sprache')}</label>
+            <label class="name" for="sp-diktatsprache" title={t('sprachserver.feld_sprache')}>{t('sprachserver.feld_sprache')}</label>
             <div class="wahl">
               <Auswahlfeld
                 id="sp-diktatsprache"
@@ -599,17 +842,20 @@
             </div>
           </div>
           <div class="zeile stapel">
-            <label class="name" for="sp-anweisung">{t('sprachserver.feld_anweisung')}</label>
+            <div class="obenzeile">
+              <label class="name" for="sp-anweisung">{t('sprachserver.feld_anweisung')}</label>
+              <button class="rowsign" onclick={() => (anweisungstext = werkAnweisung)}
+                      title={t('sprachserver.zuruecksetzen')}
+                      aria-label={zuruecksetzenName(anweisungsname)}>
+                <Hauszeichen zeichen="refresh" groesse={14} />
+              </button>
+            </div>
             <WachsendesFeld
               knapp
               zeilen={3}
               bind:wert={anweisungstext}
               beschriftung={anweisungsname}
             />
-            <button class="stillknopf" aria-label={zuruecksetzenName(anweisungsname)}
-                    onclick={() => (anweisungstext = werkAnweisung)}>
-              {t('sprachserver.zuruecksetzen')}
-            </button>
           </div>
           <!-- On: a finished dictation goes out the moment the recording is
                stopped, instead of waiting in the field for Enter. -->
@@ -634,7 +880,7 @@
 
         <Serverabschnitt zeichen="besen" titel={t('sprachserver.gruppe_bereinigung')}>
           <div class="zeile">
-            <label class="name" for="sp-bereinigung">{t('sprachserver.feld_bereinigung')}</label>
+            <label class="name" for="sp-bereinigung" title={t('sprachserver.feld_bereinigung')}>{t('sprachserver.feld_bereinigung')}</label>
             <div class="wahl">
               <Auswahlfeld
                 id="sp-bereinigung"
@@ -646,17 +892,20 @@
             </div>
           </div>
           <div class="zeile stapel">
-            <label class="name" for="sp-putzanweisung">{t('sprachserver.feld_anweisung')}</label>
+            <div class="obenzeile">
+              <label class="name" for="sp-putzanweisung">{t('sprachserver.feld_anweisung')}</label>
+              <button class="rowsign" onclick={() => (putzanweisungstext = werkBereinigung)}
+                      title={t('sprachserver.zuruecksetzen')}
+                      aria-label={zuruecksetzenName(putzanweisungsname)}>
+                <Hauszeichen zeichen="refresh" groesse={14} />
+              </button>
+            </div>
             <WachsendesFeld
               knapp
               zeilen={3}
               bind:wert={putzanweisungstext}
               beschriftung={putzanweisungsname}
             />
-            <button class="stillknopf" aria-label={zuruecksetzenName(putzanweisungsname)}
-                    onclick={() => (putzanweisungstext = werkBereinigung)}>
-              {t('sprachserver.zuruecksetzen')}
-            </button>
           </div>
         </Serverabschnitt>
       {/snippet}
@@ -674,7 +923,7 @@
               <Auswahlfeld
                 id="sp-stimmemodell"
                 bind:wert={stimmewahl}
-                eintraege={stimmeauswahl}
+                eintraege={stimmeeintraege}
                 beschriftung={t('sprachserver.feld_stimme')}
                 gewaehlt={(neu) => sichern({ stimme: neu })}
               />
@@ -703,10 +952,11 @@
           maxSchichten={MAX_SCHICHTEN}
           bind:faeden={stimmFaeden}
           maxFaeden={auskunft?.kerne ?? 8}
+          gesperrt={systemStimme}
         />
       {/snippet}
       {#snippet rechts()}
-        <Serverabschnitt zeichen="sprache_welle" titel={t('sprachserver.gruppe_gespraech')}>
+        <Serverabschnitt zeichen="sprache_welle" titel={t('sprachserver.gruppe_gespraech')} gewicht={5}>
           <div class="zeile niedrig">
             <span class="name">{t('sprachserver.feld_vorlesen')}</span>
             <Schalter
@@ -739,75 +989,154 @@
               />
             </div>
           </div>
-          <div class="zeile probezeile">
-            <label class="name" for="sp-stimmprobe">{t('sprachserver.feld_stimmprobe')}</label>
-            <div class="probewahl">
-              <Auswahlfeld
-                id="sp-stimmprobe"
-                bind:wert={stimmprobewahl}
-                eintraege={stimmprobeauswahl}
-                beschriftung={t('sprachserver.feld_stimmprobe')}
-                gewaehlt={(neu) => sichern({ stimmprobe: neu })}
+          <div class="zeile">
+            <label class="zahlname" for="sp-wait-for-speech">{t('sprachserver.wait_for_speech')}</label>
+            <div class="zahlplatz">
+              <Zahlenfeld
+                id="sp-wait-for-speech"
+                bind:wert={waitSeconds}
+                min={0.1}
+                schritt={0.1}
+                nullwort={t('parameter.auto')}
+                beschriftung={t('sprachserver.wait_for_speech')}
               />
             </div>
-            <button class="feldknopf" onclick={ordnerZeigen}>{t('sprachserver.ordner_zeigen')}</button>
           </div>
           <div class="zeile">
-            <label class="name" for="sp-stimmsprache">{t('sprachserver.feld_stimmsprache')}</label>
+            <label class="zahlname" for="sp-rounds-without-speech">{t('sprachserver.rounds_without_speech')}</label>
+            <div class="zahlplatz">
+              <Zahlenfeld
+                id="sp-rounds-without-speech"
+                bind:wert={silentRoundsCount}
+                min={1}
+                schritt={1}
+                ganzzahlig
+                nullwort={t('parameter.auto')}
+                beschriftung={t('sprachserver.rounds_without_speech')}
+              />
+            </div>
+          </div>
+          <div class="zeile">
+            <label class="name" for="sp-stimmsprache" title={t('sprachserver.feld_stimmsprache')}>{t('sprachserver.feld_stimmsprache')}</label>
             <div class="wahl">
               <Auswahlfeld
                 id="sp-stimmsprache"
                 bind:wert={stimmsprachwahl}
                 eintraege={stimmsprachauswahl}
                 beschriftung={t('sprachserver.feld_stimmsprache')}
+                gesperrt={systemStimme}
                 gewaehlt={(neu) => sichern({ stimmsprache: neu })}
               />
             </div>
           </div>
           <div class="zeile stapel">
-            <label class="name" for="sp-gespraechsanweisung">{t('sprachserver.feld_gespraechsanweisung')}</label>
+            <div class="obenzeile">
+              <label class="name" for="sp-gespraechsanweisung">{t('sprachserver.feld_gespraechsanweisung')}</label>
+              <button class="rowsign" onclick={() => (gespraechsanweisungstext = werkGespraechsanweisung)}
+                      title={t('sprachserver.zuruecksetzen')}
+                      aria-label={zuruecksetzenName(gespraechsanweisungsname)}>
+                <Hauszeichen zeichen="refresh" groesse={14} />
+              </button>
+            </div>
             <WachsendesFeld
               knapp
               zeilen={3}
               bind:wert={gespraechsanweisungstext}
               beschriftung={gespraechsanweisungsname}
             />
-            <button class="stillknopf" aria-label={zuruecksetzenName(gespraechsanweisungsname)}
-                    onclick={() => (gespraechsanweisungstext = werkGespraechsanweisung)}>
-              {t('sprachserver.zuruecksetzen')}
-            </button>
           </div>
         </Serverabschnitt>
       {/snippet}
     </Serverreihe>
 
-    <Serverabschnitt titel={t('sprachserver.gruppe_parameter')}>
-      {#each PARAMETER as p (p.knopf)}
-        <div class="zeile regel">
-          <div class="kopfzeile">
-            <label class="regelname" for="sp-{p.knopf}">{parameterlabels[p.knopf]}</label>
-            <div class="zahlplatz">
-              <Zahlenfeld
-                bind:wert={stimmregler[p.knopf]}
-                min={p.min}
-                max={p.max}
-                schritt={p.schritt}
-                ganzzahlig={p.ganzzahlig}
-              />
-            </div>
-          </div>
-          <Schieberegler
-            id="sp-{p.knopf}"
-            bind:wert={stimmregler[p.knopf]}
-            stufen={p.stufen}
-            beschriftung={parameterlabels[p.knopf]}
-            anzeige={(w) => anzeige(w, p.ganzzahlig, p.schritt)}
-            mit_zahl={false}
-            fuellung
+    <Serverabschnitt titel={t('sprachserver.feld_stimmprobe')}>
+      <div class="zeile probezeile">
+        <label class="name" for="sp-stimmprobe">{t('sprachserver.sample_file')}</label>
+        <div class="probewahl">
+          <Auswahlfeld
+            id="sp-stimmprobe"
+            bind:wert={stimmprobewahl}
+            eintraege={stimmprobeauswahl}
+            beschriftung={t('sprachserver.feld_stimmprobe')}
+            gesperrt={systemStimme}
+            gewaehlt={(neu) => sichern({ stimmprobe: neu })}
           />
         </div>
-      {/each}
+        <button class="zeichenknopf" onclick={ordnerZeigen}
+                title={t('sprachserver.ordner_zeigen')} aria-label={t('sprachserver.ordner_zeigen')}>
+          <Hauszeichen zeichen="ordner" groesse="klein" />
+        </button>
+      </div>
+      <div class="zeile probeaktionen">
+        <div class="aktionen">
+          <button class="zeichenknopf" id="sp-probe-aufnehmen" onclick={probeAufnehmen}
+                  disabled={probeNimmtAuf || probeSpielt || diktatBelegt || systemStimme}
+                  title={diktatBelegt ? t('sprachserver.sample_dictation_busy') : t('sprachserver.sample_record')}
+                  aria-label={t('sprachserver.sample_record')}>
+            <Hauszeichen zeichen="microphone" groesse="klein" />
+          </button>
+          <button class="zeichenknopf" id="sp-probe-abspielen" onclick={probeAbspielen}
+                  disabled={!probeName || probeSpielt || probeNimmtAuf || systemStimme}
+                  title={t('sprachserver.sample_play')} aria-label={t('sprachserver.sample_play')}>
+            <Hauszeichen zeichen="play" groesse="klein" />
+          </button>
+          <button class="zeichenknopf" id="sp-probe-stoppen" onclick={probeStoppen}
+                  disabled={(!probeNimmtAuf && !probeSpielt) || systemStimme}
+                  title={t('sprachserver.sample_stop')} aria-label={t('sprachserver.sample_stop')}>
+            <Hauszeichen zeichen="stop" groesse="klein" />
+          </button>
+        </div>
+        <span class="probename" class:laeuft={probeNimmtAuf}>{probeZeile}</span>
+        <button class="zeichenknopf rechtsaussen" id="sp-probe-loeschen" onclick={probeLoeschen}
+                disabled={!probeName || probeNimmtAuf || systemStimme}
+                title={t('sprachserver.sample_delete')} aria-label={t('sprachserver.sample_delete')}>
+          <Hauszeichen zeichen="trash" groesse="klein" />
+        </button>
+      </div>
     </Serverabschnitt>
+
+    <div class="parameterblock">
+      <button class="klappzeile tafelkopf" onclick={() => (parameterOffen = !parameterOffen)} aria-expanded={parameterOffen}>
+        <svg class="winkel" class:auf={parameterOffen} width="14" height="14" viewBox="0 0 11 11" fill="none"
+             stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true">
+          <path d="M4.125 2.75L6.875 5.5L4.125 8.25" />
+        </svg>
+        <span>{t('sprachserver.gruppe_parameter')}</span>
+      </button>
+      <Serverabschnitt>
+        {#each PARAMETER as p, i (p.knopf)}
+          {#if i === 0 || parameterOffen}
+            <div class="zeile regel">
+              <div class="kopfzeile">
+                <label class="regelname" for="sp-{p.knopf}">{parameterlabels[p.knopf]}</label>
+                <div class="zahlplatz">
+                  <Zahlenfeld
+                    bind:wert={stimmregler[p.knopf]}
+                    min={p.min}
+                    max={p.max}
+                    schritt={p.schritt}
+                    ganzzahlig={p.ganzzahlig}
+                    nullwort={t('parameter.auto')}
+                    gesperrt={systemStimme}
+                  />
+                </div>
+              </div>
+              <Schieberegler
+                id="sp-{p.knopf}"
+                bind:wert={() => stimmregler[p.knopf] ?? werkAuto[p.knopf], (neu) => (stimmregler[p.knopf] = neu)}
+                gesperrt={systemStimme}
+                stufen={p.stufen}
+                beschriftung={parameterlabels[p.knopf]}
+                anzeige={(w) => anzeige(w, p.ganzzahlig, p.schritt)}
+                mit_zahl={false}
+                fuellung
+              />
+            </div>
+          {/if}
+        {/each}
+      </Serverabschnitt>
+    </div>
     <LlamaCppSection {auskunft} onrefresh={laden} />
   {/snippet}
 
@@ -816,7 +1145,7 @@
       <Serverlogkopf offen={protokollAuf} onumschalten={protokollKlappen}
                      onauskoppeln={() => oeffneProtokoll(t('modell.protokoll_titel'))} />
       {#if protokollAuf}
-        <pre class="protokoll">{protokoll.join('\n') || '—'}</pre>
+        <pre class="protokoll">{protokoll.join('\n') || '-'}</pre>
       {/if}
     </div>
   {/snippet}
@@ -856,13 +1185,88 @@
     background: color-mix(in srgb, var(--text) 6%, var(--glass-button));
     color: var(--text);
   }
-  /* The sample picker, 168 wide, and the button that opens its folder. */
+  /* The sample block: the picker 200 wide and the folder button beside it,
+     under them the buttons of the recording with the chosen file's name. */
   .probezeile {
     gap: 12px;
   }
   .probewahl {
     flex: none;
-    width: 168px;
+    width: 200px;
+  }
+  /* The three buttons of the recording, 10 apart. */
+  .aktionen {
+    flex: none;
+    display: flex;
+    gap: 10px;
+  }
+  .zeichenknopf {
+    flex: none;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: none;
+    border-radius: 9px;
+    background: var(--glass-button);
+    box-shadow: inset 0 0 0 1px var(--glass-button-edge);
+    color: var(--text-leise);
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .zeichenknopf:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--text) 6%, var(--glass-button));
+    color: var(--text);
+  }
+  .zeichenknopf:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .rechtsaussen {
+    margin-left: auto;
+  }
+  /* The chosen file and its length, or the running time of a recording. */
+  .probename {
+    min-width: 0;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--text-leise);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* The parameters: a folding row of 34 over the card; folded, the card
+     holds the first parameter only. */
+  .parameterblock {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .klappzeile {
+    height: 34px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    text-align: left;
+  }
+  .klappzeile .winkel {
+    flex: none;
+    color: var(--text-still);
+    transition: transform 0.15s;
+  }
+  .klappzeile .winkel.auf {
+    transform: rotate(90deg);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .klappzeile .winkel {
+      transition: none;
+    }
   }
   .protokoll {
     margin: 0;

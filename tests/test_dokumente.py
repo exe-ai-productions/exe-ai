@@ -6,9 +6,10 @@ import io
 
 from app.i18n import t
 from tests.conftest import pdf_mit_seiten
+from tests.fensterquelle import BAR_SOURCE
 
 # The document endings as agreed: the text endings the agent reference
-# reads, without .env (it holds keys), plus .pdf — 76 in all. Frozen here
+# reads, without .env (it holds keys), plus .pdf and .svg — 77 in all. Frozen here
 # so neither of the two lists in the code can drift or shrink without a
 # test going red.
 ERWARTETE_ENDUNGEN = (
@@ -20,7 +21,7 @@ ERWARTETE_ENDUNGEN = (
     ".java", ".kt", ".go", ".rs", ".rb", ".php", ".pl", ".lua", ".r", ".jl", ".swift", ".m",
     ".scala", ".clj", ".ex", ".exs", ".erl", ".sql", ".graphql", ".proto", ".tf", ".hcl",
     ".dockerfile", ".makefile", ".cmake", ".gradle", ".rst", ".tex", ".srt", ".vtt", ".diff",
-    ".patch",
+    ".patch", ".svg",
 )
 
 
@@ -37,7 +38,7 @@ def test_txt_rundreise_und_meta(client):
     assert antwort.status_code == 201
     meta = antwort.json()["dokument"]
     assert meta["typ"] == "txt"
-    assert meta["kb"] == 1
+    assert meta["size_bytes"] == len("Hallo Dokument, dies ist Text.".encode())
     # The extracted text is in the database — not the file itself.
     dokument = client.app.state.repositories.documents.holen(meta["id"])
     assert "Hallo Dokument" in dokument.extracted_text
@@ -200,7 +201,7 @@ def test_a_document_without_a_kept_file_has_no_path_and_the_card_is_as_it_was():
         id="d1", chat_id="c1", filename="alt.pdf", created_at="2024-01-01T00:00:00",
         size_bytes=4096, pages=3,
     )
-    card = {"id": "d1", "name": "alt.pdf", "typ": "pdf", "seiten": 3, "kb": 4, "getragen": None}
+    card = {"id": "d1", "name": "alt.pdf", "typ": "pdf", "seiten": 3, "size_bytes": 4096, "getragen": None}
     assert meta_bauen(old).model_dump() == {**card, "pfad": None}
     old.pfad = ""
     assert meta_bauen(old).model_dump() == {**card, "pfad": None}
@@ -390,10 +391,7 @@ def test_die_listen_von_fenster_und_backend_bleiben_gleich():
 
     from app.api.v1.dokumente import ERLAUBTE_ENDUNGEN
 
-    quelle = (
-        Path(__file__).resolve().parent.parent
-        / "frontend/src/teile/Eingabeleiste.svelte"
-    ).read_text(encoding="utf-8")
+    quelle = BAR_SOURCE.read_text(encoding="utf-8")
     # Comments out of the way: a quoted word inside one would join the set.
     quelle = re.sub(r"//[^\n]*", "", quelle)
     quelle = re.sub(r"/\*.*?\*/", "", quelle, flags=re.S)

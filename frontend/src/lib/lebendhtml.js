@@ -156,6 +156,17 @@ function angleichen(alt, neu) {
   while (neue.length > i) alt.appendChild(neue[i])
 }
 
+/* The one class the page itself puts on a live element, never the markup:
+   the copy button wears it for the second its tick shows. It is no
+   difference, or the next piece of a growing answer would replace the button
+   and the tick would end before its time. */
+const LIVE_STATE_CLASS = 'copied'
+
+function withoutLiveState(value) {
+  const names = value.split(' ')
+  return names.includes(LIVE_STATE_CLASS) ? names.filter((name) => name !== LIVE_STATE_CLASS).join(' ') : value
+}
+
 /* Same tag, same attributes — the element can be kept and only its
    children looked at. A changed attribute (a class the highlighter
    added, a src) is a different element and gets replaced whole. */
@@ -163,7 +174,8 @@ function gleicheHuelle(a, n) {
   if (a.tagName !== n.tagName) return false
   if (a.attributes.length !== n.attributes.length) return false
   for (const attribut of n.attributes) {
-    if (a.getAttribute(attribut.name) !== attribut.value) return false
+    const value = a.getAttribute(attribut.name)
+    if ((attribut.name === 'class' && value !== null ? withoutLiveState(value) : value) !== attribut.value) return false
   }
   return true
 }

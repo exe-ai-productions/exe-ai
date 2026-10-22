@@ -74,6 +74,10 @@ mitgeliefert = [
     # no file any more — this copy is the one it finds.
     (str(WURZEL / "app" / "__init__.py"), "app"),
     *_gefiltert(WURZEL / "skills", "skills"),
+    # The program's own Tailscale, built beforehand by deploy/build_tailscale.sh
+    # for the system this runs on. Where it was not built, the program ships
+    # without it and uses the owner's, if there is one (app/tailscale.py).
+    *(_gefiltert(WURZEL / "dist" / "tailscale", "tailscale") if (WURZEL / "dist" / "tailscale").is_dir() else []),
     # Shipped agents, the same two-layer rule as the skills: this folder is
     # replaced by every update, the user's prompts/agenten/ never is, and a
     # same-named user file wins (app/agenten.py).

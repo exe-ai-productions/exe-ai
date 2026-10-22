@@ -61,6 +61,9 @@ export const agentenmodell = $state({
      ahead of anybody asking for it (app/agentenmodellwahl.py —
      the same lever the main model's own key carries). Null while unread. */
   vorladen: null,
+  /* Whether a run the program places itself may land on the agent server.
+     Null while unread; the window shows the shipped answer until then. */
+  use_for_runs: null,
   /* Whether the values above have been read. The page must not write before
      it has read, or the first pass would store its own initial state over
      what was there. */
@@ -142,6 +145,7 @@ async function einlesen(streng = false) {
       agentenmodell.module = w.module && typeof w.module === 'object' ? w.module : {}
       agentenmodell.fein = w.fein && typeof w.fein === 'object' ? w.fein : null
       agentenmodell.vorladen = typeof w.vorladen === 'boolean' ? w.vorladen : null
+      agentenmodell.use_for_runs = typeof w.use_for_runs === 'boolean' ? w.use_for_runs : null
       agentenmodell.geladen = true
     }
   } catch (fehler) {
@@ -190,6 +194,7 @@ function alsObjekt(aenderung = {}) {
     module: agentenmodell.module,
     fein: agentenmodell.fein,
     vorladen: agentenmodell.vorladen,
+    use_for_runs: agentenmodell.use_for_runs,
     ...aenderung,
   }
 }

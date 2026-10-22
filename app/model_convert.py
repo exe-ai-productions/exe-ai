@@ -56,8 +56,9 @@ _FLOAT_COPY = 16.0
 _SAFETENSORS_HEADER_MAX = 100 * 1024 * 1024
 
 
-def _safetensors_bits(source: Path) -> float | None:
-    """The bits per weight most of a safetensors file's weights hold."""
+def safetensors_header(source: Path) -> tuple[int, dict] | None:
+    """The length of a safetensors file's JSON header and the header itself,
+    or None when the file has no header of that kind."""
     with open(source, "rb") as file:
         start = file.read(8)
         if len(start) != 8:
@@ -66,8 +67,16 @@ def _safetensors_bits(source: Path) -> float | None:
         if not 0 < length < _SAFETENSORS_HEADER_MAX:
             return None
         header = json.loads(file.read(length))
+    return (length, header) if isinstance(header, dict) else None
+
+
+def safetensors_main_dtype(source: Path) -> str | None:
+    """The dtype most of a safetensors file's weights are stored in."""
+    parsed = safetensors_header(source)
+    if parsed is None:
+        return None
     weights: dict[str, int] = {}
-    for name, entry in header.items():
+    for name, entry in parsed[1].items():
         if name == "__metadata__" or not isinstance(entry, dict):
             continue
         count = 1
@@ -77,7 +86,13 @@ def _safetensors_bits(source: Path) -> float | None:
         weights[dtype] = weights.get(dtype, 0) + count
     if not weights:
         return None
-    return _SAFETENSORS_BITS.get(max(weights, key=lambda dtype: weights[dtype]))
+    return max(weights, key=lambda dtype: weights[dtype])
+
+
+def _safetensors_bits(source: Path) -> float | None:
+    """The bits per weight most of a safetensors file's weights hold."""
+    dtype = safetensors_main_dtype(source)
+    return None if dtype is None else _SAFETENSORS_BITS.get(dtype)
 
 
 def source_bits(source: Path) -> float | None:
@@ -133,6 +148,16 @@ def target(source: Path, weight_type: str) -> Path:
     """The converted file's place: beside the source, named after it and
     the type, so two conversions of one file never meet."""
     return source.with_name(f"{source.stem}.{weight_type}.gguf")
+
+
+def converted_type(path: Path) -> str | None:
+    """The weight type of ``path`` when it is a file a conversion wrote —
+    named ``<stem>.<type>.gguf`` as ``target`` names it, the type one of the
+    list a copy is offered in — otherwise None."""
+    if path.suffix.lower() != ".gguf":
+        return None
+    _, dot, kind = path.stem.rpartition(".")
+    return kind if dot and kind in WEIGHT_TYPES else None
 
 
 def command(program: Path, source: Path, weight_type: str) -> list[str]:

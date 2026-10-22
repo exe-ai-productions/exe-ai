@@ -12,13 +12,14 @@ import { imageSwitches } from './imageSwitches.svelte.js'
 import { seedlage } from './bildseed.svelte.js'
 import { familyOf } from './imageFamilies.svelte.js'
 import {
-  art, auswahl, drawAsked, leinwand, pictureMissing, refVideo,
+  art, auswahl, drawAsked, leinwand, listen, pictureMissing, refVideo,
   startValuesThere, steuervideo, stilVon, surface, takesRefVideo, werte,
 } from './studio.svelte.js'
 import { readStudioStore, studioStore } from './studioStore.svelte.js'
 import { t } from './texte.svelte.js'
 import { videoFrames as takeVideoFrames } from './videoFrames.js'
 import { melde } from './zustand.svelte.js'
+import { meldeText } from './meldewesen.svelte.js'
 
 // sd-cli's own frame rate, what control frames are taken at without one —
 // and the rate it reads a reference video at.
@@ -155,7 +156,10 @@ async function vorbereitenUndZeichnen(modeWish) {
     return
   }
   if (!w.modell) {
-    melde(t('bildserver.kein_standardmodell'), 'hinweis')
+    // A default model that misses a part says which one, not that none is chosen.
+    const missing = listen.missingParts[listen.standardmodell]
+    if (missing) meldeText('bild.teil_fehlt', { teil: missing }, 'hinweis')
+    else melde(t('bildserver.kein_standardmodell'), 'hinweis')
     return
   }
   // They did not arrive: nothing is drawn, the failed request has said so.
@@ -241,8 +245,10 @@ async function vorbereitenUndZeichnen(modeWish) {
     video: drawsVideo,
     video_frames: control ? control.count
       : drawsVideo && zahl(w.video_frames, null) !== null ? ganz(w.video_frames) : null,
-    fps: control ? control.rate
-      : drawsVideo && zahl(w.fps, null) !== null ? ganz(w.fps) : null,
+    // A family with a fixed rate draws at it whatever is sent.
+    fps: fam?.fixed_fps ? null
+      : control ? control.rate
+        : drawsVideo && zahl(w.fps, null) !== null ? ganz(w.fps) : null,
     end_bild: kind.value === 'flf2v' ? w.end_bild || null : null,
     steuerbilder: control ? control.names : [],
     ref_video_frames: reference ?? [],
@@ -332,6 +338,10 @@ export function painterQuery() {
   return {
     modell: w.modell,
     live_preview: w.live_preview,
+    preview_interval: w.live_preview && zahl(w.preview_interval, null) !== null
+      ? Math.trunc(zahl(w.preview_interval, 0)) : null,
+    preview_noisy: Boolean(w.live_preview) && Boolean(w.preview_noisy),
+    preview_taesd: w.live_preview === 'tae' && Boolean(w.taesd),
     pulid_weights: w.pulid_weights || null,
     pulid_id_embedding: w.pulid_id_embedding || null,
     sigmas: w.sigmas.trim(),

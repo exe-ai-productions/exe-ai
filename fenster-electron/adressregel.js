@@ -175,7 +175,7 @@ function addressForLog(address) {
 // The manual, told apart from everything else this program serves. It is one
 // fixed path, so recognising it needs no bookkeeping — which is the whole
 // point: the rule in the window used to treat EVERY own page as the manual.
-const HANDBUCH_PFAD = '/hilfe/'
+const HANDBUCH_PFAD = '/help/'
 
 function istHandbuch(adresse) {
   try {

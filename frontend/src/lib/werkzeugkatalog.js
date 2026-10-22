@@ -46,12 +46,18 @@ const NACH_WERKZEUG = {
   remove_background: 'freistellen',
   memory_save: 'wolke',
   deliver_file: 'seite',
+  start_job: 'agent',
+  job: 'agent',
+  cronjob: 'stopwatch',
+  cron_note: 'stopwatch',
+  goal: 'flag',
+  get_current_time: 'clock',
 }
 
 /* Step 2 — by server, the name from mcp_servers.json. The one entry a new
    server needs; without it its tools fall through to the patterns. A server
    may name one of the house's standing signs instead of a drawn tool mark:
-   the row draws that sign in the tool colour, and no server needs a drawing
+   the row draws that sign in the text colour, and no server needs a drawing
    made for it alone. */
 const NACH_SERVER = {
   websuche: 'globus',
@@ -77,8 +83,9 @@ const NACH_SERVER = {
   sentry: 'glocke',
 }
 
-/* Step 2 for a BUILT-IN source — the three names whose mark belongs to the
-   house and not to a server: the shell, the memory, the skills. They stand
+/* Step 2 for a BUILT-IN source — the names whose mark belongs to the house
+   and not to a server: the shell, the memory, the skills, the drawing tool,
+   the schedules, the goals, the delivered files and the clock. They stand
    apart from NACH_SERVER because a server of one's own may carry the same
    name: a foreign server called "shell" wears the built-in shell's mark the
    moment both are read from one table, and the two rows then look alike
@@ -89,6 +96,11 @@ const NACH_EINGEBAUT = {
   shell: 'eingabe',
   memory: 'wolke',
   skills: 'buch',
+  image: 'bild',
+  cronjob: 'stopwatch',
+  goal: 'flag',
+  dock: 'seite',
+  clock: 'clock',
 }
 
 /* Step 3 — by name pattern, for tools whose server we do not know. */
@@ -113,10 +125,9 @@ export const RUECKFALL = 'winkel'
  * the two carry the same names, and only the kind tells them apart.
  *
  * `null` — the caller does not know, as the tool rows of a chat cannot —
- * reads the house's table first. For the three names in both that is the
- * answer the one table gave before, so nothing loses its mark for not
- * knowing; what the kind adds is the DIFFERENCE, and only the caller who
- * knows it can draw it.
+ * reads the house's table first, so nothing loses its mark for not knowing;
+ * what the kind adds is the DIFFERENCE, and only the caller who knows it can
+ * draw it.
  */
 export function zeichenFuer(rohname = '', server = '', eingebaut = null) {
   /* A server's tool reaches the chat under the server's own word (the

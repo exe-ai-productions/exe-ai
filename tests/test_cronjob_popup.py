@@ -30,14 +30,17 @@ LEISTE = (FRONTEND / "teile/ModulCronjobs.svelte").read_text(encoding="utf-8")
 
 
 def test_die_seite_zeigt_den_kalender_und_oeffnet_das_formular_im_popup():
-    assert "<ScheduleCalendar {kalender} gross onpick={tagGeklickt} />" in SEITE
+    assert "<ScheduleCalendar {kalender} gross onpick={tagGeklickt}" in SEITE
     assert 'popover="auto"' in SEITE
-    # A day clicked opens the form for a new schedule beside that day.
+    # A day clicked opens the pop-up with that day's runs beside that day.
     klick = SEITE.split("function tagGeklickt(day, anker) {", 1)[1].split("\n  }\n", 1)[0]
-    assert "form = { entry: null }" in klick
+    assert "view = { kind: 'day' }" in klick
     assert "zeigen(anker)" in klick
-    # "Change" opens the same pop-up with the schedule.
-    assert "form = { entry: zeile }" in SEITE
+    # "New cronjob" at the foot of the day opens the form in the same pop-up.
+    neu = SEITE.split("function newOnDay() {", 1)[1].split("\n  }\n", 1)[0]
+    assert "view = { kind: 'form', entry: null }" in neu
+    # The pen opens the form with the schedule, in the same pop-up.
+    assert "view = { kind: 'form', entry: zeile }" in SEITE
     assert "<ScheduleForm entry={own.entry}" in SEITE
 
 
@@ -129,7 +132,7 @@ def test_die_dunklen_looks_zeichnen_die_glaskante_als_feldrand():
         ":root[data-modus='dunkel']",
         ":root[data-modus='darkmatter']",
         # the auto-dark copy of Exe for a device in dark mode
-        ":root:not([data-modus='hell'], [data-eigen='hell'])",
+        ":root:not([data-modus='hell'], [data-modus='snow'], [data-eigen='hell'])",
     ):
         block = _block(selector)
         assert "--feldstrich: var(--glass-button-edge);" in block, selector
@@ -143,7 +146,7 @@ def test_die_dunklen_looks_geben_dem_datumsfeld_das_dunkle_farbschema():
     for selector in (
         ":root[data-modus='dunkel']",
         ":root[data-modus='darkmatter']",
-        ":root:not([data-modus='hell'], [data-eigen='hell'])",
+        ":root:not([data-modus='hell'], [data-modus='snow'], [data-eigen='hell'])",
     ):
         assert "--feld-farbschema: dark;" in _block(selector), selector
     for selector in (":root", ":root[data-modus='heaven']", ":root[data-modus='moune']"):
@@ -282,6 +285,7 @@ const stubs = {
   'agentmarke.mjs': "export const agentName = (a) => a\\n",
   'clock.mjs': "export const dayIn = () => '2026-10-13'\\nexport const partsIn = () => ({ hour: 8, minute: 0 })\\n",
   'zustand.mjs': "export const zustand = { timezone: 'Europe/Berlin' }\\n",
+  'isoweek.mjs': "export const isoWeek = () => 1\\n",
 }
 for (const [name, code] of Object.entries(stubs)) writeFileSync(name, code)
 // The counter the windows read is reactive, as in the real module: a move
@@ -301,7 +305,8 @@ writeFileSync('gebaut.mjs', compileModule(readFileSync(%r, 'utf-8'), {
   .replace('./agentmarke.js', './agentmarke.mjs')
   .replace('./clock.js', './clock.mjs')
   .replace('./ereignisstrom.svelte.js', './ereignisstrom.mjs')
-  .replace('./zustand.svelte.js', './zustand.mjs'))
+  .replace('./zustand.svelte.js', './zustand.mjs')
+  .replace('./isoweek.js', './isoweek.mjs'))
 const { kalender } = await import('./gebaut.mjs')
 const { calls } = await import('./api.mjs')
 const { neuigkeit } = await import('./ereignisstrom.mjs')
@@ -383,7 +388,7 @@ def test_a_change_in_the_settings_leaves_the_calendar_to_the_announcement():
     assert "edits += 1" in changed
     assert "kalender" not in changed
     assert "reload" not in CALENDAR_STATE.read_text(encoding="utf-8").replace("preload", "")
-    for signature in ("function geschlossen(row, own = form) {", "async function umschalten(z, an) {", "async function loeschen(z) {"):
+    for signature in ("function geschlossen(row, own = view) {", "async function umschalten(z, an) {", "async function loeschen(z) {"):
         body = SEITE.split(signature, 1)[1].split("\n  }\n", 1)[0]
         assert "scheduleChanged()" in body, signature
     # Silence probe: a hand start changes no schedule.
@@ -405,7 +410,7 @@ def test_the_window_counts_the_announcement_for_schedules_and_not_for_jobs():
 def test_the_cronjob_page_does_not_reach_into_the_foot_with_a_negative_margin():
     regel = HUELLE.split("  .cronjobseite {", 1)[1].split("\n  }\n", 1)[0]
     assert "margin-bottom" not in regel
-    assert "fillsFoot={istCronjobs}" in HUELLE
+    assert "fillsFoot={istCronjobs || agentList}" in HUELLE
     # The frame gives the foot room back to a page that asks for it ...
     assert "class:fillsFoot" in MENU_PAGE
     gibt = MENU_PAGE.split("  .breite.fillsFoot {", 1)[1].split("}", 1)[0]
@@ -472,11 +477,11 @@ def test_a_late_answer_closes_only_the_popup_it_came_from():
     # The form this instance was made for is an each-item keyed by the form
     # object: a `{@const own = form}` follows `form` to the next one, and the
     # late answer would close the pop-up that stands then.
-    assert "{#each form ? [form] : [] as own (own)}" in SEITE
-    assert "{@const own = form}" not in SEITE
+    assert "{#each view ? [view] : [] as own (own)}" in SEITE
+    assert "{@const own = view}" not in SEITE
     assert "onclose={(row) => geschlossen(row, own)}" in SEITE
-    kopf = SEITE.split("function geschlossen(row, own = form) {", 1)[1].split("form = null", 1)[0]
-    assert "if (own !== form)" in kopf
+    kopf = SEITE.split("function geschlossen(row, own = view) {", 1)[1].split("view = null", 1)[0]
+    assert "if (own !== view)" in kopf
     # The saved schedule still reaches the lists.
     assert "scheduleChanged()" in kopf and "laden()" in kopf
 
@@ -569,3 +574,19 @@ def test_the_list_closes_on_resize_and_only_a_field_moving_scroll():
     assert "zumachen()" in handler
     assert "window.addEventListener('scroll', dismiss, true)" in AUSWAHL
     assert "window.addEventListener('resize', dismiss)" in AUSWAHL
+
+
+def test_the_settings_pass_the_calendar_the_prop_it_reads_for_the_plus():
+    calendar = (FRONTEND / "teile/ScheduleCalendar.svelte").read_text(encoding="utf-8")
+    assert "let { kalender, gross = false, onpick = null, empty = false, onplus = null } = $props()" in calendar
+    call = SEITE.split("<ScheduleCalendar", 1)[1].split("/>", 1)[0]
+    assert "empty={loaded && zeilen.length === 0}" in call
+    assert "leer=" not in call
+
+
+def test_a_click_on_the_open_row_shuts_it_even_when_the_light_dismiss_came_first():
+    waehlen = SEITE.split("function waehlen(z, ev) {", 1)[1].split("\n  }\n", 1)[0]
+    assert "if (gewaehlt === z.id) {" in waehlen
+    assert "lightClosed.id === z.id && performance.now() - lightClosed.time < 300" in waehlen
+    toggle = SEITE.split("function umgeschaltet(ev) {", 1)[1].split("\n  }\n", 1)[0]
+    assert "lightClosed = { id: gewaehlt, time: performance.now() }" in toggle

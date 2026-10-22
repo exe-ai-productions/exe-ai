@@ -298,8 +298,10 @@ def test_the_studios_bar_and_progress_read_no_chat():
     assert "const laufend = $derived(zustand.pictureQueue.find((w) => w.running) ?? null)" in canvas
     assert "const inLine = $derived(zustand.pictureQueue.length > 0)" in canvas
     app = (FRONTEND / "App.svelte").read_text(encoding="utf-8")
+    line = (FRONTEND / "lib/bildlinie.svelte.js").read_text(encoding="utf-8")
     assert "bildLaeuftChat" not in app and "bildChatsAktualisieren" not in app
-    assert "chat_id" not in app.split("function pictureLineRefresh() {", 1)[1].split("\n  }\n", 1)[0]
+    assert "bildLaeuftChat" not in line and "bildChatsAktualisieren" not in line
+    assert "chat_id" not in line.split("function pictureLineRefresh() {", 1)[1].split("\n}\n", 1)[0]
 
 
 def test_the_terminal_listens_to_the_studios_runs_while_the_studio_is_shown():

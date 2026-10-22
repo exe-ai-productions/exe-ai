@@ -46,9 +46,9 @@
   waits, and that is worth exactly as much as a finished one: nobody is going
   to walk past the agents panel on the off-chance. It is reported here rather
   than from a second watcher, because it is the same list, the same "once"
-  rule and the same switch — the notification settings offer three reporters
-  (done, waiting, failed), and until now the middle one could not report
-  anything at all.
+  rule and the same switch — the notification settings offer four reporters
+  (done, waiting, failed, agent / cronjob), and until now the middle one
+  could not report anything at all.
 
   Once per QUESTION, not per run: a run that asks three times has three
   things to say. The call's id is what tells them apart.
@@ -63,9 +63,10 @@ import { t } from './texte.svelte.js'
    app/db/repositories/auftraege.py. */
 const ENDEN = ['fertig', 'gescheitert', 'abgebrochen', 'unterbrochen']
 
-/* What an ending is worth as an occurrence. An abort is missing on
-   purpose — it is not a fourth kind, it is the one that says nothing. */
-const VORFALL = { fertig: 'fertig', gescheitert: 'fehler', unterbrochen: 'fehler' }
+/* What an ending is worth as an occurrence. A run that ended well is
+   `agent_cronjob`, with a sound of its own: "done" belongs to an answer in
+   a chat. An abort is missing on purpose — it is the one that says nothing. */
+const VORFALL = { fertig: 'agent_cronjob', gescheitert: 'fehler', unterbrochen: 'fehler' }
 
 /* Long enough for a sentence, short enough that three of them stacked stay
    readable. The toast wraps, so this is about attention, not pixels. */

@@ -31,9 +31,10 @@ _SUBPROCESS = {"Popen", "run", "call", "check_call", "check_output"}
 _ASYNCIO = {"create_subprocess_exec", "create_subprocess_shell", "_process_from_line"}
 
 # The two files that open a program for its own window — the browser and
-# the file manager. Their windows are the point, so their calls stay as
-# they are.
-_OWN_WINDOW = {"appfenster.py": 1, "ordner_oeffnen.py": 2}
+# the file manager, which shows a folder, opens a file, opens a text file in
+# the editor and shows a file selected (four starts). Their windows are the
+# point, so their calls stay as they are.
+_OWN_WINDOW = {"appfenster.py": 1, "ordner_oeffnen.py": 4}
 
 
 @pytest.fixture

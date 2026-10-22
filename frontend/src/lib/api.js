@@ -57,6 +57,20 @@ const NEULADE_SPERRE_MS = 60_000
    refusal is left standing where it can be seen. */
 const NEULADE_FENSTER_MS = 10 * 60_000
 const NEULADE_HOECHSTENS = 3
+/* A reload after which the service takes the page's key again did its job
+   and counts for nothing: the limits above are there for a key that stays
+   wrong, not for a service that was restarted a fourth time within ten
+   minutes. Every call but the sign-in needs the key, so an answer that is
+   not a refusal, to a call that carried one, is the service saying that this
+   page's key is the right one now. */
+function neuladeVergessen() {
+  if (!SCHLUESSEL) return
+  try {
+    if (sessionStorage.getItem(NEULADE_MARKE) !== null) sessionStorage.removeItem(NEULADE_MARKE)
+  } catch {
+    /* No tab storage: there was no mark either. */
+  }
+}
 export function sitzungNeuLaden() {
   if (typeof window === 'undefined') return false
   /* A page that never had a key has none to be stale: a refusal there is a
@@ -223,6 +237,7 @@ async function rufRoh(pfad, optionen = {}) {
     },
   })
   if (!antwort.ok) throw await errorFrom(antwort)
+  neuladeVergessen()
   return antwort
 }
 
@@ -301,6 +316,15 @@ export const api = {
   uebersetzungen: (sprache) =>
     ruf(`/translations/${sprache}`, { headers: { [LANGUAGE_HEADER]: sprache } }),
   werkzeuge: () => ruf('/tools'),
+  /* The web app of the settings: its state, and the four things the page does.
+     Every call answers with the same state. */
+  webApp: {
+    state: () => ruf('/web-app'),
+    setPassword: (password) => ruf('/web-app/password', { method: 'PUT', body: alsText({ password }) }),
+    start: () => ruf('/web-app/start', { method: 'POST' }),
+    stop: () => ruf('/web-app/stop', { method: 'POST' }),
+    startTailscale: () => ruf('/web-app/tailscale/start', { method: 'POST' }),
+  },
   /* The command runs of a chat, and the stream that keeps them current.
      `ab` on the answer is the event count already covered — passed straight
      back into `laeufeStrom` so the stream resumes instead of repeating. */
@@ -315,9 +339,17 @@ export const api = {
   bildmodelle: () => ruf('/bild/modelle'),
   bildProtokoll: () => ruf('/bild/server/log'),
   /* The starting values a model opens on — its family read from the file's
-     own header, that family's start values and the companion files that
-     fit it. Asked whenever the chosen model changes. */
-  bildVorgaben: (modell) => ruf(`/bild/vorgaben${modell ? `?modell=${encodeURIComponent(modell)}` : ''}`),
+     own header, that family's start values (the model's variant over them)
+     and the companion files that fit it. Asked whenever the chosen model
+     changes. A family said by hand decides the start values the service
+     answers with, and nothing else. */
+  bildVorgaben: (modell, chosenFamily = '') => {
+    const query = new URLSearchParams()
+    if (modell) query.set('modell', modell)
+    if (chosenFamily) query.set('chosen_family', chosenFamily)
+    const text = query.toString()
+    return ruf(`/bild/vorgaben${text ? `?${text}` : ''}`)
+  },
   /* The one table of model families (app/image_families.py). */
   bildFamilien: () => ruf('/bild/familien'),
   /* The further sd.cpp switches and their files (app/image_switches.py). */
@@ -327,7 +359,9 @@ export const api = {
   imageDevices: () => ruf('/bild/devices'),
   convertModel: (model, weightType) =>
     ruf('/bild/convert', { method: 'POST', body: alsText({ model, weight_type: weightType }) }),
-  collectImatrix: (model, on) => ruf('/bild/imatrix', { method: 'POST', body: alsText({ model, on }) }),
+  convertFp16: (model) =>
+    ruf('/bild/convert-fp16', { method: 'POST', body: alsText({ model }) }),
+  collectImatrix: (on) => ruf('/bild/imatrix', { method: 'POST', body: alsText({ on }) }),
   /* What the program kept for a picture it drew: the prompt, the model and
      the values, by the picture's name. Empty where it kept nothing. */
   drawnWith: (name) => ruf(`/bild/info?name=${encodeURIComponent(name)}`),
@@ -418,6 +452,18 @@ export const api = {
     }),
   spracheStoppen: () => ruf('/sprachserver/stop', { method: 'POST' }),
   spracheOrdnerOeffnen: () => ruf('/sprachserver/folder', { method: 'POST' }),
+  /* The voice sample: a recording kept in the speech model folder (and
+     chosen), handed back as a WAV, deleted. The name travels in the path. */
+  voiceSampleSave: (wav) =>
+    ruf('/sprachserver/voice-sample', {
+      method: 'POST',
+      headers: { 'Content-Type': 'audio/wav' },
+      body: wav,
+    }),
+  voiceSampleBlob: async (name) =>
+    (await rufRoh(`/sprachserver/voice-sample/${encodeURIComponent(name)}`)).blob(),
+  voiceSampleDelete: (name) =>
+    ruf(`/sprachserver/voice-sample/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   /* `bereinigen: false` for the readings taken while somebody still speaks —
      they are replaced a second later, and only the pass after the stop is
      worth a tidy-up. */
@@ -457,6 +503,10 @@ export const api = {
     ruf('/bereinigungsserver/start', { method: 'POST', body: alsText({ modell, port: port ?? null }) }),
   bereinigungStoppen: () => ruf('/bereinigungsserver/stop', { method: 'POST' }),
 
+  /* Tokens per second of a running server — model, agent, cleanup or
+     speech — as the service reads them from the server's own counters. */
+  serverThroughput: (server) => ruf(`/servers/${server}/throughput`),
+
   /* The assets view: the saved pictures, and the storage locations behind
      them — one place to see what was drawn and to move where it is kept. */
   /* The saved pictures; with `chat` only that chat's, with `projekt` those
@@ -494,6 +544,10 @@ export const api = {
   agentenmodellStarten: (modell) =>
     ruf('/agentenmodell/start', { method: 'POST', body: alsText({ modell }) }),
   agentenmodellStoppen: () => ruf('/agentenmodell/stop', { method: 'POST' }),
+  agentenmodellChatTemplateEdit: (modell) =>
+    ruf('/agentenmodell/chat-template/edit', { method: 'POST', body: alsText({ modell }) }),
+  agentenmodellChatTemplateReveal: (modell) =>
+    ruf('/agentenmodell/chat-template/reveal', { method: 'POST', body: alsText({ modell }) }),
   agentenmodellProtokoll: () => ruf('/agentenmodell/log'),
   bildZeichnen: (daten) => ruf('/bild', { method: 'POST', body: alsText(daten) }),
 
@@ -614,12 +668,27 @@ export const api = {
   /* What lies in the scripts folder — the wall under the folder row in the
      schedules mask, so a script is picked instead of typed. */
   skripteListe: () => ruf('/skripte'),
+  /* The beginning of one script's text, for a tile: only so many bytes are
+     asked for as the tile shows. Asked with the header — this route does not
+     take the key in its address, as a picture's does. */
+  scriptStart: async (name, bytes) => {
+    const answer = await rufRoh(`/skripte/text?name=${encodeURIComponent(name)}`, {
+      headers: { Range: `bytes=0-${bytes - 1}` },
+    })
+    return (await answer.text()).slice(0, bytes)
+  },
   runnerAuskunft: () => ruf('/runner'),
   /* The machine's one memory pool, for the pill in the header. */
   speicherBlick: () => ruf('/system/speicher'),
   runnerProtokoll: () => ruf('/runner/log'),
   runnerStarten: (daten) => ruf('/runner/start', { method: 'POST', body: alsText(daten) }),
   runnerStoppen: () => ruf('/runner/stop', { method: 'POST' }),
+  /* The chat template row: the copy of the model's template opened in the
+     text editor, and its file shown in the file manager. */
+  runnerChatTemplateEdit: (modell) =>
+    ruf('/runner/chat-template/edit', { method: 'POST', body: alsText({ modell }) }),
+  runnerChatTemplateReveal: (modell) =>
+    ruf('/runner/chat-template/reveal', { method: 'POST', body: alsText({ modell }) }),
   /* A companion (mmproj/mtp) carries which model it belongs to and its
      role, so the service records the association in a manifest and the
      runner attaches it later without guessing from file names. */
@@ -639,6 +708,10 @@ export const api = {
      and scopes the search to that kind alone. */
   modellSuche: (q, art, anzahl = 12) =>
     ruf(`/models/search?q=${encodeURIComponent(q)}&art=${art}&anzahl=${anzahl}`),
+  /* The round picture of a repository's owner on Hugging Face, as a data
+     URL — or a 404 when there is none. Fetched by our server, never by the
+     page. */
+  ownerAvatar: (owner) => ruf(`/models/avatar/${encodeURIComponent(owner)}`),
   /* The model files of one found repository — what the download can finish.
      `art` is the tab it was found in; it decides which file forms count. */
   modellDateien: (repo, art) =>
@@ -772,6 +845,8 @@ export const api = {
   oauthStart: (daten) =>
     ruf('/tools/oauth/start', { method: 'POST', body: alsText(daten) }),
   oauthStatus: () => ruf('/tools/oauth/status'),
+  /* The return address a provider has to be given, as the service uses it. */
+  oauthRedirect: () => ruf('/tools/oauth/redirect'),
   oauthVergessen: (server) =>
     ruf(`/tools/oauth/${encodeURIComponent(server)}`, { method: 'DELETE' }),
 

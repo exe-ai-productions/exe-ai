@@ -4,12 +4,15 @@
 // (unless one is already answering — a second window must not become a
 // second service), wait for the port, then send the window to the interface.
 //
-// Closing the main window ends the whole program — but not the service. The
-// service outlives the window, whether this window started it or only found
-// it running: the terminal client talks to the same service, and a client
-// in the middle of an answer must not lose it because the window went; the
-// next window, and the next client, attach to the service that is still
-// there, with its model server and its running chats. So the service is
+// Closing the main window does not end the program: it runs on with its sign
+// in the menu bar (menueleiste.js), and the sign opens the window again. The
+// program ends from the sign's menu, with Cmd+Q, or for an update. Either
+// way the service is not ended with it. The service outlives the window,
+// whether this window started it or only found it running: the terminal
+// client talks to the same service, and a client in the middle of an answer
+// must not lose it because the window went; the next window, and the next
+// client, attach to the service that is still there, with its model server
+// and its running chats. So the service is
 // started cut loose from the shell (a session of its own, no shared
 // streams), on every platform, and before-quit ends only what belongs to
 // the window: the terminals inside it. The service ends through `exe service stop`,
@@ -17,8 +20,8 @@
 // an update is installed (endServiceForUpdate).
 
 const {
-  app, BrowserWindow, Menu, clipboard, globalShortcut, ipcMain, nativeImage, nativeTheme, screen, session,
-  shell,
+  app, BrowserWindow, ClipboardItem, Menu, Tray, clipboard, globalShortcut, ipcMain, nativeImage, nativeTheme, screen,
+  session, shell,
 } = require('electron')
 const { spawn } = require('child_process')
 const fs = require('fs')
@@ -241,8 +244,10 @@ function geometrieSchreiben(fenster) {
     // The frame colour and the frame's scheme share the file and stay in it.
     const colour = frameColourRead()
     const scheme = frameSchemeRead()
+    const folded = sidebarFoldedRead()
     fs.writeFileSync(geometriedatei(), JSON.stringify({
       ...fenster.getNormalBounds(), ...(colour ? { colour } : {}), ...(scheme ? { scheme } : {}),
+      ...(folded ? { folded } : {}),
     }))
   } catch (e) {
     /* not worth failing the shutdown over */
@@ -274,6 +279,18 @@ function windowFileRead() {
 function frameColourRead() {
   const { colour } = windowFileRead()
   return typeof colour === 'string' && FRAME_COLOUR.test(colour) ? colour.toLowerCase() : null
+}
+
+// Where no colour is kept yet (the very first start), the page will show the
+// look Auto: Exe where the system is dark, Snow where it is light. These are
+// the solid frame tones (--bg-seite) of those two looks in stil/global.css, so
+// window, splash and interface open on one colour and nothing changes on the
+// way up. A test keeps them equal to the stylesheet.
+const AUTO_GROUND_DARK = '#151514'
+const AUTO_GROUND_LIGHT = '#e2e2e2'
+
+function autoGround() {
+  return nativeTheme.shouldUseDarkColors ? AUTO_GROUND_DARK : AUTO_GROUND_LIGHT
 }
 
 function frameColourKeep(colour) {
@@ -336,6 +353,39 @@ function frameSchemeApply(scheme) {
 ipcMain.on('frame-scheme', (event, scheme) => {
   if (!fenster || fenster.isDestroyed() || event.sender !== fenster.webContents) return
   if (frameSchemeApply(scheme)) frameSchemeKeep(scheme)
+})
+
+// ---------------------------------------------------------------------------
+// The window buttons over the sidebar
+//
+// On the Mac the three window buttons stand in the first row of the sidebar
+// (topbar.js): in front of the mark while the sidebar is open, centred over
+// the signs of the narrow bar while it is folded. Only the page knows which
+// of the two stands, so it says so (preload.js) every time it changes, and the
+// shell moves the buttons there. Kept beside the colour, so the next start
+// builds the window with the buttons where they stood. Nowhere else is
+// anything set or kept.
+
+function sidebarFoldedRead() {
+  return windowFileRead().folded === true
+}
+
+function sidebarFoldedKeep(folded) {
+  const kept = windowFileRead()
+  if ((kept.folded === true) === folded) return
+  try {
+    fs.writeFileSync(geometriedatei(), JSON.stringify({ ...kept, folded }))
+  } catch {
+    /* the next start puts the buttons where the open sidebar wants them */
+  }
+}
+
+ipcMain.on('sidebar-folded', (event, folded) => {
+  if (process.platform !== 'darwin') return
+  if (!fenster || fenster.isDestroyed() || event.sender !== fenster.webContents) return
+  const is = folded === true
+  fenster.setWindowButtonPosition(topbar.buttonsAt(is))
+  sidebarFoldedKeep(is)
 })
 
 // ---------------------------------------------------------------------------
@@ -562,6 +612,8 @@ const regel = require('./adressregel')
 const kontextmenue = require('./kontextmenue')
 const { thumbnail } = require('./thumbnail')
 const dienstsuche = require('./dienstsuche')
+const menueleiste = require('./menueleiste')
+const topbar = require('./topbar')
 const terminal = require('./terminal')
 const { istHandbuch } = regel
 
@@ -643,7 +695,7 @@ function fensterweiche({ url }, inhalt) {
 //
 // — which anything preferring rich text over pixels (Mail, Notes, Word, a
 // chat box) picks up instead of the picture. Fetching the bytes ourselves
-// and writing only `{ image }` never produces that second flavour, so there
+// and writing only `image/png` never produces that second flavour, so there
 // is nothing here to work around.
 async function bildKopieren(adresse) {
   const bild = adresse.startsWith('data:')
@@ -655,7 +707,9 @@ async function bildKopieren(adresse) {
   // answers): then the clipboard is none of our business — whatever the
   // user had in it stays.
   if (bild.isEmpty()) return
-  clipboard.write({ image: bild })
+  await clipboard.write([
+    new ClipboardItem({ 'image/png': new Blob([bild.toPNG()], { type: 'image/png' }) }),
+  ])
 }
 
 /* The doc folder's previews (thumbnail.js): only of what the service this
@@ -700,7 +754,32 @@ let menuWords = kontextmenue.wordsFrom(null)
 ipcMain.on('menu-words', (event, sent) => {
   if (!fenster || fenster.isDestroyed() || event.sender !== fenster.webContents) return
   menuWords = kontextmenue.wordsFrom(sent)
+  // The page sends its words once it stands (and listens for the notice
+  // before it does), so this is also the moment a notice that waited for it
+  // can be handed over.
+  pageTold = true
+  noticeDeliver()
+  // The sign's menu speaks the same language, and is set anew with it. After
+  // the notice: a menu that cannot be set must not hold the notice back.
+  try {
+    if (sign) sign.setWords(sent)
+  } catch (failure) {
+    console.error('Menu bar: setting the words failed:', failure && failure.message)
+  }
 })
+
+/* A notice for the page, from the shell: today only that ending the service
+   from the sign's menu failed. It is handed over once — at once where the
+   page stands, else as soon as it does (the window was closed, or is still
+   loading) — and the page shows it in its own words. */
+let pageTold = false
+let noticePending = false
+
+function noticeDeliver() {
+  if (!noticePending || !pageTold || !fenster || fenster.isDestroyed()) return
+  noticePending = false
+  fenster.webContents.send('shell-notice', 'service-stop-failed')
+}
 
 /* The list of entries comes from kontextmenue.js (plain JavaScript, checked
    by tests/test_kontextmenue.py); this is the half that needs a window: each
@@ -779,7 +858,14 @@ function kontextmenueBauen(inhalt, params) {
           },
         }
       }
-      return { label: eintrag.label, click: () => clipboard.writeText(eintrag.adresse) }
+      return {
+        label: eintrag.label,
+        click: () => {
+          clipboard.writeText(eintrag.adresse).catch((fehler) => {
+            console.error('Copy failed:', fehler)
+          })
+        },
+      }
     })
 }
 
@@ -804,7 +890,7 @@ function rememberManual(inhalt) {
   inhalt.on('did-create-window', (neues, angaben) => {
     if (!istHandbuch(angaben && angaben.url)) return
     hilfefenster = neues
-    // /hilfe/ carries its own <title> and would overwrite "Exe AI — Help"
+    // /help/ carries its own <title> and would overwrite "Exe AI — Help"
     // as soon as it loads.
     neues.on('page-title-updated', (ereignis) => ereignis.preventDefault())
     neues.on('closed', () => {
@@ -850,6 +936,8 @@ let kind = null
 let fenster = null
 let hilfefenster = null
 let beendet = false
+// The sign in the menu bar (menueleiste.js), once the program is ready.
+let sign = null
 
 // Shown the moment the service is known to be unreachable, whether that
 // verdict comes early (spawn itself failed, or the service died before it
@@ -1053,17 +1141,22 @@ function navigationDecide(contents, details, redirect) {
 
 function fensterBauen() {
   const gemerkt = geometrieLesen()
+  // The scheme of that look, before the window is there to be drawn (and
+  // before the system's own scheme is asked below: a forced one counts).
+  frameSchemeApply(frameSchemeRead())
   // The frame colour of the look shown last: the ground of the window until
   // a page paints over it, and the ground of the splash. Without one kept,
-  // window and splash are what they always were.
-  const ground = frameColourRead()
-  if (ground) console.log(`Window ground: ${ground}`)
-  // The scheme of that look, before the window is there to be drawn.
-  frameSchemeApply(frameSchemeRead())
+  // the first start, it is the colour of the look Auto on this system.
+  const ground = frameColourRead() || autoGround()
+  console.log(`Window ground: ${ground}`)
+  // The top bar: on the Mac the page draws it (topbar.js).
+  const topBarOptions = topbar.topBarOptions(process.platform, sidebarFoldedRead())
+  console.log(`Window top bar: ${JSON.stringify(topBarOptions)}`)
   fenster = new BrowserWindow({
     ...(gemerkt || { width: BREITE, height: HOEHE, center: true }),
     ...menuBarOptions(),
-    ...(ground ? { backgroundColor: ground } : {}),
+    ...topBarOptions,
+    backgroundColor: ground,
     minWidth: MIN_BREITE, minHeight: MIN_HOEHE,
     title: 'Exe AI',
     webPreferences: {
@@ -1073,6 +1166,8 @@ function fensterBauen() {
          shortcut (see preload.js). Everything else about the interface is
          still a plain web page that knows nothing about this shell. */
       preload: path.join(__dirname, 'preload.js'),
+      /* Tells the bridge whether the page draws the top bar. */
+      additionalArguments: topbar.topBarArguments(process.platform),
       /* The viewer that draws a PDF's pages is a built-in plugin, and the
          window loads none unless told to. The page shows a PDF document in
          a frame; without this the frame stays empty. */
@@ -1080,7 +1175,7 @@ function fensterBauen() {
     },
   })
   fenster.loadFile(
-    path.join(__dirname, 'anzeige', 'index.html'), ground ? { query: { ground } } : undefined,
+    path.join(__dirname, 'anzeige', 'index.html'), { query: { ground } },
   )
   // The splash shows a failed start every time it has just loaded: the
   // first time when the verdict came while it was still loading, and again
@@ -1088,6 +1183,10 @@ function fensterBauen() {
   fenster.webContents.on('did-finish-load', () => {
     if (dienstFehlgeschlagen) fehlstartSchreiben()
   })
+  // A page that loads has not sent its words yet. The window's own page only:
+  // a frame inside it (a document, a preview) loading changes nothing.
+  pageTold = false
+  fenster.webContents.on('did-navigate', () => { pageTold = false })
 
   // The program is called Exe AI, and the title bar says so. Left alone,
   // Chromium replaces the window title with the page's own <title> the
@@ -1103,7 +1202,7 @@ function fensterBauen() {
 
   // The manual, second window — and every other address the page asks for.
   //
-  // The interface asks for the manual with a plain window.open('/hilfe/')
+  // The interface asks for the manual with a plain window.open('/help/')
   // whenever the Tauri bridge is absent — which it is here — so nothing in
   // the frontend has to know about this shell. Like the Tauri command it
   // replaces, a second click raises the window that is already open instead
@@ -1126,9 +1225,46 @@ function fensterBauen() {
   // here, so before-quit saves as well.
   fenster.on('close', () => geometrieSchreiben(fenster))
 
-  // Closing the main window means closing the program — on macOS a window
-  // otherwise just hides and the service would keep running.
-  fenster.on('closed', () => app.quit())
+  // Closing the main window leaves the program running with its sign in the
+  // menu bar; the terminals in the window end with its page (terminal.js).
+}
+
+// The window, whenever the sign, the dock or a second start asks for it: the
+// one there is, in front — or, where it was closed, a new one. The interface
+// loads as soon as the service answers, and the service is started again
+// where it does not (it was ended from the sign's menu). A service that
+// runs is never ended for a window, a service that is coming up is waited
+// for and not started twice, and one asking while another is still under
+// way is let go.
+let opening = false
+
+async function openWindow() {
+  if (beendet || opening) return
+  opening = true
+  try {
+    // A service that is just being ended is waited for, not started over.
+    if (endingService) await endingService.catch(() => {})
+    if (fenster && !fenster.isDestroyed()) {
+      bringWindowForward()
+      // On the interface, with the service answering: nothing left to do.
+      if (fenster.webContents.getURL().startsWith(ADDRESS) && (await antwortet())) return
+      // A failed start that stands on the page is over with this new try.
+      fenster.webContents
+        .executeJavaScript('delete document.body.dataset.zustand')
+        .catch(() => {})
+    } else {
+      fensterBauen()
+    }
+    dienstFehlgeschlagen = false
+    dienstAntwortete = false
+    // A service found running whose process has since gone is no service.
+    if (dienstVorgefunden && !dienstsuche.processAlive(dienstVorgefunden.pid)) dienstVorgefunden = null
+    // A service of ours that is coming up is waited for, never started twice.
+    if (!kind && !dienstVorgefunden) await dienstStarten()
+    await warten()
+  } finally {
+    opening = false
+  }
 }
 
 // The splash page is showing; switch over as soon as the service answers.
@@ -1173,12 +1309,53 @@ async function warten() {
    button does: start recording, or stop and fetch the text. */
 const DIKTAT_KUERZEL = 'CommandOrControl+Shift+M'
 
+/* Pressed where the program runs on in the menu bar without a window: the
+   window is opened, and the page is told once its microphone button stands
+   (`button.mikro`, the button of Mikrofonknopf.svelte) — the page only
+   listens after it has been built, so a message sent any earlier goes
+   nowhere. An open already under way is waited for, as long as it takes;
+   a start of the service that failed ends the wait. A press while this is
+   under way changes nothing; it would stop the recording the first one is
+   about to start. */
+let dictationPending = false
+
+async function startDictationInNewWindow() {
+  if (dictationPending) return
+  dictationPending = true
+  try {
+    await openWindow()
+    const deadline = Date.now() + 30000
+    while (opening || Date.now() < deadline) {
+      if (beendet || dienstFehlgeschlagen || !fenster || fenster.isDestroyed()) return
+      const ready =
+        fenster.webContents.getURL().startsWith(ADDRESS) &&
+        (await fenster.webContents
+          .executeJavaScript("!!document.querySelector('button.mikro')")
+          .catch(() => false))
+      if (ready) {
+        bringWindowForward()
+        fenster.webContents.send('diktat')
+        return
+      }
+      await new Promise((r) => setTimeout(r, 200))
+    }
+  } finally {
+    dictationPending = false
+  }
+}
+
 function kuerzelSetzen() {
   /* A shortcut another program already holds cannot be taken, and that is
      not a reason to refuse to start: everything else about the program works
      without it, and the button is still there to be clicked. */
   const genommen = globalShortcut.register(DIKTAT_KUERZEL, () => {
-    if (!fenster || fenster.isDestroyed()) return
+    if (dictationPending) return
+    if (!fenster || fenster.isDestroyed()) {
+      // The program runs on without a window, in the menu bar: the shortcut
+      // brings one, and the dictation begins in it.
+      if (sign) startDictationInNewWindow()
+      return
+    }
     bringWindowForward()
     fenster.webContents.send('diktat')
   })
@@ -1214,6 +1391,78 @@ const terminals = terminal.createTerminals({
   address: ADDRESS,
   command: clientProgram,
 })
+
+// ---------------------------------------------------------------------------
+// The sign in the menu bar
+//
+// The way to it is menueleiste.js. Its entries open the window, end the
+// service, and end the program; ending the service is the client's stop, the
+// one an update takes, and it takes the model server along.
+
+// The end that is under way, while there is one: a window asked for in the
+// meantime waits for it, and starts the service afterwards.
+let endingService = null
+
+function endServiceFromMenu() {
+  endingService = endServiceNow().finally(() => { endingService = null })
+  return endingService
+}
+
+async function endServiceNow() {
+  const root = dienstsuche.dataRoot({
+    packaged: app.isPackaged, repoRoot: path.join(__dirname, '..'),
+  })
+  const running = await dienstsuche.runningService({ port: PORT, root })
+  const mine = kind
+  const found = dienstVorgefunden
+  // Whatever it was doing, its end is the one asked for: no failed start.
+  dienstAntwortete = true
+  // The client's stop, and then the process itself, as before an update: the
+  // service closes its port before its model server is gone, and a window
+  // opened in between would start a second service on the same folder.
+  const words = await endRunningService(running)
+  const whose = running ? `pid ${running.pid}; ` : ''
+  console.log(`Service: ended from the menu bar (${whose}${words})`)
+  // Nothing of ours runs any more — unless another start began while this
+  // one ended, which is its own.
+  if (kind === mine) kind = null
+  if (dienstVorgefunden === found) dienstVorgefunden = null
+}
+
+// Ending the service from the menu failed: the window comes up (a new one
+// where it was closed) and the page shows a message.
+async function tellStopFailed() {
+  noticePending = true
+  try {
+    await openWindow()
+  } finally {
+    // No window came up (the program is ending): nothing waits for a page
+    // that is not there, and the notice does not wait for a later one.
+    if (!fenster || fenster.isDestroyed()) noticePending = false
+  }
+  bringWindowForward()
+  noticeDeliver()
+}
+
+function setUpSign() {
+  try {
+    sign = menueleiste.start({
+      Tray, Menu, nativeImage,
+      folder: path.join(__dirname, 'anzeige'),
+      platform: process.platform,
+      answers: antwortet,
+      openWindow,
+      endService: endServiceFromMenu,
+      endProgram: () => app.quit(),
+      endFailed: tellStopFailed,
+      log: (line) => console.error(line),
+    })
+  } catch (failure) {
+    // Without its sign the program ends with its window, as it always did.
+    sign = null
+    console.error('Menu bar: the sign could not be set up:', failure && failure.message)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // A newer version
@@ -1381,17 +1630,32 @@ function bringWindowForward() {
 
 if (app.requestSingleInstanceLock()) {
   app.on('second-instance', () => {
+    // A program that runs on in the menu bar without a window opens one.
+    if (sign && (!fenster || fenster.isDestroyed())) {
+      console.log('Second start: opening the window')
+      openWindow()
+      return
+    }
     console.log('Second start: bringing the window forward')
     bringWindowForward()
   })
   app.whenReady().then(async () => {
     // The click catcher goes into every page of the session, before any
     // window loads one.
-    session.defaultSession.setPreloads([path.join(__dirname, 'linkclicks.js')])
+    session.defaultSession.registerPreloadScript({
+      type: 'frame', id: 'linkclicks', filePath: path.join(__dirname, 'linkclicks.js'),
+    })
     menueSetzen()
     fensterBauen()
     kuerzelSetzen()
-    if (!(await dienstAnbinden())) await dienstStarten()
+    setUpSign()
+    // The sign's entries wait while the start is under way.
+    opening = true
+    try {
+      if (!(await dienstAnbinden())) await dienstStarten()
+    } finally {
+      opening = false
+    }
     // One quiet look for a newer version, once the service is on its way.
     // Whatever it finds is the page's to show; the shell shows nothing.
     updater.check()
@@ -1407,16 +1671,28 @@ if (app.requestSingleInstanceLock()) {
   app.quit()
 }
 
-app.on('will-quit', () => globalShortcut.unregisterAll())
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll()
+  if (sign) sign.remove()
+})
 
-app.on('window-all-closed', () => app.quit())
+// The dock icon on macOS asks for a window as well.
+app.on('activate', () => {
+  if (sign && (!fenster || fenster.isDestroyed())) openWindow()
+})
+
+// The last window closing does not end the program; the sign keeps it. Where
+// the sign could not be set up, nothing would keep it, and it ends.
+app.on('window-all-closed', () => {
+  if (!sign) app.quit()
+})
 
 // The way out. The service is not ended here, on no platform: it was started
 // cut loose from the shell (dienstStarten) and runs on for the terminal
 // client and the next window (the header of this file). Nothing is waited
-// for, so the quit goes through as it came — closing the window calls
-// app.quit() twice (the window's 'closed' and 'window-all-closed'), and
-// every pass simply runs through.
+// for, so the quit goes through as it came — a quit from the sign in the
+// menu bar, Cmd+Q and an update's restart can each run through more than
+// once, and every pass simply runs through.
 app.on('before-quit', () => {
   // Cmd+Q ends the program without ever closing the window — so the
   // geometry has to be written here too, before anything else, or a quit by

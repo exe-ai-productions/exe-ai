@@ -29,7 +29,7 @@ from typing import Any
 from app import einstellungswahl
 from app.agenten import HELPER_NAME, Agent
 from app.tools import (
-    auftrag_werkzeug, cron_notiz, cronjob, frage_werkzeug, memory,
+    auftrag_werkzeug, cron_notiz, cronjob, frage_werkzeug, job_werkzeug, memory,
 )
 
 BLOCKED_TOOLS = frozenset({
@@ -38,6 +38,7 @@ BLOCKED_TOOLS = frozenset({
     cronjob.WERKZEUG_NAME,
     cron_notiz.WERKZEUG_NAME,
     auftrag_werkzeug.WERKZEUG_NAME,
+    job_werkzeug.WERKZEUG_NAME,
 })
 # What a scheduled run with no agent is not offered: the same list without
 # the schedule's note. The note is the run's own — it belongs to the entry

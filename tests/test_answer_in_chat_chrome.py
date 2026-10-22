@@ -135,6 +135,14 @@ const markGeometry = () => {
   return { lineEnd, strokeTop, gap: strokeTop - lineEnd, piece: piece.display }
 }
 const dashOf = (node) => parseFloat(getComputedStyle(node).strokeDashoffset)
+// The air between the mark's outer form (its right edge on the screen) and
+// the first thing standing beside it in its row: figures, dots or the word.
+const markAir = (row) => {
+  const outline = row && row.querySelector('.outline')
+  const beside = row && Array.from(row.children).find((n) => n.tagName.toLowerCase() !== 'svg')
+  if (!outline || !beside) return null
+  return beside.getBoundingClientRect().left - outline.getBoundingClientRect().right
+}
 // The top of the mark's outer form, frame by frame, and whether the line of
 // the text entry reaches the line of the row under it (`hole`, 0 = it does).
 const recordFrames = (count) => new Promise((resolve) => {
@@ -277,6 +285,7 @@ scene.nachricht = {
 }
 await settle()
 const finished = measure()
+report.air = { finished: markAir(document.querySelector('.place.done .wartet')) }
 report.end = {
   running, finished,
   jumpBottom: Math.abs(finished.bottom - running.bottom),
@@ -418,6 +427,7 @@ report.noText = {
   rowHeight: silentRow ? silentRow.getBoundingClientRect().height : -1,
   foot: getComputedStyle(document.querySelector('.fuss')).visibility,
 }
+report.air.waiting = markAir(silentRow)
 
 // 11. The mark never goes away while the answer runs: over a whole round its
 // outer form and the mark itself never drop below full opacity, the outer
@@ -492,6 +502,39 @@ report.stored13 = {
   continues: storedRow ? getComputedStyle(storedRow, '::after').content !== 'none' : false,
 }
 
+// 13b. A refusal: its sentence stands under the answer with the reason
+// verbatim; an empty answer is not additionally called silent. Other ends
+// carry no such line.
+const refusalOf = (id, content, stats) => {
+  scene.again += 1
+  scene.laeuft = false
+  scene.nachricht = {
+    id, rolle: 'assistant', content,
+    abschnitte: content ? [{ art: 'content', text: content }] : [], werkzeuge: [], stats,
+  }
+}
+const notes = () => Array.from(document.querySelectorAll('.hinweis')).map((n) => (n.textContent || '').replace(/\s+/g, ' ').trim())
+const refusalRead = () => ({
+  notes: notes(),
+  reason: Array.from(document.querySelectorAll('.hinweis .erklaerung')).map((n) => (n.textContent || '').trim()),
+  answer: (document.querySelector('.antwortlinie')?.textContent || '').includes('Words before the refusal.'),
+})
+refusalOf('m15a', '', { abgelehnt: true, ablehnung_erklaerung: 'The request touches a topic the maker keeps closed.' })
+await settle()
+report.refusalEmpty = refusalRead()
+refusalOf('m15b', 'Words before the refusal.', { abgelehnt: true })
+await settle()
+report.refusalAfterWords = refusalRead()
+refusalOf('m15c', '', {})
+await settle()
+report.silentEmpty = refusalRead()
+refusalOf('m15d', 'Words before the refusal.', { abgeschnitten: true })
+await settle()
+report.cutOff = refusalRead()
+refusalOf('m15e', 'Words before the refusal.', {})
+await settle()
+report.plainEnd = refusalRead()
+
 // 14. A new line of the running text: the mark glides down frame by frame on
 // the spring, the line stays whole between the text and the mark.
 report.glide = await grownAnswer('m14')
@@ -554,6 +597,64 @@ report.stored = {
   spans: document.querySelectorAll('.flow-char').length,
   text: document.querySelector('.fliesstext')?.textContent ?? null,
 }
+// 10a. No text yet: the foot of a running answer shows no button, and keeps
+// its height for the end of the run.
+scene.again += 1
+scene.laeuft = true
+scene.nachricht = { id: 'm11', rolle: 'assistant', content: '', abschnitte: [], werkzeuge: [], stats: {} }
+await wait(400)
+const bareFoot = document.querySelector('.fuss')
+report.bare = {
+  foot: bareFoot ? getComputedStyle(bareFoot).visibility : null,
+  buttons: Array.from(document.querySelectorAll('.fuss .tat')).map((b) => getComputedStyle(b).visibility),
+  height: bareFoot ? bareFoot.getBoundingClientRect().height : -1,
+}
+scene.laeuft = false
+scene.nachricht = { ...scene.nachricht, content: 'Done.', abschnitte: [{ art: 'content', text: 'Done.' }] }
+await wait(400)
+const doneFoot = document.querySelector('.fuss')
+report.bare.doneFoot = doneFoot ? getComputedStyle(doneFoot).visibility : null
+report.bare.doneHeight = doneFoot ? doneFoot.getBoundingClientRect().height : -1
+report.bare.doneButtons = Array.from(document.querySelectorAll('.fuss .tat')).map((b) => getComputedStyle(b).visibility)
+
+// 10b. An answer that ends with a list stands as high after its end as in the
+// last frame of its run.
+const listText = 'Here is what I found:\n\n- the first point\n- the second point\n- the third point, with a list inside:\n  - one inside\n  - two inside\n'
+const endsWith = async (id, text) => {
+  scene.again += 1
+  scene.laeuft = true
+  scene.nachricht = { id, rolle: 'assistant', content: text, abschnitte: [{ art: 'content', text }], werkzeuge: [], stats: {} }
+  const wanted = text.replace(/[-\n ]/g, '').length
+  for (let k = 0; k < 150 && (document.querySelector('.fliesstext')?.textContent.replace(/[-\n ]/g, '').length ?? 0) < wanted; k += 1) {
+    await wait(100)
+  }
+  const entry = () => Array.from(document.querySelectorAll('.ereignis.textzeile')).pop()
+  const sizes = () => ({ row: row().getBoundingClientRect().height, entry: entry().getBoundingClientRect().height })
+  // The spring rests when the entry's height stood still for half a second.
+  const atRest = async () => {
+    let still = 0
+    let last = -1
+    for (let k = 0; k < 100 && still < 5; k += 1) {
+      await wait(100)
+      const now = entry().getBoundingClientRect().height
+      still = now === last ? still + 1 : 0
+      last = now
+    }
+  }
+  await atRest()
+  const running = sizes()
+  scene.laeuft = false
+  await atRest()
+  const finished = sizes()
+  return {
+    running, finished,
+    jumpRow: Math.abs(finished.row - running.row),
+    jumpEntry: Math.abs(finished.entry - running.entry),
+  }
+}
+report.listEnd = await endsWith('m12', listText)
+report.paragraphEnd = await endsWith('m13', 'First I say this.\n\nThen I say that.')
+
 // 10. The row of a helper opens the agents with its card picked.
 scene.again += 1
 scene.laeuft = false
@@ -717,7 +818,7 @@ def report() -> dict:
         )
         (folder / "vite.config.js").write_text(VITE_CONFIG, encoding="utf-8")
         build = subprocess.run(
-            [str(FRONTEND / "node_modules" / ".bin" / "vite"), "build", "--config", "vite.config.js"],
+            [shutil.which("vite", path=str(FRONTEND / "node_modules" / ".bin")), "build", "--config", "vite.config.js"],
             cwd=folder,
             capture_output=True,
             text=True,
@@ -753,6 +854,36 @@ def test_at_the_end_the_last_text_line_stays_and_the_answer_stays_as_high(report
     assert end["markGone"] and end["numbersInPlace"]
     assert end["jumpBottom"] <= 1, end
     assert end["jumpHeight"] <= 1, end
+
+
+def test_a_refusal_stands_under_the_answer_with_its_reason_and_without_the_silent_line(report):
+    empty = report["refusalEmpty"]
+    reason = "The request touches a topic the maker keeps closed."
+    assert empty["notes"] == [f"nachricht.abgelehnt {reason}"], empty
+    assert empty["reason"] == [reason], empty
+    # Without the refusal the same empty answer is called silent.
+    assert report["silentEmpty"]["notes"] == ["nachricht.stumm"], report["silentEmpty"]
+
+
+def test_the_text_before_a_refusal_stays_and_a_refusal_without_reason_has_no_reason_line(report):
+    after = report["refusalAfterWords"]
+    assert after["answer"] and after["notes"] == ["nachricht.abgelehnt"] and after["reason"] == [], after
+
+
+def test_silence_other_ends_carry_no_refusal_line(report):
+    # A cut-off answer keeps its own sentence; a plain end has no note.
+    assert report["cutOff"]["notes"] == ["nachricht.abgeschnitten"], report["cutOff"]
+    assert report["plainEnd"]["notes"] == [] and report["plainEnd"]["reason"] == [], report["plainEnd"]
+
+
+def test_the_mark_keeps_as_much_air_from_its_neighbour_as_a_dot_from_its_text(report):
+    """13 pixels between the outer form of the mark and the figures of a
+    finished answer, and the same beside the dots and the word of a waiting
+    one (without the padding of the row: 6.2). A dot of the line keeps 12.5
+    to 13 from its text."""
+    air = report["air"]
+    assert air["finished"] is not None and abs(air["finished"] - 13) <= 0.5, air
+    assert air["waiting"] is not None and abs(air["waiting"] - 13) <= 0.5, air
 
 
 def test_a_block_holds_all_calls_and_its_window_shows_ten_rows_at_most(report):
@@ -855,13 +986,14 @@ def test_under_a_running_text_only_the_mark_stands_in_its_row(report):
 
 def test_before_the_first_word_the_wait_row_speaks_as_it_always_did(report):
     """The silence check: with no text the word, the dots and the clock
-    stand by the mark and the foot is not hidden."""
+    stand by the mark; the foot under it is invisible, like under running
+    text (its buttons stand only once the answer is over)."""
     silent = report["noText"]
     assert silent["mark"], silent
     assert "working" in silent["word"] and "3 s" in silent["word"], silent
     assert silent["dots"] == 1 and silent["clock"] == 1, silent
     assert silent["rowHeight"] == 20, silent
-    assert silent["foot"] == "visible", silent
+    assert silent["foot"] == "hidden", silent
 
 
 def test_the_readings_of_a_finished_answer_stand_in_the_quietest_text_step(report):
@@ -946,3 +1078,26 @@ def test_with_less_motion_the_mark_stands_at_its_new_place_in_the_first_frame(re
     assert grow["total"] >= 0.8 * grow["lineHeight"], ("the mark did not move down", grow)
     assert abs(grow["first"] - grow["last"]) <= 0.5, ("the mark glided although less motion was asked for", grow)
     assert grow["maxHole"] <= 0.5, grow
+
+
+def test_a_running_answer_without_text_shows_no_button_and_keeps_the_height_of_its_foot(report):
+    """Before the first word the foot is invisible like under running text,
+    and it is as high then as after the end (so the end moves nothing); the
+    finished answer shows both buttons. Silence probe: the finished one."""
+    bare = report["bare"]
+    assert bare["foot"] == "hidden", bare
+    assert bare["buttons"] and set(bare["buttons"]) == {"hidden"}, bare
+    assert bare["doneFoot"] == "visible", bare
+    assert bare["doneButtons"] and set(bare["doneButtons"]) == {"visible"}, bare
+    assert abs(bare["height"] - bare["doneHeight"]) <= 0.5, bare
+
+
+def test_an_answer_that_ends_with_a_list_is_as_high_after_its_end_as_in_its_last_frame(report):
+    """The entry of the text and the answer's line differ by under half a
+    pixel between the last frame of the run and the finished answer (before:
+    one margin of the last list item, 3.7 px, more with a nested list).
+    Silence probe: an answer that ends with a paragraph."""
+    for case in ("listEnd", "paragraphEnd"):
+        end = report[case]
+        assert end["jumpEntry"] < 0.5, (case, end)
+        assert end["jumpRow"] < 0.5, (case, end)

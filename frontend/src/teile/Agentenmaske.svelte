@@ -7,9 +7,14 @@
   import { t } from '../lib/texte.svelte.js'
   import { fade } from 'svelte/transition'
   import { untrack } from 'svelte'
+  import { serverLogo } from '../lib/serverlogo.svelte.js'
+  import { artFuer } from '../lib/werkzeugarten.js'
+  import Hauszeichen from './Hauszeichen.svelte'
   import Schalter from './Schalter.svelte'
+  import Werkzeugzeichen from './Werkzeugzeichen.svelte'
   import Startordnerpillen from './Startordnerpillen.svelte'
   import Agentenfarbwahl from './Agentenfarbwahl.svelte'
+  import Auswahlfeld from './Auswahlfeld.svelte'
   import Zahlenfeld from './Zahlenfeld.svelte'
   import { melde, zustand } from '../lib/zustand.svelte.js'
   import { meldeText } from '../lib/meldewesen.svelte.js'
@@ -44,12 +49,21 @@
      a stated zero meaning no thinking at all, and the field can now say that
      without it being mistaken for "untouched". */
   let denklaenge = $state(null)
+  /* The stage a run asks for, a word of the chat's own scale. Empty: the file
+     names none and no thinking field goes out. The stages are the scale of
+     app/denkstufen.py; a model that lacks one drops it at the service. */
+  let thinkingStage = $state('')
+  const STAGES = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+  const stageEntries = $derived([
+    { wert: '', text: t('parameter.auto') },
+    ...STAGES.map((stage) => ({ wert: stage, text: t('denken.stufe.' + stage) })),
+  ])
   let maxBefehlssekunden = $state(null) // empty: the cascade decides, no ceiling of its own
   /* Empty means the agent picked none and keeps the shared default —
      which is exactly what every agent looked like before the field. */
   let farbe = $state('')
   /* The limits stand folded; the line says how many there are. */
-  const GRENZEN_ANZAHL = 5
+  const GRENZEN_ANZAHL = 6
   let grenzenOffen = $state(false)
   /* What the agent is for, in a sentence the chat's model reads beside the
      name when it hands work off. Empty: the file says nothing. */
@@ -69,6 +83,24 @@
   const LISTE_OFFEN_BIS = 20
   const werkzeugeGedeckelt = $derived(werkzeuge.length > LISTE_OFFEN_BIS)
 
+  /* The tools the list lets the agent use: all of them, or the picked ones
+     by their saved names — so a file that still names tools stays warned
+     while the list of tools is not loaded. The warning stands as soon as
+     that holds a tool of the command kind and one of the web kind: what the
+     agent reads from the web could then steer what it runs. */
+  const allowed = $derived(
+    alleWerkzeuge
+      ? werkzeuge
+      : gewaehlteWerkzeuge.map((name) => ({
+          name,
+          server: werkzeuge.find((w) => w.name === name)?.server ?? '',
+        })),
+  )
+  const commandWebWarning = $derived(
+    allowed.some((w) => artFuer(w.name, w.server) === 'terminal') &&
+      allowed.some((w) => artFuer(w.name, w.server) === 'web'),
+  )
+
   /* Filling the form from an agent that already exists.
 
      This is the whole point of the change: every control needed to run an
@@ -85,7 +117,7 @@
   function schnappschuss() {
     return JSON.stringify([
       neuName, neuPrompt, alleWerkzeuge, gewaehlteWerkzeuge, ordner, maxRunden,
-      maxMinuten, maxTokens, denklaenge, maxBefehlssekunden, farbe, description,
+      maxMinuten, maxTokens, denklaenge, thinkingStage, maxBefehlssekunden, farbe, description,
     ])
   }
   let grund = $state(null)
@@ -103,6 +135,7 @@
     maxMinuten = quelle?.max_minutes ?? 20
     maxTokens = quelle?.max_tokens ?? null
     denklaenge = quelle?.reasoning_budget ?? null
+    thinkingStage = quelle?.reasoning_effort ?? ''
     maxBefehlssekunden = quelle?.max_command_seconds ?? null
     farbe = quelle?.color ?? ''
     description = quelle?.description ?? ''
@@ -222,6 +255,7 @@
       max_minutes: maxMinuten,
       max_tokens: maxTokens ?? null,
       reasoning_budget: denklaenge ?? null,
+      reasoning_effort: thinkingStage || null,
       max_command_seconds: maxBefehlssekunden ?? null,
       prompt: neuPrompt.trim(),
     }
@@ -248,6 +282,11 @@
 </script>
 
 <div class="maske">
+ <div class="spalten">
+  <!-- The left column: what the agent IS — its name, what it is for, its
+       instruction. The right one: what it MAY do and where. One column
+       under 860 px and on the phone. -->
+  <div class="spalte">
   <!-- The name first, across the whole width under its label: it says
        WHICH agent this is. The name is the file's identity, and saving
        writes by name. Renaming an existing agent would quietly make a second
@@ -272,7 +311,7 @@
   <!-- The instruction, under its own label like the two fields above and
        empty when empty. A prompt is prose, not a value: it was a one-line
        field, which made every agent look like it had one sentence in it. -->
-  <div class="reihe stacked">
+  <div class="reihe stacked grow">
     <span class="etikett">{t('agenten.anweisung')}</span>
     <textarea
       class="feld prompt"
@@ -280,9 +319,12 @@
       aria-label={t('agenten.anweisung')}
     ></textarea>
   </div>
+  </div>
+  <div class="spalte">
   <!-- The tool selection, as a surface: the switch mirrors the file
        truth that NO list means "every approved tool", and only with
        it off does the list of picks appear. -->
+  <div class="heading">{t('werkzeuge.titel')}</div>
   <div class="wzkopf">
     <span>{t('agenten.alle_werkzeuge')}</span>
     <Schalter
@@ -305,12 +347,19 @@
             checked={gewaehlteWerkzeuge.includes(werkzeug.name)}
             onchange={() => werkzeugSchalten(werkzeug.name)}
           />
+          <span class="wzzeichen">
+            <Werkzeugzeichen name={werkzeug.name} server={werkzeug.server} eingebaut={werkzeug.builtin}
+                             logo={werkzeug.builtin ? null : serverLogo(werkzeug.server)} />
+          </span>
           <span class="wzname werkzeugname">{werkzeug.anzeige ?? werkzeug.name}</span>
         </label>
       {:else}
         <span class="wzleer">{t('agenten.keine_werkzeuge')}</span>
       {/each}
     </div>
+  {/if}
+  {#if commandWebWarning}
+    <p class="tool-warning" role="note">{t('agenten.command_web_warning')}</p>
   {/if}
   <!-- Above the limits, because a colour says WHICH agent this is rather
        than what it may do — and it is pickable while the agent is being
@@ -329,11 +378,7 @@
        foot of the mask out of reach. -->
   <button class="grenzenkopf" aria-expanded={grenzenOffen}
           onclick={() => (grenzenOffen = !grenzenOffen)}>
-    <svg class="winkel" class:auf={grenzenOffen} width="11" height="11" viewBox="0 0 24 24"
-         fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
-         stroke-linejoin="round" aria-hidden="true">
-      <path d="M9 6l6 6-6 6" />
-    </svg>
+    <span class="winkel" class:auf={grenzenOffen}><Hauszeichen zeichen="chevron_right" groesse={11} /></span>
     <span>{t('agenten.grenzen')}</span>
     <span class="grenzenzahl">{GRENZEN_ANZAHL}</span>
   </button>
@@ -365,6 +410,10 @@
                     ganzzahlig nullwort={t('parameter.auto')} gesperrt={denkGesperrt} />
       </div>
       <div class="reihe">
+        <span class="etikett">{t('agenten.denkstufe')}</span>
+        <Auswahlfeld bind:wert={thinkingStage} eintraege={stageEntries} />
+      </div>
+      <div class="reihe">
         <span class="etikett">{t('agenten.max_befehlssekunden')}</span>
         <!-- Starts at 1 for the same reason as the answer length above. -->
         <Zahlenfeld bind:wert={maxBefehlssekunden} min={1}
@@ -372,31 +421,34 @@
       </div>
     </div>
   {/if}
+  </div>
+ </div>
   <!-- No time field here any more (Stufe 6): when an agent runs is said in
        the cron table, in one place, and nowhere else. -->
   <div class="fuss">
-    <!-- The one way out that THROWS AWAY what was typed, and it used to be
-         the quietest thing in the mask. It says so now: a step brighter than
-         the plain buttons, and a ring in the colour that means "this
-         discards". Outline only — the full colour never goes behind text. -->
-    <button class="knopf verwirft" onclick={() => onabbrechen?.()}>{t('app.abbrechen')}</button>
+    <!-- The one way out that THROWS AWAY what was typed: the cross, in the
+         colour that means "this discards". -->
+    <button class="signbutton verwirft" onclick={() => onabbrechen?.()}
+            aria-label={t('app.abbrechen')} title={t('app.abbrechen')}>
+      <Hauszeichen zeichen="kreuz" groesse={16} />
+    </button>
     <!-- Only where there is something to go back TO: on a new agent the
          empty fields already are the reset, and a control that undoes
          nothing is worse than none. -->
     {#if stand}
-      <button class="knopf" onclick={zuruecksetzen} disabled={sichert}>
-        {t('agenten.zuruecksetzen')}
+      <button class="signbutton" onclick={zuruecksetzen} disabled={sichert}
+              aria-label={t('agenten.zuruecksetzen')} title={t('agenten.zuruecksetzen')}>
+        <Hauszeichen zeichen="refresh" groesse={16} />
       </button>
     {/if}
     <button
-      class="haken"
+      class="signbutton sichern"
       onclick={sichern}
       disabled={sichert || laedt || !neuName.trim() || !neuPrompt.trim()}
       title={t('app.sichern')}
       aria-label={t('app.sichern')}
     >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-           stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4L19 7" /></svg>
+      <Hauszeichen zeichen="save" groesse={16} />
     </button>
   </div>
 </div>
@@ -406,13 +458,63 @@
      window now instead of a tile. */
   .maske {
     --etikettspalte: 108px;
+    /* Takes the room the page leaves, so the instruction can grow down to
+       the foot instead of leaving the page's lower part empty; and it is
+       its own width the two columns are measured by, not the window's. */
+    flex: 1 1 auto;
+    container: maske / inline-size;
     display: flex;
     flex-direction: column;
     gap: 10px;
     padding: 12px 14px 16px;
   }
-  /* Heading and mode on one line, the name taking whatever is left: the
-     mode is two words and never wraps, so it needs no share of its own. */
+  /* Two columns: what the agent is on the left, what it may do on the
+     right; one column under 860 px, where the window itself is narrow. */
+  .spalten {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 14px 28px;
+    align-items: stretch;
+    flex: 1 1 auto;
+  }
+  .spalte {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+  }
+  @media (max-width: 860px) {
+    .spalten { grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr auto; }
+  }
+  /* Two columns need room of their own: where the mask itself is narrow,
+     the colour code and the bin would be pushed out of the right one. */
+  @container maske (max-width: 640px) {
+    .spalten { grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr auto; }
+  }
+  :global(html[data-phone]) .spalten { grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr auto; }
+  /* A fingertip is taller than a pointer. */
+  :global(html[data-phone]) .signbutton {
+    width: 44px;
+    height: 44px;
+  }
+  /* Caution, not failure: the quiet yellow form of the house, colour on the
+     text and the line, never the full colour behind the words. */
+  .tool-warning {
+    margin: 0;
+    padding: 9px 12px;
+    border: 1px solid color-mix(in srgb, var(--gelb) 45%, var(--linie-stark));
+    background: color-mix(in srgb, var(--gelb) 8%, var(--bg));
+    border-radius: 9px;
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--gelb-text);
+  }
+  /* The tools' own heading, over the switch of "all approved tools". */
+  .heading {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
   .feld {
     width: 100%;
     /* A field on glass: glass with the house's field outline. */
@@ -446,8 +548,9 @@
   .feld.prompt {
     font: 400 13px/1.55 var(--schrift);
     resize: vertical;
-    height: 320px;
-    min-height: 78px;
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 320px;
     overflow-y: auto;
     padding: 9px 12px;
   }
@@ -471,6 +574,8 @@
   .reihe.hoch { align-items: flex-start; }
   .reihe.stacked { flex-direction: column; align-items: stretch; gap: 4px; }
   .reihe.stacked .etikett { flex: none; width: auto; }
+  /* The instruction's row takes what is left of the column. */
+  .reihe.stacked.grow { flex: 1 1 auto; }
   /* A locked row steps back the way the model window's locked row does, and
      the reason stands in the title. The number field dims its own input on
      top of that, so the field itself reads a shade quieter than the model
@@ -513,6 +618,7 @@
     font-variant-numeric: tabular-nums;
   }
   .winkel {
+    display: inline-flex;
     flex: none;
     transition: transform 0.15s;
   }
@@ -547,6 +653,18 @@
     max-height: 300px;
     overflow-y: auto;
   }
+  /* Every mark of the list in one box, whatever the mark draws: the plain
+     chevron a tool without a mark of its own gets is smaller than the
+     others and would pull its name to the left. */
+  .wzzeichen {
+    --wz-groesse: 18px;
+    flex: none;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
   .wz {
     display: flex;
     align-items: center;
@@ -574,45 +692,31 @@
     padding-top: 6px;
     border-top: none;
   }
-  .knopf {
-    border: none;
-    background: none;
-    color: var(--text-still);
-    font: inherit;
-    font-size: 12px;
-    padding: 3px 6px;
-    border-radius: 9px;
-    cursor: pointer;
-  }
-  .knopf:hover { color: var(--text); background: var(--glass-hover); }
-  /* The check beside it keeps its own weight: two loud buttons are not one
-     loud button, they are two. */
-  .knopf.verwirft {
-    color: var(--rot-text);
-    border: none;
-    border-radius: 9px;
-    padding: 5px 11px;
-    /* A state surface mixes its colour over the card glass. */
-    background: color-mix(in srgb, var(--rot) 12%, var(--glass-card));
-  }
-  .knopf.verwirft:hover {
-    color: var(--rot-text);
-    background: color-mix(in srgb, var(--rot) 18%, var(--glass-card));
-  }
-  .haken {
-    margin-left: auto;
-    border: none;
-    background: var(--glass-button);
-    box-shadow: inset 0 0 0 1px var(--glass-button-edge);
-    color: var(--text);
-    width: 30px;
-    height: 30px;
-    border-radius: 9px;
-    cursor: pointer;
+  /* The foot's signs: button glass with the field outline as a ring ON the
+     edge, so the button keeps the house's size. */
+  .signbutton {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: 9px;
+    background: var(--glass-button);
+    box-shadow: inset 0 0 0 1px var(--feldstrich);
+    color: var(--text);
+    cursor: pointer;
   }
-  .haken:hover:not(:disabled) { background: var(--text); color: var(--bg); }
-  .haken:disabled { opacity: 0.5; cursor: default; }
+  .signbutton:hover:not(:disabled) { background: var(--glass-hover); }
+  .signbutton:disabled { opacity: 0.5; cursor: default; }
+  /* Throws the typed text away: a state surface mixes its colour over the
+     button glass, the full colour never goes behind a sign. */
+  .signbutton.verwirft {
+    color: var(--rot-text);
+    background: color-mix(in srgb, var(--rot) 12%, var(--glass-button));
+  }
+  .signbutton.verwirft:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--rot) 18%, var(--glass-button));
+  }
+  .signbutton.sichern { margin-left: auto; }
 </style>

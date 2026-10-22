@@ -12,6 +12,7 @@
   it did not hold: a server connected after the list was read.
 */
 import { SERVERKATALOG } from './serverkatalog.js'
+import { ownerLogo } from './logos.js'
 import { werkzeugeLaden, werkzeugwahl } from './werkzeuge.svelte.js'
 
 const KATALOGNAMEN = new Set(SERVERKATALOG.map((k) => k.name))
@@ -37,4 +38,20 @@ export function serverLogo(name) {
     laden()
   }
   return eintrag?.logo ?? null
+}
+
+/* The house's own sources: a call of a built-in tool reaches the chat with
+   the name of its source (`shell`, `memory`, …) — the same word a server of
+   one's own may be called, and such a server never lends its logo to them. */
+const BUILT_IN_SOURCES = new Set(['clock', 'cronjob', 'dock', 'goal', 'image', 'memory', 'shell', 'skills'])
+
+/* The mark a call row wears for the server that ran it: the maker's vector
+   for a name the catalogue knows, the checked image for a server of one's
+   own, nothing for a built-in tool and for a server without a logo. */
+export function serverMark(name) {
+  if (!name || BUILT_IN_SOURCES.has(name)) return null
+  const vector = KATALOGNAMEN.has(name) ? ownerLogo(name) : null
+  if (vector) return { vector }
+  const image = serverLogo(name)
+  return image ? { image } : null
 }

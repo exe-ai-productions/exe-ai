@@ -46,7 +46,7 @@ import httpx
 
 import inspect
 
-from app import bildbausatz, image_switches, prozessstopp
+from app import bildbausatz, bildrunner, image_switches, prozessstopp, shutdown
 from app.no_console import no_window
 from app.photomaker import fingerabdruck as foto_fingerabdruck
 from app.pipe_text import live_text
@@ -56,6 +56,11 @@ from app.sddownload import ORDNER, gefundenes_programm
 # The lines the server window shows: as many as the chat runner keeps
 # (app/modellrunner.py), the oldest dropped first.
 PROTOKOLL_ZEILEN = 400
+
+# How long a server whose connection broke is given to be gone, and its reader
+# to have taken the server's last lines: a crash ends the process a moment
+# after the connection, one that merely stalls stays alive and is no crash.
+ABSTURZ_WARTE_SEKUNDEN = 2.0
 
 log = logging.getLogger(__name__)
 
@@ -267,6 +272,8 @@ class Bildturbo:
         # What the server says, for the window's server log — the same ring
         # buffer every other server keeps, filled by the one stdout reader.
         self._protokoll: deque[str] = deque(maxlen=PROTOKOLL_ZEILEN)
+        # Set when the reader of the current server's output has seen its end.
+        self._leser_fertig = threading.Event()
         # The rest of the harness the server was started with — the "Gespann".
         # VAE and detector bind at start (they are start flags, not per-request
         # HTTP fields), so a request that wants a different one needs a fresh
@@ -347,6 +354,13 @@ class Bildturbo:
         self._photomaker: str | None = None
         self._gesichter_fingerabdruck: str | None = None
         self._zeichnet = False
+        # When the server last had something to do: its start and the end of
+        # every picture it drew. The idle time counts from here
+        # (``im_leerlauf_stoppen``); a look at its state does not move it.
+        self._zuletzt = time.monotonic()
+        # True from the moment the idle time ended the server until it starts
+        # again or is stopped by hand: the next picture then starts it.
+        self._im_leerlauf_beendet = False
         # Set by ``abbrechen`` so the draw it interrupts reports itself as a
         # silent stop, not a failure.
         self._abgebrochen = False
@@ -373,6 +387,11 @@ class Bildturbo:
         # so counting is armed per request (``_zaehl``) and disarmed after.
         self._fortschritt: dict | None = None
         self._zaehl: dict | None = None
+        # The newest live-preview picture of the running draw with its stamp
+        # (microseconds), as one value so a reader never sees a stamp beside
+        # the picture of another. None before the first and after the last
+        # picture of every draw.
+        self._preview: tuple[int, bytes] | None = None
 
     @property
     def programm(self) -> Path | None:
@@ -381,6 +400,11 @@ class Bildturbo:
     @property
     def modell(self) -> str | None:
         return self._modell if self.laeuft() else None
+
+    @property
+    def port(self) -> int:
+        """The port this instance's server listens on, running or not."""
+        return self._port
 
     # The rest of the running Gespann, read back the same way — None while
     # nothing runs, so the window's own restart pill (is what I am about to
@@ -630,6 +654,7 @@ class Bildturbo:
         modell_pfad: Path,
         *,
         vae: Path | None = None,
+        vae_tae: bool = False,
         ad_modell: Path | None = None,
         ad_prompt: str = "",
         ad_negativ: str = "",
@@ -710,6 +735,11 @@ class Bildturbo:
                 # since: there is nothing to bring back.
                 log.info("Image server is not started again: it was stopped since its pause")
                 return False
+            if shutdown.begun():
+                # The service is ending and has stopped, or is about to stop,
+                # every server it holds: one started now would outlive it.
+                log.info("Image server is not started: the service is ending")
+                return False
             programm = self.programm
             if programm is None:
                 raise BildturboFehler("bild.kein_programm")
@@ -750,13 +780,9 @@ class Bildturbo:
                 *modell_teile,
                 "--listen-ip", "127.0.0.1",
                 "--listen-port", str(self._port),
-                # Flash attention in the diffusion model — this build supports
-                # it (it is what makes the turbo a turbo), and here it is safe
-                # because it is OUR binary, not an old one a user swapped in.
-                "--diffusion-fa",
             ]
             if vae is not None:
-                befehl += ["--vae", str(vae)]
+                befehl += bildbausatz.vae_switch(vae, vae_tae)
             if model_args:
                 befehl += ["--model-args", model_args]
             if ad_modell is not None:
@@ -822,11 +848,18 @@ class Bildturbo:
             # Cleared once the new process stands: the old reader no longer
             # writes from here on, so nothing of the old server slips in.
             self._protokoll.clear()
+            self._leser_fertig = threading.Event()
             threading.Thread(
-                target=self._zaehler_lesen, args=(self._prozess,), daemon=True
+                target=self._zaehler_lesen, args=(self._prozess, self._leser_fertig),
+                daemon=True,
             ).start()
             self._modell = Path(modell_pfad).name
-            self._vae = Path(vae).name if vae is not None else None
+            # Kept as the choice is named in a draw order, so a tiny
+            # autoencoder and a VAE of the same file name are two servers.
+            self._vae = (
+                (bildbausatz.TAE_PREFIX if vae_tae else "") + Path(vae).name
+                if vae is not None else None
+            )
             self._ad_modell = Path(ad_modell).name if ad_modell is not None else None
             self._ad_prompt = ad_prompt if ad_modell is not None else ""
             self._ad_negativ = ad_negativ if ad_modell is not None else ""
@@ -885,6 +918,8 @@ class Bildturbo:
             self._ad_extra = ad_extra if ad_modell is not None else ""
             self._start_values = start_values
             self._paused_for = None
+            self._zuletzt = time.monotonic()
+            self._im_leerlauf_beendet = False
             self._pid_merken(self._prozess.pid)
             return True
 
@@ -943,10 +978,43 @@ class Bildturbo:
         self._war_bereit = self._bereit()
         return self._war_bereit
 
-    def stoppen(self) -> bool:
-        """Switch the add-on off. True when there was one to switch off."""
+    def stoppen(self, frist: float = 5.0) -> bool:
+        """Switch the add-on off. True when there was one to switch off.
+        ``frist`` is how long the process gets to end before it is killed."""
         with self._schloss:
-            return self._stoppen_intern()
+            self._im_leerlauf_beendet = False
+            return self._stoppen_intern(frist)
+
+    def im_leerlauf_beendet(self) -> bool:
+        """Was the server ended by its idle time, and not started or
+        stopped by hand since? The next picture starts it again."""
+        return self._im_leerlauf_beendet
+
+    def im_leerlauf_stoppen(self, minuten: int | None, jetzt: float | None = None) -> bool:
+        """End the server once it has had nothing to do for ``minuten``
+        minutes — no picture drawn since its start or since the last one
+        ended. True when it was ended. None or zero is never.
+
+        The sd-server has no switch to free its model by itself, so the
+        program ends the process; the next picture starts it the way it
+        starts after any other start value changed. A server that draws, or
+        that stands aside for a picture of the other path, is never ended
+        here, and the look at its state every few seconds is no work."""
+        if not minuten:
+            return False
+        jetzt = time.monotonic() if jetzt is None else jetzt
+        with self._schloss:
+            prozess = self._prozess
+            if prozess is None or prozess.poll() is not None:
+                return False
+            if self._zeichnet or self._paused_for is not None:
+                return False
+            if jetzt - self._zuletzt < minuten * 60:
+                return False
+            log.info("Image server: no picture for %s min, ending it", minuten)
+            ended = self._stoppen_intern()
+            self._im_leerlauf_beendet = ended
+            return ended
 
     def abbrechen(self) -> bool:
         """Break off a picture being drawn right now. True when there was one.
@@ -1041,7 +1109,7 @@ class Bildturbo:
         args, kwargs = values
         return self.starten(*args, **kwargs, _paused_with=values)
 
-    def _stoppen_intern(self) -> bool:
+    def _stoppen_intern(self, frist: float = 5.0) -> bool:
         prozess = self._prozess
         self._modell = None
         self._vae = None
@@ -1084,17 +1152,28 @@ class Bildturbo:
         if prozess is None or prozess.poll() is not None:
             self._prozess = None
             return False
-        prozessstopp.beenden(prozess, frist=5.0)
+        prozessstopp.beenden(prozess, frist=frist)
         self._prozess = None
         return True
 
     def fortschritt(self) -> dict | None:
         """The running picture's step counter, or None when nothing is in
-        flight — the same shape the sd-cli runner reports, so the one
-        progress endpoint can serve both paths."""
+        flight — the same shape the sd-cli runner reports, with the stamp of
+        the newest preview (0 while there is none), so the one progress
+        endpoint can serve both paths."""
         if not self.laeuft() or not self._zeichnet:
             return None
-        return self._fortschritt
+        stand = self._fortschritt
+        if stand is None:
+            return None
+        preview = self._preview
+        return {**stand, "preview": preview[0] if preview else 0}
+
+    def preview(self) -> bytes | None:
+        """The running draw's newest live-preview picture, while there is
+        one."""
+        preview = self._preview
+        return preview[1] if self.laeuft() and self._zeichnet and preview else None
 
     def _zeilen_aufnehmen(self, text: str, prozess: subprocess.Popen) -> str:
         """Hands every finished line of ``text`` to the server log and returns
@@ -1116,7 +1195,52 @@ class Bildturbo:
         """What the server has said since it was last started."""
         return list(self._protokoll)
 
-    def _zaehler_lesen(self, prozess: subprocess.Popen) -> None:
+    def absturz_worte(self) -> str | None:
+        """What the server's own words say about its end, for a request the
+        server did not answer because it is gone: the marked note naming the
+        signal that ended it, then its telling lines — the same last words the
+        sd-cli path shows (``bildrunner.last_words``). None while the server
+        still lives, or when it was ended on purpose: that is no crash."""
+        # The process and its reader as they stand now: a restart meanwhile
+        # does not hand over the next server's end.
+        prozess, leser_fertig = self._prozess, self._leser_fertig
+        if prozess is None:
+            return None
+        deadline = time.monotonic() + ABSTURZ_WARTE_SEKUNDEN
+        while (code := prozess.poll()) is None:
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.05)
+        leser_fertig.wait(timeout=ABSTURZ_WARTE_SEKUNDEN)
+        return bildrunner.last_words(self.protokoll(), bildrunner.crash_note(code)) or None
+
+    def _fehlerworte(self, fehler: Exception) -> str | None:
+        """The words shown under "the picture could not be drawn": the
+        server's own answer where it gave one, and where the connection broke
+        because the server is gone, how it ended."""
+        if not isinstance(fehler, httpx.HTTPError):
+            return None
+        worte = _serverwort(fehler)
+        # A request that ran out of time was slow, not cut off: its server
+        # lives, and no wait for its end is made.
+        if (
+            worte is None and isinstance(fehler, httpx.TransportError)
+            and not isinstance(fehler, httpx.TimeoutException)
+        ):
+            return self.absturz_worte()
+        return worte
+
+    def ladefehler_grund(self) -> str:
+        """The sentence for a server that did not come up: the generator
+        refusing a switch it does not know says that it is too old, which
+        the picture window words as an update to make."""
+        if any("unknown argument" in zeile for zeile in self._protokoll):
+            return "bild.sdcpp_veraltet"
+        return "bild.turbo_ladefehler"
+
+    def _zaehler_lesen(
+        self, prozess: subprocess.Popen, fertig: threading.Event | None = None,
+    ) -> None:
         """Lifelong stdout reader for one server process. Counting is armed
         per request by ``zeichnen``: only bars that count iterations are
         painting passes (the loader's bars count megabytes), and pass
@@ -1191,6 +1315,8 @@ class Bildturbo:
                     "gesamt": zaehl["paint_total"],
                 }
             rest = text[-64:]
+        if fertig is not None:
+            fertig.set()
 
     def _arm_counter(self, steps: int, passes: int) -> None:
         """Start counting the bars of one picture of ``steps`` requested
@@ -1242,7 +1368,7 @@ class Bildturbo:
         if not self.bereit_abwarten(self._start_deadline(), stopped=stopped):
             if stopped is not None and stopped():
                 raise BildturboFehler("bild.abgebrochen")
-            raise BildturboFehler("bild.turbo_ladefehler")
+            raise BildturboFehler(self.ladefehler_grund())
         with self._stop_lock:
             if stopped is not None and stopped():
                 # Asked in the moment before: the picture is never handed
@@ -1250,6 +1376,7 @@ class Bildturbo:
                 raise BildturboFehler("bild.abgebrochen")
             self._abgebrochen = False
             self._zeichnet = True
+            self._preview = None
         schritte = int((auftrag.get("sample_params") or {}).get("sample_steps") or 0)
         if schritte > 0:
             self._arm_counter(schritte, paesse or 1)
@@ -1268,6 +1395,7 @@ class Bildturbo:
             deadline = (
                 time.monotonic() + zeitgrenze if zeitgrenze and not video else None
             )
+            seen_preview: tuple | None = None
             while True:
                 poll = httpx.get(f"{base_url}/jobs/{job_id}", timeout=30.0)
                 poll.raise_for_status()
@@ -1295,6 +1423,21 @@ class Bildturbo:
                     # next picture does not queue behind it.
                     self._end_job(job_id)
                     raise BildturboFehler("bild.zeit_abgelaufen")
+                if status_name == "generating":
+                    # The newest live-preview picture, kept with its stamp;
+                    # the server holds only the newest, so a rhythm quicker
+                    # than this look leaves pictures out, as meant.
+                    shown = job.get("preview") or {}
+                    encoded = shown.get("b64_json")
+                    # A new pass or step is a new preview even when it looks
+                    # like the one before, as a file sd-cli rewrites is.
+                    marker = (shown.get("pass"), shown.get("step"), encoded)
+                    if encoded and marker != seen_preview:
+                        seen_preview = marker
+                        try:
+                            self._preview = (time.time_ns() // 1000, base64.b64decode(encoded))
+                        except ValueError:
+                            log.warning("Image server: a live preview did not decode")
                 if stopped is not None and not self._abgebrochen and stopped():
                     # A stop that fell between the look above and this
                     # draw's own flag: taken up here like any stop of a
@@ -1310,14 +1453,16 @@ class Bildturbo:
             # Everything else keeps the server's own words: its 400 names the
             # file and the mistake ("invalid generation parameters"), while
             # the bare key says only that something failed.
-            server_words = _serverwort(fehler) if isinstance(fehler, httpx.HTTPError) else None
+            server_words = self._fehlerworte(fehler)
             raise BildturboFehler("bild.gescheitert", server_words) from fehler
         finally:
             self._zeichnet = False
+            self._zuletzt = time.monotonic()
             self._abgebrochen = False
             self._job = None
             self._zaehl = None
             self._fortschritt = None
+            self._preview = None
 
     @property
     def upscaler_folder(self) -> str | None:
@@ -1326,7 +1471,8 @@ class Bildturbo:
 
     def upscale(
         self, picture_b64: str, upscaler: str, output_format: str = "png",
-        zeitgrenze: float | None = None,
+        zeitgrenze: float | None = None, repeats: int | None = None,
+        tile_size: int | None = None,
     ) -> bytes:
         """Upscale one finished picture over the server's own route
         ``/sdcpp/v1/upscale`` — no model, no sampling. ``upscaler`` is a
@@ -1334,7 +1480,8 @@ class Bildturbo:
         upscaler folder; ``output_format`` is ``png``, ``jpeg`` or ``webp``. The route
         answers at once with the picture. ``zeitgrenze`` is how many seconds
         the call waits for it — the route cannot be broken off, so the server
-        draws on to its end; None waits without a limit."""
+        draws on to its end; None waits without a limit. ``repeats`` and
+        ``tile_size`` are named only when given; the server has its own."""
         if not self.laeuft():
             raise BildturboFehler("bild.turbo_aus")
         # Marked as drawing before the wait, so a stop pressed while the
@@ -1347,10 +1494,17 @@ class Bildturbo:
             if self._abgebrochen:
                 raise BildturboFehler("bild.abgebrochen")
             if not ready:
-                raise BildturboFehler("bild.turbo_ladefehler")
+                raise BildturboFehler(self.ladefehler_grund())
+            body: dict = {
+                "image": picture_b64, "upscaler": upscaler, "output_format": output_format,
+            }
+            if repeats is not None:
+                body["repeats"] = repeats
+            if tile_size is not None:
+                body["tile_size"] = tile_size
             response = httpx.post(
                 f"http://127.0.0.1:{self._port}/sdcpp/v1/upscale",
-                json={"image": picture_b64, "upscaler": upscaler, "output_format": output_format},
+                json=body,
                 timeout=zeitgrenze or None,
             )
             response.raise_for_status()
@@ -1370,10 +1524,11 @@ class Bildturbo:
                 raise BildturboFehler("bild.abgebrochen") from error
             if isinstance(error, httpx.TimeoutException):
                 raise BildturboFehler("bild.zeit_abgelaufen") from error
-            server_words = _serverwort(error) if isinstance(error, httpx.HTTPError) else None
+            server_words = self._fehlerworte(error)
             raise BildturboFehler("bild.gescheitert", server_words) from error
         finally:
             self._zeichnet = False
+            self._zuletzt = time.monotonic()
             self._abgebrochen = False
 
     # --- Orphan handling: a server outlives a service crash on its own
@@ -1391,17 +1546,6 @@ class Bildturbo:
             alt = int(self._pid_datei.read_text(encoding="utf-8").strip())
         except (OSError, ValueError):
             return
-        try:
-            antwort = subprocess.run(
-                ["ps", "-p", str(alt), "-o", "comm="],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
-                **no_window(),
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return
-        if "sd-server" in antwort.stdout:
-            try:
-                os.kill(alt, 15)
-            except OSError:
-                pass
+        if prozessstopp.runs_program(alt, "sd-server"):
+            prozessstopp.beenden_nach_pid(alt)
         self._pid_datei.unlink(missing_ok=True)

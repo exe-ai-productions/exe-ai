@@ -246,9 +246,12 @@ Promise.resolve(handlers['terminal-start']({{ sender: contents }}, {{ cols: 100,
     assert ergebnis["sent"] == [["terminal-data", "hello from exe"], ["terminal-exit", 0]]
     assert ergebnis["running"] is True
     assert ergebnis["runningAfterExit"] is False
-    assert len(ergebnis["logged"]) == 1
+    # The size the client was given and the first size it is told afterwards
+    # are in the log, so a start at the wrong size can be told from a later one.
+    assert len(ergebnis["logged"]) == 2
     assert "started in the window against http://127.0.0.1:8123" in ergebnis["logged"][0]
-    assert "pid 4242" in ergebnis["logged"][0]
+    assert "pid 4242, 100x30" in ergebnis["logged"][0]
+    assert ergebnis["logged"][1] == "Terminal: first resize after the start: 90x28"
 
 
 def test_a_second_start_for_the_same_page_ends_the_first_client():
@@ -729,7 +732,145 @@ def test_the_start_and_the_update_both_begin_with_the_clients_stop():
     for the service the client cannot end, the update waits as long as it
     lives."""
     quelle = MAIN.read_text(encoding="utf-8")
-    assert len(re.findall(r"await endRunningService\(", quelle)) == 1
+    # The update, and the sign's menu entry that ends the service: both wait
+    # for the process as long as it lives.
+    assert len(re.findall(r"await endRunningService\(", quelle)) == 2
     assert len(re.findall(r"await endFoundService\(", quelle)) == 1
     assert re.search(r"async function endRunningService\(running\) \{.*?clientStop\(\).*?processAlive", quelle, re.S)
     assert re.search(r"async function endFoundService\(running\) \{.*?clientStop\(\).*?processAlive", quelle, re.S)
+
+
+# --- The dictation shortcut where the program runs without a window ----------
+
+
+def _press_shortcut(
+    *,
+    window: str,
+    sign: bool = True,
+    presses: int = 1,
+    ready_after: int = 2,
+    open_under_way: bool = False,
+    service_fails: bool = False,
+    closed_during: bool = False,
+) -> dict:
+    """Presses the dictation shortcut ``presses`` times at once. ``window``:
+    ``open`` (a window on the interface) or ``none`` (the window was closed;
+    opening one builds it on the splash, and the interface and its microphone
+    button stand ``ready_after`` ticks later). ``open_under_way``: another
+    open is running, so the call to open returns at once and the window
+    comes up on its own after ``ready_after`` ticks. ``service_fails``: the
+    service did not start. ``closed_during``: the window is closed again
+    before the page stands. Returns the calls made, and whether a later
+    press is still taken."""
+    quelle = MAIN.read_text(encoding="utf-8")
+    stueck = _stueck(
+        quelle,
+        r"let dictationPending = false\n.*?\n\}\n\nfunction kuerzelSetzen\(\) \{.*?\n\}\n",
+        "the shortcut",
+    )
+    skript = f"""
+const calls = []
+const ADDRESS = 'http://127.0.0.1:8123'
+const sign = {str(sign).lower()}
+let beendet = false
+let opening = {str(open_under_way).lower()}
+let dienstFehlgeschlagen = false
+let held = null
+const globalShortcut = {{ register: (key, callback) => {{ held = callback; return true }} }}
+const DIKTAT_KUERZEL = 'k'
+const console = {{ warn() {{}} }}
+let ticks = 0
+let destroyed = false
+const tick = setInterval(() => ticks++, 50)
+const page = () => ({{
+  isDestroyed: () => destroyed,
+  webContents: {{
+    getURL: () => (ticks >= {ready_after} ? ADDRESS + '/app/' : 'file:///splash.html'),
+    executeJavaScript: async () => ticks >= {ready_after},
+    send: (channel) => calls.push(['send', channel]),
+  }},
+}})
+let fenster = {{ open: page(), none: null }}[{json.dumps(window)}]
+if ({str(window == "open").lower()}) ticks = 99
+function bringWindowForward() {{ calls.push('forward') }}
+async function openWindow() {{
+  if (opening) return
+  calls.push('open')
+  fenster = page()
+  if ({str(service_fails).lower()}) dienstFehlgeschlagen = true
+}}
+{stueck}
+(async () => {{
+  try {{
+    kuerzelSetzen()
+    if ({str(open_under_way).lower()}) {{
+      fenster = page()
+      setTimeout(() => {{ opening = false }}, 400)
+    }}
+    for (let i = 0; i < {presses}; i++) held()
+    if ({str(closed_during).lower()}) setTimeout(() => {{ destroyed = true }}, 100)
+    await new Promise((r) => setTimeout(r, 1500))
+    // A later press must be taken again once the first has run its course.
+    calls.push('later')
+    destroyed = false
+    fenster = null
+    held()
+    await new Promise((r) => setTimeout(r, 50))
+    calls.push(opening ? 'busy' : 'free')
+  }} catch (error) {{
+    calls.push(['error', String(error)])
+  }}
+  clearInterval(tick)
+  // A later press may have begun a wait of its own: leave at once.
+  process.stdout.write(JSON.stringify({{ calls }}) + "\\n", () => process.exit(0))
+}})()
+"""
+    return _laufe(skript)
+
+
+def _before_later(calls: list) -> list:
+    return calls[: calls.index("later")]
+
+
+def test_the_shortcut_without_a_window_opens_one_and_dictates_once_the_page_stands():
+    # Fails without the fix: the branch ended with the window opened and the
+    # page was never told.
+    calls = _before_later(_press_shortcut(window="none")["calls"])
+    assert calls == ["open", "forward", ["send", "diktat"]]
+
+
+def test_a_second_press_while_the_window_comes_up_does_not_stop_the_dictation_again():
+    calls = _before_later(_press_shortcut(window="none", presses=3)["calls"])
+    assert calls == ["open", "forward", ["send", "diktat"]]
+
+
+def test_an_open_already_under_way_is_waited_for_and_the_dictation_begins_after_it():
+    calls = _before_later(_press_shortcut(window="none", open_under_way=True, ready_after=10)["calls"])
+    assert calls == ["forward", ["send", "diktat"]]
+
+
+def test_a_service_that_did_not_start_ends_the_wait_without_a_dictation():
+    calls = _press_shortcut(window="none", service_fails=True, ready_after=9999)["calls"]
+    assert _before_later(calls) == ["open"]
+    # And the next press is taken again, not swallowed for the rest of the wait.
+    assert calls[calls.index("later") + 1 :] == ["open", "free"]
+
+
+def test_a_window_closed_before_the_page_stands_gets_no_message():
+    calls = _press_shortcut(window="none", closed_during=True, ready_after=9999)["calls"]
+    assert _before_later(calls) == ["open"]
+
+
+def test_the_shortcut_with_a_window_open_dictates_at_once_and_opens_nothing():
+    assert _before_later(_press_shortcut(window="open")["calls"]) == ["forward", ["send", "diktat"]]
+
+
+def test_the_shortcut_without_a_window_and_without_a_sign_does_nothing():
+    assert _before_later(_press_shortcut(window="none", sign=False)["calls"]) == []
+
+
+def test_the_shell_waits_for_the_button_the_interface_draws():
+    # The wait looks for `button.mikro`; the page must still draw that.
+    button = (WURZEL / "frontend" / "src" / "teile" / "Mikrofonknopf.svelte").read_text(encoding="utf-8")
+    assert re.search(r'<button\s+class="mikro"', button)
+    assert "button.mikro" in MAIN.read_text(encoding="utf-8")

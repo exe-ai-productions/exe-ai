@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from app.config import Config
@@ -122,3 +124,26 @@ def test_zwei_orte_duerfen_sich_keinen_ordner_teilen(tmp_path):
     # And nesting is refused too, in both directions.
     with _pytest.raises(SpeicherortFehler):
         setzen(config, "models", str(gemeinsam / "drin"))
+
+
+def test_a_relative_path_raises_its_own_key_and_creates_no_folder(tmp_path, monkeypatch):
+    from app.speicherorte import SpeicherortFehler, setzen
+
+    monkeypatch.chdir(tmp_path)
+    config = Config()
+    config.app.data_dir = str(tmp_path / "data")
+    config.app.bilder_verzeichnis = str(tmp_path / "data" / "images")
+
+    texts = ["relativ", "./neu", "a/b"]
+    if os.name != "nt":
+        # Windows has no ``~name`` for another user: it joins the name to the
+        # folder of the users and keeps going.
+        texts.append("~keinbenutzerdiesesnamens/x")
+    for text in texts:
+        with pytest.raises(SpeicherortFehler) as fehler:
+            setzen(config, "images", text)
+        assert fehler.value.grund == "speicherorte.not_absolute"
+
+    assert not (tmp_path / "relativ").exists()
+    assert not (tmp_path / "neu").exists()
+    assert not (tmp_path / "a").exists()

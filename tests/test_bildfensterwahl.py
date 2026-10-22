@@ -174,6 +174,8 @@ CHAT_A = {
     "hires_denoise": 0.45,
     "hires_upscaler": "RealESRGAN",
     "upscale_model": "RealESRGAN_x4.pth",
+    "upscale_repeats": 2,
+    "upscale_tile_size": 256,
     "hires_breite": "",
     "hires_hoehe": 1536,
     "slg_scale": 2.5,
@@ -292,7 +294,7 @@ def test_the_upscale_model_is_kept_like_the_highres_upscaler():
 
 
 def test_a_stored_infinite_switch_value_is_dropped_alone():
-    kept = bildfensterwahl.wahl_pruefen({"switches": {"sample_lms_max_order": float("inf"), "fa": True, "timestep_shift": 250}})
+    kept = bildfensterwahl.wahl_pruefen({"switches": {"sample_lms_max_order": float("inf"), "sage_attn": True, "timestep_shift": 250}})
     assert kept == {"switches": {"timestep_shift": 250}}
 
 

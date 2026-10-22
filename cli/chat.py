@@ -398,23 +398,28 @@ def send(
         _Round(ctx, title_from or text).follow(ctx.client.stream("/chat/completions", message))
     finally:
         session.answering = False
+        session.open_calls.clear()
         session.generation_id = None
         ctx.asker.cancel()
         ctx.screen.set_activity(None)
 
 
-def stop(ctx: Context) -> None:
+def stop(ctx: Context) -> bool:
     """Asks the service to end the running answer of the open chat. The
-    answer's own stream then closes with its last event, as always."""
+    answer's own stream then closes with its last event, as always. Returns
+    whether the request reached the service."""
     chat = ctx.session.chat
     if chat is None:
-        return
+        return False
     try:
         ctx.client.post("/chat/stop", json={"chat_id": chat["id"]})
     except ServiceUnreachable as error:
         ctx.renderer.error(ctx.texts.t("fehler.dienst_antwortet_nicht", error=error.address))
+        return False
     except ServiceError as error:
         ctx.renderer.error(error.detail)
+        return False
+    return True
 
 
 class _Round:
@@ -496,6 +501,7 @@ class _Round:
         elif kind == "tool_call_laeuft":
             self._say_tool(event)
         elif kind == "tool_call":
+            ctx.session.open_calls.add(event.get("aufruf_id") or event.get("name"))
             self._say_tool(event)
             ctx.renderer.tool_call(event)
         elif kind == "tool_result":
@@ -507,6 +513,10 @@ class _Round:
                 ctx.asker.cancel()
             self._say(ctx.texts.t("status.erzeugt_antwort"))
             ctx.renderer.tool_result(event)
+            calls = ctx.session.open_calls
+            calls.discard(event.get("aufruf_id") or event.get("name"))
+            if not calls:
+                ctx.screen.tool_finished()
         elif kind in ("tool_confirm", "user_ask"):
             self._ask(event)
         elif kind == "kontext":

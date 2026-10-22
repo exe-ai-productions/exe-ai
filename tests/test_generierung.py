@@ -887,6 +887,73 @@ async def test_abbruch_stoppt_den_strom_und_rettet_den_text(laufender_server):
         assert nachrichten[1]["stats"]["abgebrochen"] is True
 
 
+@pytest.mark.asyncio
+async def test_a_stopped_run_stores_and_reports_no_speed(laufender_server):
+    """A run that was stopped has no speed: the stored stats and the `stats`
+    event of the stream both say it was stopped and carry no figure and no
+    name of whoever measured it."""
+    import httpx
+
+    class MitTempo(MockProvider):
+        """Reports a measured speed after its third chunk, then goes on
+        writing: the figure stands in the run when the stop lands."""
+
+        async def streamen(self, anfrage):
+            async for stueck in super().streamen(anfrage):
+                yield stueck
+                if self.ausgegebene_haeppchen == 3 and stueck.sorte == "content":
+                    yield Stueck(
+                        "stats",
+                        daten={
+                            "dauer_sekunden": 1.0, "haeppchen": 3, "erzeugte_tokens": 60,
+                            "erzeugungs_sekunden": 0.5, "tempo_tokens": 60, "tempo_sekunden": 0.5,
+                            "tokens_pro_sekunde": 120.0, "tempo_quelle": "server",
+                        },
+                    )
+
+    app, basis_adresse = laufender_server
+    provider = MitTempo(
+        mock_endpunkt("test"), haeppchen=[f"Teil{i} " for i in range(50)], verzoegerung=0.05
+    )
+    zustand = app.state.discovery.zustaende["test"]
+    zustand.provider = provider
+    zustand.erreichbar = True
+
+    kopfzeilen = {"X-Sitzungsschluessel": app.state.sitzungsschluessel}
+    async with httpx.AsyncClient(base_url=basis_adresse, timeout=30, headers=kopfzeilen) as client:
+        chat_id = (await client.post("/api/v1/chats", json={"title": "Abbruch"})).json()["id"]
+        gelesen: list[dict] = []
+        generation_id = None
+        async with client.stream(
+            "POST",
+            "/api/v1/chat/completions",
+            json={"chat_id": chat_id, "endpoint_id": "test", "content": "Los"},
+        ) as antwort:
+            async for zeile in antwort.aiter_lines():
+                if not zeile.startswith("data:"):
+                    continue
+                ereignis = json.loads(zeile[5:].strip())
+                gelesen.append(ereignis)
+                if ereignis["typ"] == "start":
+                    generation_id = ereignis["generation_id"]
+                elif ereignis["typ"] == "content" and len(gelesen) == 8:
+                    await client.post(
+                        "/api/v1/chat/stop", json={"generation_id": generation_id}
+                    )
+
+        meldung = [e for e in gelesen if e["typ"] == "stats"]
+        assert meldung and meldung[-1]["daten"]["abgebrochen"] is True
+        gespeichert = (await client.get(f"/api/v1/chats/{chat_id}/messages")).json()[
+            "nachrichten"
+        ][1]["stats"]
+        for stats in (meldung[-1]["daten"], gespeichert):
+            assert stats["abgebrochen"] is True
+            assert stats.get("tokens_pro_sekunde") is None
+            assert stats.get("tempo_quelle") is None
+            assert stats.get("tempo_tokens") is None
+            assert stats.get("tempo_sekunden") is None
+
+
 class _KeepaliveGegenstelle:
     """A stand-in model server, in the shape measured on oMLX
     (a recorded raw stream): one real answer

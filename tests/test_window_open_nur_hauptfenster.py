@@ -60,7 +60,7 @@ const MANUAL = {{ name: 'manual' }}
 let fenster = {{ isDestroyed: () => false, webContents: MAIN }}
 let hilfefenster = null
 function istEigeneSeite(address) {{ return address.startsWith('http://127.0.0.1:8090/') }}
-function istHandbuch(address) {{ return address.includes('/hilfe/') }}
+function istHandbuch(address) {{ return address.includes('/help/') }}
 function nachDraussen(address) {{ out.push(address) }}
 function menuBarOptions() {{ return {{}} }}
 const regel = {{ addressForLog: (address) => address }}
@@ -76,7 +76,7 @@ const result = {{
   from_manual: ask('https://example.com/', MANUAL),
   from_nothing: ask('https://example.com/', undefined),
   own_from_document: ask('http://127.0.0.1:8090/api/v1/ablage/x.pdf', DOC),
-  own_manual: ask('http://127.0.0.1:8090/hilfe/', MANUAL),
+  own_manual: ask('http://127.0.0.1:8090/help/', MANUAL),
 }}
 // The loop that used to open a tab per call.
 out.length = 0

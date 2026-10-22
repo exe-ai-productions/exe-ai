@@ -31,6 +31,7 @@ all: see ``ASR_MARKE``.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 import httpx
 
@@ -95,7 +96,9 @@ ASR_MARKE = "<asr_text>"
 MODELLNAME = "speech"
 
 
-def runner_bauen(modellordner, programm: str | None, port: int) -> Modellrunner:
+def runner_bauen(
+    modellordner, programm: str | None, port: int, shared_with: Callable[[], int | None] | None = None
+) -> Modellrunner:
     """The speech server's runner — the same class, another kind.
 
     WITH the chat template, and that was measured rather than assumed. The
@@ -119,10 +122,13 @@ def runner_bauen(modellordner, programm: str | None, port: int) -> Modellrunner:
         zusatzflags=FLAGS,
         sampling_flags=True,
         zustand_callback=runnerzustand.melder(runnerzustand.SPEECH),
+        shared_with=shared_with,
     )
 
 
-def putzrunner_bauen(modellordner, programm: str | None, port: int) -> Modellrunner:
+def putzrunner_bauen(
+    modellordner, programm: str | None, port: int, shared_with: Callable[[], int | None] | None = None
+) -> Modellrunner:
     """The tidy-up model's runner — the same folder, everything else its own.
 
     The same folder because a person who wants a cleaner puts a small text
@@ -142,6 +148,7 @@ def putzrunner_bauen(modellordner, programm: str | None, port: int) -> Modellrun
         zusatzflags=(),
         sampling_flags=True,
         zustand_callback=runnerzustand.melder(runnerzustand.CLEANUP),
+        shared_with=shared_with,
     )
 
 

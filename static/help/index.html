@@ -1,0 +1,860 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exe AI — Manual</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script>
+  /* Which language this manual opens in.
+     The program keeps its display language on the server, behind the session
+     key — a static page cannot ask for it. But this page is opened from the
+     interface with window.open, so it is same-origin with the window that
+     opened it, and that window's <html lang> is exactly the language the
+     interface resolved for itself (frontend/src/lib/texte.svelte.js).
+     Reading it is one line and needs no build and no route.
+     Order: an explicit choice made in this manual wins, then the opener,
+     then the device. Only this English page ever redirects — the German one
+     never does, so there is no loop to get caught in. */
+  (function () {
+    var SCHLUESSEL = 'exe-hilfe-sprache'
+    try {
+      var gewuenscht = new URLSearchParams(location.search).get('sprache')
+      if (gewuenscht === 'en' || gewuenscht === 'de') {
+        localStorage.setItem(SCHLUESSEL, gewuenscht)
+        return
+      }
+      var gemerkt = localStorage.getItem(SCHLUESSEL)
+      if (gemerkt === 'en') return
+      var sprache = gemerkt
+      if (!sprache) {
+        try { sprache = window.opener && window.opener.document.documentElement.lang } catch (e) { /* another origin, or no opener */ }
+      }
+      if (!sprache) sprache = navigator.language || ''
+      if (String(sprache).slice(0, 2).toLowerCase() === 'de') location.replace('/help/de/')
+    } catch (e) { /* storage blocked — the English page is the fallback */ }
+  })()
+</script>
+<meta name="description" content="Your models run on your computer. Chats, documents, images, and voice features are all in one window, and your data stays with you.">
+<style>:root{color-scheme:dark;--bg:#1c1c1a;--panel:#232320;--card:#272724;--line:rgba(236,235,230,.10);--text:#ecebe6;--muted:#b1aea6;--quiet:#8a877c;--accent:#bebbb4;--green:#6b8e6f;--font:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;--mono:ui-monospace,SFMono-Regular,Consolas,monospace}
+*{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:#4c4b45 transparent}html{background:var(--bg);scroll-behavior:smooth}body{margin:0;color:var(--text);font:15px/1.7 var(--font);-webkit-font-smoothing:antialiased}button,input{font:inherit}button,a,input{ -webkit-tap-highlight-color:transparent}button,a{touch-action:manipulation}a{color:inherit}button{cursor:pointer}button:disabled{cursor:default;opacity:.4}[hidden]{display:none!important}a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:4px}h1,h2,h3,p{margin-top:0}p{margin-bottom:16px}svg.icon{width:20px;height:20px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}button .icon,a .icon{pointer-events:none}.skip{position:fixed;left:12px;top:-100px;z-index:100;background:var(--text);color:var(--bg);padding:12px;border-radius:8px}.skip:focus{top:12px}
+.topbar{height:82px;position:sticky;top:0;z-index:30;border-bottom:1px solid var(--line);background:rgba(28,28,26,.97);backdrop-filter:blur(16px)}.top-inner{max-width:1500px;height:100%;padding:0 36px;margin:auto;display:flex;align-items:center;justify-content:space-between;gap:24px}.identity{display:flex;align-items:center;gap:22px;text-decoration:none;flex-shrink:0}.identity img{display:block;width:160px;height:auto}.identity span{padding-left:22px;border-left:1px solid var(--line);font-size:13px;color:var(--muted)}.top-actions{display:flex;align-items:center;gap:18px}.language{display:flex;align-items:center;gap:3px;border:1px solid var(--line);padding:3px;border-radius:9px;font-size:12px}.language a,.language span{padding:3px 9px;text-decoration:none;border-radius:5px}.language span{color:var(--bg);background:var(--text)}.language a:hover{background:var(--card)}.site-link{font-size:13px;color:var(--muted);text-decoration:none;display:flex;gap:7px;align-items:center}.site-link:hover{color:var(--text)}.site-link .icon{width:15px;height:15px}.menu-button{display:none;align-items:center;gap:9px;border:1px solid var(--line);background:var(--card);color:var(--text);padding:7px 10px;border-radius:8px;font-size:13px}
+.shell{max-width:1500px;margin:auto;display:grid;grid-template-columns:264px minmax(0,1fr);gap:48px;padding:0 36px}.sidebar{position:sticky;top:82px;height:calc(100dvh - 82px);padding:30px 22px 24px 0;border-right:1px solid var(--line);overflow-y:auto;scrollbar-width:thin;scrollbar-color:#4c4b45 transparent}.nav-group{margin:22px 0 0}.nav-group h2{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--quiet);margin:0 0 7px 12px;font-weight:600}.nav-link{display:flex;align-items:center;gap:10px;text-decoration:none;min-height:36px;padding:7px 11px;border-radius:8px;margin:2px 0;font-size:12.5px;line-height:1.4;color:#c1bfb8;border:1px solid transparent}.nav-link b{font-weight:400;width:18px;flex-shrink:0;color:#89867b;font-size:10px;font-variant-numeric:tabular-nums}.nav-link .icon{width:17px;height:17px}.nav-link:hover{background:var(--panel);color:var(--text)}.nav-link[aria-current=page]{background:#32312e;border-color:#474540;color:#eae9e4}.nav-link[aria-current=page] b{color:var(--accent)}.sidebar-note{font-size:11px;margin:25px 12px 0;color:var(--quiet);line-height:1.6}.main{min-width:0;padding-bottom:30px}.toolbar{min-height:93px;display:flex;align-items:center;justify-content:space-between;gap:24px;border-bottom:1px solid var(--line);margin-bottom:34px}.breadcrumb{font-size:12px;color:var(--quiet);display:flex;align-items:center;gap:9px;min-width:0}.breadcrumb a{text-decoration:none;white-space:nowrap}.breadcrumb span:last-child{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.search{display:flex;align-items:center;gap:10px;padding:7px 11px;background:#252522;border:1px solid var(--line);border-radius:9px;max-width:290px;flex:0 1 290px}.search .icon{width:17px;height:17px;color:var(--quiet)}.search input{min-width:0;width:100%;background:transparent;border:0;color:var(--text);font-size:12.5px;outline:none}.search input::placeholder{color:var(--quiet)}.search:focus-within{border-color:var(--accent)}.search kbd{padding:0 4px;font-size:10px;color:var(--quiet);border:1px solid #474641;line-height:1.7;border-radius:4px}.search-clear{border:0;background:none;color:var(--muted);padding:0;font-size:19px;line-height:1}
+.eyebrow{display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}.eyebrow:before{content:'';width:5px;height:5px;border-radius:50%;background:var(--green)}.home-hero{display:grid;grid-template-columns:1fr 1.08fr;gap:28px;align-items:center;padding:14px 0 30px}.home-hero h1{font-size:clamp(30px,3.2vw,48px);font-weight:600;line-height:1.14;letter-spacing:-.045em;margin:0 0 18px}.home-hero p{color:var(--muted);font-size:14px;line-height:1.7;margin:0 0 22px}.hero-image{margin:0;position:relative;min-width:0}.hero-image img{width:100%;height:auto;display:block;box-shadow:0 24px 46px #0004;border:1px solid #464540;border-radius:11px}.hero-image figcaption{margin-top:13px;font-size:10px;color:var(--quiet);display:flex;align-items:center;gap:7px}.hero-image figcaption:before{content:'';width:5px;height:5px;background:var(--green);border-radius:50%}.primary{display:inline-flex;align-items:center;gap:13px;padding:9px 15px;background:var(--text);color:#1e1e1b;border-radius:7px;font-size:12px;text-decoration:none;font-weight:600;line-height:1.5}.primary:hover{background:white}.primary .icon{width:16px;height:16px}.overview-heading{display:flex;align-items:baseline;justify-content:space-between;margin:20px 0 14px;border-top:1px solid var(--line);padding-top:22px}.overview-heading h2{font-size:16px;font-weight:500;margin:0}.overview-heading span{font-size:11px;color:var(--quiet)}.quick-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.quick{display:flex;flex-direction:column;gap:10px;border:1px solid var(--line);border-radius:11px;background:#232320;padding:20px;text-decoration:none;transition:background .15s,border-color .15s}.quick:hover{background:#2c2c29;border-color:#5f5d56}.quick .icon{color:var(--accent);width:22px;height:22px}.quick strong{font-size:14px;font-weight:500;line-height:1.3}.quick p{font-size:12px;line-height:1.55;color:var(--muted);margin:0}.quick-tail{margin-top:auto;padding-top:7px;color:var(--quiet);display:flex;align-items:center;justify-content:space-between;font-size:10px}.quick-tail .icon{width:14px;height:14px;color:var(--quiet)}.utility-links{display:flex;gap:20px;flex-wrap:wrap;margin-top:23px;padding:16px 0;font-size:12px}.utility-links a{display:flex;gap:8px;align-items:center;text-decoration:none;color:var(--muted)}.utility-links .icon{width:16px;height:16px}.utility-links a:hover{color:var(--text)}
+.chapter{animation:appear .18s ease}.home:focus,.chapter:focus{outline:none}.chapter-header{margin-bottom:26px;padding:8px 0 24px;border-bottom:1px solid var(--line)}.chapter-header.with-visual{display:grid;grid-template-columns:1fr minmax(220px,.8fr);gap:28px;align-items:center}.chapter-header h2,.results-title{font-size:clamp(27px,3vw,39px);line-height:1.14;font-weight:600;letter-spacing:-.035em;margin:0 0 16px}.chapter-header .unter{color:var(--muted);font-size:14px;line-height:1.7;margin:0}.chapter-count{font-size:11px;color:var(--quiet);font-variant-numeric:tabular-nums;margin:0 0 12px;letter-spacing:.08em}.chapter h3{font-size:17px;font-weight:500;line-height:1.4;margin:0 0 12px}.chapter h3.frei{margin:30px 0 16px;font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}.chapter .text{max-width:850px}.chapter p{font-size:14px;line-height:1.8}.zwei,.drei{display:grid;gap:16px;margin:20px 0}.zwei{grid-template-columns:repeat(2,minmax(0,1fr))}.drei{grid-template-columns:repeat(3,minmax(0,1fr))}.karte{background:#242421;border:1px solid var(--line);padding:22px;border-radius:12px;min-width:0}.karte p{font-size:13px;color:#c9c7c0;line-height:1.8}.karte p:last-child{margin-bottom:0}.karte .schritt{display:block;text-transform:uppercase;font-size:10px;letter-spacing:.13em;color:var(--accent);margin-bottom:18px}.karte .taste{display:inline-block;margin-bottom:15px}.k{font-weight:500;background:#353531;border:1px solid #494742;border-radius:5px;padding:1px 5px;font-size:.9em;box-decoration-break:clone;-webkit-box-decoration-break:clone;color:#e6e5e0;white-space:normal}kbd{font:11px/1.7 var(--mono);background:#2d2d2a;border:1px solid #4a4943;border-radius:5px;padding:2px 6px;white-space:nowrap}code{font:12px/1.5 var(--mono);background:#32322f;border-radius:4px;padding:2px 5px;color:#d2d0ca;overflow-wrap:anywhere}.tafel{margin:20px 0;border:1px solid var(--line);border-radius:12px;padding:7px 20px;background:#232320;overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px;line-height:1.7}th,td{text-align:left;vertical-align:top;padding:12px 16px 12px 0}th:last-child,td:last-child{padding-right:0}th{font-size:10px;text-transform:uppercase;letter-spacing:.09em;font-weight:500;color:var(--quiet)}td:first-child{width:27%;font-weight:500;color:#e0ded9}tr+tr td,thead+tbody td{border-top:1px solid var(--line)}.karte table{font-size:12px}.karte td{padding:9px 9px 9px 0}.karte td:first-child{width:38%}.merke{border-left:2px solid var(--green);padding:15px 18px;margin:24px 0;background:#292926;border-radius:0 8px 8px 0;color:#cccac3}.punkt{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px}.gelb{background:#c9a227}.blau{background:#6a97c4}.gruen{background:#6b8e6f}.rot{background:#c8817b}ul{padding-left:20px}li{margin:10px 0;font-size:14px}.leise{color:var(--muted)}.chapter-visual{margin:0;min-width:0}.image-open{display:block;width:100%;padding:0;border:1px solid #46443f;border-radius:9px;background:transparent;overflow:hidden}.image-open img{width:100%;height:auto;display:block;transition:filter .2s}.image-open:hover img{filter:brightness(1.1)}.chapter-visual figcaption{display:flex;justify-content:space-between;color:var(--quiet);font-size:10px;margin-top:8px;gap:10px}.chapter-visual figcaption .icon{height:13px;width:13px}.chapter-nav{display:flex;gap:15px;border-top:1px solid var(--line);padding-top:25px;margin-top:35px}.chapter-nav a{display:flex;flex:1;gap:15px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:15px 18px;text-decoration:none;min-width:0}.chapter-nav a:hover{background:var(--panel)}.chapter-nav a:last-child{text-align:right;justify-content:flex-end}.chapter-nav span{display:block;min-width:0}.chapter-nav small{display:block;text-transform:uppercase;font-size:9px;letter-spacing:.12em;color:var(--quiet);margin-bottom:4px}.chapter-nav strong{font-size:12px;font-weight:500;line-height:1.5;display:block}.page-footer{margin-top:35px;color:var(--quiet);font-size:10px;display:flex;justify-content:space-between;gap:15px;border-top:1px solid var(--line);padding-top:17px}.page-footer a{text-decoration:none}.page-footer a:hover{color:var(--text)}
+.results-title{margin-bottom:12px}.results-caption{color:var(--muted);font-size:13px;margin-bottom:25px}.result-list{display:grid;gap:12px}.result{display:block;text-decoration:none;border:1px solid var(--line);border-radius:11px;padding:19px 22px;background:var(--panel)}.result:hover{border-color:#706e65}.result strong{font-size:16px;font-weight:500}.result small{display:block;font-size:10px;color:var(--accent);margin-bottom:7px;text-transform:uppercase;letter-spacing:.1em}.result p{font-size:13px;color:var(--muted);line-height:1.8;margin:8px 0 0}.result mark{background:#4d4c46;color:#f3f3ef;border-radius:3px;padding:0 2px}.search-empty{padding:28px;border:1px dashed #514f49;border-radius:10px;color:var(--muted)}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.image-dialog{padding:18px;border:1px solid #54524c;background:#21211f;color:var(--text);border-radius:14px;max-width:min(1200px,94vw);max-height:94dvh}.image-dialog::backdrop{background:#0c0c0bdf;backdrop-filter:blur(4px)}.image-dialog img{display:block;width:100%;height:auto;max-height:78dvh;object-fit:contain}.dialog-bar{display:flex;justify-content:space-between;gap:20px;align-items:center;margin-bottom:12px;font-size:12px;color:var(--muted)}.dialog-close{padding:5px 9px;background:#363632;border:1px solid #595751;border-radius:7px;color:var(--text)}.noscript{margin:24px;padding:20px;border:1px solid var(--line);border-radius:10px}.no-js .chapter{display:block}.no-js .chapter-nav{display:none}@keyframes appear{from{opacity:.5;transform:translateY(4px)}to{opacity:1;transform:none}}
+@media(min-width:1550px){.shell{gap:64px}.home-hero{gap:40px}.home-hero h1{font-size:50px}}
+@media(max-width:1100px){.shell{grid-template-columns:226px minmax(0,1fr);gap:28px;padding:0 25px}.top-inner{padding:0 25px}.sidebar{padding-right:16px}.home-hero{grid-template-columns:1fr}.hero-image{max-width:570px}.home-hero h1{max-width:650px;font-size:39px}.home-hero p{max-width:610px}.home-hero{gap:6px}.quick-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.chapter-header.with-visual{grid-template-columns:1fr}.chapter-visual{max-width:530px}.drei{grid-template-columns:1fr}.drei .karte{padding:20px}.drei .schritt{margin-bottom:8px}.toolbar{gap:15px}.search{max-width:230px}}
+@media(max-width:800px){.topbar{height:72px}.top-inner{padding:0 20px;gap:12px}.identity{gap:14px}.identity img{width:125px}.identity span{display:none}.top-actions{gap:10px}.site-link{display:none}.menu-button{display:flex}.shell{display:block;padding:0 22px}.sidebar{display:none;position:fixed;top:72px;left:0;right:0;bottom:0;height:calc(100dvh - 72px);z-index:25;background:#21211f;border:0;padding:22px 24px 36px;overscroll-behavior:contain}.menu-open .sidebar{display:block}.menu-open{overflow:hidden}.nav-link{min-height:43px;font-size:14px}.nav-group{margin-top:20px}.nav-group h2{font-size:10px}.sidebar-note{margin-top:25px}.toolbar{min-height:92px;margin-bottom:24px}.search{max-width:260px;flex-basis:260px}.home-hero{grid-template-columns:1fr 1fr;gap:20px;padding-top:7px}.home-hero h1{font-size:33px}.hero-image figcaption{font-size:9px}.quick-grid{gap:12px}.quick{padding:19px}.chapter-header.with-visual{grid-template-columns:1fr minmax(210px,.85fr)}.drei{grid-template-columns:repeat(3,minmax(0,1fr))}.zwei{gap:12px}.karte{padding:18px}.chapter p{font-size:13px}.chapter-nav{margin-top:27px}}
+@media(max-width:590px){.top-inner{padding:0 16px}.identity img{width:112px}.language a,.language span{padding:3px 7px}.menu-button{font-size:0;padding:8px}.menu-button .icon{width:18px;height:18px}.shell{padding:0 18px}.toolbar{align-items:flex-start;flex-direction:column;gap:13px;padding:18px 0;min-height:auto;margin-bottom:20px}.breadcrumb{font-size:11px}.search{width:100%;max-width:none;flex-basis:auto;padding:9px 11px}.search input{font-size:14px}.search kbd{display:none}.home-hero{grid-template-columns:1fr;gap:12px;padding:6px 0 12px}.home-hero h1{font-size:36px;max-width:430px}.home-hero p{font-size:13px}.home-hero .eyebrow{margin-bottom:13px}.hero-image{margin-top:10px}.overview-heading{margin-top:15px;padding-top:20px}.overview-heading h2{font-size:15px}.overview-heading span{font-size:10px}.quick-grid{grid-template-columns:1fr 1fr;gap:9px}.quick{padding:16px 13px;gap:9px}.quick strong{font-size:12.5px}.quick p{font-size:11.5px}.quick .icon{width:20px;height:20px}.quick-tail{font-size:9px}.quick-tail .icon{width:13px;height:13px}.utility-links{gap:15px;margin-top:16px;font-size:11px}.chapter-header.with-visual{grid-template-columns:1fr;gap:18px}.chapter-header{padding:8px 0 20px}.chapter-header h2{font-size:33px}.chapter-header .unter{font-size:13px}.zwei,.drei{grid-template-columns:1fr}.tafel{padding:6px 12px}.tafel table{font-size:12px;min-width:390px}.karte table{font-size:12px}th,td{padding:10px 12px 10px 0}.chapter-nav{gap:8px}.chapter-nav a{padding:12px;gap:8px}.chapter-nav strong{font-size:11px}.chapter-nav .icon{width:15px;height:15px}.page-footer{margin-top:25px;font-size:9px}.image-dialog{padding:10px}.dialog-bar{font-size:11px}.result{padding:17px}.result strong{font-size:15px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.chapter{animation:none}*{transition:none!important}}
+@media print{body{background:white;color:black}.topbar,.sidebar,.toolbar,.home,.search-panel,.chapter-nav,.page-footer,.image-dialog,.skip,.noscript{display:none!important}.shell{display:block;padding:0;max-width:none}.main{padding:0}.chapter,.chapter[hidden]{display:block!important;break-before:page;animation:none}.chapter-header{border-color:#ccc}.chapter-header h2,.chapter-header .unter,.chapter-count,.chapter h3,.chapter p,td,.karte p{color:black}.chapter-header.with-visual{grid-template-columns:1fr}.chapter-visual{display:none}.karte,.tafel{background:white;border-color:#ccc;break-inside:avoid}.k,kbd,code{background:#eee;color:black;border-color:#bbb}.text,.zwei,.drei{max-width:none}table{min-width:0!important}.tafel{overflow:visible}.merke{background:#eee;color:black}.chapter-count{color:#555}.chapter[hidden]{padding-top:20px}}
+
+.no-js .chapter[hidden]{display:block!important}
+</style></head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="topbar"><div class="top-inner"><a class="identity" href="#uebersicht" aria-label="Exe AI · Overview"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2MDEiIGhlaWdodD0iMTgwIiB2aWV3Qm94PSIwIDAgNjAxIDE4MCI+CjwhLS0gVGhlIGxldHRlcmluZyBpcyBhcyB0YWxsIGFzIHRoZSBtYXJrOiB0aGUgZmxhdCB0b3Agb2YgdGhlIEUgbWVldHMgdGhlIG1hcmsncyB1cHBlciBlZGdlLCB0aGUgbGluZSBiZWxvdyBzdGFuZHMgb24gaXRzIGxvd2VyIGVkZ2UuIC0tPgo8cGF0aCBmaWxsLXJ1bGU9Im5vbnplcm8iIGZpbGw9IiM4ZjhlODYiIGQ9Ik0gNjkuMzE2NDA2IDEwLjEzNjcxOSBMIDEyMi41NjI1IDEwLjEyNSBMIDEzOC41NzAzMTIgMTAuMTIxMDk0IEMgMTQ1LjEyNSAxMC4xMjEwOTQgMTUxLjE0ODQzOCA5Ljg1NTQ2OSAxNTcuNTYyNSAxMS40Mzc1IEMgMTY1Ljk4MDQ2OSAxMy41MDc4MTIgMTczLjY2Nzk2OSAxNy44NDc2NTYgMTc5Ljc4OTA2MiAyMy45ODQzNzUgQyAxODkuODI4MTI1IDMzLjk2ODc1IDE5My45NDkyMTkgNDYuMDc0MjE5IDE5My45Njg3NSA1OS45OTYwOTQgTCAxOTMuOTU3MDMxIDk5LjkyOTY4OCBMIDE5My45NzI2NTYgMTE0Ljk5MjE4OCBDIDE5My45NzY1NjIgMTIxLjkwNjI1IDE5NC4yNzczNDQgMTI2LjkzMzU5NCAxOTIuNTg5ODQ0IDEzMy42Nzk2ODggQyAxOTAuNDk2MDk0IDE0Mi4wNDY4NzUgMTg2LjE1NjI1IDE0OS42Nzk2ODggMTgwLjAzMTI1IDE1NS43NTc4MTIgQyAxNzIuNDMzNTk0IDE2My4zNTE1NjIgMTYyLjM2MzI4MSAxNjguNTE5NTMxIDE1MS42MTcxODggMTY5LjYwOTM3NSBDIDE0OC43MzQzNzUgMTY5LjkwMjM0NCAxNDUuODE2NDA2IDE2OS44MzU5MzggMTQyLjkxNzk2OSAxNjkuODM5ODQ0IEwgMTMxLjMxMjUgMTY5LjgzMjAzMSBMIDc2Ljk2ODc1IDE2OS44MzIwMzEgTCA1OS45NTcwMzEgMTY5LjgzNTkzOCBDIDUzLjAxMTcxOSAxNjkuODM1OTM4IDQ2LjkwNjI1IDE3MC4xNzE4NzUgNDAuMTM2NzE5IDE2OC40Mjk2ODggQyAyNC4yNDIxODggMTY0LjMzNTkzOCAxMS4xOTUzMTIgMTUxLjkzNzUgNi4zMjQyMTkgMTM2LjI1NzgxMiBDIDQuNjkxNDA2IDEzMC45OTYwOTQgNC4xNzU3ODEgMTI2LjM2MzI4MSA0LjE1NjI1IDEyMC44MDA3ODEgTCA0LjE1MjM0NCA4MC42ODM1OTQgTCA0LjE1NjI1IDY2LjA5Mzc1IEMgNC4xNjAxNTYgNTguOTcyNjU2IDMuOTY0ODQ0IDUzLjAwMzkwNiA1Ljc3NzM0NCA0Ni4wMTE3MTkgQyA3Ljk5MjE4OCAzNy42OTE0MDYgMTIuMzU1NDY5IDMwLjEwMTU2MiAxOC40Mjk2ODggMjMuOTk2MDk0IEMgMjYuMDYyNSAxNi4zNDM3NSAzNi4wOTM3NSAxMS41NDY4NzUgNDYuODQzNzUgMTAuNDAyMzQ0IEMgNDkuOTkyMTg4IDEwLjA3ODEyNSA1My4xMTcxODggMTAuMTU2MjUgNTYuMjgxMjUgMTAuMTQ4NDM4IFogTSAxNDYuNDUzMTI1IDE1NC43NjU2MjUgQyAxNjMuNjc5Njg4IDE1NC43NTM5MDYgMTc4LjM3MTA5NCAxNDAuNDYwOTM4IDE3OC43MDcwMzEgMTIzLjE3MTg3NSBDIDE3OC43NTc4MTIgMTIwLjU4NTkzOCAxNzguNzM0Mzc1IDExNy45ODgyODEgMTc4LjczODI4MSAxMTUuNDAyMzQ0IEwgMTc4Ljc1NzgxMiAxMDAuMjA3MDMxIEwgMTc4Ljc1IDc1LjcyMjY1NiBDIDE3OC43OTI5NjkgNjcuNzgxMjUgMTc5LjQ4MDQ2OSA1Ni4yNjU2MjUgMTc3LjQzNzUgNDguOTU3MDMxIEMgMTc1Ljg1NTQ2OSA0My40Njg3NSAxNzIuODc1IDM4LjQ4ODI4MSAxNjguNzk2ODc1IDM0LjQ5MjE4OCBDIDE2NC4yODUxNTYgMzAuMDQ2ODc1IDE1OC41NzQyMTkgMjcuMDE1NjI1IDE1Mi4zNjcxODggMjUuNzY5NTMxIEMgMTQ3LjkxNDA2MiAyNC44NjMyODEgMTQxLjcxMDkzOCAyNS4xMDU0NjkgMTM3LjAyNzM0NCAyNS4xMjUgTCAxMTkuNzQyMTg4IDI1LjE1MjM0NCBMIDUxLjA3ODEyNSAyNS4xNzE4NzUgQyA1MC45NTcwMzEgMjUuMTc1NzgxIDUwLjgzNTkzOCAyNS4xNzk2ODggNTAuNzE0ODQ0IDI1LjE3OTY4OCBDIDQyLjAxOTUzMSAyNS41OTc2NTYgMzMuODQzNzUgMjkuNDQ5MjE5IDI3Ljk5MjE4OCAzNS44OTQ1MzEgQyAyNC4xNDA2MjUgNDAuMTIxMDk0IDIxLjQ1NzAzMSA0NS4yNzczNDQgMjAuMjAzMTI1IDUwLjg1NTQ2OSBDIDE4Ljk4ODI4MSA1Ni4yODEyNSAxOS4zMDA3ODEgNjIuMzAwNzgxIDE5LjMwNDY4OCA2Ny44OTQ1MzEgTCAxOS4zMTY0MDYgODUuNzI2NTYyIEwgMTkuMzEyNSAxMDkuODkwNjI1IEMgMTkuMzA4NTk0IDExNC4zNzg5MDYgMTkuMjQ2MDk0IDExOC45MjE4NzUgMTkuMzY3MTg4IDEyMy4zNzg5MDYgQyAxOS43NzM0MzggMTM4LjE3MTg3NSAzMC45NDkyMTkgMTUxLjIzMDQ2OSA0NS4zOTA2MjUgMTU0LjE2Nzk2OSBDIDUwLjM3ODkwNiAxNTUuMTgzNTk0IDU3LjQ1NzAzMSAxNTQuODA4NTk0IDYyLjY1MjM0NCAxNTQuODI4MTI1IEMgNzIuMDI3MzQ0IDE1NC45NDkyMTkgODEuNDAyMzQ0IDE1NC45NjA5MzggOTAuNzc3MzQ0IDE1NC44NTkzNzUgTCAxMjguMTcxODc1IDE1NC44MzIwMzEgQyAxMzEuODM5ODQ0IDE1NC44MjQyMTkgMTM1LjU3NDIxOSAxNTQuODg2NzE5IDEzOS4yMzQzNzUgMTU0LjgxNjQwNiBDIDE0MS4yOTY4NzUgMTU0Ljc3NzM0NCAxNDQuNSAxNTQuOTk2MDk0IDE0Ni40NTMxMjUgMTU0Ljc2NTYyNSBaIE0gMTQ2LjQ1MzEyNSAxNTQuNzY1NjI1ICIvPgo8cGF0aCBmaWxsLXJ1bGU9Im5vbnplcm8iIGZpbGw9IiM4ZjhlODYiIGQ9Ik0gNTMuNDg0Mzc1IDUxLjk4NDM3NSBDIDU1LjEyNSA1MS45MTAxNTYgNTcuMjkyOTY5IDUxLjgzNTkzOCA1OC42ODM1OTQgNTIuOTE0MDYyIEMgNjAuODAwNzgxIDU0LjU1MDc4MSA2Mi44ODI4MTIgNTYuMjkyOTY5IDY0LjkzMzU5NCA1OC4wMTk1MzEgQyA2OC42MzY3MTkgNjEuMTYwMTU2IDcyLjM1NTQ2OSA2NC4yODEyNSA3Ni4wOTc2NTYgNjcuMzc4OTA2IEwgOTAuMjUzOTA2IDc5LjA0Njg3NSBDIDkyLjU2MjUgODAuOTQ1MzEyIDk1LjY5MTQwNiA4My4zNjMyODEgOTcuNzEwOTM4IDg1LjUxMTcxOSBDIDk4Ljg3ODkwNiA4Ny4wOTc2NTYgOTkuMjU3ODEyIDg5LjA4OTg0NCA5OS4wMzUxNTYgOTEuMDE1NjI1IEMgOTguNTk3NjU2IDk0Ljc2OTUzMSA5NC42NTYyNSA5Ny4zMzU5MzggOTEuOTI5Njg4IDk5LjU4OTg0NCBMIDgzLjI4NTE1NiAxMDYuNzM0Mzc1IEMgNzUuNDMzNTk0IDExMy4yMjY1NjIgNjYuODAwNzgxIDEyMC43MjY1NjIgNTguODM1OTM4IDEyNi45NDkyMTkgQyA1Ny4xNDg0MzggMTI3LjkzMzU5NCA1NS45Mzc1IDEyOC4zNDc2NTYgNTMuOTc2NTYyIDEyOC4xOTkyMTkgQyA1MC4wNTg1OTQgMTI3LjkwNjI1IDQ2Ljk0NTMxMiAxMjQuMTI4OTA2IDQ3LjM5ODQzOCAxMjAuMjI2NTYyIEMgNDcuNTIzNDM4IDExOS4wOTc2NTYgNDcuOTUzMTI1IDExNy4yNTM5MDYgNDguNzY1NjI1IDExNi40MjU3ODEgQyA1Mi4xNzk2ODggMTEyLjk0NTMxMiA1Ni40NjQ4NDQgMTA5LjY3NTc4MSA2MC4yMTA5MzggMTA2LjU4OTg0NCBMIDgwLjIxNDg0NCA5MC4wMjM0MzggQyA3My4zOTg0MzggODQuMzAwNzgxIDY2LjUzOTA2MiA3OC42MjUgNTkuNjQ4NDM4IDcyLjk5MjE4OCBDIDU2LjE2NDA2MiA3MC4xMjEwOTQgNTIuNTU4NTk0IDY3LjE5OTIxOSA0OS4yNjU2MjUgNjQuMTcxODc1IEMgNDYuNDg0Mzc1IDYxLjYxMzI4MSA0Ni43MjY1NjIgNTYuNzY5NTMxIDQ5LjI4NTE1NiA1NC4xNjc5NjkgQyA1MC42MzI4MTIgNTIuODAwNzgxIDUxLjY3NTc4MSA1Mi40MTc5NjkgNTMuNDg0Mzc1IDUxLjk4NDM3NSBaIE0gNTMuNDg0Mzc1IDUxLjk4NDM3NSAiLz4KPHBhdGggZmlsbC1ydWxlPSJub256ZXJvIiBmaWxsPSIjOGY4ZTg2IiBkPSJNIDEwNS43MzgyODEgMTEyLjcxNDg0NCBDIDEwNy42Njc5NjkgMTEyLjU1ODU5NCAxMTEuMjgxMjUgMTEyLjY2NDA2MiAxMTMuMzU5Mzc1IDExMi42NjAxNTYgTCAxMjguMTM2NzE5IDExMi42NTIzNDQgTCAxNDEuMzEyNSAxMTIuNjQwNjI1IEMgMTQ0LjQ1MzEyNSAxMTIuNjMyODEyIDE0OS44MzU5MzggMTEyLjExMzI4MSAxNTIuNDI5Njg4IDExMy44Mzk4NDQgQyAxNTQuMTk5MjE5IDExNS4wMzEyNSAxNTUuNDE3OTY5IDExNi44ODY3MTkgMTU1LjgwMDc4MSAxMTguOTg0Mzc1IEMgMTU2LjU4NTkzOCAxMjMuMjI2NTYyIDE1My42NDA2MjUgMTI2Ljg4MjgxMiAxNDkuNSAxMjcuNjE3MTg4IEMgMTQ2Ljc5Mjk2OSAxMjcuNzczNDM4IDE0My4zMTY0MDYgMTI3LjY4MzU5NCAxNDAuNTIzNDM4IDEyNy42ODc1IEwgMTI0LjI5Mjk2OSAxMjcuNzA3MDMxIEwgMTEyLjMzNTkzOCAxMjcuNzE0ODQ0IEMgMTA5LjE3MTg3NSAxMjcuNzE0ODQ0IDEwNC45MTQwNjIgMTI4LjIyNjU2MiAxMDIuMjkyOTY5IDEyNi4zODY3MTkgQyAxMDAuNjc1NzgxIDEyNS4yNDYwOTQgOTkuNTg1OTM4IDEyMy41IDk5LjI3MzQzOCAxMjEuNTQ2ODc1IEMgOTguNTM1MTU2IDExNi45ODQzNzUgMTAxLjIyNjU2MiAxMTMuNDI5Njg4IDEwNS43MzgyODEgMTEyLjcxNDg0NCBaIE0gMTA1LjczODI4MSAxMTIuNzE0ODQ0ICIvPgo8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgyMzUgMTAuMTI1KSBzY2FsZSgxLjI1NjMzKSB0cmFuc2xhdGUoLTIzNSAtMjUuMDg2KSI+CjxwYXRoIGZpbGwtcnVsZT0ibm9uemVybyIgZmlsbD0iIzhmOGU4NiIgZD0iTSAyNDIgMTA0IEwgMjgwLjQ0NTMxMiAxMDQgQyAyODQuMzI4MTI1IDEwNCAyODYuODk4NDM4IDEwMS43MDMxMjUgMjg2Ljg5ODQzOCA5OC4wMzkwNjIgQyAyODYuODk4NDM4IDk0LjM3NSAyODQuMzI4MTI1IDkyLjA3ODEyNSAyODAuNDQ1MzEyIDkyLjA3ODEyNSBMIDI0OS4wNTQ2ODggOTIuMDc4MTI1IEwgMjQ5LjA1NDY4OCA2OS41NDY4NzUgTCAyNzguODA0Njg4IDY5LjU0Njg3NSBDIDI4Mi40Njg3NSA2OS41NDY4NzUgMjg0Ljg3NSA2Ny4zNTkzNzUgMjg0Ljg3NSA2My45MTQwNjIgQyAyODQuODc1IDYwLjQ2ODc1IDI4Mi40MTQwNjIgNTguMzM1OTM4IDI3OC44MDQ2ODggNTguMzM1OTM4IEwgMjQ5LjA1NDY4OCA1OC4zMzU5MzggTCAyNDkuMDU0Njg4IDM3LjAwNzgxMiBMIDI4MC40NDUzMTIgMzcuMDA3ODEyIEMgMjg0LjMyODEyNSAzNy4wMDc4MTIgMjg2Ljg5ODQzOCAzNC43MTA5MzggMjg2Ljg5ODQzOCAzMS4wNDY4NzUgQyAyODYuODk4NDM4IDI3LjM4MjgxMiAyODQuMzI4MTI1IDI1LjA4NTkzOCAyODAuNDQ1MzEyIDI1LjA4NTkzOCBMIDI0MiAyNS4wODU5MzggQyAyMzcuNjI1IDI1LjA4NTkzOCAyMzQuOTQ1MzEyIDI3LjgyMDMxMiAyMzQuOTQ1MzEyIDMyLjQxNDA2MiBMIDIzNC45NDUzMTIgOTYuNjcxODc1IEMgMjM0Ljk0NTMxMiAxMDEuMjY1NjI1IDIzNy42MjUgMTA0IDI0MiAxMDQgWiBNIDMwMC4zMzU5MzggMTA1LjA5Mzc1IEMgMzAyLjYzMjgxMiAxMDUuMDkzNzUgMzA0LjEwOTM3NSAxMDQuMjczNDM4IDMwNS44MDQ2ODggMTAxLjY0ODQzOCBMIDMxOC4yNzM0MzggODMuMjE4NzUgTCAzMTguNTQ2ODc1IDgzLjIxODc1IEwgMzMxLjA3MDMxMiAxMDEuODY3MTg4IEMgMzMyLjQ5MjE4OCAxMDQuMDU0Njg4IDMzMy45Njg3NSAxMDUuMDkzNzUgMzM2LjQ4NDM3NSAxMDUuMDkzNzUgQyAzNDAuMTQ4NDM4IDEwNS4wOTM3NSAzNDIuOTkyMTg4IDEwMi42ODc1IDM0Mi45OTIxODggOTkuMDc4MTI1IEMgMzQyLjk5MjE4OCA5Ny42NTYyNSAzNDIuNSA5Ni4zNDM3NSAzNDEuNTE1NjI1IDk0LjkyMTg3NSBMIDMyNy4wMjM0MzggNzQuNjg3NSBMIDM0MS40NjA5MzggNTUuMjE4NzUgQyAzNDIuNjY0MDYyIDUzLjYzMjgxMiAzNDMuMTU2MjUgNTIuMjY1NjI1IDM0My4xNTYyNSA1MC42Nzk2ODggQyAzNDMuMTU2MjUgNDcuMjg5MDYyIDM0MC40NzY1NjIgNDQuODgyODEyIDMzNi42NDg0MzggNDQuODgyODEyIEMgMzM0LjI0MjE4OCA0NC44ODI4MTIgMzMyLjc2NTYyNSA0NS45NzY1NjIgMzMxLjAxNTYyNSA0OC42NTYyNSBMIDMxOS4yMDMxMjUgNjYuMzc1IEwgMzE4LjkyOTY4OCA2Ni4zNzUgTCAzMDYuODQzNzUgNDguNTQ2ODc1IEMgMzA1LjA5Mzc1IDQ1LjgxMjUgMzAzLjcyNjU2MiA0NC44ODI4MTIgMzAxLjA0Njg3NSA0NC44ODI4MTIgQyAyOTcuMzI4MTI1IDQ0Ljg4MjgxMiAyOTQuNDg0Mzc1IDQ3LjQ1MzEyNSAyOTQuNDg0Mzc1IDUwLjc4OTA2MiBDIDI5NC40ODQzNzUgNTIuMzc1IDI5NC45NzY1NjIgNTMuNzQyMTg4IDI5NS45NjA5MzggNTUuMDU0Njg4IEwgMzEwLjQ1MzEyNSA3NS4wNzAzMTIgTCAyOTUuNzQyMTg4IDk0Ljk3NjU2MiBDIDI5NC41OTM3NSA5Ni42MTcxODggMjk0LjA0Njg3NSA5Ny44NzUgMjk0LjA0Njg3NSA5OS40NjA5MzggQyAyOTQuMDQ2ODc1IDEwMi43NDIxODggMjk2LjY3MTg3NSAxMDUuMDkzNzUgMzAwLjMzNTkzOCAxMDUuMDkzNzUgWiBNIDM3NS45NTMxMjUgMTA1LjE0ODQzOCBDIDM4NyAxMDUuMTQ4NDM4IDM5NS42NDA2MjUgMTAwLjgyODEyNSAzOTkuNDY4NzUgOTMuNDQ1MzEyIEMgNDAwLjA3MDMxMiA5Mi4yNDIxODggNDAwLjM5ODQzOCA5MS4wMzkwNjIgNDAwLjM5ODQzOCA5MCBDIDQwMC4zOTg0MzggODYuNzE4NzUgMzk3Ljk5MjE4OCA4NC43NSAzOTQuOTI5Njg4IDg0Ljc1IEMgMzkzLjAxNTYyNSA4NC43NSAzOTEuNzU3ODEyIDg1LjM1MTU2MiAzOTAuMzM1OTM4IDg2LjkzNzUgQyAzODUuOTYwOTM4IDkyLjUxNTYyNSAzODEuOTY4NzUgOTQuNjQ4NDM4IDM3NS44NDM3NSA5NC42NDg0MzggQyAzNjYuOTg0Mzc1IDk0LjY0ODQzOCAzNjEuMzUxNTYyIDg4LjQxNDA2MiAzNjEuMzUxNTYyIDc4LjczNDM3NSBMIDM2MS4zNTE1NjIgNzguMjk2ODc1IEwgMzk1LjUzMTI1IDc4LjI5Njg3NSBDIDM5OS41NzgxMjUgNzguMjk2ODc1IDQwMS44NzUgNzUuODkwNjI1IDQwMS44NzUgNzEuODQzNzUgQyA0MDEuODc1IDU2LjA5Mzc1IDM5MS4wNDY4NzUgNDQuODI4MTI1IDM3NS4xODc1IDQ0LjgyODEyNSBDIDM1OC40NTMxMjUgNDQuODI4MTI1IDM0Ny43ODkwNjIgNTYuNzUgMzQ3Ljc4OTA2MiA3NS4yMzQzNzUgQyAzNDcuNzg5MDYyIDk0LjA0Njg3NSAzNTguMjM0Mzc1IDEwNS4xNDg0MzggMzc1Ljk1MzEyNSAxMDUuMTQ4NDM4IFogTSAzNjEuNDYwOTM4IDY5LjMyODEyNSBDIDM2Mi4wMDc4MTIgNjEuMDE1NjI1IDM2Ny41ODU5MzggNTUuMzgyODEyIDM3NS4yNDIxODggNTUuMzgyODEyIEMgMzgyLjg5ODQzOCA1NS4zODI4MTIgMzg4LjI1NzgxMiA2MC45MDYyNSAzODguNTMxMjUgNjkuMzI4MTI1IFogTSA0MzUuODYzMjgxIDEwNC45Mjk2ODggQyA0MzkuNTI3MzQ0IDEwNC45Mjk2ODggNDQxLjYwNTQ2OSAxMDMuMTI1IDQ0Mi45MTc5NjkgOTguODU5Mzc1IEwgNDQ4LjExMzI4MSA4My44NzUgTCA0NzcuNTg5ODQ0IDgzLjg3NSBMIDQ4Mi43ODUxNTYgOTguOTY4NzUgQyA0ODQuMDQyOTY5IDEwMy4xNzk2ODggNDg2LjE3NTc4MSAxMDQuOTI5Njg4IDQ5MC4wMDM5MDYgMTA0LjkyOTY4OCBDIDQ5NC4xMDU0NjkgMTA0LjkyOTY4OCA0OTcuMDU4NTk0IDEwMi4yNSA0OTcuMDU4NTk0IDk4LjQyMTg3NSBDIDQ5Ny4wNTg1OTQgOTcuMTY0MDYyIDQ5Ni43ODUxNTYgOTUuOTA2MjUgNDk2LjEyODkwNiA5NC4xMDE1NjIgTCA0NzMuMTYwMTU2IDMxLjc1NzgxMiBDIDQ3MS4xOTE0MDYgMjYuNDUzMTI1IDQ2OC4wMTk1MzEgMjQuMTU2MjUgNDYyLjgyNDIxOSAyNC4xNTYyNSBDIDQ1Ny42ODM1OTQgMjQuMTU2MjUgNDU0LjUxMTcxOSAyNi41NjI1IDQ1Mi41OTc2NTYgMzEuODEyNSBMIDQyOS42ODM1OTQgOTQuMTAxNTYyIEMgNDI5LjAyNzM0NCA5NS43OTY4NzUgNDI4Ljc1MzkwNiA5Ny4zMjgxMjUgNDI4Ljc1MzkwNiA5OC40MjE4NzUgQyA0MjguNzUzOTA2IDEwMi40MTQwNjIgNDMxLjU0Mjk2OSAxMDQuOTI5Njg4IDQzNS44NjMyODEgMTA0LjkyOTY4OCBaIE0gNDUxLjQ0OTIxOSA3Mi43MTg3NSBMIDQ2Mi41NTA3ODEgMzkuMDMxMjUgTCA0NjIuOTMzNTk0IDM5LjAzMTI1IEwgNDc0LjE0NDUzMSA3Mi43MTg3NSBaIE0gNTEzLjMzOTg0NCAxMDQuOTI5Njg4IEMgNTE3Ljc2OTUzMSAxMDQuOTI5Njg4IDUyMC4zOTQ1MzEgMTAyLjI1IDUyMC4zOTQ1MzEgOTcuNjAxNTYyIEwgNTIwLjM5NDUzMSAzMS40ODQzNzUgQyA1MjAuMzk0NTMxIDI2LjgzNTkzOCA1MTcuNzY5NTMxIDI0LjE1NjI1IDUxMy4zMzk4NDQgMjQuMTU2MjUgQyA1MDguOTY0ODQ0IDI0LjE1NjI1IDUwNi4yODUxNTYgMjYuODM1OTM4IDUwNi4yODUxNTYgMzEuNDg0Mzc1IEwgNTA2LjI4NTE1NiA5Ny42MDE1NjIgQyA1MDYuMjg1MTU2IDEwMi4yNSA1MDguOTY0ODQ0IDEwNC45Mjk2ODggNTEzLjMzOTg0NCAxMDQuOTI5Njg4IFogTSAyMjggLTIuNjQwNjI1ICIvPgo8cGF0aCBmaWxsLXJ1bGU9Im5vbnplcm8iIGZpbGw9InJnYig1Ni4wNzg0MzElLCA1NS42ODYyNzUlLCA1Mi41NDkwMiUpIiBmaWxsLW9wYWNpdHk9IjEiIGQ9Ik0gMjM1LjY5MTQwNiAxNTIuMjEwOTM4IEMgMjM2LjIwNzAzMSAxNTIuMjEwOTM4IDIzNi41NDY4NzUgMTUxLjk4NDM3NSAyMzYuODMyMDMxIDE1MS40MTAxNTYgTCAyNDAuMDM5MDYyIDE0NS4zMDg1OTQgTCAyNDkuMTY3OTY5IDE0NS4zMDg1OTQgTCAyNTAuNDQxNDA2IDE1MS40MTAxNTYgQyAyNTAuNTYyNSAxNTEuOTY4NzUgMjUwLjgxMjUgMTUyLjIxMDkzOCAyNTEuMzM5ODQ0IDE1Mi4yMTA5MzggQyAyNTEuOTQ5MjE5IDE1Mi4yMTA5MzggMjUyLjQ0OTIxOSAxNTEuODMyMDMxIDI1Mi41MzEyNSAxNTEuMzA0Njg4IEMgMjUyLjU1ODU5NCAxNTEuMTM2NzE5IDI1Mi41MzkwNjIgMTUwLjk1NzAzMSAyNTIuNDkyMTg4IDE1MC42OTkyMTkgTCAyNDguMTg3NSAxMzAuOTI5Njg4IEMgMjQ4LjAzOTA2MiAxMzAuMjUgMjQ3LjY5NTMxMiAxMjkuOTQ1MzEyIDI0Ny4wNTg1OTQgMTI5Ljk0NTMxMiBDIDI0Ni4zOTA2MjUgMTI5Ljk0NTMxMiAyNDUuOTMzNTk0IDEzMC4yNjU2MjUgMjQ1LjU3MDMxMiAxMzAuOTI5Njg4IEwgMjM1LjAyMzQzOCAxNTAuNjk5MjE5IEMgMjM0Ljg3NSAxNTAuOTY4NzUgMjM0LjgxMjUgMTUxLjE1MjM0NCAyMzQuNzg5MDYyIDE1MS4zMDQ2ODggQyAyMzQuNzA3MDMxIDE1MS44MzIwMzEgMjM1LjA4NTkzOCAxNTIuMjEwOTM4IDIzNS42OTE0MDYgMTUyLjIxMDkzOCBaIE0gMjQwLjkyOTY4OCAxNDMuNTIzNDM4IEwgMjQ2LjU2MjUgMTMyLjcxNDg0NCBMIDI0Ni42NTIzNDQgMTMyLjcxNDg0NCBMIDI0OC44NDM3NSAxNDMuNTIzNDM4IFogTSAyNTYuMTQwNjI1IDE1Mi4yMTA5MzggQyAyNTYuNzczNDM4IDE1Mi4yMTA5MzggMjU3LjIzNDM3NSAxNTEuODA0Njg4IDI1Ny4zMzk4NDQgMTUxLjEzNjcxOSBMIDI2MC41MjczNDQgMTMxLjAxOTUzMSBDIDI2MC42MzI4MTIgMTMwLjM1NTQ2OSAyNjAuMzAwNzgxIDEyOS45NDUzMTIgMjU5LjY2Nzk2OSAxMjkuOTQ1MzEyIEMgMjU5LjAzMTI1IDEyOS45NDUzMTIgMjU4LjU3NDIxOSAxMzAuMzU1NDY5IDI1OC40Njg3NSAxMzEuMDE5NTMxIEwgMjU1LjI4MTI1IDE1MS4xMzY3MTkgQyAyNTUuMTc1NzgxIDE1MS44MDQ2ODggMjU1LjUwMzkwNiAxNTIuMjEwOTM4IDI1Ni4xNDA2MjUgMTUyLjIxMDkzOCBaIE0gMjcyLjYwNTQ2OSAxNTIuMjU3ODEyIEMgMjc2LjE5MTQwNiAxNTIuMjU3ODEyIDI3OC45NDkyMTkgMTUwLjQxMDE1NiAyNzkuMzgyODEyIDE0Ny42ODc1IEMgMjc5Ljc0MjE4OCAxNDUuNDE0MDYyIDI3OC42OTkyMTkgMTQ0LjI2NTYyNSAyNzUuNTgyMDMxIDE0My40OTIxODggTCAyNzMuNDEwMTU2IDE0Mi45NDkyMTkgQyAyNzEuNDE0MDYyIDE0Mi40NDkyMTkgMjcwLjYyMTA5NCAxNDEuNjMyODEyIDI3MC44MjQyMTkgMTQwLjM1OTM3NSBDIDI3MS4wNzAzMTIgMTM4LjgwMDc4MSAyNzIuNzUgMTM3LjY2NDA2MiAyNzQuODgyODEyIDEzNy42NjQwNjIgQyAyNzYuODgyODEyIDEzNy42NjQwNjIgMjc3LjkyOTY4OCAxMzguNjE3MTg4IDI3OC4yODUxNTYgMTQwLjE3OTY4OCBDIDI3OC40MzM1OTQgMTQwLjY3OTY4OCAyNzguNjc5Njg4IDE0MC44MjgxMjUgMjc5LjEwNTQ2OSAxNDAuODI4MTI1IEMgMjc5LjU4OTg0NCAxNDAuODI4MTI1IDI3OS45NDE0MDYgMTQwLjUxMTcxOSAyODAuMDE5NTMxIDE0MC4wMTE3MTkgQyAyODAuMDM1MTU2IDEzOS45MDYyNSAyODAuMDQyOTY5IDEzOS43ODUxNTYgMjgwLjAzNTE1NiAxMzkuNjMyODEyIEMgMjc5LjkyOTY4OCAxMzcuNTE1NjI1IDI3Ny45NjQ4NDQgMTM2IDI3NS4yNjk1MzEgMTM2IEMgMjcxLjg0NzY1NiAxMzYgMjY5LjIyNjU2MiAxMzcuODE2NDA2IDI2OC44MDg1OTQgMTQwLjQ0OTIxOSBDIDI2OC40NzI2NTYgMTQyLjU4NTkzOCAyNjkuNjk5MjE5IDE0My45NDUzMTIgMjcyLjYyMTA5NCAxNDQuNjg3NSBMIDI3NC44MzIwMzEgMTQ1LjI1IEMgMjc2Ljg1NTQ2OSAxNDUuNzUgMjc3LjUzMTI1IDE0Ni40NzY1NjIgMjc3LjMxNjQwNiAxNDcuODM1OTM4IEMgMjc3LjA1MDc4MSAxNDkuNTE1NjI1IDI3NS4yODUxNTYgMTUwLjYwOTM3NSAyNzMuMDExNzE5IDE1MC42MDkzNzUgQyAyNzAuODA0Njg4IDE1MC42MDkzNzUgMjY5LjY1NjI1IDE0OS43MzA0NjkgMjY5LjE5MTQwNiAxNDguMDc4MTI1IEMgMjY5LjAyNzM0NCAxNDcuNTc4MTI1IDI2OC43OTI5NjkgMTQ3LjM2NzE4OCAyNjguMzk4NDM4IDE0Ny4zNjcxODggQyAyNjcuODY3MTg4IDE0Ny4zNjcxODggMjY3LjQyMTg3NSAxNDcuNjg3NSAyNjcuMzM1OTM4IDE0OC4yMTQ4NDQgQyAyNjcuMzEyNSAxNDguMzgyODEyIDI2Ny4zMTY0MDYgMTQ4LjU0Njg3NSAyNjcuMzY3MTg4IDE0OC43MzA0NjkgQyAyNjcuNjkxNDA2IDE1MC44NjMyODEgMjY5LjcxNDg0NCAxNTIuMjU3ODEyIDI3Mi42MDU0NjkgMTUyLjI1NzgxMiBaIE0gMjgxLjc1IDE1Ny42OTE0MDYgQyAyODQuMTU2MjUgMTU3LjY5MTQwNiAyODUuNDQ5MjE5IDE1Ni42MTcxODggMjg3LjQwMjM0NCAxNTIuOTUzMTI1IEwgMjk1Ljc2NTYyNSAxMzcuNDUzMTI1IEMgMjk1Ljg2NzE4OCAxMzcuMjczNDM4IDI5NS45Mjk2ODggMTM3LjA3NDIxOSAyOTUuOTUzMTI1IDEzNi45MjE4NzUgQyAyOTYuMDM5MDYyIDEzNi4zNzg5MDYgMjk1LjY5MTQwNiAxMzYgMjk1LjExNzE4OCAxMzYgQyAyOTQuNjE3MTg4IDEzNiAyOTQuMzI0MjE5IDEzNi4yMTA5MzggMjk0LjA0Njg3NSAxMzYuNzQyMTg4IEwgMjg3LjE2MDE1NiAxNTAgTCAyODcuMTE3MTg4IDE1MCBMIDI4NC40NDkyMTkgMTM2Ljc0MjE4OCBDIDI4NC4zNTE1NjIgMTM2LjIxMDkzOCAyODQuMDgyMDMxIDEzNiAyODMuNjEzMjgxIDEzNiBDIDI4My4wMjM0MzggMTM2IDI4Mi41MzkwNjIgMTM2LjM2MzI4MSAyODIuNDQ5MjE5IDEzNi45MjE4NzUgQyAyODIuNDI1NzgxIDEzNy4wNzQyMTkgMjgyLjQyNTc4MSAxMzcuMjczNDM4IDI4Mi40NzY1NjIgMTM3LjQ1MzEyNSBMIDI4NS43NTM5MDYgMTUyLjEwNTQ2OSBMIDI4NS4xNDQ1MzEgMTUzLjI4NTE1NiBDIDI4NC4xMTMyODEgMTU1LjMwMDc4MSAyODMuMTI4OTA2IDE1NS45NjQ4NDQgMjgyLjAwNzgxMiAxNTUuOTY0ODQ0IEMgMjgxLjYyODkwNiAxNTUuOTY0ODQ0IDI4MS41MzEyNSAxNTUuOTIxODc1IDI4MS4yMTQ4NDQgMTU1LjkyMTg3NSBDIDI4MC43MTQ4NDQgMTU1LjkyMTg3NSAyODAuMzYzMjgxIDE1Ni4yMjI2NTYgMjgwLjI4OTA2MiAxNTYuNjc1NzgxIEMgMjgwLjE4MzU5NCAxNTcuMzQzNzUgMjgwLjc1IDE1Ny42OTE0MDYgMjgxLjc1IDE1Ny42OTE0MDYgWiBNIDMwMS4wMTk1MzEgMTUyLjI1NzgxMiBDIDMwNC42MDU0NjkgMTUyLjI1NzgxMiAzMDcuMzYzMjgxIDE1MC40MTAxNTYgMzA3Ljc5Njg3NSAxNDcuNjg3NSBDIDMwOC4xNTYyNSAxNDUuNDE0MDYyIDMwNy4xMTMyODEgMTQ0LjI2NTYyNSAzMDMuOTk2MDk0IDE0My40OTIxODggTCAzMDEuODI0MjE5IDE0Mi45NDkyMTkgQyAyOTkuODI4MTI1IDE0Mi40NDkyMTkgMjk5LjAzNTE1NiAxNDEuNjMyODEyIDI5OS4yMzgyODEgMTQwLjM1OTM3NSBDIDI5OS40ODQzNzUgMTM4LjgwMDc4MSAzMDEuMTY0MDYyIDEzNy42NjQwNjIgMzAzLjI5Njg3NSAxMzcuNjY0MDYyIEMgMzA1LjI5Njg3NSAxMzcuNjY0MDYyIDMwNi4zNDM3NSAxMzguNjE3MTg4IDMwNi42OTkyMTkgMTQwLjE3OTY4OCBDIDMwNi44NDc2NTYgMTQwLjY3OTY4OCAzMDcuMDkzNzUgMTQwLjgyODEyNSAzMDcuNTE5NTMxIDE0MC44MjgxMjUgQyAzMDguMDAzOTA2IDE0MC44MjgxMjUgMzA4LjM1NTQ2OSAxNDAuNTExNzE5IDMwOC40MzM1OTQgMTQwLjAxMTcxOSBDIDMwOC40NDkyMTkgMTM5LjkwNjI1IDMwOC40NTcwMzEgMTM5Ljc4NTE1NiAzMDguNDQ5MjE5IDEzOS42MzI4MTIgQyAzMDguMzQzNzUgMTM3LjUxNTYyNSAzMDYuMzc4OTA2IDEzNiAzMDMuNjgzNTk0IDEzNiBDIDMwMC4yNjE3MTkgMTM2IDI5Ny42NDA2MjUgMTM3LjgxNjQwNiAyOTcuMjIyNjU2IDE0MC40NDkyMTkgQyAyOTYuODg2NzE5IDE0Mi41ODU5MzggMjk4LjExMzI4MSAxNDMuOTQ1MzEyIDMwMS4wMzUxNTYgMTQ0LjY4NzUgTCAzMDMuMjQ2MDk0IDE0NS4yNSBDIDMwNS4yNjk1MzEgMTQ1Ljc1IDMwNS45NDUzMTIgMTQ2LjQ3NjU2MiAzMDUuNzMwNDY5IDE0Ny44MzU5MzggQyAzMDUuNDY0ODQ0IDE0OS41MTU2MjUgMzAzLjY5OTIxOSAxNTAuNjA5Mzc1IDMwMS40MjU3ODEgMTUwLjYwOTM3NSBDIDI5OS4yMTg3NSAxNTAuNjA5Mzc1IDI5OC4wNzAzMTIgMTQ5LjczMDQ2OSAyOTcuNjA1NDY5IDE0OC4wNzgxMjUgQyAyOTcuNDQxNDA2IDE0Ny41NzgxMjUgMjk3LjIwNzAzMSAxNDcuMzY3MTg4IDI5Ni44MTI1IDE0Ny4zNjcxODggQyAyOTYuMjgxMjUgMTQ3LjM2NzE4OCAyOTUuODM1OTM4IDE0Ny42ODc1IDI5NS43NSAxNDguMjE0ODQ0IEMgMjk1LjcyNjU2MiAxNDguMzgyODEyIDI5NS43MzA0NjkgMTQ4LjU0Njg3NSAyOTUuNzgxMjUgMTQ4LjczMDQ2OSBDIDI5Ni4xMDU0NjkgMTUwLjg2MzI4MSAyOTguMTI4OTA2IDE1Mi4yNTc4MTIgMzAxLjAxOTUzMSAxNTIuMjU3ODEyIFogTSAzMTEuMTg3NSAxNDguNDQxNDA2IEMgMzEwLjc5Njg3NSAxNTAuOTI1NzgxIDMxMS43NzM0MzggMTUyLjA4OTg0NCAzMTQuMTY0MDYyIDE1Mi4wODk4NDQgTCAzMTQuNTc0MjE5IDE1Mi4wODk4NDQgQyAzMTUuNjQ4NDM4IDE1Mi4wODk4NDQgMzE2LjA1MDc4MSAxNTEuNzU3ODEyIDMxNi4xNDQ1MzEgMTUxLjE1MjM0NCBDIDMxNi4yMjI2NTYgMTUwLjY2Nzk2OSAzMTUuOTQ5MjE5IDE1MC4zOTQ1MzEgMzE1LjMwNDY4OCAxNTAuMzUxNTYyIEwgMzE0Ljg2NzE4OCAxNTAuMzM1OTM4IEMgMzEzLjQ0MTQwNiAxNTAuMjczNDM4IDMxMy4wMDM5MDYgMTQ5LjU5Mzc1IDMxMy4yNDYwOTQgMTQ4LjA1MDc4MSBMIDMxNC44NTE1NjIgMTM3LjkyMTg3NSBMIDMxNy4xODM1OTQgMTM3LjkyMTg3NSBDIDMxNy43NzM0MzggMTM3LjkyMTg3NSAzMTguMTUyMzQ0IDEzNy42MjEwOTQgMzE4LjIzODI4MSAxMzcuMDg5ODQ0IEMgMzE4LjMyMDMxMiAxMzYuNTYyNSAzMTguMDM1MTU2IDEzNi4yNTc4MTIgMzE3LjQ0NTMxMiAxMzYuMjU3ODEyIEwgMzE1LjExMzI4MSAxMzYuMjU3ODEyIEwgMzE1LjYwOTM3NSAxMzMuMTQwNjI1IEMgMzE1LjcxMDkzOCAxMzIuNDg4MjgxIDMxNS4zNzEwOTQgMTMyLjA2NjQwNiAzMTQuNzc3MzQ0IDEzMi4wNjY0MDYgQyAzMTQuMTg3NSAxMzIuMDY2NDA2IDMxMy43MTQ4NDQgMTMyLjQ4ODI4MSAzMTMuNjEzMjgxIDEzMy4xNDA2MjUgTCAzMTMuMTE3MTg4IDEzNi4yNTc4MTIgTCAzMTEuNTI3MzQ0IDEzNi4yNTc4MTIgQyAzMTAuOTM3NSAxMzYuMjU3ODEyIDMxMC41NzAzMTIgMTM2LjU2MjUgMzEwLjQ4ODI4MSAxMzcuMDg5ODQ0IEMgMzEwLjQwMjM0NCAxMzcuNjIxMDk0IDMxMC42NzU3ODEgMTM3LjkyMTg3NSAzMTEuMjY1NjI1IDEzNy45MjE4NzUgTCAzMTIuODU1NDY5IDEzNy45MjE4NzUgWiBNIDMyNC40NjQ4NDQgMTUyLjI1NzgxMiBDIDMyNy40MDIzNDQgMTUyLjI1NzgxMiAzMjkuODk4NDM4IDE1MC45MTAxNTYgMzMxLjE0ODQzOCAxNDguNjcxODc1IEMgMzMxLjI3MzQzOCAxNDguNDQxNDA2IDMzMS4zNjcxODggMTQ4LjIxNDg0NCAzMzEuMzk0NTMxIDE0OC4wNTA3ODEgQyAzMzEuNDgwNDY5IDE0Ny41MDM5MDYgMzMxLjE3NTc4MSAxNDcuMTcxODc1IDMzMC42NDQ1MzEgMTQ3LjE3MTg3NSBDIDMzMC4zMTI1IDE0Ny4xNzE4NzUgMzMwLjA1ODU5NCAxNDcuMzA4NTk0IDMyOS44MTY0MDYgMTQ3LjYwOTM3NSBDIDMyOC40NzY1NjIgMTQ5LjU3ODEyNSAzMjYuODQ3NjU2IDE1MC41IDMyNC42NTIzNDQgMTUwLjUgQyAzMjEuNTE5NTMxIDE1MC41IDMxOS44ODI4MTIgMTQ4LjMwNDY4OCAzMjAuNDY4NzUgMTQ0LjYxMzI4MSBMIDMzMS4wODIwMzEgMTQ0LjYxMzI4MSBDIDMzMS44MjQyMTkgMTQ0LjYxMzI4MSAzMzIuMzMyMDMxIDE0NC4xNjAxNTYgMzMyLjQ1MzEyNSAxNDMuNDAyMzQ0IEMgMzMzLjE0NDUzMSAxMzkuMDI3MzQ0IDMzMC44Mzk4NDQgMTM2IDMyNi44MTI1IDEzNiBDIDMyMi41NTg1OTQgMTM2IDMxOS4yNjU2MjUgMTM5LjIxMDkzOCAzMTguNDcyNjU2IDE0NC4yMDMxMjUgQyAzMTcuNjcxODc1IDE0OS4yNjE3MTkgMzE5Ljk0MTQwNiAxNTIuMjU3ODEyIDMyNC40NjQ4NDQgMTUyLjI1NzgxMiBaIE0gMzIwLjczNDM3NSAxNDMuMDIzNDM4IEMgMzIxLjQwNjI1IDEzOS44NDM3NSAzMjMuNzAzMTI1IDEzNy43NTc4MTIgMzI2LjUxNTYyNSAxMzcuNzU3ODEyIEMgMzI5LjMxNjQwNiAxMzcuNzU3ODEyIDMzMC45MDYyNSAxMzkuODU5Mzc1IDMzMC40NTMxMjUgMTQzLjAyMzQzOCBaIE0gMzM0LjczMDQ2OSAxNTIuMjU3ODEyIEMgMzM1LjMzMjAzMSAxNTIuMjU3ODEyIDMzNS43OTY4NzUgMTUxLjgwNDY4OCAzMzUuODk0NTMxIDE1MS4xODM1OTQgTCAzMzcuMjk2ODc1IDE0Mi4zMjgxMjUgQyAzMzcuNzIyNjU2IDEzOS42NDg0MzggMzM5LjY4MzU5NCAxMzcuNzg1MTU2IDM0MS45OTYwOTQgMTM3Ljc4NTE1NiBDIDM0NC4xNDg0MzggMTM3Ljc4NTE1NiAzNDUuMzcxMDk0IDEzOS4yNTM5MDYgMzQ1LjAxMTcxOSAxNDEuNTExNzE5IEwgMzQzLjQ4MDQ2OSAxNTEuMTgzNTk0IEMgMzQzLjM4MjgxMiAxNTEuODA0Njg4IDM0My43MDMxMjUgMTUyLjI1NzgxMiAzNDQuMzI0MjE5IDE1Mi4yNTc4MTIgQyAzNDQuOTI5Njg4IDE1Mi4yNTc4MTIgMzQ1LjM5NDUzMSAxNTEuODA0Njg4IDM0NS40OTIxODggMTUxLjE4MzU5NCBMIDM0Ni45MzM1OTQgMTQyLjA4NTkzOCBDIDM0Ny4zMzIwMzEgMTM5LjU3NDIxOSAzNDkuMjE4NzUgMTM3Ljc4NTE1NiAzNTEuNTUwNzgxIDEzNy43ODUxNTYgQyAzNTMuODM1OTM4IDEzNy43ODUxNTYgMzU0Ljk2NDg0NCAxMzkuMjUzOTA2IDM1NC41NzgxMjUgMTQxLjY5MTQwNiBMIDM1My4wNzQyMTkgMTUxLjE4MzU5NCBDIDM1Mi45NzY1NjIgMTUxLjgwNDY4OCAzNTMuMzAwNzgxIDE1Mi4yNTc4MTIgMzUzLjkwNjI1IDE1Mi4yNTc4MTIgQyAzNTQuNTExNzE5IDE1Mi4yNTc4MTIgMzU0Ljk3NjU2MiAxNTEuODA0Njg4IDM1NS4wNzQyMTkgMTUxLjE4MzU5NCBMIDM1Ni42NDg0MzggMTQxLjIzODI4MSBDIDM1Ny4xNTIzNDQgMTM4LjA1ODU5NCAzNTUuNDY4NzUgMTM2IDM1Mi4zOTQ1MzEgMTM2IEMgMzUwLjAxNTYyNSAxMzYgMzQ3Ljk1MzEyNSAxMzcuMzc4OTA2IDM0Ni45MDIzNDQgMTM5LjMxNjQwNiBMIDM0Ni44NTU0NjkgMTM5LjMxNjQwNiBDIDM0Ni41ODIwMzEgMTM3LjMzMjAzMSAzNDUuMTI4OTA2IDEzNiAzNDIuODI4MTI1IDEzNiBDIDM0MC41NDI5NjkgMTM2IDMzOC43MTA5MzggMTM3LjMxNjQwNiAzMzcuNzM4MjgxIDEzOS4xNjQwNjIgTCAzMzcuNjkxNDA2IDEzOS4xNjQwNjIgTCAzMzguMDM1MTU2IDEzNy4wMTU2MjUgQyAzMzguMTI4OTA2IDEzNi40MTAxNTYgMzM3LjgwMDc4MSAxMzYgMzM3LjI0MjE4OCAxMzYgQyAzMzYuNjk1MzEyIDEzNiAzMzYuMjM4MjgxIDEzNi40MTAxNTYgMzM2LjE0NDUzMSAxMzcuMDE1NjI1IEwgMzMzLjg5ODQzOCAxNTEuMTgzNTk0IEMgMzMzLjgwMDc4MSAxNTEuODA0Njg4IDMzNC4xMjEwOTQgMTUyLjI1NzgxMiAzMzQuNzMwNDY5IDE1Mi4yNTc4MTIgWiBNIDM2My41OTM3NSAxNTIuMjU3ODEyIEMgMzY3LjE3OTY4OCAxNTIuMjU3ODEyIDM2OS45Mzc1IDE1MC40MTAxNTYgMzcwLjM3MTA5NCAxNDcuNjg3NSBDIDM3MC43MzA0NjkgMTQ1LjQxNDA2MiAzNjkuNjg3NSAxNDQuMjY1NjI1IDM2Ni41NzAzMTIgMTQzLjQ5MjE4OCBMIDM2NC4zOTg0MzggMTQyLjk0OTIxOSBDIDM2Mi40MDIzNDQgMTQyLjQ0OTIxOSAzNjEuNjA5Mzc1IDE0MS42MzI4MTIgMzYxLjgxMjUgMTQwLjM1OTM3NSBDIDM2Mi4wNTg1OTQgMTM4LjgwMDc4MSAzNjMuNzM4MjgxIDEzNy42NjQwNjIgMzY1Ljg3MTA5NCAxMzcuNjY0MDYyIEMgMzY3Ljg3MTA5NCAxMzcuNjY0MDYyIDM2OC45MTc5NjkgMTM4LjYxNzE4OCAzNjkuMjczNDM4IDE0MC4xNzk2ODggQyAzNjkuNDIxODc1IDE0MC42Nzk2ODggMzY5LjY2Nzk2OSAxNDAuODI4MTI1IDM3MC4wOTM3NSAxNDAuODI4MTI1IEMgMzcwLjU3ODEyNSAxNDAuODI4MTI1IDM3MC45Mjk2ODggMTQwLjUxMTcxOSAzNzEuMDA3ODEyIDE0MC4wMTE3MTkgQyAzNzEuMDIzNDM4IDEzOS45MDYyNSAzNzEuMDMxMjUgMTM5Ljc4NTE1NiAzNzEuMDIzNDM4IDEzOS42MzI4MTIgQyAzNzAuOTE3OTY5IDEzNy41MTU2MjUgMzY4Ljk1MzEyNSAxMzYgMzY2LjI1NzgxMiAxMzYgQyAzNjIuODM1OTM4IDEzNiAzNjAuMjE0ODQ0IDEzNy44MTY0MDYgMzU5Ljc5Njg3NSAxNDAuNDQ5MjE5IEMgMzU5LjQ2MDkzOCAxNDIuNTg1OTM4IDM2MC42ODc1IDE0My45NDUzMTIgMzYzLjYwOTM3NSAxNDQuNjg3NSBMIDM2NS44MjAzMTIgMTQ1LjI1IEMgMzY3Ljg0Mzc1IDE0NS43NSAzNjguNTE5NTMxIDE0Ni40NzY1NjIgMzY4LjMwNDY4OCAxNDcuODM1OTM4IEMgMzY4LjAzOTA2MiAxNDkuNTE1NjI1IDM2Ni4yNzM0MzggMTUwLjYwOTM3NSAzNjQgMTUwLjYwOTM3NSBDIDM2MS43OTI5NjkgMTUwLjYwOTM3NSAzNjAuNjQ0NTMxIDE0OS43MzA0NjkgMzYwLjE3OTY4OCAxNDguMDc4MTI1IEMgMzYwLjAxNTYyNSAxNDcuNTc4MTI1IDM1OS43ODEyNSAxNDcuMzY3MTg4IDM1OS4zODY3MTkgMTQ3LjM2NzE4OCBDIDM1OC44NTU0NjkgMTQ3LjM2NzE4OCAzNTguNDEwMTU2IDE0Ny42ODc1IDM1OC4zMjQyMTkgMTQ4LjIxNDg0NCBDIDM1OC4zMDA3ODEgMTQ4LjM4MjgxMiAzNTguMzA0Njg4IDE0OC41NDY4NzUgMzU4LjM1NTQ2OSAxNDguNzMwNDY5IEMgMzU4LjY3OTY4OCAxNTAuODYzMjgxIDM2MC43MDMxMjUgMTUyLjI1NzgxMiAzNjMuNTkzNzUgMTUyLjI1NzgxMiBaIE0gMzc5LjY0MDYyNSAxNTIuMjU3ODEyIEMgMzgwLjIzMDQ2OSAxNTIuMjU3ODEyIDM4MC43MDMxMjUgMTUxLjgyMDMxMiAzODAuODA0Njg4IDE1MS4xODM1OTQgTCAzODIuMjI2NTYyIDE0Mi4yMDcwMzEgQyAzODIuNjA1NDY5IDEzOS44MTY0MDYgMzg0LjEwMTU2MiAxMzcuOTA2MjUgMzg2LjU4NTkzOCAxMzcuOTA2MjUgQyAzODcuMjgxMjUgMTM3LjkwNjI1IDM4Ny42NjAxNTYgMTM3LjkyMTg3NSAzODcuOTcyNjU2IDEzNy43NzM0MzggQyAzODguMjM4MjgxIDEzNy42MjEwOTQgMzg4LjM5ODQzOCAxMzcuMzc4OTA2IDM4OC40NDkyMTkgMTM3LjA1ODU5NCBDIDM4OC41IDEzNi43NDIxODggMzg4LjM5ODQzOCAxMzYuNSAzODguMTk5MjE5IDEzNi4zMzIwMzEgQyAzODcuOTE0MDYyIDEzNi4xMDU0NjkgMzg3LjQ5NjA5NCAxMzYgMzg2Ljk0OTIxOSAxMzYgQyAzODUuMjI2NTYyIDEzNiAzODMuNDg4MjgxIDEzNy4yMTA5MzggMzgyLjY2Nzk2OSAxMzkuMDU4NTk0IEwgMzgyLjYyMTA5NCAxMzkuMDU4NTk0IEwgMzgyLjk0NTMxMiAxMzcuMDE1NjI1IEMgMzgzLjAzOTA2MiAxMzYuNDEwMTU2IDM4Mi43MTA5MzggMTM2IDM4Mi4xNTIzNDQgMTM2IEMgMzgxLjU5Mzc1IDEzNiAzODEuMTQ4NDM4IDEzNi40MTAxNTYgMzgxLjA1NDY4OCAxMzcuMDE1NjI1IEwgMzc4LjgwODU5NCAxNTEuMTgzNTk0IEMgMzc4LjcwNzAzMSAxNTEuODIwMzEyIDM3OS4wNDY4NzUgMTUyLjI1NzgxMiAzNzkuNjQwNjI1IDE1Mi4yNTc4MTIgWiBNIDM5My41MzUxNTYgMTUyLjI1NzgxMiBDIDM5Ni40NzI2NTYgMTUyLjI1NzgxMiAzOTguOTY4NzUgMTUwLjkxMDE1NiA0MDAuMjE4NzUgMTQ4LjY3MTg3NSBDIDQwMC4zNDM3NSAxNDguNDQxNDA2IDQwMC40Mzc1IDE0OC4yMTQ4NDQgNDAwLjQ2NDg0NCAxNDguMDUwNzgxIEMgNDAwLjU1MDc4MSAxNDcuNTAzOTA2IDQwMC4yNDYwOTQgMTQ3LjE3MTg3NSAzOTkuNzE0ODQ0IDE0Ny4xNzE4NzUgQyAzOTkuMzgyODEyIDE0Ny4xNzE4NzUgMzk5LjEyODkwNiAxNDcuMzA4NTk0IDM5OC44ODY3MTkgMTQ3LjYwOTM3NSBDIDM5Ny41NDY4NzUgMTQ5LjU3ODEyNSAzOTUuOTE3OTY5IDE1MC41IDM5My43MjI2NTYgMTUwLjUgQyAzOTAuNTg5ODQ0IDE1MC41IDM4OC45NTMxMjUgMTQ4LjMwNDY4OCAzODkuNTM5MDYyIDE0NC42MTMyODEgTCA0MDAuMTUyMzQ0IDE0NC42MTMyODEgQyA0MDAuODk0NTMxIDE0NC42MTMyODEgNDAxLjQwMjM0NCAxNDQuMTYwMTU2IDQwMS41MjM0MzggMTQzLjQwMjM0NCBDIDQwMi4yMTQ4NDQgMTM5LjAyNzM0NCAzOTkuOTEwMTU2IDEzNiAzOTUuODgyODEyIDEzNiBDIDM5MS42Mjg5MDYgMTM2IDM4OC4zMzU5MzggMTM5LjIxMDkzOCAzODcuNTQyOTY5IDE0NC4yMDMxMjUgQyAzODYuNzQyMTg4IDE0OS4yNjE3MTkgMzg5LjAxMTcxOSAxNTIuMjU3ODEyIDM5My41MzUxNTYgMTUyLjI1NzgxMiBaIE0gMzg5LjgwNDY4OCAxNDMuMDIzNDM4IEMgMzkwLjQ3NjU2MiAxMzkuODQzNzUgMzkyLjc3MzQzOCAxMzcuNzU3ODEyIDM5NS41ODU5MzggMTM3Ljc1NzgxMiBDIDM5OC4zODY3MTkgMTM3Ljc1NzgxMiAzOTkuOTc2NTYyIDEzOS44NTkzNzUgMzk5LjUyMzQzOCAxNDMuMDIzNDM4IFogTSA0MDYuOTY4NzUgMTMzLjA3ODEyNSBDIDQwNy43MTA5MzggMTMzLjA3ODEyNSA0MDguNDEwMTU2IDEzMi40ODgyODEgNDA4LjUyNzM0NCAxMzEuNzQ2MDk0IEMgNDA4LjY0NDUzMSAxMzEuMDE5NTMxIDQwOC4xMzI4MTIgMTMwLjQyOTY4OCA0MDcuMzkwNjI1IDEzMC40Mjk2ODggQyA0MDYuNjY0MDYyIDEzMC40Mjk2ODggNDA1Ljk2NDg0NCAxMzEuMDE5NTMxIDQwNS44NDc2NTYgMTMxLjc0NjA5NCBDIDQwNS43MzA0NjkgMTMyLjQ4ODI4MSA0MDYuMjQyMTg4IDEzMy4wNzgxMjUgNDA2Ljk2ODc1IDEzMy4wNzgxMjUgWiBNIDQwMy45MzM1OTQgMTUyLjI1NzgxMiBDIDQwNC41MjczNDQgMTUyLjI1NzgxMiA0MDUgMTUxLjgyMDMxMiA0MDUuMTAxNTYyIDE1MS4xODM1OTQgTCA0MDcuMzM1OTM4IDEzNy4wNzQyMTkgQyA0MDcuNDM3NSAxMzYuNDM3NSA0MDcuMTAxNTYyIDEzNiA0MDYuNTA3ODEyIDEzNiBDIDQwNS45MTc5NjkgMTM2IDQwNS40NDE0MDYgMTM2LjQzNzUgNDA1LjMzOTg0NCAxMzcuMDc0MjE5IEwgNDAzLjEwNTQ2OSAxNTEuMTgzNTk0IEMgNDAzLjAwMzkwNiAxNTEuODIwMzEyIDQwMy4zNDM3NSAxNTIuMjU3ODEyIDQwMy45MzM1OTQgMTUyLjI1NzgxMiBaIE0gNDA5LjUyMzQzOCAxNTIuMjU3ODEyIEMgNDEwLjEyNSAxNTIuMjU3ODEyIDQxMC41ODk4NDQgMTUxLjgwNDY4OCA0MTAuNjg3NSAxNTEuMTgzNTk0IEwgNDEyLjA4OTg0NCAxNDIuMzI4MTI1IEMgNDEyLjUxNTYyNSAxMzkuNjQ4NDM4IDQxNC40NzY1NjIgMTM3Ljc4NTE1NiA0MTYuNzg5MDYyIDEzNy43ODUxNTYgQyA0MTguOTQxNDA2IDEzNy43ODUxNTYgNDIwLjE2NDA2MiAxMzkuMjUzOTA2IDQxOS44MDQ2ODggMTQxLjUxMTcxOSBMIDQxOC4yNzM0MzggMTUxLjE4MzU5NCBDIDQxOC4xNzU3ODEgMTUxLjgwNDY4OCA0MTguNDk2MDk0IDE1Mi4yNTc4MTIgNDE5LjExNzE4OCAxNTIuMjU3ODEyIEMgNDE5LjcyMjY1NiAxNTIuMjU3ODEyIDQyMC4xODc1IDE1MS44MDQ2ODggNDIwLjI4NTE1NiAxNTEuMTgzNTk0IEwgNDIxLjcyNjU2MiAxNDIuMDg1OTM4IEMgNDIyLjEyNSAxMzkuNTc0MjE5IDQyNC4wMTE3MTkgMTM3Ljc4NTE1NiA0MjYuMzQzNzUgMTM3Ljc4NTE1NiBDIDQyOC42Mjg5MDYgMTM3Ljc4NTE1NiA0MjkuNzU3ODEyIDEzOS4yNTM5MDYgNDI5LjM3MTA5NCAxNDEuNjkxNDA2IEwgNDI3Ljg2NzE4OCAxNTEuMTgzNTk0IEMgNDI3Ljc2OTUzMSAxNTEuODA0Njg4IDQyOC4wOTM3NSAxNTIuMjU3ODEyIDQyOC42OTkyMTkgMTUyLjI1NzgxMiBDIDQyOS4zMDQ2ODggMTUyLjI1NzgxMiA0MjkuNzY5NTMxIDE1MS44MDQ2ODggNDI5Ljg2NzE4OCAxNTEuMTgzNTk0IEwgNDMxLjQ0MTQwNiAxNDEuMjM4MjgxIEMgNDMxLjk0NTMxMiAxMzguMDU4NTk0IDQzMC4yNjE3MTkgMTM2IDQyNy4xODc1IDEzNiBDIDQyNC44MDg1OTQgMTM2IDQyMi43NDYwOTQgMTM3LjM3ODkwNiA0MjEuNjk1MzEyIDEzOS4zMTY0MDYgTCA0MjEuNjQ4NDM4IDEzOS4zMTY0MDYgQyA0MjEuMzc1IDEzNy4zMzIwMzEgNDE5LjkyMTg3NSAxMzYgNDE3LjYyMTA5NCAxMzYgQyA0MTUuMzM1OTM4IDEzNiA0MTMuNTAzOTA2IDEzNy4zMTY0MDYgNDEyLjUzMTI1IDEzOS4xNjQwNjIgTCA0MTIuNDg0Mzc1IDEzOS4xNjQwNjIgTCA0MTIuODI4MTI1IDEzNy4wMTU2MjUgQyA0MTIuOTIxODc1IDEzNi40MTAxNTYgNDEyLjU5Mzc1IDEzNiA0MTIuMDM1MTU2IDEzNiBDIDQxMS40ODgyODEgMTM2IDQxMS4wMzEyNSAxMzYuNDEwMTU2IDQxMC45Mzc1IDEzNy4wMTU2MjUgTCA0MDguNjkxNDA2IDE1MS4xODM1OTQgQyA0MDguNTkzNzUgMTUxLjgwNDY4OCA0MDguOTE0MDYyIDE1Mi4yNTc4MTIgNDA5LjUyMzQzOCAxNTIuMjU3ODEyIFogTSA0MzcuNzAzMTI1IDE1Mi4yNTc4MTIgQyA0NDAuMDUwNzgxIDE1Mi4yNTc4MTIgNDQyLjQxNzk2OSAxNTAuOTU3MDMxIDQ0My42MDU0NjkgMTQ5LjAwMzkwNiBMIDQ0My42NDg0MzggMTQ5LjAwMzkwNiBMIDQ0My4yOTY4NzUgMTUxLjI0MjE4OCBDIDQ0My4xOTkyMTkgMTUxLjg0NzY1NiA0NDMuNTMxMjUgMTUyLjI1NzgxMiA0NDQuMDkzNzUgMTUyLjI1NzgxMiBDIDQ0NC42NTIzNDQgMTUyLjI1NzgxMiA0NDUuMTA5Mzc1IDE1MS44NDc2NTYgNDQ1LjIwNzAzMSAxNTEuMjQyMTg4IEwgNDQ2Ljc5Mjk2OSAxNDEuMjIyNjU2IEMgNDQ3LjMwMDc4MSAxMzguMDE1NjI1IDQ0NS4zNzg5MDYgMTM2IDQ0MS43NzczNDQgMTM2IEMgNDM5LjA1NDY4OCAxMzYgNDM2LjY1NjI1IDEzNy4yNzM0MzggNDM1LjUzOTA2MiAxMzkuMTQ4NDM4IEMgNDM1LjMyMDMxMiAxMzkuNDk2MDk0IDQzNS4xNTYyNSAxMzkuODU5Mzc1IDQzNS4xMDkzNzUgMTQwLjE2NDA2MiBDIDQzNS4wMjM0MzggMTQwLjcwNzAzMSA0MzUuMzI4MTI1IDE0MS4wNzAzMTIgNDM1Ljg1NTQ2OSAxNDEuMDcwMzEyIEMgNDM2LjI1IDE0MS4wNzAzMTIgNDM2LjU1MDc4MSAxNDAuODkwNjI1IDQzNi43ODkwNjIgMTQwLjUyNzM0NCBDIDQzNy44NjcxODggMTM4LjYwNTQ2OSA0MzkuNDA2MjUgMTM3Ljc3MzQzOCA0NDEuNDQ5MjE5IDEzNy43NzM0MzggQyA0NDMuOTAyMzQ0IDEzNy43NzM0MzggNDQ1LjEyNSAxMzkuMTMyODEyIDQ0NC43NjU2MjUgMTQxLjQwNjI1IEwgNDQ0LjU0Njg3NSAxNDIuNzY1NjI1IEwgNDM5LjU4MjAzMSAxNDMuMDcwMzEyIEMgNDM1Ljg5NDUzMSAxNDMuMzEyNSA0MzMuNjMyODEyIDE0NC45NjA5MzggNDMzLjIxMDkzOCAxNDcuNjQwNjI1IEMgNDMyLjc3MzQzOCAxNTAuMzk0NTMxIDQzNC42MDE1NjIgMTUyLjI1NzgxMiA0MzcuNzAzMTI1IDE1Mi4yNTc4MTIgWiBNIDQzOC4zODY3MTkgMTUwLjUzMTI1IEMgNDM2LjI2OTUzMSAxNTAuNTMxMjUgNDM0Ljk2ODc1IDE0OS4zNjcxODggNDM1LjI0NjA5NCAxNDcuNjA5Mzc1IEMgNDM1LjUxNTYyNSAxNDUuOTE0MDYyIDQzNy4wNjI1IDE0NC44MjQyMTkgNDM5LjU3NDIxOSAxNDQuNjYwMTU2IEwgNDQ0LjMwMDc4MSAxNDQuMzM5ODQ0IEwgNDQ0LjAyMzQzOCAxNDYuMDgyMDMxIEMgNDQzLjYyODkwNiAxNDguNTc4MTI1IDQ0MS4xNDA2MjUgMTUwLjUzMTI1IDQzOC4zODY3MTkgMTUwLjUzMTI1IFogTSA0NTMuODM1OTM4IDE1Ny44MjgxMjUgQyA0NTguMTU2MjUgMTU3Ljg1OTM3NSA0NjEuMjEwOTM4IDE1NS40MDYyNSA0NjEuNzg5MDYyIDE1MS43NDIxODggTCA0NjQuMTE3MTg4IDEzNy4wNDY4NzUgQyA0NjQuMjE4NzUgMTM2LjQxMDE1NiA0NjMuODU5Mzc1IDEzNiA0NjMuMjg1MTU2IDEzNiBDIDQ2Mi43MTA5MzggMTM2IDQ2Mi4yMTg3NSAxMzYuNDEwMTU2IDQ2Mi4xMTcxODggMTM3LjA0Njg3NSBMIDQ2MS43MzA0NjkgMTM5LjQ5NjA5NCBMIDQ2MS42ODc1IDEzOS40OTYwOTQgQyA0NjEuMDk3NjU2IDEzNy40Njg3NSA0NTkuNDI1NzgxIDEzNiA0NTYuODY3MTg4IDEzNiBDIDQ1Mi44NTU0NjkgMTM2IDQ0OS42ODM1OTQgMTM5LjE5NTMxMiA0NDguOTEwMTU2IDE0NC4wODIwMzEgQyA0NDguMTM2NzE5IDE0OC45NTcwMzEgNDUwLjI5Njg3NSAxNTIuMTUyMzQ0IDQ1NC4yNzczNDQgMTUyLjE1MjM0NCBDIDQ1Ni43OTI5NjkgMTUyLjE1MjM0NCA0NTkuMDUwNzgxIDE1MC42ODM1OTQgNDYwLjIzODI4MSAxNDguNjU2MjUgTCA0NjAuMjgxMjUgMTQ4LjY1NjI1IEwgNDU5Ljc3NzM0NCAxNTEuODIwMzEyIEMgNDU5LjM3MTA5NCAxNTQuMzkwNjI1IDQ1Ny4yMzQzNzUgMTU2LjEzMjgxMiA0NTQuMTk5MjE5IDE1Ni4xMDE1NjIgQyA0NTIuMTg3NSAxNTYuMDg1OTM4IDQ1MC45NzI2NTYgMTU1LjI1MzkwNiA0NTAuMTA1NDY5IDE1My43NDIxODggQyA0NDkuODYzMjgxIDE1My4zNDc2NTYgNDQ5LjY3NTc4MSAxNTMuMjEwOTM4IDQ0OS4zMjgxMjUgMTUzLjIxMDkzOCBDIDQ0OC43ODEyNSAxNTMuMjEwOTM4IDQ0OC4zNTkzNzUgMTUzLjU3NDIxOSA0NDguMjc3MzQ0IDE1NC4wODk4NDQgQyA0NDguMjM0Mzc1IDE1NC4zNTkzNzUgNDQ4LjI3MzQzOCAxNTQuNjE3MTg4IDQ0OC4zNzg5MDYgMTU0Ljg3NSBDIDQ0OS4wNzQyMTkgMTU2LjYxNzE4OCA0NTEuMDM5MDYyIDE1Ny43OTY4NzUgNDUzLjgzNTkzOCAxNTcuODI4MTI1IFogTSA0NTQuOTM3NSAxNTAuMzc4OTA2IEMgNDUxLjk0MTQwNiAxNTAuMzc4OTA2IDQ1MC4zNjMyODEgMTQ3Ljg5ODQzOCA0NTAuOTY0ODQ0IDE0NC4wOTc2NTYgQyA0NTEuNTc0MjE5IDE0MC4yNjk1MzEgNDUzLjk1MzEyNSAxMzcuNzczNDM4IDQ1Ni45MzM1OTQgMTM3Ljc3MzQzOCBDIDQ1OS45MzM1OTQgMTM3Ljc3MzQzOCA0NjEuNjAxNTYyIDE0MC4zMTI1IDQ2MS4wMDM5MDYgMTQ0LjA4MjAzMSBDIDQ2MC40MDYyNSAxNDcuODUxNTYyIDQ1Ny45NDkyMTkgMTUwLjM3ODkwNiA0NTQuOTM3NSAxNTAuMzc4OTA2IFogTSA0NjkuMzMyMDMxIDEzMy4wNzgxMjUgQyA0NzAuMDc0MjE5IDEzMy4wNzgxMjUgNDcwLjc3MzQzOCAxMzIuNDg4MjgxIDQ3MC44OTA2MjUgMTMxLjc0NjA5NCBDIDQ3MS4wMDc4MTIgMTMxLjAxOTUzMSA0NzAuNDk2MDk0IDEzMC40Mjk2ODggNDY5Ljc1MzkwNiAxMzAuNDI5Njg4IEMgNDY5LjAyNzM0NCAxMzAuNDI5Njg4IDQ2OC4zMjgxMjUgMTMxLjAxOTUzMSA0NjguMjEwOTM4IDEzMS43NDYwOTQgQyA0NjguMDkzNzUgMTMyLjQ4ODI4MSA0NjguNjA1NDY5IDEzMy4wNzgxMjUgNDY5LjMzMjAzMSAxMzMuMDc4MTI1IFogTSA0NjYuMjk2ODc1IDE1Mi4yNTc4MTIgQyA0NjYuODkwNjI1IDE1Mi4yNTc4MTIgNDY3LjM2MzI4MSAxNTEuODIwMzEyIDQ2Ny40NjQ4NDQgMTUxLjE4MzU5NCBMIDQ2OS42OTkyMTkgMTM3LjA3NDIxOSBDIDQ2OS44MDA3ODEgMTM2LjQzNzUgNDY5LjQ2NDg0NCAxMzYgNDY4Ljg3MTA5NCAxMzYgQyA0NjguMjgxMjUgMTM2IDQ2Ny44MDQ2ODggMTM2LjQzNzUgNDY3LjcwMzEyNSAxMzcuMDc0MjE5IEwgNDY1LjQ2ODc1IDE1MS4xODM1OTQgQyA0NjUuMzY3MTg4IDE1MS44MjAzMTIgNDY1LjcwNzAzMSAxNTIuMjU3ODEyIDQ2Ni4yOTY4NzUgMTUyLjI1NzgxMiBaIE0gNDcxLjg4NjcxOSAxNTIuMjU3ODEyIEMgNDcyLjQ3NjU2MiAxNTIuMjU3ODEyIDQ3Mi45NDkyMTkgMTUxLjgyMDMxMiA0NzMuMDUwNzgxIDE1MS4xODM1OTQgTCA0NzQuMzk4NDM4IDE0Mi42NzU3ODEgQyA0NzQuODYzMjgxIDEzOS43NTM5MDYgNDc2Ljk4ODI4MSAxMzcuNzg1MTU2IDQ3OS43NDYwOTQgMTM3Ljc4NTE1NiBDIDQ4Mi4zNDc2NTYgMTM3Ljc4NTE1NiA0ODMuNjI4OTA2IDEzOS4zNTkzNzUgNDgzLjE5MTQwNiAxNDIuMTE3MTg4IEwgNDgxLjc1MzkwNiAxNTEuMTgzNTk0IEMgNDgxLjY1MjM0NCAxNTEuODIwMzEyIDQ4MS45OTYwOTQgMTUyLjI1NzgxMiA0ODIuNTg1OTM4IDE1Mi4yNTc4MTIgQyA0ODMuMTc1NzgxIDE1Mi4yNTc4MTIgNDgzLjY1MjM0NCAxNTEuODIwMzEyIDQ4My43NTM5MDYgMTUxLjE4MzU5NCBMIDQ4NS4yNDIxODggMTQxLjc5Njg3NSBDIDQ4NS44MDQ2ODggMTM4LjIyNjU2MiA0ODQuMDIzNDM4IDEzNiA0ODAuNjA1NDY5IDEzNiBDIDQ3OC4wNDY4NzUgMTM2IDQ3Ni4wMTU2MjUgMTM3LjI0MjE4OCA0NzQuODk0NTMxIDEzOS4xNjQwNjIgTCA0NzQuODQ3NjU2IDEzOS4xNjQwNjIgTCA0NzUuMTkxNDA2IDEzNy4wMTU2MjUgQyA0NzUuMjg1MTU2IDEzNi40MTAxNTYgNDc0Ljk1NzAzMSAxMzYgNDc0LjM5ODQzOCAxMzYgQyA0NzMuODUxNTYyIDEzNiA0NzMuMzk0NTMxIDEzNi40MTAxNTYgNDczLjMwMDc4MSAxMzcuMDE1NjI1IEwgNDcxLjA1NDY4OCAxNTEuMTgzNTk0IEMgNDcwLjk1MzEyNSAxNTEuODIwMzEyIDQ3MS4yOTI5NjkgMTUyLjI1NzgxMiA0NzEuODg2NzE5IDE1Mi4yNTc4MTIgWiBNIDQ5My40Mzc1IDE1Mi4yNTc4MTIgQyA0OTYuMzc1IDE1Mi4yNTc4MTIgNDk4Ljg3MTA5NCAxNTAuOTEwMTU2IDUwMC4xMjEwOTQgMTQ4LjY3MTg3NSBDIDUwMC4yNDYwOTQgMTQ4LjQ0MTQwNiA1MDAuMzM5ODQ0IDE0OC4yMTQ4NDQgNTAwLjM2NzE4OCAxNDguMDUwNzgxIEMgNTAwLjQ1MzEyNSAxNDcuNTAzOTA2IDUwMC4xNDg0MzggMTQ3LjE3MTg3NSA0OTkuNjE3MTg4IDE0Ny4xNzE4NzUgQyA0OTkuMjg1MTU2IDE0Ny4xNzE4NzUgNDk5LjAzMTI1IDE0Ny4zMDg1OTQgNDk4Ljc4OTA2MiAxNDcuNjA5Mzc1IEMgNDk3LjQ0OTIxOSAxNDkuNTc4MTI1IDQ5NS44MjAzMTIgMTUwLjUgNDkzLjYyNSAxNTAuNSBDIDQ5MC40OTIxODggMTUwLjUgNDg4Ljg1NTQ2OSAxNDguMzA0Njg4IDQ4OS40NDE0MDYgMTQ0LjYxMzI4MSBMIDUwMC4wNTQ2ODggMTQ0LjYxMzI4MSBDIDUwMC43OTY4NzUgMTQ0LjYxMzI4MSA1MDEuMzA0Njg4IDE0NC4xNjAxNTYgNTAxLjQyNTc4MSAxNDMuNDAyMzQ0IEMgNTAyLjExNzE4OCAxMzkuMDI3MzQ0IDQ5OS44MTI1IDEzNiA0OTUuNzg1MTU2IDEzNiBDIDQ5MS41MzEyNSAxMzYgNDg4LjIzODI4MSAxMzkuMjEwOTM4IDQ4Ny40NDUzMTIgMTQ0LjIwMzEyNSBDIDQ4Ni42NDQ1MzEgMTQ5LjI2MTcxOSA0ODguOTE0MDYyIDE1Mi4yNTc4MTIgNDkzLjQzNzUgMTUyLjI1NzgxMiBaIE0gNDg5LjcwNzAzMSAxNDMuMDIzNDM4IEMgNDkwLjM3ODkwNiAxMzkuODQzNzUgNDkyLjY3NTc4MSAxMzcuNzU3ODEyIDQ5NS40ODgyODEgMTM3Ljc1NzgxMiBDIDQ5OC4yODkwNjIgMTM3Ljc1NzgxMiA0OTkuODc4OTA2IDEzOS44NTkzNzUgNDk5LjQyNTc4MSAxNDMuMDIzNDM4IFogTSA1MDguNjUyMzQ0IDE1Mi4yNTc4MTIgQyA1MTEuMzE2NDA2IDE1Mi4yNTc4MTIgNTEzLjQ0NTMxMiAxNTAuNzQyMTg4IDUxNC41NzAzMTIgMTQ4LjU5Mzc1IEwgNTE0LjYxNzE4OCAxNDguNTkzNzUgTCA1MTQuMTkxNDA2IDE1MS4yNzM0MzggQyA1MTQuMTAxNTYyIDE1MS44NjMyODEgNTE0LjUwNzgxMiAxNTIuMjU3ODEyIDUxNS4wNzAzMTIgMTUyLjI1NzgxMiBDIDUxNS42NDQ1MzEgMTUyLjI1NzgxMiA1MTYuMTE3MTg4IDE1MS44NDc2NTYgNTE2LjIwNzAzMSAxNTEuMjczNDM4IEwgNTE5LjQyMTg3NSAxMzAuOTc2NTYyIEMgNTE5LjUyMzQzOCAxMzAuMzM5ODQ0IDUxOS4xNjc5NjkgMTI5Ljg5ODQzOCA1MTguNTc4MTI1IDEyOS44OTg0MzggQyA1MTcuOTg4MjgxIDEyOS44OTg0MzggNTE3LjUwNzgxMiAxMzAuMzM5ODQ0IDUxNy40MDYyNSAxMzAuOTc2NTYyIEwgNTE2LjA1ODU5NCAxMzkuNDk2MDk0IEwgNTE2LjAxMTcxOSAxMzkuNDk2MDk0IEMgNTE1LjUwMzkwNiAxMzcuNDUzMTI1IDUxMy43MjI2NTYgMTM2IDUxMS4xNzk2ODggMTM2IEMgNTA3LjIzMDQ2OSAxMzYgNTAzLjk3NjU2MiAxMzkuMjI2NTYyIDUwMy4xOTkyMTkgMTQ0LjEyODkwNiBDIDUwMi40MjU3ODEgMTQ5LjAxOTUzMSA1MDQuNjcxODc1IDE1Mi4yNTc4MTIgNTA4LjY1MjM0NCAxNTIuMjU3ODEyIFogTSA1MDkuMjc3MzQ0IDE1MC40ODQzNzUgQyA1MDYuMjUgMTUwLjQ4NDM3NSA1MDQuNjQ4NDM4IDE0Ny45NzI2NTYgNTA1LjI1NzgxMiAxNDQuMTI4OTA2IEMgNTA1Ljg2NzE4OCAxNDAuMjg1MTU2IDUwOC4yNjU2MjUgMTM3Ljc3MzQzOCA1MTEuMjkyOTY5IDEzNy43NzM0MzggQyA1MTQuMjg5MDYyIDEzNy43NzM0MzggNTE1Ljk0MTQwNiAxNDAuMzI4MTI1IDUxNS4zMzk4NDQgMTQ0LjEyODkwNiBDIDUxNC43MzQzNzUgMTQ3Ljk0NTMxMiA1MTIuMjczNDM4IDE1MC40ODQzNzUgNTA5LjI3NzM0NCAxNTAuNDg0Mzc1IFogTSA1MjEuNDE0MDYyIDE1Mi4xMzY3MTkgQyA1MjIuMjAzMTI1IDE1Mi4xMzY3MTkgNTIyLjkyMTg3NSAxNTEuNTE1NjI1IDUyMy4wNDY4NzUgMTUwLjcyNjU2MiBDIDUyMy4xNzE4NzUgMTQ5LjkyNTc4MSA1MjIuNjUyMzQ0IDE0OS4zMDQ2ODggNTIxLjg2MzI4MSAxNDkuMzA0Njg4IEMgNTIxLjA3ODEyNSAxNDkuMzA0Njg4IDUyMC4zNDM3NSAxNDkuOTI1NzgxIDUyMC4yMTg3NSAxNTAuNzI2NTYyIEMgNTIwLjA5Mzc1IDE1MS41MTU2MjUgNTIwLjYyODkwNiAxNTIuMTM2NzE5IDUyMS40MTQwNjIgMTUyLjEzNjcxOSBaIE0gMjM4LjY3NTc4MSAxMjIuNDg0Mzc1ICIvPgo8L2c+Cjwvc3ZnPgo=" alt="Exe AI — AI systems reimagined." width="180" height="54"><span>Manual</span></a><div class="top-actions"><a class="site-link" href="https://exe-hq.net/" target="_blank" rel="noopener">Visit website<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 13 V19 a2 2 0 0 1-2 2 H5 a2 2 0 0 1-2-2 V8 a2 2 0 0 1 2-2 H11" /> <path d="M14 4 H20 V10" /> <path d="M20 4 L10.5 13.5" /></svg></a><div class="language" aria-label="Language"><a id="other-language" lang="de" hreflang="de" href="/help/de/?sprache=de" aria-label="Deutsch">DE</a><span lang="en" aria-current="true">EN</span></div><button class="menu-button" id="menu-toggle" type="button" aria-expanded="false" aria-controls="chapter-sidebar" aria-label="Chapters"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>Chapters</button></div></div></header>
+<div class="shell"><aside class="sidebar" id="chapter-sidebar"><nav aria-label="Chapters"><a class="nav-link" href="#uebersicht" aria-current="page"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/></svg><span>Overview</span></a><div class="nav-group"><h2>Getting started</h2><a class="nav-link" href="#erste-schritte"><b>01</b><span>Getting started</span></a><a class="nav-link" href="#fenster"><b>02</b><span>The window</span></a><a class="nav-link" href="#chats"><b>03</b><span>Chats and projects</span></a><a class="nav-link" href="#eingabe"><b>04</b><span>The input bar</span></a><a class="nav-link" href="#antworten"><b>05</b><span>Reading responses</span></a></div><div class="nav-group"><h2>Features</h2><a class="nav-link" href="#modelle"><b>06</b><span>Models</span></a><a class="nav-link" href="#ordner"><b>07</b><span>Folders and documents</span></a><a class="nav-link" href="#werkzeuge"><b>08</b><span>Tools and permissions</span></a><a class="nav-link" href="#agenten"><b>09</b><span>Agents and cron jobs</span></a><a class="nav-link" href="#bilder"><b>10</b><span>Images and video</span></a><a class="nav-link" href="#sprache"><b>11</b><span>Dictation and conversation</span></a></div><div class="nav-group"><h2>Settings &amp; help</h2><a class="nav-link" href="#wissen"><b>12</b><span>What the assistant knows</span></a><a class="nav-link" href="#einstellungen"><b>13</b><span>Settings</span></a><a class="nav-link" href="#tasten"><b>14</b><span>Keyboard shortcuts</span></a><a class="nav-link" href="#daten"><b>15</b><span>Your data</span></a><a class="nav-link" href="#terminal"><b>16</b><span>Terminal</span></a><a class="nav-link" href="#hakt"><b>17</b><span>Troubleshooting</span></a></div></nav><p class="sidebar-note">Go straight to your topic. Every feature in one place.</p></aside>
+<main class="main" id="content" tabindex="-1"><div class="toolbar"><div class="breadcrumb"><a href="#uebersicht">Manual</a><span aria-hidden="true">/</span><span id="current-label">Overview</span></div><form class="search" id="search-form" role="search"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /> <path d="M20 20l-3.5-3.5" /></svg><label class="sr-only" for="manual-search">Search the manual</label><input id="manual-search" type="search" placeholder="Search the manual …" autocomplete="off" spellcheck="false"><kbd aria-hidden="true">⌘ K</kbd><button class="search-clear" id="search-clear" type="button" aria-label="Clear search" hidden>×</button></form></div>
+<section class="home" id="uebersicht" tabindex="-1" aria-labelledby="home-title"><div class="home-hero"><div><div class="eyebrow">Exe AI · Manual</div><h1 id="home-title">Everything Exe AI can do — and where to find it.</h1><p>Your models run on your computer. Chats, documents, images, and voice features are all in one window, and your data stays with you.</p><a class="primary" href="#erste-schritte">Getting started<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></a></div><figure class="hero-image"><button class="image-open" type="button" data-image aria-label="Enlarge image"><img src="/help/bilder/held-exe.webp" alt="The Exe AI window with chat and sidebars" width="2880" height="1800"></button><figcaption>Exe AI · Your models. Your machine.</figcaption></figure></div>
+<div class="overview-heading"><h2>What do you need help with?</h2><span>17 chapters</span></div><div class="quick-grid"><a class="quick" href="#modelle"><svg class="icon" viewBox="0 0 64 64" aria-hidden="true"><rect x="12" y="13" width="40" height="17" rx="5.5" stroke-width="5" /> <rect x="12" y="34" width="40" height="17" rx="5.5" stroke-width="5" /> <circle cx="21" cy="21.5" r="1.4" stroke-width="4.2" /> <circle cx="21" cy="42.5" r="1.4" stroke-width="4.2" /> <path d="M36 21.5 H44 M36 42.5 H44" stroke-width="4.5" /></svg><strong>Set up models</strong><p>Start local servers and connect cloud providers.</p><span class="quick-tail">Open chapter<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></span></a><a class="quick" href="#chats"><svg class="icon" viewBox="0 0 64 64" aria-hidden="true"><path d="M14 12 H50 A8 8 0 0 1 58 20 V38 A8 8 0 0 1 50 46 H32 L20 56 V46 H14 A8 8 0 0 1 6 38 V20 A8 8 0 0 1 14 12 Z" stroke-width="5" /></svg><strong>Chats &amp; projects</strong><p>Organize conversations and share working files.</p><span class="quick-tail">Open chapter<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></span></a><a class="quick" href="#agenten"><svg class="icon" viewBox="0 2 64 64" aria-hidden="true"><path d="M6 24 Q32 30 58 24" stroke-width="5" /> <path d="M18 24 V15 Q18 8 32 8 Q46 8 46 15 V24" stroke-width="5" /> <path d="M23 30 L27 33 L23 36" stroke-width="4.5" /> <path d="M41 30 L37 33 L41 36" stroke-width="4.5" /> <path d="M8 60 V51 Q8 42 19 39.5 L32 47 L45 39.5 Q56 42 56 51 V60" stroke-width="5" /></svg><strong>Agents &amp; cron jobs</strong><p>Delegate tasks and schedule recurring work.</p><span class="quick-tail">Open chapter<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></span></a><a class="quick" href="#bilder"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /> <circle cx="8.5" cy="9.5" r="1.6" /> <path d="M4 17l4.5-5 3.5 4 3-2.5L20 17" /></svg><strong>Images &amp; video</strong><p>Image models, reference images, and tools in the studio.</p><span class="quick-tail">Open chapter<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></span></a><a class="quick" href="#werkzeuge"><svg class="icon" viewBox="0 0 64 64" aria-hidden="true"><path d="M23 26 H41 V36 C41 42.5 37 46.5 32 46.5 C27 46.5 23 42.5 23 36 Z" stroke-width="5" /> <path d="M27.5 26 V13 M36.5 26 V13" stroke-width="5" /> <path d="M32 46.5 V56" stroke-width="4.5" /></svg><strong>Tools &amp; permissions</strong><p>Connect MCP servers and control tool access.</p><span class="quick-tail">Open chapter<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></span></a><a class="quick" href="#einstellungen"><svg class="icon" viewBox="0 0 100 100" aria-hidden="true"><circle stroke-width="6.5" cx="50" cy="50" r="16" /> <path stroke-width="6.5" d="M50 22 V32 M50 68 V78 M22 50 H32 M68 50 H78 M30 30 l7 7 M63 63 l7 7 M70 30 l-7 7 M37 63 l-7 7" /></svg><strong>Settings</strong><p>Adjust language, appearance, and assistant behavior.</p><span class="quick-tail">Open chapter<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></span></a></div><div class="utility-links"><a href="#tasten"><svg class="icon" viewBox="0 0 64 64" aria-hidden="true"><rect x="6" y="17" width="52" height="30" rx="6" stroke-width="5" /> <path d="M17 27 h0 M27 27 h0 M37 27 h0 M47 27 h0" stroke-width="5" /> <path d="M21 37 H43" stroke-width="4.5" /></svg>Keyboard shortcuts</a><a href="#hakt"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/></svg>Troubleshooting</a><a href="#fenster"><svg class="icon" viewBox="0 0 64 64" aria-hidden="true"><rect stroke-width="5" x="9" y="13" width="46" height="38" rx="8" /> <path stroke-width="5" d="M25 13 V51" /></svg>The window</a></div></section>
+<section class="search-panel" id="search-results" aria-labelledby="search-title" hidden><div class="eyebrow">Manual</div><h1 class="results-title" id="search-title">Search results</h1><p class="results-caption" id="result-caption"></p><div class="result-list" id="result-list"></div></section>
+<section class="chapter" id="erste-schritte" tabindex="-1" aria-labelledby="title-erste-schritte" hidden><div class="chapter-header "><div><p class="chapter-count">Chapter 01 / 17</p><h2 id="title-erste-schritte">Getting started</h2><p class="unter">From the first launch to your first response.</p></div></div>
+  <div class="text">
+    <p>When you first launch the app, you see the <b class="k">Welcome</b> window. It asks for three things: your preferred name, language, and appearance. You can change all of these later in Settings. You do not need an account.</p>
+  </div>
+  <h3 class="frei">Three steps to your first model</h3>
+  <div class="drei">
+    <div class="karte">
+      <span class="schritt">Step 1</span>
+      <h3>Download the server software</h3>
+      <p>Open <b class="k">Settings</b> at the bottom of the left sidebar, then <b class="k">Model server</b> in the group <b class="k">Servers and connections</b>. Use the download button to download the model server, a small, free program that performs the calculations.</p>
+    </div>
+    <div class="karte">
+      <span class="schritt">Step 2</span>
+      <h3>Choose a model</h3>
+      <p>In the same settings, open the <b class="k">Catalog</b> in the group <b class="k">Models</b> to see models that fit your computer's memory. Select a model and choose <b class="k">Download</b>.</p>
+    </div>
+    <div class="karte">
+      <span class="schritt">Step 3</span>
+      <h3>Start</h3>
+      <p>Go back to the <b class="k">Model server</b> and press <b class="k">Start</b>. Context, GPU layers, and port are already filled in. When the indicator turns green, the server is running and your model is available in the chat.</p>
+    </div>
+  </div>
+  <div class="text">
+    <p>Prefer a cloud model? Open <b class="k">Cloud providers</b> in the group <b class="k">Models</b>, select <b class="k">Add provider</b>, enter your key, and press <b class="k">Connect</b>. The provider's models appear automatically.</p>
+  </div>
+</section><section class="chapter" id="fenster" tabindex="-1" aria-labelledby="title-fenster" hidden><div class="chapter-header with-visual"><div><p class="chapter-count">Chapter 02 / 17</p><h2 id="title-fenster">The window</h2><p class="unter">The sidebar is on the left, the chat is in the middle, and a second sidebar on the right holds everything created alongside the chat. Both sidebars are collapsed after installation.</p></div><figure class="chapter-visual"><button class="image-open" type="button" data-image aria-label="Enlarge image: The Exe AI window with chat and sidebars"><img src="/help/bilder/held-exe.webp" alt="The Exe AI window with chat and sidebars" width="2880" height="1800" loading="lazy"></button><figcaption><span>Inside Exe AI</span><span>Enlarge image ↗</span></figcaption></figure></div>
+  <div class="zwei">
+    <div class="karte">
+      <kbd class="taste">⌘ B · Ctrl + B</kbd>
+      <h3>The left sidebar</h3>
+      <p>At the top, you will find <b class="k">Search chats</b>. Below are your projects and chats, sorted by date. At the bottom, you will find five icons:</p>
+      <table>
+        <tr><td>Chats</td><td>your conversations</td></tr>
+        <tr><td>New chat</td><td>starts an empty chat</td></tr>
+        <tr><td>New project</td><td>groups chats and shares folders with them</td></tr>
+        <tr><td>Images</td><td>generate images and videos</td></tr>
+        <tr><td>Settings</td><td>models, servers, tools, and this manual</td></tr>
+      </table>
+    </div>
+    <div class="karte">
+      <kbd class="taste">⌘ J · Ctrl + J</kbd>
+      <h3>The right sidebar</h3>
+      <p>The right sidebar shows what the assistant creates and executes alongside the chat. It also has seven icons at the bottom:</p>
+      <table>
+        <tr><td>Preview</td><td>files the assistant creates: HTML, SVG, spreadsheets, PDFs</td></tr>
+        <tr><td>Agents</td><td>start tasks, track progress, and read reports</td></tr>
+        <tr><td>Cronjobs</td><td>a calendar for everything scheduled to run at a set time</td></tr>
+        <tr><td>Terminal</td><td>every command in this chat, logged live</td></tr>
+        <tr><td>CLI</td><td>the terminal client <code>exe</code>, running in the window</td></tr>
+        <tr><td>Gallery</td><td>all generated images</td></tr>
+        <tr><td>Doc folder</td><td>uploaded and saved files</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="text">
+    <p>In the preview, use <b class="k">View</b> and <b class="k">Source</b> to switch between the rendered result and the file's source text. <b class="k">Reload</b> refreshes the preview; <b class="k">Download</b> saves the file.</p>
+    <p>The status bar shows whether the model server is running — <b class="k">Server active</b> or <b class="k">Server inactive</b> — and how much memory is in use.</p>
+  </div>
+</section><section class="chapter" id="chats" tabindex="-1" aria-labelledby="title-chats" hidden><div class="chapter-header "><div><p class="chapter-count">Chapter 03 / 17</p><h2 id="title-chats">Chats and projects</h2><p class="unter">Each conversation is a chat. Projects group related chats.</p></div></div>
+  <div class="text">
+    <p><b class="k">New chat</b> starts an empty conversation. <b class="k">Search chats</b> helps you find an existing one. Right-click a chat, or click the <b class="k">More</b> button in its row, to open its menu:</p>
+  </div>
+  <div class="tafel">
+    <table>
+      <tr><td><b class="k">Pin</b></td><td>Keeps the chat at the top, under “Pinned.”</td></tr>
+      <tr><td><b class="k">Rename</b></td><td>Gives the chat a new title.</td></tr>
+      <tr><td><b class="k">Move to project</b></td><td>Moves the chat into a project.</td></tr>
+      <tr><td><b class="k">Archive</b></td><td>Removes the chat from the list without deleting it. In the <b class="k">Archive</b>, use <b class="k">Restore</b> to bring it back.</td></tr>
+      <tr><td><b class="k">Delete</b></td><td>Deletes the chat. If an agent is still working in it, the agent is stopped as well.</td></tr>
+    </table>
+  </div>
+  <div class="zwei">
+    <div class="karte">
+      <h3>Projects</h3>
+      <p>A project is a named group of chats. Chats in the same project share their working folders. <b class="k">New project</b> creates a project. You can also archive an entire project.</p>
+    </div>
+    <div class="karte">
+      <h3>The indicator next to a chat</h3>
+      <table>
+        <tr><td><span class="punkt gelb"></span>Yellow</td><td>Waiting for you</td></tr>
+        <tr><td><span class="punkt blau"></span>Blue</td><td>Response in progress</td></tr>
+        <tr><td><span class="punkt gruen"></span>Green</td><td>Response complete</td></tr>
+        <tr><td><span class="punkt rot"></span>Red</td><td>Run failed</td></tr>
+      </table>
+    </div>
+  </div>
+</section><section class="chapter" id="eingabe" tabindex="-1" aria-labelledby="title-eingabe" hidden><div class="chapter-header "><div><p class="chapter-count">Chapter 04 / 17</p><h2 id="title-eingabe">The input bar</h2><p class="unter">Below the text field is a row of buttons. They apply to the chat that is currently open.</p></div></div>
+  <div class="tafel">
+    <table>
+      <tr><td><b class="k">+</b></td><td>Opens the plus menu. <b class="k">Upload files</b> attaches documents and photos; you can also drag or paste files into the field. <b class="k">Generate an image</b> opens the image studio. <b class="k lang">Suspend your instructions for this chat</b> turns your instructions off for this chat only, even before its first message.</td></tr>
+      <tr><td><b class="k">Working folders</b></td><td>Grants access to folders where the assistant may work.</td></tr>
+      <tr><td><b class="k">Permission mode</b></td><td>Auto, Manual, or Restricted: controls how often the assistant asks before using a tool.</td></tr>
+      <tr><td><b class="k">Model</b></td><td>Selects the model for this chat. Three indicators show tool support, image support, and whether the speed module is active.</td></tr>
+      <tr><td>Context ring</td><td>Shows how full the context is, for example “0 / 16k tokens.” Context is everything the model can consider at once: the chat so far, your documents, and the tools.</td></tr>
+      <tr><td><b class="k">Thinking</b></td><td>Sets how thoroughly the model thinks before responding: Off, On, Minimal, Low, Medium, High, X-High, or Maximum. The available levels depend on the model. Some show only “Always thinks” or “Never thinks.”</td></tr>
+      <tr><td><b class="k">Dictate</b></td><td>Click to start dictating into the text field. Hold the button for one second to start a conversation.</td></tr>
+      <tr><td><b class="k">Send</b></td><td>Sends the message. If a response is being generated, the same button stops it.</td></tr>
+    </table>
+  </div>
+  <div class="zwei">
+    <div class="karte">
+      <h3>Keys in the text field</h3>
+      <table>
+        <tr><td><kbd>Enter</kbd></td><td>sends the message</td></tr>
+        <tr><td><kbd>Shift + Enter</kbd></td><td>starts a new line</td></tr>
+        <tr><td><kbd>Escape</kbd></td><td>stops the response</td></tr>
+        <tr><td><kbd>/</kbd></td><td>as the first character: shows your skills</td></tr>
+      </table>
+    </div>
+    <div class="karte">
+      <h3>The queue</h3>
+      <p>If you write while a response is being generated, your message is marked <b class="k">Queued</b>. It is sent as soon as the response is complete. <b class="k">Remove from queue</b> returns it to the input field.</p>
+    </div>
+  </div>
+</section><section class="chapter" id="antworten" tabindex="-1" aria-labelledby="title-antworten" hidden><div class="chapter-header "><div><p class="chapter-count">Chapter 05 / 17</p><h2 id="title-antworten">Reading responses</h2><p class="unter">A response shows both the text and how it was produced.</p></div></div>
+  <div class="zwei">
+    <div class="karte">
+      <h3>Thinking</h3>
+      <p>If the model uses reasoning, a collapsed row labeled <b class="k">Thinking</b> appears above the response. Click to expand it.</p>
+    </div>
+    <div class="karte">
+      <h3>Tools</h3>
+      <p>Each tool call appears as a small card showing its name and duration. If the call fails, the card is marked “Failed.” Click to see exactly what ran.</p>
+    </div>
+    <div class="karte">
+      <h3>Below the response</h3>
+      <p><b class="k">Copy</b> places the text on the clipboard. <b class="k">Regenerate</b> asks the model to respond again. The adjacent performance metrics show generation speed (TPS) and the time until the first text output (TTFT).</p>
+    </div>
+    <div class="karte">
+      <h3>Follow-up questions</h3>
+      <p>The assistant may ask a follow-up question. Choose an answer or write your own. <b class="k">Answer later</b> lets you postpone your response.</p>
+    </div>
+  </div>
+  <div class="text">
+    <h3>When the context fills up</h3>
+    <p>When the context is almost full, the chat summarizes its older messages. A label such as “12 compressed messages” appears in their place. Nothing is lost: the history remains readable, while the model receives the summary. Set the threshold under <b class="k">Settings</b> → <b class="k">Instructions</b> → <b class="k">Context compression</b>. “Auto” means 80%. This feature is still in development.</p>
+  </div>
+</section><section class="chapter" id="modelle" tabindex="-1" aria-labelledby="title-modelle" hidden><div class="chapter-header with-visual"><div><p class="chapter-count">Chapter 06 / 17</p><h2 id="title-modelle">Models</h2><p class="unter">Local means that nothing you type leaves your computer. Cloud means that your text is sent to a provider, which bills you for usage.</p></div><figure class="chapter-visual"><button class="image-open" type="button" data-image aria-label="Enlarge image: The model catalog with local models"><img src="/help/bilder/katalog-exe.webp" alt="The model catalog with local models" width="2880" height="1800" loading="lazy"></button><figcaption><span>Inside Exe AI</span><span>Enlarge image ↗</span></figcaption></figure></div>
+  <div class="text">
+    <h3>The catalog</h3>
+    <p>The <b class="k">Catalog</b> (in the settings, group <b class="k">Models</b>) has six tabs: Chat, Embedding, Speech, Image, Add-ons, and Downloads. Each card shows a model's capabilities: “Calls tools,” “Sees images,” “Thinks before responding,” and “Has a speed module.” A line such as “Recommended for your 64 GB” tells you whether it fits your computer. You can also use the search field to find models directly on Hugging Face. Under <b class="k">Downloads</b>, you can see what is currently downloading.</p>
+    <h3 style="margin-top:26px">The six servers</h3>
+    <p>In the settings, group <b class="k">Servers and connections</b>, each server has its own page; <b class="k">Overview</b> shows all of them at a glance. <b class="k">Local models</b> in the group <b class="k">Models</b> is the quick pick for the models on your computer.</p>
+  </div>
+  <div class="tafel">
+    <table>
+      <tr><td>Model server</td><td>The model you chat with.</td></tr>
+      <tr><td>Agent server</td><td>The model used by agents and cron jobs.</td></tr>
+      <tr><td>Embedding server</td><td>Prepares documents for search. It is loaded on demand.</td></tr>
+      <tr><td>Speech server</td><td>Dictation, conversation, and voice.</td></tr>
+      <tr><td>Cleanup server</td><td>A small model that polishes dictated text.</td></tr>
+      <tr><td>Image server</td><td>Keeps the image model loaded so it does not need to be reloaded for each image.</td></tr>
+    </table>
+  </div>
+  <div class="text">
+    <p>On a server's page, choose a model and configure it: <b class="k">Context</b> (how much the model can consider at once), <b class="k">GPU layers</b> (how much of the processing the graphics card handles), <b class="k">CPU threads</b>, plus the <b class="k">Speed module</b> and <b class="k">Vision module</b>. Under <b class="k">Advanced</b>, you will find settings such as KV cache, Flash Attention, and Memory Lock. The <b class="k">Server log</b> shows the server's messages. Use <b class="k">Start</b> and <b class="k">Stop</b> to start and stop it.</p>
+    <p>Under <b class="k">Parameters</b>, you will find values such as temperature. They apply to all chats using this model. <b class="k">Reset</b> restores the defaults.</p>
+    <h3 style="margin-top:26px">Cloud</h3>
+    <p>Under <b class="k">Cloud providers</b>, <b class="k">Add provider</b> connects Anthropic, OpenAI, or a custom server that supports the OpenAI API, such as oMLX or LM Studio. Your key stays on this computer, in a file read only by the app. After that, the interface only shows whether a key has been set.</p>
+    <p>Cloud providers often do not report a model's capabilities. Enable the appropriate options yourself on the model's page: <b class="k lang">Model can see images (Vision)</b>, <b class="k lang">Model can think (Reasoning)</b>, <b class="k lang">Model can use tools (Tool Calls)</b>.</p>
+  </div>
+</section><section class="chapter" id="ordner" tabindex="-1" aria-labelledby="title-ordner" hidden><div class="chapter-header "><div><p class="chapter-count">Chapter 07 / 17</p><h2 id="title-ordner">Folders and documents</h2><p class="unter">In an approved folder, the model works without asking. For access outside that folder, it asks in the chat.</p></div></div>
+  <div class="zwei">
+    <div class="karte">
+      <h3>Working folders</h3>
+      <p>Use <b class="k">Working folders</b> to grant access to a folder: browse for a folder or paste its path, then select <b class="k">Grant access</b>. <b class="k">Grant access to another folder</b> adds another one. <b class="k">Revoke folder access</b> removes permission without deleting anything.</p>
+      <p>Each chat also has its own folder. Chats in a project share the project's folders.</p>
+    </div>
+    <div class="karte">
+      <h3>Folder notes</h3>
+      <p>Each approved folder contains a file named <code>exe.md</code> with notes about that folder. These notes accompany every message, and the assistant keeps them up to date.</p>
+    </div>
+    <div class="karte">
+      <h3>Attaching documents</h3>
+      <p>Use <b class="k">Upload files</b> to attach images, for models that can see them, and documents up to 20 MB: PDFs and text files such as TXT, MD, CSV, JSON, or source code files.</p>
+      <p>A document is included in full in the context; its card then says “Fully in context.” If it does not fit, the card says “Document too large.” The file still remains in the chat's folder, and the assistant reads individual passages from it.</p>
+    </div>
+    <div class="karte">
+      <h3>Storage locations</h3>
+      <p>Exe AI keeps its files in a few folders on this computer. Each has a row with the folder icon, which opens the folder, and <b class="k">Change location</b>, which moves it; the change takes hold at once. The assistant knows the folders in force, so it can tell you where a file belongs.</p>
+      <table>
+        <tr><td>Generated pictures</td><td>the <b class="k">Gallery</b> in the right sidebar</td></tr>
+        <tr><td>Image and video models</td><td>the <b class="k">Image server</b> page; subfolders <code>vae/</code>, <code>text_encoders/</code>, <code>lora/</code>, <code>embedding/</code>, <code>upscaler/</code> and more hold the parts of a model</td></tr>
+        <tr><td>Language models</td><td>the <b class="k">Model server</b> and <b class="k">Agent server</b> pages; subfolders <code>mtp/</code> and <code>vision/</code> hold draft models and vision projectors</td></tr>
+        <tr><td>Embedding models</td><td>the <b class="k">Embedding server</b> page</td></tr>
+        <tr><td>Speech models</td><td>the <b class="k">Speech server</b> page</td></tr>
+        <tr><td>Scripts</td><td>the <b class="k">Cronjobs</b> page; scripts a schedule may start</td></tr>
+        <tr><td>Doc folder</td><td>the <b class="k">Doc folder</b> in the right sidebar</td></tr>
+      </table>
+    </div>
+    <div class="karte">
+      <h3>The Doc folder</h3>
+      <p>The <b class="k">Doc folder</b> in the right sidebar collects everything you have uploaded and everything agents and cron jobs have saved. Each file shows who created or uploaded it. The <b class="k">All projects</b> view shows files from every project.</p>
+      <p>Drag a file into the chat to attach it. <b class="k">Add files</b> adds new files; <b class="k">Change location</b> moves the folder.</p>
+    </div>
+  </div>
+</section><section class="chapter" id="werkzeuge" tabindex="-1" aria-labelledby="title-werkzeuge" hidden><div class="chapter-header with-visual"><div><p class="chapter-count">Chapter 08 / 17</p><h2 id="title-werkzeuge">Tools and permissions</h2><p class="unter">Tools let the assistant do more than write: read files, run commands, search the web, and generate images. You decide what it is allowed to do.</p></div><figure class="chapter-visual"><button class="image-open" type="button" data-image aria-label="Enlarge image: The MCP server gallery"><img src="/help/bilder/mcp-exe.webp" alt="The MCP server gallery" width="2880" height="1800" loading="lazy"></button><figcaption><span>Inside Exe AI</span><span>Enlarge image ↗</span></figcaption></figure></div>
+  <h3 class="frei">Permission mode</h3>
+  <div class="drei">
+    <div class="karte">
+      <h3>Auto</h3>
+      <p>Tools run without asking, even outside working folders.</p>
+    </div>
+    <div class="karte">
+      <h3>Manual</h3>
+      <p>File and command tools work without asking inside working folders. Outside those folders, and for other tools, permission is generally requested first.</p>
+    </div>
+    <div class="karte">
+      <h3>Restricted</h3>
+      <p>Permission is requested before every file operation and command, even inside working folders.</p>
+    </div>
+  </div>
+  <div class="text">
+    <p>After a fresh installation, the mode is set to Manual. Until you choose a mode yourself, the app asks only about file operations and commands outside working folders. For agents, the middle level is called “Sandboxed.”</p>
+    <h3 style="margin-top:26px">The “Allow execution?” prompt</h3>
+    <p>When a tool needs your permission, the prompt shows exactly what will run and why approval is needed, for example because a path is outside the approved folders or the operation accesses the network.</p>
+  </div>
+  <div class="tafel">
+    <table>
+      <tr><td><b class="k">Allow once</b></td><td>Applies only to this particular call.</td></tr>
+      <tr><td><b class="k">Always allow</b></td><td>From now on, applies to the entire tool in all chats and all agent runs.</td></tr>
+      <tr><td><b class="k">No</b></td><td>Denies permission. You can add a note explaining what the assistant should do instead.</td></tr>
+    </table>
+  </div>
+  <div class="text">
+    <p>To take an “Always allow” permission back, type <code>/tools forget</code> and the tool's name in the terminal client, for example <code>/tools forget read_file</code>: the tool asks again. The file <code>berechtigungen.json</code> in the app data folder (see <a href="#daten" style="color:inherit">Your data</a>) is the second way. Some dangerous commands remain blocked in every mode.</p>
+    <h3 id="snapshots" style="margin-top:26px">Commits</h3>
+    <p>Before the assistant changes files, Exe AI can copy your folder, so that you can get back what it wrote. This is off in a fresh installation, because the copies are kept in the app data folder. Switch it on with <code>/settings global.checkpoints.enabled true</code>. Then <code>/rollback</code> shows the commits and <code>/rollback 1</code> restores what the assistant wrote after commit 1 (see <a href="#terminal" style="color:inherit">Terminal</a>).</p>
+    <p>Unattended agents reject anything that would need approval. Agents you start from a chat send their approval requests to that chat.</p>
+    <h3 style="margin-top:26px">Built-in tools</h3>
+    <p>Under <b class="k">Settings</b> → <b class="k">Tools</b>, each tool has a switch. Every enabled tool adds a little time to each request, so disable the tools you do not need.</p>
+  </div>
+  <div class="tafel">
+    <table>
+      <thead><tr><th>Group</th><th>Tool</th><th>What it does</th></tr></thead>
+      <tbody>
+      <tr><td>Terminal</td><td><code>read_file</code></td><td>Reads a text file's contents.</td></tr>
+      <tr><td></td><td><code>write_file</code></td><td>Writes text to a file, creating it if necessary.</td></tr>
+      <tr><td></td><td><code>edit_file</code></td><td>Replaces an exact text match in a file.</td></tr>
+      <tr><td></td><td><code>list_dir</code></td><td>Lists the contents of a folder.</td></tr>
+      <tr><td></td><td><code>search_files</code></td><td>Searches the shared folders for text and reports every line it appears in.</td></tr>
+      <tr><td></td><td><code>create_folder</code></td><td>Creates a folder and shares it as a working folder for this chat.</td></tr>
+      <tr><td></td><td><code>run_command</code></td><td>Runs shell commands on this computer to start programs and scripts or move and rename files.</td></tr>
+      <tr><td></td><td><code>ask_user</code></td><td>Asks you when a decision requires your input.</td></tr>
+      <tr><td></td><td><code>start_job</code></td><td>Delegates work to an agent that completes it in the background and provides a report.</td></tr>
+      <tr><td></td><td><code>job</code></td><td>Shows the jobs this chat has started in the background and ends one on request.</td></tr>
+      <tr><td>Exe Web Search</td><td><code>web_search</code></td><td>Searches the web.</td></tr>
+      <tr><td></td><td><code>read_webpage</code></td><td>Reads a web page.</td></tr>
+      <tr><td>Memory</td><td><code>memory_save</code></td><td>Remembers information about you or your project across conversations.</td></tr>
+      <tr><td>Skills</td><td><code>skill_load</code></td><td>Loads saved instructions for a type of task.</td></tr>
+      <tr><td></td><td><code>skill_save</code></td><td>Saves a workflow so it can be loaded again later.</td></tr>
+      <tr><td>Image tool</td><td><code>draw_image</code></td><td>Generates an image using the local image model.</td></tr>
+      <tr><td></td><td><code>draw_video</code></td><td>Creates a short video with the local video model.</td></tr>
+      <tr><td>Cron jobs</td><td><code>cronjob</code></td><td>Sets up one-off or repeating cronjobs that start a job at a set time.</td></tr>
+      <tr><td></td><td><code>cron_note</code></td><td>Saves a brief note for a cronjob to read during its next run.</td></tr>
+      <tr><td>Clock</td><td><code>get_current_time</code></td><td>Reads the current time, the day of the week and the time zone.</td></tr>
+      <tr><td>Goals</td><td><code>goal</code></td><td>Notifies you that an agent has reached its goal. The report is delivered directly as the notification.</td></tr>
+      <tr><td>Dock</td><td><code>deliver_file</code></td><td>Hands you a finished file: in a chat it appears in the response, from a job it lands in the Doc folder.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="text">
+    <h3 style="margin-top:26px">More tools through MCP servers</h3>
+    <p>Under <b class="k">Settings</b> → <b class="k">MCP Servers</b>, connect Exe AI to apps you use every day, such as Notion, GitHub, Figma, Gmail, Recraft, Hugging Face, Google Drive, or Slack. Depending on the service, sign in through your browser or enter an API key. Under <b class="k">Custom server</b>, enter an address or launch command. Web search is already built in.</p>
+    <p class="merke">The app treats tool output as data, not as instructions. This also applies to text from web pages.</p>
+  </div>
+</section><section class="chapter" id="agenten" tabindex="-1" aria-labelledby="title-agenten" hidden><div class="chapter-header with-visual"><div><p class="chapter-count">Chapter 09 / 17</p><h2 id="title-agenten">Agents and cron jobs</h2><p class="unter">An agent completes a task independently and returns a report. A cron job runs a task at a scheduled time.</p></div><figure class="chapter-visual"><button class="image-open" type="button" data-image aria-label="Enlarge image: The agents panel with tasks and reports"><img src="/help/bilder/agenten-exe.webp" alt="The agents panel with tasks and reports" width="2880" height="1800" loading="lazy"></button><figcaption><span>Inside Exe AI</span><span>Enlarge image ↗</span></figcaption></figure></div>
+  <div class="zwei">
+    <div class="karte">
+      <h3>Creating an agent</h3>
+      <p><b class="k">Settings</b> → <b class="k">Agents</b>. An agent has a name, description, instructions, tools, folders, and limits: <b class="k">Max. rounds</b>, <b class="k">Max. minutes</b>, <b class="k">Max. tokens</b>. Each agent is stored as a single Markdown file, which also holds two more limits: <code>reasoning_budget</code> (how long it may think before it answers) and <code>max_command_seconds</code> (how long one shell command may run).</p>
+    </div>
+    <div class="karte">
+      <h3>Starting a task</h3>
+      <p>Right sidebar → <b class="k">Agents</b> → <b class="k">New task</b>: choose an agent, describe the task, and select <b class="k">Start</b>. You can also ask the assistant in the chat to start an agent.</p>
+    </div>
+    <div class="karte">
+      <h3>Tracking progress</h3>
+      <p>The <b class="k">Active tasks</b> section shows what is running. The <b class="k">Reports</b> section collects the results. A run has one of these statuses: “Running,” “Waiting for you,” “Complete,” “Canceled,” “Failed,” or “Interrupted.” If an agent asks a question, it waits for your answer.</p>
+    </div>
+    <div class="karte">
+      <h3>Model and subagents</h3>
+      <p>The model used by agents is selected through <b class="k lang">Model for agents &amp; cron jobs</b> on the page of the <b class="k">Agent server</b> in the settings.</p>
+      <p>The assistant can also delegate a subtask to a subagent without you creating an agent first. The limits are on the <b class="k">Agents</b> page under <b class="k">Subagents</b>.</p>
+    </div>
+  </div>
+  <h3 class="frei">Cron jobs</h3>
+  <div class="text">
+    <p>Right sidebar → <b class="k">Cron jobs</b> opens a calendar with <b class="k">Day</b> and <b class="k">Month</b> views. <b class="k">New cron job</b> asks for three details:</p>
+  </div>
+  <div class="tafel">
+    <table>
+      <tr><td>Type</td><td>Agent, Script, or Reminder</td></tr>
+      <tr><td>Repeat</td><td>Once, Daily, Weekly, Monthly, or Custom (using a cron expression)</td></tr>
+      <tr><td>Time</td><td>when to start</td></tr>
+    </table>
+  </div>
+  <div class="text">
+    <p>You can also simply tell the assistant, for example: “Remind me to check the mail every morning at eight.”</p>
+    <p><b class="k">Run now</b> starts a cron job immediately. <b class="k">Recent runs</b> shows the results. If a cron job has a goal, only a run that reaches it sends a notification. After several consecutive failures, the cron job is paused until you enable it again.</p>
+  </div>
+</section><section class="chapter" id="bilder" tabindex="-1" aria-labelledby="title-bilder" hidden><div class="chapter-header with-visual"><div><p class="chapter-count">Chapter 10 / 17</p><h2 id="title-bilder">Images and video</h2><p class="unter">The Images icon at the bottom of the left sidebar opens the area where you generate images and videos. Generation runs on your computer.</p></div><figure class="chapter-visual"><button class="image-open" type="button" data-image aria-label="Enlarge image: The image studio with canvas and controls"><img src="/help/bilder/studio-exe.webp" alt="The image studio with canvas and controls" width="2880" height="1800" loading="lazy"></button><figcaption><span>Inside Exe AI</span><span>Enlarge image ↗</span></figcaption></figure></div>
+  <div class="zwei">
+    <div class="karte">
+      <h3>What you need</h3>
+      <p>You need an image model from the catalog's <b class="k">Image</b> tab. Download the image generation software once on the <b class="k">Image server</b> page in the settings using <b class="k">Download framework</b>.</p>
+    </div>
+    <div class="karte">
+      <h3>How it works</h3>
+      <p>Describe the image in the prompt bar. <b class="k">Enhance</b> rewrites your prompt in English and adds details. <b class="k">Undo</b> restores your original text. <b class="k">Generate</b> starts image generation; <b class="k">Stop</b> cancels it.</p>
+    </div>
+  </div>
+  <div class="tafel">
+    <table>
+      <thead><tr><th>Setting</th><th>Purpose</th></tr></thead>
+      <tbody>
+      <tr><td>Model, format</td><td>Which model is used and the image's aspect ratio.</td></tr>
+      <tr><td>Dimensions &amp; generation</td><td>Width, height, steps, CFG, and seed.</td></tr>
+      <tr><td>Style, LoRA, embeddings</td><td>Add-ons that guide the image's style.</td></tr>
+      <tr><td>Input image</td><td>An existing image to edit.</td></tr>
+      <tr><td>Mask</td><td>Use the brush to mark the areas to regenerate.</td></tr>
+      <tr><td>Reference images</td><td>Images that guide the model during editing. Some models accept multiple reference images.</td></tr>
+      <tr><td>Face</td><td>ADetailer finds faces in the finished image and sharpens them.</td></tr>
+      <tr><td>Face transfer</td><td>PuLID transfers a face from a photo.</td></tr>
+      <tr><td>Pose &amp; structure</td><td>ControlNet guides the pose or outlines.</td></tr>
+      <tr><td>Upscaling</td><td>Hires fix generates a larger version of the image in a second pass.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="text">
+    <p>Switch between <b class="k">Image</b> and <b class="k">Video</b>. Video has four modes: “Text to video,” “Image to video,” “First and last frame,” and “Video to video.” Video is still experimental. The available options depend on the selected model.</p>
+    <p>Finished images appear in the <b class="k">Gallery</b> in the right sidebar. The assistant can also generate images in the chat when you ask: it writes the prompt in English and can add a negative prompt and an input image, which goes out at strength 0.6 like a picture in the studio's area; size, steps, CFG, sampler, and seed it sets only when you ask for them, and only for that image. It makes short videos too when a video model is in the models folder; a chat video starts from that model's own values, not from those of the studio. The <b class="k">Remove image metadata</b> switch under <b class="k">Settings</b> → <b class="k">Memory</b> removes the prompt, settings, and EXIF data from each image.</p>
+  </div>
+</section><section class="chapter" id="sprache" tabindex="-1" aria-labelledby="title-sprache" hidden><div class="chapter-header "><div><p class="chapter-count">Chapter 11 / 17</p><h2 id="title-sprache">Dictation and conversation</h2><p class="unter">Both use the speech server in the settings. Dictation needs a speech model from the catalog's Speech tab; for the voice, use a model from there or one of the voices of your system. Speech recognition and speech generation run on your computer.</p></div></div>
+  <div class="zwei">
+    <div class="karte">
+      <h3>Dictation</h3>
+      <p>Click the microphone to start dictation; click again to stop. A preliminary transcript appears as you speak.</p>
+      <p>Optionally, a model can polish the text. Select the model on the speech server's page under <b class="k">Cleaned up by</b>. With <b class="k">Automatic dictation</b>, the text is sent automatically when you finish; otherwise, you send it yourself.</p>
+    </div>
+    <div class="karte">
+      <h3>Conversation</h3>
+      <p>Hold the microphone button for one second. The app listens, thinks, and speaks. Enable <b class="k">Read responses aloud</b> and choose a <b class="k">Voice</b> to hear every response. The voice is a separate model from the catalog or one of the voices your system brings along.</p>
+      <p>The conversation ends automatically if you do not respond for three rounds.</p>
+    </div>
+  </div>
+  <div class="text">
+    <p>The shortcuts <kbd>⌘ ⇧ M</kbd> and <kbd>Ctrl + Shift + M</kbd> work system-wide: they bring the window to the front and do the same thing as clicking the microphone, even when another app is in the foreground.</p>
+  </div>
+</section><section class="chapter" id="wissen" tabindex="-1" aria-labelledby="title-wissen" hidden><div class="chapter-header "><div><p class="chapter-count">Chapter 12 / 17</p><h2 id="title-wissen">What the assistant knows</h2><p class="unter">Four things accompany every conversation. You can read, change, and disable each of them.</p></div></div>
+  <div class="zwei">
+    <div class="karte">
+      <h3>Instructions</h3>
+      <p><b class="k">Settings</b> → <b class="k">Instructions</b>. This is where you describe how the assistant should behave. In the plus menu of the input bar, <b class="k lang">Suspend your instructions for this chat</b> disables them for the open chat.</p>
+    </div>
+    <div class="karte">
+      <h3>Memory</h3>
+      <p><b class="k">Settings</b> → <b class="k">Memory</b>. Rules and facts that apply across conversations. The assistant adds entries itself, and changes and deletes them without asking; all entries together hold at most 3,575 characters. You can read and edit them, or remove them all with <b class="k">Clear</b>.</p>
+      <p><b class="k">Exe AI Memory</b> — memory entries stay on this computer. <b class="k">Send to cloud models and custom servers</b> — memory entries are sent to the provider with every request. Both switches are on from the start.</p>
+    </div>
+    <div class="karte">
+      <h3>Your name</h3>
+      <p>You will find it under <b class="k">Preferred name</b> on the Instructions page. The <b class="k">Greeting &amp; preferred name</b> switch displays the greeting and includes your name in requests to models. Turning it off disables both. With cloud models, your name is sent to the provider.</p>
+    </div>
+    <div class="karte">
+      <h3>Skills</h3>
+      <p>A skill is a written workflow. Invoke it by typing a slash followed by its name. The included skills are <code>/cleanup</code>, <code>/cronjob</code>, <code>/grill-me</code>, <code>/handoff</code>, <code>/help</code> and <code>/image-generator</code>.</p>
+      <p><b class="k">Settings</b> → <b class="k">Skills</b>: <b class="k">Load skills automatically</b> lets the model select a skill without you naming one. <b class="k">Write a skill</b> creates a custom skill. <b class="k">Reset</b> restores a modified built-in skill to its original version.</p>
+    </div>
+  </div>
+  <div class="text">
+    <p>The notes in <code>exe.md</code> in each approved folder are included as well (see <a href="#ordner" style="color:inherit">Folders and documents</a>).</p>
+    <h3 style="margin-top:26px">Three limits on the Instructions page</h3>
+  </div>
+  <div class="tafel">
+    <table>
+      <tr><td><b class="k">Tool rounds</b></td><td>How many times the model may use a tool within one response. Tasks involving many files need more. Auto means 50.</td></tr>
+      <tr><td><b class="k">Command timeout</b></td><td>Maximum runtime of a shell command, in seconds. Downloads and builds may need more time. Auto means 120.</td></tr>
+      <tr><td><b class="k">Context compression</b></td><td>Context usage, as a percentage, at which a chat is summarized. The range is 1 to 85; Auto means 80.</td></tr>
+    </table>
+  </div>
+</section><section class="chapter" id="einstellungen" tabindex="-1" aria-labelledby="title-einstellungen" hidden><div class="chapter-header with-visual"><div><p class="chapter-count">Chapter 13 / 17</p><h2 id="title-einstellungen">Settings</h2><p class="unter">Open Settings using the Settings icon at the bottom of the left sidebar, or press ⌘ , on macOS or Ctrl + , on Windows.</p></div><figure class="chapter-visual"><button class="image-open" type="button" data-image aria-label="Enlarge image: The interface with the Exe appearance"><img src="/help/bilder/held-exe.webp" alt="The interface with the Exe appearance" width="2880" height="1800" loading="lazy"></button><figcaption><span>Inside Exe AI</span><span>Enlarge image ↗</span></figcaption></figure></div>
+  <div class="tafel">
+    <table>
+      <thead><tr><th>Group</th><th>Page</th><th>What you will find</th></tr></thead>
+      <tbody>
+      <tr><td>Interface</td><td>Appearance</td><td>Theme, message color, code colors, and layout mode.</td></tr>
+      <tr><td></td><td>Language</td><td>Auto (device), English, or Deutsch. Changes take effect immediately.</td></tr>
+      <tr><td></td><td>Notifications</td><td>Sounds, volume, popup duration, and colored indicators for agents, cron jobs, the terminal, and chats.</td></tr>
+      <tr><td></td><td>Shortcuts</td><td>All shortcuts at a glance.</td></tr>
+      <tr><td>Behavior</td><td>Instructions</td><td>Your instructions, preferred name, and the three limits.</td></tr>
+      <tr><td></td><td>Memory</td><td>What it remembers and where that information is sent.</td></tr>
+      <tr><td></td><td>Skills</td><td>Built-in and custom skills.</td></tr>
+      <tr><td></td><td>Cronjobs</td><td>All cron jobs, their calendar, and their scripts.</td></tr>
+      <tr><td></td><td>Agents</td><td>Create and edit agents; configure subagents.</td></tr>
+      <tr><td>Models</td><td>Local models</td><td>The quick pick for the models on this computer and their parameters.</td></tr>
+      <tr><td></td><td>Cloud providers</td><td>Connect providers with a key.</td></tr>
+      <tr><td></td><td>Catalog</td><td>Find and download models.</td></tr>
+      <tr><td></td><td>Downloads</td><td>What is being downloaded right now.</td></tr>
+      <tr><td>Servers and connections</td><td>Overview</td><td>All servers at a glance.</td></tr>
+      <tr><td></td><td>Model server</td><td>The model you chat with.</td></tr>
+      <tr><td></td><td>Agent server</td><td>The model used by agents and cron jobs.</td></tr>
+      <tr><td></td><td>Embedding server</td><td>Prepares documents for search.</td></tr>
+      <tr><td></td><td>Speech server</td><td>Dictation, conversation, and voice.</td></tr>
+      <tr><td></td><td>Clean-up server</td><td>Polishes dictated text.</td></tr>
+      <tr><td></td><td>Image server</td><td>Keeps the image model loaded.</td></tr>
+      <tr><td></td><td>MCP Servers</td><td>Connect apps.</td></tr>
+      <tr><td></td><td>Tools</td><td>Enable or disable individual tools.</td></tr>
+      <tr><td></td><td>Web App</td><td>Open Exe AI on your phone: password, Tailscale, and a QR code.</td></tr>
+      <tr><td>System</td><td>Credentials</td><td>For example, your Hugging Face token.</td></tr>
+      <tr><td></td><td>Configuration</td><td>For anyone who prefers to edit the file directly. Changes take effect the next time the app starts.</td></tr>
+      <tr><td></td><td>Tools file</td><td>The tool servers as a file. Changes take effect at once.</td></tr>
+      <tr><td></td><td>Help</td><td>This manual.</td></tr>
+      <tr><td></td><td>Updates</td><td>Look for a newer version of the program.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="zwei">
+    <div class="karte">
+      <h3>Appearance</h3>
+      <p>Choose from six themes — Pearl, Exe, Dark Matter, Heaven, Moune, and Snow — plus <b class="k">Custom gradient</b> with your own colors and <b class="k">Auto</b>, which follows your device's settings. A theme changes the entire window: frame, lines, messages, and code blocks.</p>
+      <p><b class="k">Message color</b> sets the color of your own messages. Under <b class="k">Code colors</b>, choose from these color schemes: Exe, Tokyo Night, One Light, GitHub, GitHub Dark, Dracula, Nord, Solarized Light, and Solarized Dark. <b class="k">Layout mode</b> adjusts the font size, chat width, and spacing between messages.</p>
+    </div>
+    <div class="karte">
+      <h3>Updates</h3>
+      <p>At startup, the app checks for a newer version. If one is available, the <b class="k">New version available</b> card appears with <b class="k">Download</b>, <b class="k">Install</b> and <b class="k">Later</b>.</p>
+      <p>Use <b class="k">Check for updates</b> in Settings to check immediately.</p>
+    </div>
+  </div>
+</section><section class="chapter" id="tasten" tabindex="-1" aria-labelledby="title-tasten" hidden><div class="chapter-header "><div><p class="chapter-count">Chapter 14 / 17</p><h2 id="title-tasten">Keyboard shortcuts</h2><p class="unter">The full list is under Settings → Keyboard shortcuts.</p></div></div>
+  <div class="tafel">
+    <table>
+      <thead><tr><th>Action</th><th>macOS</th><th>Windows</th></tr></thead>
+      <tbody>
+      <tr><td>New chat</td><td><kbd>⌘ N</kbd></td><td><kbd>Ctrl + N</kbd></td></tr>
+      <tr><td>Search chats</td><td><kbd>⌘ K</kbd></td><td><kbd>Ctrl + K</kbd></td></tr>
+      <tr><td>Toggle the left sidebar</td><td><kbd>⌘ B</kbd></td><td><kbd>Ctrl + B</kbd></td></tr>
+      <tr><td>Toggle the right sidebar</td><td><kbd>⌘ J</kbd></td><td><kbd>Ctrl + J</kbd></td></tr>
+      <tr><td>Settings</td><td><kbd>⌘ ,</kbd></td><td><kbd>Ctrl + ,</kbd></td></tr>
+      <tr><td>Microphone, system-wide</td><td><kbd>⌘ ⇧ M</kbd></td><td><kbd>Ctrl + Shift + M</kbd></td></tr>
+      <tr><td>Send</td><td colspan="2"><kbd>Enter</kbd></td></tr>
+      <tr><td>New line</td><td colspan="2"><kbd>Shift + Enter</kbd></td></tr>
+      <tr><td>Stop response</td><td colspan="2"><kbd>Escape</kbd></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section><section class="chapter" id="daten" tabindex="-1" aria-labelledby="title-daten" hidden><div class="chapter-header "><div><p class="chapter-count">Chapter 15 / 17</p><h2 id="title-daten">Your data</h2><p class="unter">Exe AI is designed to keep your data with you.</p></div></div>
+  <div class="text">
+    <ul>
+      <li>The app is accessible only from your own computer (address 127.0.0.1) until you switch on the <b class="k">Web App</b> in the settings; then your phone reaches it too, with the password you set. Chats, settings, keys, and models are stored locally in files and a database.</li>
+      <li>With a local model, nothing you type leaves your computer. With a cloud model, your text is sent to the provider.</li>
+      <li>API keys are kept in the file <code>.env</code> in the app data folder (see below). Where Exe AI writes a key itself, only you can read the file. <b class="k">Settings</b> → <b class="k">Credentials</b> shows and edits that file, so a key stands there in plain text; the pages of the cloud providers only say whether a key has been set.</li>
+      <li>Your memory entries are sent to cloud providers as long as <b class="k">Send to cloud models and custom servers</b> is on (it is on from the start). Your name accompanies every conversation, including those with cloud providers, as long as “Greeting &amp; preferred name” is enabled.</li>
+      <li>Models are downloaded directly from huggingface.co.</li>
+    </ul>
+  </div>
+  <div class="tafel">
+    <table>
+      <thead><tr><th>System</th><th>App data folder</th></tr></thead>
+      <tbody>
+      <tr><td>macOS</td><td><code>~/Library/Application Support/Exe AI Terminal</code></td></tr>
+      <tr><td>Windows</td><td><code>%APPDATA%\Exe AI Terminal</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section><section class="chapter" id="terminal" tabindex="-1" aria-labelledby="title-terminal" hidden><div class="chapter-header "><div><p class="chapter-count">Chapter 16 / 17</p><h2 id="title-terminal">Terminal</h2><p class="unter">Exe AI in a terminal: the command <code>exe</code>, the service without a window, and the commands inside a chat.</p></div></div>
+  <div class="text">
+    <h3>The command exe</h3>
+    <p>After installation, <code>exe</code> works in every terminal and every folder. On macOS the app places a link at <code>/usr/local/bin/exe</code> on its first start; if that needs a password, the Mac asks for it once. On Windows the installer puts the command on your PATH; open a new terminal window after installing.</p>
+    <p><code>exe install</code> places the link again at any time and names its path.</p>
+    <h3>Starting</h3>
+    <p><code>exe</code> opens a new chat in the terminal. Where no service is running on this machine, <code>exe</code> starts one in the background and uses it; the service keeps running after you leave. <code>exe --chat "Weekly report"</code> opens the chat with that title. <code>exe --version</code> and <code>exe --help</code> need no service.</p>
+    <h3>The sign in the menu bar</h3>
+    <p>The app also keeps a sign in the menu bar (macOS) or the notification area (Windows). Closing the window leaves the program and the service running, and the sign stays. It is drawn in full while the service answers and dimmed while it does not. Its menu has three entries: <b class="k">Open Window</b> opens the window again, <b class="k">Stop Service</b> ends the service and its model server, and <b class="k">Quit Exe AI</b> ends the program while the service runs on.</p>
+  </div>
+  <h3 class="frei">Commands and options</h3>
+  <div class="tafel">
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+      <tr><td><code>exe new</code></td><td>New chat</td></tr>
+      <tr><td><code>exe chats</code></td><td>Choose a chat</td></tr>
+      <tr><td><code>exe rename</code></td><td>Rename the chat</td></tr>
+      <tr><td><code>exe delete</code></td><td>Delete the chat</td></tr>
+      <tr><td><code>exe archive</code></td><td>Archive the chat</td></tr>
+      <tr><td><code>exe project</code></td><td>Create, rename or delete projects, and move the chat into one</td></tr>
+      <tr><td><code>exe model</code></td><td>Choose a model</td></tr>
+      <tr><td><code>exe server</code></td><td>Start or stop a server, or view its log</td></tr>
+      <tr><td><code>exe download</code></td><td>Search for a model and download it</td></tr>
+      <tr><td><code>exe provider</code></td><td>Add or remove a cloud provider</td></tr>
+      <tr><td><code>exe status</code></td><td>Show the service, the servers and memory use</td></tr>
+      <tr><td><code>exe theme</code></td><td>Choose a theme</td></tr>
+      <tr><td><code>exe lang</code></td><td>Choose a language</td></tr>
+      <tr><td><code>exe setup</code></td><td>Set up language, theme, preferred name and model</td></tr>
+      <tr><td><code>exe settings</code></td><td>Show and change settings</td></tr>
+      <tr><td><code>exe agents</code></td><td>Start and follow jobs for agents, or edit agents</td></tr>
+      <tr><td><code>exe cron</code></td><td>Create, run, pause or remove cronjobs</td></tr>
+      <tr><td><code>exe tools</code></td><td>Activate or deactivate tools</td></tr>
+      <tr><td><code>exe ps</code></td><td>Show and stop the model's running commands in the chat</td></tr>
+      <tr><td><code>exe mcp</code></td><td>Add, change or remove MCP servers, or sign in to one</td></tr>
+      <tr><td><code>exe skills</code></td><td>View, write or edit skills</td></tr>
+      <tr><td><code>exe files</code></td><td>Show the chat's files</td></tr>
+      <tr><td><code>exe image</code></td><td>Generate an image from a description</td></tr>
+      <tr><td><code>exe rollback</code></td><td>Restore files the model changed</td></tr>
+      <tr><td><code>exe memory</code></td><td>Read and edit the memory in a text editor</td></tr>
+      <tr><td><code>exe system</code></td><td>Read and edit the instructions in a text editor</td></tr>
+      <tr><td><code>exe dir</code></td><td>Show, share or stop sharing working folders</td></tr>
+      <tr><td><code>exe think</code></td><td>Choose a thinking level</td></tr>
+      <tr><td><code>exe compact</code></td><td>Compact the chat</td></tr>
+      <tr><td><code>exe export</code></td><td>Save the chat to a file</td></tr>
+      <tr><td><code>exe clear</code></td><td>Clear the screen; keep the chat</td></tr>
+      <tr><td><code>exe help</code></td><td>List available commands</td></tr>
+      <tr><td><code>exe quit</code></td><td>Quit</td></tr>
+      <tr><td><code>exe exit</code></td><td>Quit</td></tr>
+      <tr><td><code>exe service start</code></td><td>Start the service in the background</td></tr>
+      <tr><td><code>exe service run</code></td><td>Run the service in this terminal, without a window</td></tr>
+      <tr><td><code>exe service stop</code></td><td>Stop the service and its model server</td></tr>
+      <tr><td><code>exe service status</code></td><td>Show whether the service is running</td></tr>
+      <tr><td><code>exe install</code></td><td>Place the command exe on the path</td></tr>
+      <tr><td><code>--url</code></td><td>Set the service address; default: http://127.0.0.1:8090</td></tr>
+      <tr><td><code>--lang</code></td><td>Set the client language: de, en</td></tr>
+      <tr><td><code>--theme</code></td><td>Set the theme: auto, exe, darkmatter, moune, heaven, pearl, snow</td></tr>
+      <tr><td><code>--chat</code></td><td>Open a chat by ID or title</td></tr>
+      <tr><td><code>--continue</code></td><td>Open the chat used most recently</td></tr>
+      <tr><td><code>-p</code></td><td>Send one message, print the response and exit; text piped in is sent along, and tools run without asking. Example: cat error.log | exe -p "explain this error"</td></tr>
+      <tr><td><code>--password-file</code></td><td>Read the password from a file: the one the service requires beyond this machine, or the one a remote address asks for</td></tr>
+      <tr><td><code>--version</code></td><td>Show the version</td></tr>
+      <tr><td><code>--help</code></td><td>Show this help</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="text">
+    <p>To set up an MCP server from a terminal, give its address: <code>exe mcp add https://huggingface.co/mcp</code> adds the server at that address and says when it runs; in a chat, <code>/mcp add https://huggingface.co/mcp</code> does the same. If a server needs a key or a sign-in in the browser, the command says so and adds nothing; add such a server under <b class="k">MCP Servers</b> in the settings.</p>
+  </div>
+  <h3 class="frei">Inside a chat</h3>
+  <div class="tafel">
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+      <tr><td><code>/new</code></td><td>New chat</td></tr>
+      <tr><td><code>/chats</code></td><td>Choose a chat<br>Typing in the list searches; digits choose by number. Examples: /chats 2 opens chat 2; /chats archive shows archived chats.</td></tr>
+      <tr><td><code>/rename</code></td><td>Rename the chat<br>Example: /rename Tax return 2026</td></tr>
+      <tr><td><code>/delete</code></td><td>Delete the chat</td></tr>
+      <tr><td><code>/archive</code></td><td>Archive the chat<br>Archived chats are listed with /chats archive.</td></tr>
+      <tr><td><code>/project</code></td><td>Create, rename or delete projects, and move the chat into one<br>Example: /project 2 opens project 2.</td></tr>
+      <tr><td><code>/model</code></td><td>Choose a model</td></tr>
+      <tr><td><code>/server</code></td><td>Start or stop a server, or view its log<br>Examples: /server stop stops the model server; /server log agent shows the agent server's log.</td></tr>
+      <tr><td><code>/download</code></td><td>Search for a model and download it<br>Example: /download gemma 3 12b. Cancel a running download with /download stop.</td></tr>
+      <tr><td><code>/provider</code></td><td>Add or remove a cloud provider<br>Example: /provider add anthropic</td></tr>
+      <tr><td><code>/status</code></td><td>Show the service, the servers and memory use</td></tr>
+      <tr><td><code>/theme</code></td><td>Choose a theme<br>Enable Nerd Font symbols with /theme nerd on; disable them with /theme nerd off.</td></tr>
+      <tr><td><code>/lang</code></td><td>Choose a language</td></tr>
+      <tr><td><code>/setup</code></td><td>Set up language, theme, preferred name and model<br>Run a single step with, for example: /setup model</td></tr>
+      <tr><td><code>/settings</code></td><td>Show and change settings<br>Example: /settings global.verdichtung_schwelle 70</td></tr>
+      <tr><td><code>/agents</code></td><td>Start and follow jobs for agents, or edit agents<br>Start a job, for example: /agents run researcher summarize the open issues. Edit an agent with /agents edit researcher.</td></tr>
+      <tr><td><code>/cron</code></td><td>Create, run, pause or remove cronjobs<br>Examples: /cron add asks for each field in turn; /cron run 2 runs cronjob 2 now; /cron pause 2, /cron resume 2 and /cron remove 2 work the same way.</td></tr>
+      <tr><td><code>/tools</code></td><td>Activate or deactivate tools<br>Examples: /tools 3 switches tool 3 between active and inactive; /tools forget read_file revokes the “Always allow” permission for read_file.</td></tr>
+      <tr><td><code>/ps</code></td><td>Show and stop the model's running commands in the chat<br>Example: /ps 2 stops command 2.</td></tr>
+      <tr><td><code>/mcp</code></td><td>Add, change or remove MCP servers, or sign in to one<br>Examples: /mcp 2 opens MCP server 2. /mcp add https://huggingface.co/mcp adds the server at that address.</td></tr>
+      <tr><td><code>/skills</code></td><td>View, write or edit skills<br>Example: /skills handoff opens the skill handoff.</td></tr>
+      <tr><td><code>/files</code></td><td>Show the chat's files</td></tr>
+      <tr><td><code>/image</code></td><td>Generate an image from a description<br>Example: /image a lighthouse at dusk, oil painting. Cancel with Ctrl+C.</td></tr>
+      <tr><td><code>/rollback</code></td><td>Restore files the model changed<br>Example: /rollback shows the commits, /rollback 1 restores what the model wrote after commit 1, /rollback 1 --all restores everything and removes the last question, /rollback 1 notes.txt restores one file.</td></tr>
+      <tr><td><code>/memory</code></td><td>Read and edit the memory in a text editor</td></tr>
+      <tr><td><code>/system</code></td><td>Read and edit the instructions in a text editor</td></tr>
+      <tr><td><code>/dir</code></td><td>Show, share or stop sharing working folders<br>Examples: /dir add ~/Projects/website shares a folder; /dir remove 2 stops sharing folder 2.</td></tr>
+      <tr><td><code>/think</code></td><td>Choose a thinking level</td></tr>
+      <tr><td><code>/compact</code></td><td>Compact the chat<br>Focus the summary on a topic, for example: /compact only the open tasks</td></tr>
+      <tr><td><code>/export</code></td><td>Save the chat to a file<br>Use /export to save the chat as an HTML file, or /export notes.md to save it as a Markdown file.</td></tr>
+      <tr><td><code>/stop</code></td><td>Stop response</td></tr>
+      <tr><td><code>/clear</code></td><td>Clear the screen; keep the chat</td></tr>
+      <tr><td><code>/help</code></td><td>List available commands</td></tr>
+      <tr><td><code>/quit</code>, <code>/exit</code></td><td>Quit</td></tr>
+      <tr><td><code>! &lt;command&gt;</code></td><td>Runs the command in your shell; its output stays in the history.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h3 class="frei">Keys</h3>
+  <div class="tafel">
+    <table>
+      <thead><tr><th>Key</th><th>What it does</th></tr></thead>
+      <tbody>
+      <tr><td><kbd>Enter</kbd></td><td>Send</td></tr>
+      <tr><td><kbd>Ctrl + J</kbd></td><td>New line</td></tr>
+      <tr><td><kbd>Ctrl + C</kbd></td><td>Ends a running shell command; otherwise stops the response; with nothing running, quits</td></tr>
+      <tr><td><kbd>Ctrl + D</kbd></td><td>Quit (with an empty input line)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section><section class="chapter" id="hakt" tabindex="-1" aria-labelledby="title-hakt" hidden><div class="chapter-header "><div><p class="chapter-count">Chapter 17 / 17</p><h2 id="title-hakt">Troubleshooting</h2><p class="unter">Common messages and what to do about them.</p></div></div>
+  <div class="tafel">
+    <table>
+      <thead><tr><th>Message</th><th>What to do</th></tr></thead>
+      <tbody>
+      <tr><td>No model available</td><td>No server is running and no provider is connected. Start the <b class="k">Model server</b> in the settings or connect a provider under <b class="k">Cloud providers</b>.</td></tr>
+      <tr><td>No model in the folder yet</td><td>First, download one from the <b class="k">Catalog</b> in the settings.</td></tr>
+      <tr><td>This model cannot<br>call tools</td><td>Choose a model marked “Calls tools” in the catalog.</td></tr>
+      <tr><td>Document too large</td><td>The document does not fit entirely in the context. It remains in the chat's folder, and the assistant reads individual passages from it.</td></tr>
+      <tr><td>Context window is full</td><td>Start a new chat or set a larger context on the model's page.</td></tr>
+      <tr><td>The speech server is not running</td><td>Start it on the <b class="k">Speech server</b> page in the settings.</td></tr>
+      <tr><td>Microphone access is blocked</td><td>Grant access in your computer's system settings.</td></tr>
+      <tr><td>Missing key</td><td>Under <b class="k">Cloud providers</b>, open the provider and enter your key.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="text">
+    <p class="merke">You can also ask the assistant directly. Use <code>/help</code> to ask questions about the app.</p>
+  </div>
+</section>
+<nav class="chapter-nav" id="chapter-navigation" aria-label="Chapters" hidden><a id="previous-chapter" href="#uebersicht"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12H4m6-6-6 6 6 6"/></svg><span><small>Previous</small><strong>Overview</strong></span></a><a id="next-chapter" href="#fenster"><span><small>Next</small><strong>The window</strong></span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></a></nav>
+<footer class="page-footer"><span>Exe AI · Manual</span><a href="#uebersicht">All topics ↑</a></footer>
+</main></div><p class="sr-only" id="page-status" role="status" aria-live="polite"></p>
+<noscript><p class="noscript">JavaScript is disabled. All chapters are displayed on one page. Use the chapter links to navigate.</p></noscript>
+<dialog class="image-dialog" id="image-dialog" aria-labelledby="dialog-caption"><div class="dialog-bar"><span id="dialog-caption">Enlarged app view</span><button class="dialog-close" id="dialog-close" type="button">Close ×</button></div><img alt=""></dialog>
+<script>window.manualLabels = {"manual": "Manual", "overview": "Overview", "search": "Search", "chapter": "Chapter", "resultOne": "chapter found", "resultMany": "chapters found", "noResults": "No matching chapters found. Try another term, such as “model”, “dictation”, or “permissions”."};</script><script>(() => {
+  'use strict';
+  const T = window.manualLabels;
+  const chapters = Array.from(document.querySelectorAll('.chapter'));
+  const ids = chapters.map(el => el.id);
+  const home = document.getElementById('uebersicht');
+  const searchPanel = document.getElementById('search-results');
+  const input = document.getElementById('manual-search');
+  // The key beside the field is the one this system presses: the Mac
+  // writes it with the command sign, every other system with its control key.
+  const searchKey = document.querySelector('#search-form kbd');
+  const platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+  if (searchKey && platform && !/^(mac|iphone|ipad|ipod)/i.test(platform)) searchKey.textContent = 'Ctrl K';
+  const clear = document.getElementById('search-clear');
+  const crumb = document.getElementById('current-label');
+  const status = document.getElementById('page-status');
+  const previous = document.getElementById('previous-chapter');
+  const next = document.getElementById('next-chapter');
+  const chapterNav = document.getElementById('chapter-navigation');
+  const menu = document.getElementById('menu-toggle');
+  const language = document.getElementById('other-language');
+  const languageBase = language.getAttribute('href');
+  const dialog = document.getElementById('image-dialog');
+  const index = chapters.map(el => ({ id: el.id, title: el.querySelector('h2').textContent.trim(), text: el.textContent.replace(/\s+/g, ' ').trim() }));
+  const normalize = text => text.toLocaleLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  function closeMenu(restoreFocus = false) {
+    const wasOpen = document.body.classList.contains('menu-open');
+    document.body.classList.remove('menu-open');
+    menu.setAttribute('aria-expanded', 'false');
+    if (wasOpen && restoreFocus) menu.focus();
+  }
+  function selectPanel(id) {
+    home.hidden = id !== 'uebersicht';
+    searchPanel.hidden = id !== 'search';
+    chapters.forEach(ch => { ch.hidden = ch.id !== id; });
+    document.querySelectorAll('.nav-link').forEach(link => {
+      if (link.getAttribute('href') === '#' + id) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    });
+    chapterNav.hidden = !ids.includes(id);
+    clear.hidden = !input.value;
+  }
+  function updateLink(link, id, label) {
+    link.setAttribute('href', '#' + id);
+    link.querySelector('strong').textContent = label;
+  }
+  function showChapter(id, moveFocus) {
+    if (!ids.includes(id) && id !== 'uebersicht') id = 'uebersicht';
+    selectPanel(id);
+    input.value = '';
+    clear.hidden = true;
+    const n = ids.indexOf(id);
+    const title = n < 0 ? T.overview : index[n].title;
+    crumb.textContent = title;
+    document.title = title + ' — Exe AI ' + T.manual;
+    status.textContent = title;
+    if (n >= 0) {
+      updateLink(previous, n > 0 ? ids[n - 1] : 'uebersicht', n > 0 ? index[n - 1].title : T.overview);
+      updateLink(next, n + 1 < ids.length ? ids[n + 1] : 'uebersicht', n + 1 < ids.length ? index[n + 1].title : T.overview);
+    }
+    language.href = languageBase + '#' + id;
+    closeMenu();
+    if (moveFocus) {
+      window.scrollTo({top: 0, behavior: 'instant'});
+      const target = n < 0 ? home : chapters[n];
+      target.focus({preventScroll: true});
+    }
+  }
+  function highlighted(text, query) {
+    const fragment = document.createDocumentFragment();
+    const term = query.trim();
+    let offset = 0, hits = 0;
+    let pos = text.toLocaleLowerCase().indexOf(term.toLocaleLowerCase());
+    while (pos !== -1 && term && hits < 15) {
+      fragment.append(document.createTextNode(text.slice(offset, pos)));
+      const mark = document.createElement('mark');
+      mark.textContent = text.slice(pos, pos + term.length);
+      fragment.append(mark);
+      offset = pos + term.length;
+      pos = text.toLocaleLowerCase().indexOf(term.toLocaleLowerCase(), offset);
+      hits++;
+    }
+    fragment.append(document.createTextNode(text.slice(offset)));
+    return fragment;
+  }
+  function showSearch(query) {
+    input.value = query;
+    selectPanel('search');
+    chapterNav.hidden = true;
+    crumb.textContent = T.search;
+    document.title = T.search + ' — Exe AI ' + T.manual;
+    language.href = languageBase + '#search?q=' + encodeURIComponent(query);
+    const terms = normalize(query).split(/\s+/).filter(Boolean);
+    const results = index.filter(item => terms.every(term => normalize(item.text).includes(term)))
+      .sort((a, b) => Number(terms.every(t => normalize(b.title).includes(t))) - Number(terms.every(t => normalize(a.title).includes(t))));
+    const list = document.getElementById('result-list');
+    list.replaceChildren();
+    const caption = document.getElementById('result-caption');
+    caption.textContent = results.length + ' ' + (results.length === 1 ? T.resultOne : T.resultMany) + ' · “' + query + '”';
+    status.textContent = caption.textContent;
+    if (!results.length) {
+      const empty = document.createElement('p');
+      empty.className = 'search-empty'; empty.textContent = T.noResults;
+      list.append(empty);
+    }
+    results.forEach(item => {
+      const link = document.createElement('a'); link.className = 'result'; link.href = '#' + item.id;
+      const number = document.createElement('small'); number.textContent = T.chapter + ' ' + String(ids.indexOf(item.id) + 1).padStart(2, '0');
+      const title = document.createElement('strong'); title.append(highlighted(item.title, query));
+      const text = document.createElement('p');
+      let position = normalize(item.text).indexOf(normalize(query.trim()));
+      if (position < 0) position = normalize(item.text).indexOf(terms[0] || '');
+      const start = Math.max(0, position - 65);
+      let snippet = item.text.slice(start, start + 240);
+      if (start) snippet = '…' + snippet;
+      if (start + 240 < item.text.length) snippet += '…';
+      text.append(highlighted(snippet, query));
+      link.append(number, title, text); list.append(link);
+    });
+  }
+  function setHash(value, replace) {
+    try { history[replace ? 'replaceState' : 'pushState'](null, '', '#' + value); }
+    catch (_) { location.hash = value; }
+  }
+  function navigate(id, moveFocus = true) {
+    if (!ids.includes(id) && id !== 'uebersicht') return;
+    setHash(id, false);
+    showChapter(id, moveFocus);
+  }
+  function readRoute(moveFocus = false) {
+    let route;
+    try { route = decodeURIComponent(location.hash.slice(1).split('?')[0]); }
+    catch (_) { route = 'uebersicht'; }
+    if (route === 'search') {
+      const query = new URLSearchParams(location.hash.split('?')[1] || '').get('q') || '';
+      if (query.trim()) showSearch(query);
+      else showChapter('uebersicht', moveFocus);
+    } else showChapter(route || 'uebersicht', moveFocus);
+  }
+  document.addEventListener('click', event => {
+    const link = event.target.closest('a[href^="#"]');
+    if (!link || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    const id = link.getAttribute('href').slice(1);
+    if (ids.includes(id) || id === 'uebersicht') { event.preventDefault(); navigate(id); }
+  });
+  input.addEventListener('input', () => {
+    const query = input.value.trim();
+    if (!query) { setHash('uebersicht', true); showChapter('uebersicht', false); }
+    else { setHash('search?q=' + encodeURIComponent(query), true); showSearch(query); }
+  });
+  document.getElementById('search-form').addEventListener('submit', event => { event.preventDefault(); if(input.value.trim()) showSearch(input.value.trim()); });
+  clear.addEventListener('click', () => { navigate('uebersicht', false); input.focus(); });
+  menu.addEventListener('click', () => {
+    const opened = document.body.classList.toggle('menu-open');
+    menu.setAttribute('aria-expanded', String(opened));
+    if (opened) document.querySelector('.sidebar [aria-current="page"]')?.focus();
+  });
+  const media = window.matchMedia('(max-width: 800px)');
+  media.addEventListener('change', event => { if (!event.matches) closeMenu(); });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { closeMenu(true); if (document.activeElement === input && input.value) { navigate('uebersicht', false); input.focus(); } }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); closeMenu(); input.focus(); input.select(); }
+    if (event.key === 'Tab' && document.body.classList.contains('menu-open')) {
+      const focusable = [menu, ...document.querySelectorAll('.sidebar a')];
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+  });
+  document.querySelectorAll('[data-image]').forEach(button => button.addEventListener('click', () => {
+    const img = button.querySelector('img');
+    dialog.querySelector('img').src = img.src;
+    dialog.querySelector('img').alt = img.alt;
+    document.getElementById('dialog-caption').textContent = img.alt;
+    dialog.showModal();
+  }));
+  document.getElementById('dialog-close').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
+  window.addEventListener('hashchange', () => readRoute(true));
+  window.addEventListener('popstate', () => readRoute(true));
+  
+  readRoute();
+  document.documentElement.classList.remove('no-js');
+})();
+</script>
+</body></html>

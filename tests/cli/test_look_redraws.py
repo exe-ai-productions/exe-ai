@@ -22,18 +22,17 @@ from cli.client import ServiceUnreachable
 from cli.interfaces import Asker, Context, Renderer, Screen
 from cli.texts import Texts
 from tests.cli.program import (
+    EMPTIED,
     ENTER,
     FULL_COLOURS,
     Gated,
     Run,
     in_full_colours,
     run_client,
+    taped_history,
     terminal,
 )
 from tests.cli.stub_service import StubService, eventually
-
-# What a terminal is sent to empty its window.
-EMPTIED = "\x1b[2J"
 
 ASKED = "What grows in the shade"
 ANSWERED = "Hello."
@@ -68,26 +67,27 @@ def after_one_exchange(
     nothing, until it was through: the status lines then ask the service
     anew."""
     sent, output = terminal(monkeypatch, FULL_COLOURS)
+    tape = taped_history(monkeypatch)
     since: list[int] = []
 
     def drive(run: Run, type_in: Callable[[str], None]) -> None:
         ctx = run.parts()
         eventually(lambda: stub.watchers == 1)
         type_in(ASKED + ENTER)
-        eventually(lambda: ANSWERED in sent.getvalue())
+        eventually(lambda: ANSWERED in tape.getvalue())
         # Over on both sides: the next line is taken in its own turn.
         eventually(lambda: stub.running() == 0 and not ctx.session.answering)
-        since.append(len(sent.getvalue()))
+        since.append(len(tape.getvalue()))
         handled = stub.requests.count(TOOLS_ASKED)
         type_in(line + ENTER)
         if written is None:
             eventually(lambda: stub.requests.count(TOOLS_ASKED) > handled)
         else:
-            eventually(lambda: written in sent.getvalue()[since[0] :])
+            eventually(lambda: written in tape.getvalue()[since[0] :])
         type_in("/quit" + ENTER)
 
     assert run_client(http, tmp_path, monkeypatch, drive, output=output).code == 0
-    return sent.getvalue()[since[0] :]
+    return tape.getvalue()[since[0] :]
 
 
 def test_a_switch_empties_the_window_and_writes_the_history_in_the_new_colours(
@@ -119,25 +119,26 @@ def through_the_selection(
     selection was closed and — where something is to be written again —
     ``written`` stood behind it."""
     sent, output = terminal(monkeypatch, FULL_COLOURS)
+    tape = taped_history(monkeypatch)
     since: list[int] = []
 
     def drive(run: Run, type_in: Callable[[str], None]) -> None:
         ctx = run.parts()
         eventually(lambda: stub.watchers == 1)
         type_in(ASKED + ENTER)
-        eventually(lambda: ANSWERED in sent.getvalue())
+        eventually(lambda: ANSWERED in tape.getvalue())
         eventually(lambda: stub.running() == 0 and not ctx.session.answering)
-        since.append(len(sent.getvalue()))
+        since.append(len(tape.getvalue()))
         type_in("/theme" + ENTER)
         eventually(ctx.asker.pending)
         type_in(keys)
         eventually(lambda: not ctx.asker.pending())
         if written is not None:
-            eventually(lambda: written in sent.getvalue()[since[0] :].split(EMPTIED)[-1])
+            eventually(lambda: written in tape.getvalue()[since[0] :].split(EMPTIED)[-1])
         type_in("/quit" + ENTER)
 
     assert run_client(http, tmp_path, monkeypatch, drive, output=output).code == 0
-    return sent.getvalue()[since[0] :]
+    return tape.getvalue()[since[0] :]
 
 
 def test_a_theme_picked_from_the_selection_is_redrawn_like_one_named_by_its_word(
@@ -190,17 +191,18 @@ def test_beside_a_running_answer_the_window_is_emptied_at_once_and_the_history_f
     gated: Gated, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sent, output = terminal(monkeypatch, FULL_COLOURS)
+    tape = taped_history(monkeypatch)
     since: list[int] = []
 
     def shown() -> str:
-        return sent.getvalue()[since[0] :]
+        return tape.getvalue()[since[0] :]
 
     def drive(run: Run, type_in: Callable[[str], None]) -> None:
         ctx = run.parts()
         eventually(lambda: gated.watchers == 1)
         type_in(ASKED + ENTER)
         eventually(lambda: ctx.session.answering and gated.running() == 1)
-        since.append(len(sent.getvalue()))
+        since.append(len(tape.getvalue()))
         type_in("/theme moune" + ENTER)
         # Emptied while the answer still runs.
         eventually(lambda: EMPTIED in shown())
@@ -223,11 +225,12 @@ def test_five_switches_beside_a_running_answer_read_and_write_the_history_once(
     gated: Gated, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sent, output = terminal(monkeypatch, FULL_COLOURS)
+    tape = taped_history(monkeypatch)
     since: list[int] = []
     looks = ("heaven", "pearl", "darkmatter", "exe", "moune")
 
     def shown() -> str:
-        return sent.getvalue()[since[0] :]
+        return tape.getvalue()[since[0] :]
 
     def histories_read() -> int:
         return sum(1 for asked in gated.requests if asked.endswith("/messages"))
@@ -237,7 +240,7 @@ def test_five_switches_beside_a_running_answer_read_and_write_the_history_once(
         eventually(lambda: gated.watchers == 1)
         type_in(ASKED + ENTER)
         eventually(lambda: ctx.session.answering and gated.running() == 1)
-        since.append(len(sent.getvalue()))
+        since.append(len(tape.getvalue()))
         for number, look in enumerate(looks, start=1):
             type_in(f"/theme {look}" + ENTER)
             # Every switch empties the window at once.
@@ -336,21 +339,22 @@ def head_again(
     theme with nothing said in the open chat, and returns what the terminal
     was sent from the switch on, until the head stood in it again."""
     sent, output = terminal(monkeypatch, FULL_COLOURS)
+    tape = taped_history(monkeypatch)
     since: list[int] = []
 
     def drive(run: Run, type_in: Callable[[str], None]) -> None:
         run.parts()
         eventually(lambda: stub.watchers == 1)
-        since.append(len(sent.getvalue()))
+        since.append(len(tape.getvalue()))
         type_in("/theme pearl" + ENTER)
         eventually(
-            lambda: Texts("en").t("cli.tip_help") in sent.getvalue()[since[0] :].split(EMPTIED)[-1]
-            and EMPTIED in sent.getvalue()[since[0] :]
+            lambda: Texts("en").t("cli.tip_help") in tape.getvalue()[since[0] :].split(EMPTIED)[-1]
+            and EMPTIED in tape.getvalue()[since[0] :]
         )
         type_in("/quit" + ENTER)
 
     assert run_client(http, tmp_path, monkeypatch, drive, *arguments, output=output).code == 0
-    return sent.getvalue()[since[0] :]
+    return tape.getvalue()[since[0] :]
 
 
 def assert_the_head_stands_in_pearl(shown: str) -> str:

@@ -44,7 +44,7 @@ def test_the_three_lists_of_code_packs_agree():
     the style sheet is chosen and changes nothing."""
     offered = re.findall(
         r"\['(\w+)', 'einstellungen\.codefarben_\w+'\]",
-        (FRONTEND / "teile" / "SystemPrompt.svelte").read_text(encoding="utf-8"),
+        (FRONTEND / "lib" / "darstellungswerte.js").read_text(encoding="utf-8"),
     )
     styled = set(
         re.findall(
@@ -184,14 +184,14 @@ def test_the_factory_values_of_the_chat_layout():
         for name, value in re.findall(r"\{\s*id:\s*'(\w+)',[^}]*?standard:\s*(\d+)", source)
     }
     assert factory == {
-        "schrift": 17,
-        "breite": 1400,
+        "schrift": 16,
+        "breite": 900,
         "blase_eigen": 80,
         "blase_ki": 100,
         "anker_eigen": 100,
         "anker_ki": 0,
-        "abstand": 40,
-        "bildkachel": 700,
+        "abstand": 24,
+        "bildkachel": 512,
     }
 
 
@@ -358,7 +358,7 @@ def test_die_verlauf_anzahl_stimmt_mit_dem_stilblatt_ueberein():
     # The auto look follows the dark sheet while the device is dark — the
     # whole block, value for value: the mirror the auto resolution rests on.
     auto = re.search(
-        r":root:not\(\[data-modus='hell'\], \[data-eigen='hell'\]\)\s*\{([^}]*)\}", css
+        r":root:not\(\[data-modus='hell'\], \[data-modus='snow'\], \[data-eigen='hell'\]\)\s*\{([^}]*)\}", css
     )
     assert auto, "kein Block für den Auto-Dunkel-Fall"
     dunkel_treffer = re.search(r"\[data-modus='dunkel'\]\s*\{([^}]*)\}", css)

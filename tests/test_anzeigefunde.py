@@ -270,7 +270,7 @@ async def test_ein_skript_meldet_woran_es_gescheitert_ist(client, skriptordner, 
 
     await feuern(client, MORGEN.replace(hour=8, minute=1))
 
-    assert gemeldet == [("kaputt.py — ging schief — Skript mit Fehler beendet", False)]
+    assert gemeldet == [("kaputt.py - ging schief - Skript mit Fehler beendet", False)]
     lauf = repos.auftraege.laeufe_fuer_cronjob(eintrag.id)[0]
     assert lauf.ende_grund == skriptlauf.GRUND_FEHLGESCHLAGEN
 
@@ -287,7 +287,7 @@ async def test_ein_sauberes_skript_meldet_sich_wie_bisher(client, skriptordner, 
 
     await feuern(client, MORGEN.replace(hour=8, minute=1))
 
-    assert gemeldet == [("gut.py — fertig", True)]
+    assert gemeldet == [("gut.py - fertig", True)]
 
 
 async def test_ein_skript_an_seiner_fehlergrenze_meldet_sich_einmal(
@@ -306,7 +306,7 @@ async def test_ein_skript_an_seiner_fehlergrenze_meldet_sich_einmal(
 
     assert repos.cronjobs.holen(eintrag.id).aktiv is False
     assert gemeldet == [
-        ("kaputt.py — nach 1 fehlgeschlagenen Durchläufen gestoppt — Skript mit Fehler beendet", False)
+        ("kaputt.py - nach 1 fehlgeschlagenen Lauf gestoppt - Skript mit Fehler beendet", False)
     ]
 
 
@@ -334,7 +334,7 @@ async def test_die_grenze_schweigt_die_zweite_mitteilung_weg(repos, monkeypatch)
     await cronablauf.melde_wenn_faellig(
         repos, eintrag.id, "Postfach lesen", erfolgreich=False, grund="zeitgrenze",
     )
-    assert aufrufe == ["Postfach lesen — time limit reached"]
+    assert aufrufe == ["Postfach lesen - time limit reached"]
 
 
 # --- The list itself, run rather than read ----------------------------------

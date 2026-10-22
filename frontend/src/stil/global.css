@@ -14,12 +14,6 @@
      tile still carries its own surface (lighter than the ground); it just
      stops at pearl rather than paper-white. */
   --bg: #e0d7c3;
-  /* The knob of a switched-on switch. White in the light looks: the ground
-     of those looks is too close to the blue track for the knob to be seen
-     (Pearl 2.99, Moune 2.76 : 1); white stands off it 4.3, 3.5 and 5.3 : 1
-     in Pearl, Moune and Heaven. The dark looks give the token back
-     (`initial`) and the knob wears the ground, as before. */
-  --knauf-an: #ffffff;
   /* The colour scheme of the browser's own controls where a form asks for
      it (the date field of the schedule form: its calendar opens dark in a
      dark look, light in a light one). Not set on the root itself: scroll
@@ -167,27 +161,6 @@
      puts a denser ground behind the input bar, and a sign needs 3:1 there. */
   --blau: #477eb3;
   --rot: #b4544c;
-  /* The fifth colour, and the only one that is not a state.
-
-     Green, yellow, blue and red say what SOMETHING IS DOING — done,
-     waiting, running, broken. This one says what something IS: a tool call.
-     It belongs to the same word wherever that word appears — the mark in a
-     chat row, the name in the terminal, the icon in a notice — because a
-     tool is one thing, and one thing looks like itself everywhere.
-
-     Blue used to do this job in three places, and it collided with its own
-     state meaning: a notice about a running tool and a notice about a
-     running job wore the same colour and meant two different things.
-
-     A warm sand, quiet on purpose: a bright orange held this place, and
-     over a chat full of calls it shouted. Every look mixes one warm tone
-     (#c98a5a) into its own quiet ink, 45 parts to 55, so the colour stays
-     the tool's own and sits as calmly as the text beside it. A fixed value
-     per look, like every colour here. Measured as text on the raised
-     ground of each look: 4.53 here (43 parts — at 45 it came to 4.39,
-     under the 4.5 a line of type needs), Exe 7.53, Dark Matter 6.63,
-     Heaven 5.48, Moune 5.25. */
-  --werkzeug: #7f6045;
   /* The same four meanings, in the form that survives being SET AS TEXT.
      A filled dot and a written sentence do not need the same contrast: a
      shape reads at 3:1, a line of type needs 4.5:1. Measured on this ground
@@ -221,9 +194,14 @@
   --sx-zahl: #7a5c8f;
   --sx-ruf: #2f5d80;
 
-  --schrift: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui,
-    sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';
-  --schrift-fest: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Segoe UI has no weight 500, so Medium falls back to Regular; its
+     variable cousin, on Windows 11, carries every weight and stands right in
+     front of it. */
+  --schrift: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text',
+    'Segoe UI', system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';
+  /* The fixed-width faces by system: without a Windows one, "monospace"
+     there is Courier New. */
+  --schrift-fest: ui-monospace, SFMono-Regular, Menlo, 'Cascadia Mono', Consolas, monospace;
 
   /* The four sizes of the page frame: body text, the quiet hint under a
      field, a section heading, a page title. One place, so a size is a
@@ -242,11 +220,48 @@
   --anlauf-schwung: cubic-bezier(0.32, 0.72, 0.2, 1);
 }
 
+/* Snow is Pearl without its hue, one step lighter: the same surfaces in the
+   same places, every surface and line a neutral grey on Pearl's lightness
+   steps, all raised by one step until the top surface is pure white. Only
+   these twenty values differ; the state colours, the other code colours and
+   the glass are Pearl's, inherited from the root block above. The look that
+   follows a light device wears it too: no `data-modus` is exactly that case.
+   Placed after Pearl and before the dark sets, so the dark device's rule at
+   the end of this part still wins for the look that follows the device. */
+:root[data-modus='snow'],
+:root:not([data-modus]) {
+  --bg: #eaeaea;
+  --rahmen-vorgabe-1: #eaeaea;
+  --rahmen-vorgabe-2: #eaeaea;
+  --rahmen-vorgabe-3: #eaeaea;
+  --rahmen-vorgabe-4: #eaeaea;
+  --bg-leiste: #e2e2e2;
+  --bg-seite: #e2e2e2;
+  --bg-erhoben: #f7f7f7;
+  --bg-hoch: #ffffff;
+  --blase: #e5e5e5;
+  --code-bg: #f4f4f4;
+  --linie: #d2d2d2;
+  --linie-stark: #b8b8b8;
+  --kontrast: #b8b8b8;
+  --text: #1c1c1c;
+  --text-leise: #424242;
+  --feldstrich: #828282;
+  --indicator-empty: #7a7a7a;
+  --sx-komm: #7a7a7a;
+  --code-vordergrund: #272727;
+}
+
 /* The own gradient wears Exe's whole set while its gradient is dark
    (zustand.svelte.js sets data-eigen from the gradient's brightness), and
    Pearl's — the root block — while it is light. */
 :root[data-eigen='dunkel'],
 :root[data-modus='dunkel'] {
+  /* The user's own bubble ships in a mid grey with light ink here, the way
+     the dark look with a colour of its own does; a colour the user picks
+     still wins over it. */
+  --blase-eigen-standard: #616161;
+  --blase-eigen-text-standard: #ecebe6;
   /* Green, yellow and blue already carry as text on this ground (5.07,
      7.69, 5.31 measured); red does not (3.82) and is lifted. */
   --gruen-text: #6b8e6f;
@@ -261,9 +276,7 @@
   --violett: #9b8ac4;
   --oliv: #9aa05e;
   --indicator-empty: #94938e;
-  --werkzeug: #cdaf96;
   --bg: #1c1c1a;
-  --knauf-an: initial;
   --feld-farbschema: dark;
   --bg-leiste: #151514;
   --bg-seite: #151514;
@@ -320,7 +333,9 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-modus='hell'], [data-eigen='hell']) {
+  :root:not([data-modus='hell'], [data-modus='snow'], [data-eigen='hell']) {
+    --blase-eigen-standard: #616161;
+    --blase-eigen-text-standard: #ecebe6;
     --gruen-text: #6b8e6f;
     --gelb-text: #c9a227;
     --blau-text: #5b8dbe;
@@ -333,9 +348,7 @@
     --violett: #9b8ac4;
     --oliv: #9aa05e;
     --indicator-empty: #94938e;
-  --werkzeug: #cdaf96;
     --bg: #1c1c1a;
-    --knauf-an: initial;
     --feld-farbschema: dark;
     --bg-leiste: #151514;
     --bg-seite: #151514;
@@ -431,7 +444,6 @@
    would sink into it, and blau/violett have to stay legible against violet. */
 :root[data-modus='darkmatter'] {
   --bg: #0b0817;
-  --knauf-an: initial;
   --feld-farbschema: dark;
   /* The header band sits darker than the nebula it caps — a near-black violet
      for the menu bar (--bg-leiste), the wordmark row (--kopf-bg) and a soft
@@ -507,13 +519,12 @@
   --blase-eigen-text-standard: #1a1a18;
   --gruen: #5fbe86;
   --gelb: #d6b13f;
-  /* The active accent runs brighter here so the send button, the "running"
-     dots and the model status truly glow against the violet ground instead of
-     sinking into it. Still the same blau that means "active" everywhere — just
-     lifted for the darker skin, not a new decorative colour. */
+  /* The active accent runs brighter here so the "running" dots and the model
+     status truly glow against the violet ground instead of sinking into it.
+     Still the same blau that means "active" everywhere — just lifted for the
+     darker skin, not a new decorative colour. */
   --blau: #8bb8ff;
   --rot: #e0687e;
-  --werkzeug: #c1a1a0;
   /* All four carry as text on this ground (6.08 to 9.80 measured), so the
      text forms are the shape forms — named anyway, because a variable that
      exists in three palettes and not the fourth falls back to the light one
@@ -544,7 +555,6 @@
    Heaven holds whether the system sits in light or dark. */
 :root[data-modus='heaven'] {
   --bg: #e8eef8;
-  --knauf-an: #ffffff;
   --feld-farbschema: light;
   --bg-leiste: #d3dff0;
   --kopf-bg: #d3dff0;
@@ -608,7 +618,6 @@
   --gelb: #b9952b;
   --blau: #3f6da5;
   --rot: #b4544c;
-  --werkzeug: #76615b;
   /* Measured 3.39 / 2.44 / 3.53 / 4.18 against this ground — all four short
      of what a written line needs. */
   --gruen-text: #4f7357;
@@ -647,7 +656,6 @@
      lightness unchanged — the first ones read as white: 15 points on the
      frame, 25 on the windows. */
   --bg: #e0e7d6;
-  --knauf-an: #ffffff;
   --feld-farbschema: light;
   --bg-leiste: #c1dabe;
   --kopf-bg: #d2edcf;
@@ -702,7 +710,6 @@
   --gelb: #c9a227;
   --blau: #5b8dbe;
   --rot: #b4544c;
-  --werkzeug: #7a674b;
   --gruen-text: #4f7d57;
   --gelb-text: #725c16;
   --blau-text: #3e6183;
@@ -738,6 +745,9 @@ body {
   margin: 0;
   font-family: var(--schrift);
   font-size: var(--schrift-text);
+  /* "normal" is a property of the face: about 1.2 here, 1.33 in Segoe UI.
+     Stated, so every system sets its lines the way they stand on a Mac. */
+  line-height: 1.2;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
@@ -753,7 +763,7 @@ button {
 
 /* Whoever doesn't use the mouse has to see where they are. */
 :focus-visible {
-  outline: 2px solid var(--blau);
+  outline: 2px solid var(--text);
   outline-offset: 2px;
   border-radius: 9px;
 }
@@ -782,16 +792,12 @@ button {
    so nothing agreed.
 
    This is the one place in charge. Change the number here and every tool
-   name in the program follows.
-
-   `--werkzeug` is the fifth colour and the only one that is not a state
-   (see the palette above): green, yellow, blue and red say what something
-   is DOING, this one says what something IS. */
+   name in the program follows. */
 .werkzeugname {
   font-family: var(--schrift-fest);
   font-size: 12px;
   font-weight: 600;
-  color: var(--werkzeug);
+  color: var(--text);
 }
 
 /* A SECTION HEADING on a server panel, wherever one stands.
@@ -855,7 +861,7 @@ button {
   color: var(--text);
   /* The whole face in one line, so nothing is inherited: a row with a line
      height of its own would make the button taller there than elsewhere. */
-  font: 400 13px var(--schrift);
+  font: 400 13px/1.19 var(--schrift);
   padding: 7px 15px;
   cursor: pointer;
   transition: background 0.12s, transform 0.08s;
@@ -890,4 +896,20 @@ button {
    Cmd+minus), which scales the viewport along and needs no factor. */
 #wurzel {
   --stufenfaktor: 1;
+}
+
+/* A message that comes out of the line fills from the strength its waiting
+   bubble had (teile/Warteblasen.svelte: the ground at 60 %, the text at 0.6)
+   to full, and does not move: the waiting bubble already stood in its place.
+   A whole-element opacity of that amount draws exactly the dimmed picture.
+   Less motion asked for: it stands full at once. */
+@keyframes from-queue-fill {
+  from { opacity: 0.6; }
+  to { opacity: 1; }
+}
+.from-queue {
+  animation: from-queue-fill 240ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .from-queue { animation: none; }
 }

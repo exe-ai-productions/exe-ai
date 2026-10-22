@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 
@@ -1045,3 +1046,74 @@ def test_a_replacing_attempt_of_a_second_live_service_is_left_alone(tmp_path):
     assert repos_one.messages.holen(mine.id) is None
     assert repos_one.messages.holen(theirs.id).zustand == "laeuft"
     assert repos_one.messages.holen(old_two.id).zustand == "fertig"
+
+
+# --- The memory reaches cloud models from the start --------------------------
+
+
+def _memory_rows(db: Database) -> dict[tuple[str, str], str]:
+    rows = db.verbindung.execute(
+        "SELECT bereich, schluessel, wert_json FROM einstellungen"
+    ).fetchall()
+    return {(r["bereich"], r["schluessel"]): r["wert_json"] for r in rows}
+
+
+def _back_to_version(db: Database, version: int) -> None:
+    db.verbindung.execute("DELETE FROM schema_version")
+    db.verbindung.execute(
+        "INSERT INTO schema_version (version, applied_at) VALUES (?, '2026-10-20T00:00:00')",
+        (version,),
+    )
+
+
+def test_a_stored_cloud_off_of_the_memory_is_turned_on_once_in_every_scope(db: Database):
+    """The memory switches were stored as a pair with "cloud" off, by the old
+    default and by hand alike: the step sets every such value to on once and
+    leaves "lokal" and everything else standing."""
+    for bereich, wert in (
+        ("global", '{"lokal": true, "cloud": false}'),
+        ("chat:abc", '{"lokal": false, "cloud": false}'),
+        ("agent:xyz", '{"lokal": true, "cloud": true}'),
+    ):
+        db.verbindung.execute(
+            "INSERT INTO einstellungen (bereich, schluessel, wert_json, updated_at) "
+            "VALUES (?, 'gedaechtnis', ?, '2026-10-20T00:00:00')",
+            (bereich, wert),
+        )
+    db.verbindung.execute(
+        "INSERT INTO einstellungen (bereich, schluessel, wert_json, updated_at) "
+        "VALUES ('global', 'bildmetadaten', '{\"an\": false}', '2026-10-20T00:00:00')"
+    )
+    _back_to_version(db, 42)
+
+    db.schema_einrichten()
+
+    rows = _memory_rows(db)
+    assert json.loads(rows[("global", "gedaechtnis")]) == {"lokal": True, "cloud": True}
+    assert json.loads(rows[("chat:abc", "gedaechtnis")]) == {"lokal": False, "cloud": True}
+    assert json.loads(rows[("agent:xyz", "gedaechtnis")]) == {"lokal": True, "cloud": True}
+    assert json.loads(rows[("global", "bildmetadaten")]) == {"an": False}
+    assert db.schema_version() == SCHEMA_VERSION
+
+
+def test_a_cloud_off_written_after_the_step_stays_through_the_next_start(db: Database):
+    db.verbindung.execute(
+        "INSERT INTO einstellungen (bereich, schluessel, wert_json, updated_at) "
+        "VALUES ('global', 'gedaechtnis', '{\"lokal\": true, \"cloud\": false}', '2026-10-20T00:00:00')"
+    )
+    _back_to_version(db, 42)
+    db.schema_einrichten()
+    db.verbindung.execute(
+        "UPDATE einstellungen SET wert_json = '{\"lokal\": true, \"cloud\": false}' "
+        "WHERE schluessel = 'gedaechtnis'"
+    )
+
+    db.schema_einrichten()
+
+    assert json.loads(_memory_rows(db)[("global", "gedaechtnis")]) == {"lokal": True, "cloud": False}
+
+
+def test_silence_a_database_without_a_stored_memory_switch_gets_none(db: Database):
+    _back_to_version(db, 42)
+    db.schema_einrichten()
+    assert ("global", "gedaechtnis") not in _memory_rows(db)

@@ -74,6 +74,9 @@ _FALLBACK_COLUMNS = 80
 # of the letters.
 WORDMARK_FROM = 60
 WORDMARK_MARGIN = 2
+# Where there is no room for the whole mark, the name alone in the same
+# letters, without the ">_": from the width of those letters and the margin.
+WORDMARK_NAME_FROM = wordmark.NAME_WIDTH + WORDMARK_MARGIN
 
 # How many of the chats the head lists, newest first.
 RECENT_CHATS = 3
@@ -236,11 +239,38 @@ def link_addresses(text: Text) -> Text:
     return text
 
 
-def _first_argument(arguments: Any) -> str:
-    """The short form of a call's arguments: its first field."""
-    if isinstance(arguments, Mapping) and arguments:
-        return _short(next(iter(arguments.values())))
-    return ""
+# The arguments that say what a call touches, in the order they are looked
+# for. A file tool may list its text before its path (``content`` comes first
+# for a write), so the first field of the call would be the file's body. The
+# first three name a place and are shown with forward slashes.
+_PATH_KEYS = ("path", "file_path", "pfad")
+_MAIN_KEYS = (*_PATH_KEYS, "command", "query", "url", "name")
+
+
+def _slashed(path: str) -> str:
+    """``path`` with forward slashes when it is a Windows one: it starts with
+    a drive letter or two backslashes, or has a backslash and no slash. A path
+    that starts with a slash is left alone: on a Mac a backslash can be a
+    letter of a file's name."""
+    if re.match(r"[A-Za-z]:", path) or path.startswith("\\\\") or ("\\" in path and "/" not in path):
+        return path.replace("\\", "/")
+    return path
+
+
+def _main_argument(arguments: Any) -> str:
+    """The short form of what a call is about: the first of the keys that name
+    it which carries a text, otherwise the first text of the call, otherwise
+    the first field as it is."""
+    if not isinstance(arguments, Mapping) or not arguments:
+        return ""
+    for key in _MAIN_KEYS:
+        value = arguments.get(key)
+        if isinstance(value, str) and value.strip():
+            return _short(_slashed(value.strip()) if key in _PATH_KEYS else value)
+    for value in arguments.values():
+        if isinstance(value, str) and value.strip():
+            return _short(value)
+    return _short(next(iter(arguments.values())))
 
 
 # --- The two columns ----------------------------------------------------------
@@ -477,8 +507,9 @@ class _Call:
 class Head:
     """The program's mark as the head shows it, decided by the width it is
     drawn into: the block letters, with their margin, where the window is
-    wide enough for them and the output carries them; the name in one
-    line, in bold, everywhere else. An empty line stands above the mark,
+    wide enough for them and the output carries them — the whole mark, or
+    where that is too wide the name alone in the same letters; the name in
+    one line, in bold, everywhere else. An empty line stands above the mark,
     another between it and the line that says where the client stands."""
 
     def __init__(self, stand: Text) -> None:
@@ -488,9 +519,16 @@ class Head:
         yield Text("")
         # The block letters are Unicode: an output without it gets the
         # name, whatever its width.
-        if glyphs.speaks_unicode() and options.max_width >= WORDMARK_FROM:
+        width = options.max_width
+        lines: tuple[str, ...] | None = None
+        if glyphs.speaks_unicode():
+            if width >= WORDMARK_FROM:
+                lines = wordmark.WORDMARK
+            elif width >= WORDMARK_NAME_FROM:
+                lines = wordmark.WORDMARK_NAME
+        if lines is not None:
             margin = " " * WORDMARK_MARGIN
-            letters = "\n".join(margin + line for line in wordmark.WORDMARK)
+            letters = "\n".join(margin + line for line in lines)
             yield Text(letters, style="exe.mark", no_wrap=True, overflow="crop")
         else:
             name = Text(wordmark.WORDMARK_PLAIN, style="exe.mark", no_wrap=True)
@@ -753,7 +791,7 @@ class HistoryRenderer(Renderer):
     def _running(self, call: _Call) -> str:
         running = self._ctx.texts.t("werkzeug.laeuft", name=call.name)
         lines = [f"{running} {clock(_now() - call.since)}"]
-        argument = _first_argument(call.arguments)
+        argument = _main_argument(call.arguments)
         if argument:
             lines.append(argument)
         return "\n".join(lines)
@@ -798,7 +836,7 @@ class HistoryRenderer(Renderer):
         head.append(_shown(call.name), style="exe.tool")
         if call.server:
             head.append(f" {glyphs.glyph('separator')} {_shown(call.server)}", style="exe.muted")
-        argument = _first_argument(call.arguments)
+        argument = _main_argument(call.arguments)
         if argument:
             head.append("  " + argument, style="exe.text")
 
@@ -860,6 +898,11 @@ class HistoryRenderer(Renderer):
         service set, written out in its own sentence."""
         texts = self._ctx.texts
         sentences: list[str] = []
+        # What the model's maker gave as the reason for a refusal stands
+        # under its sentence, quiet, in the text column and without a sign of its own.
+        explanation = data.get("ablehnung_erklaerung")
+        explanation = explanation.strip() if isinstance(explanation, str) else ""
+        refusal_at = -1
         # Of the ways an answer can be cut short, the one that explains the
         # most is named — the order the window names them in.
         used_up = data.get("denken_aufgebraucht")
@@ -873,13 +916,21 @@ class HistoryRenderer(Renderer):
             sentences.append(texts.t("nachricht.anbietergrenze"))
         elif data.get("abgeschnitten") is True:
             sentences.append(texts.t("nachricht.abgeschnitten"))
+        # A model that declined to answer: nothing was cut off, nothing is
+        # coming — its own sentence.
+        if data.get("abgelehnt") is True:
+            refusal_at = len(sentences)
+            sentences.append(texts.t("nachricht.abgelehnt"))
         # This one can stand beside any of the above.
         if data.get("komprimieren_fehlgeschlagen") is True:
             sentences.append(texts.t("nachricht.komprimieren_fehlgeschlagen"))
         sign = glyphs.glyph("warning")
-        return [
-            Beside(Text(sentence, style="exe.red"), sign, "exe.red") for sentence in sentences
-        ]
+        marks: list[RenderableType] = []
+        for index, sentence in enumerate(sentences):
+            marks.append(Beside(Text(sentence, style="exe.red"), sign, "exe.red"))
+            if index == refusal_at and explanation:
+                marks.append(Beside(Text(explanation, style="exe.muted")))
+        return marks
 
     def done(self, event: Event) -> None:
         self._close_open()

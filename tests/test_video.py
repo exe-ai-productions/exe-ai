@@ -433,14 +433,16 @@ def test_a_wish_with_a_reference_video_reaches_the_painter(
     assert seen[-1].ref_video_frames == tuple(scratch / name for name in frames)
     # A control video's frames are read from the working pictures alike.
     assert seen[-1].control_frames == (scratch / frames[0],)
-    assert seen[-1].switches == {"ref_video_audio": "voice.wav"}
+    # Beside the request's own switch, the machine's start values of flash
+    # attention and batched CFG (app/bildgeraete.py) reach the painter.
+    assert seen[-1].switches == {"flash_attn": "off,diffusion=on", "batched_cfg": "off", "ref_video_audio": "voice.wav"}
     assert seen[-1].switch_paths == {"ref_video_audio": wan_folder / "audio" / "voice.wav"}
 
     # Silence probe: without the frames the sound is not sent either.
     answer = client.post("/api/v1/bild", json=wish)
     assert answer.status_code == 201, answer.text
     assert seen[-1].ref_video_frames == ()
-    assert seen[-1].switches == {}
+    assert seen[-1].switches == {"flash_attn": "off,diffusion=on", "batched_cfg": "off"}
 
 
 def test_a_mode_on_a_video_is_refused(client: TestClient, wan_folder: Path, monkeypatch):

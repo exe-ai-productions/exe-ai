@@ -26,8 +26,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+import psutil
 
-from cli.client import ServiceClient, ServiceUnreachable
+from cli.client import InterfaceMissing, ServiceClient, ServiceUnreachable
 
 # The program in its service role: packaged, the program itself; from source,
 # the script at the root of the tree, run by the interpreter of this client.
@@ -50,7 +51,8 @@ PASSWORD_FILE_VARIABLE = "EXE_AI_PASSWORD_FILE"
 OWN_INSTANCE_VARIABLE = "PYINSTALLER_RESET_ENVIRONMENT"
 
 # The service's own name for the note it writes about itself while it runs
-# (app/main.py, ``INSTANZNOTIZ``: its process id and its port) and the data
+# (app/main.py, ``INSTANZNOTIZ``: its process id, its port and when its process
+# began) and the data
 # folder under the root it writes it into (config.example.yaml, ``data_dir``).
 NOTE_PREFIX = ".dienst"
 DATA_FOLDER = "data"
@@ -77,20 +79,13 @@ STOP_POLL_SECONDS = 0.5
 # (app/main.py, ``_antwortet``).
 PROBE_SECONDS = 0.4
 
-# The system's process list says how long a process has been running in
-# whole seconds: a process that began within the second in which a note was
-# written may still have been its writer.
-AGE_RESOLUTION_SECONDS = 1.0
-# How the list writes a running time: days, then hours, minutes and seconds
-# — sixty of each place make one of the place before it.
-CLOCK_STEP = 60
-SECONDS_PER_DAY = 24 * 60 * 60
-
-# Windows counts time in steps of a hundred nanoseconds since 1601; this
-# many of them make a second, and this many seconds lie between that start
-# and the one the rest of the program counts from.
-WINDOWS_TICKS_PER_SECOND = 10_000_000
-WINDOWS_EPOCH_SECONDS = 11_644_473_600
+# How far two readings of one process's start may lie apart: the service wrote
+# its own and this client reads it again — on Linux both are worked out from
+# the time the machine booted, which a clock set in between moves. A service
+# of an earlier build read its beginning from the process list, which counts
+# whole seconds, so the comparison with what a service says of itself allows
+# twice that.
+START_TOLERANCE_SECONDS = 1.0
 
 # Where the request to end a service lies on Windows (app/stoppmarke.py): the
 # note's name with another ending. There, a termination signal is the end of
@@ -180,13 +175,21 @@ def start_and_wait(
     call, and a service given up on would come up later with nobody
     attached to it. ``False`` when the process ended first. An interrupt
     from the keyboard ends the wait and the service that was started for
-    it, and is raised on."""
+    it, and is raised on. A service that answers that its interface is
+    missing is ended the same way, and ``InterfaceMissing`` is raised."""
     process = start_detached(port, password_file)
     try:
         while True:
             try:
                 client.connect()
                 return True
+            except InterfaceMissing:
+                # It answers, and says that its page is not built: nothing
+                # more will come of waiting. The one that was started is
+                # ended like at the interrupt key, and the sentence goes on.
+                process.terminate()
+                process.wait()
+                raise
             except ServiceUnreachable:
                 pass
             if process.poll() is not None:
@@ -250,65 +253,45 @@ def read_note(file: Path) -> int | None:
         return None
 
 
-def _elapsed(text: str) -> float | None:
-    """The seconds a running time of the form ``[[dd-]hh:]mm:ss`` stands
-    for, or ``None`` for anything else."""
-    days, _, clock = text.rpartition("-")
-    parts = clock.split(":")
-    if len(parts) not in (2, 3):
-        return None
+def read_beginning(file: Path) -> float | None:
+    """The moment the note says its process began, in seconds since the
+    epoch — ``None`` where the note says none: a note of an older service, or
+    no readable note."""
     try:
-        seconds = 0
-        for part in parts:
-            seconds = seconds * CLOCK_STEP + int(part)
-        return float((int(days) if days else 0) * SECONDS_PER_DAY + seconds)
-    except ValueError:
+        data = json.loads(file.read_text(encoding="utf-8"))
+        beginning = data["began"]
+        if isinstance(beginning, bool) or not isinstance(beginning, (int, float)):
+            return None
+        return float(beginning)
+    except (OSError, ValueError, KeyError, TypeError, OverflowError):
+        # A whole number beyond any moment in time is none.
         return None
-
-
-def _listed(command: list[str]) -> str | None:
-    """What a system tool prints about a process, or ``None`` where the
-    tool is not there or knows no such process."""
-    try:
-        asked = subprocess.run(command, capture_output=True, text=True, check=False)
-    except OSError:
-        return None
-    return asked.stdout.strip() if asked.returncode == 0 else None
 
 
 def began(pid: int) -> float | None:
     """When the process behind ``pid`` began, in seconds since the epoch —
-    ``None`` where there is no such process or the system does not say.
-    Asked of the system's own tools: its process list, which names the
-    running time, and on Windows the shell that names the start itself."""
-    if sys.platform == "win32":
-        asked = f"(Get-Process -Id {int(pid)}).StartTime.ToFileTimeUtc()"
-        ticks = _listed(["powershell", "-NoProfile", "-NonInteractive", "-Command", asked])
-        if ticks is None or not ticks.isdigit():
-            return None
-        return int(ticks) / WINDOWS_TICKS_PER_SECOND - WINDOWS_EPOCH_SECONDS
-    now = time.time()
-    running = _listed(["ps", "-o", "etime=", "-p", str(int(pid))])
-    age = _elapsed(running) if running is not None else None
-    return None if age is None else now - age
+    ``None`` where there is no such process or the system does not say. Read
+    from the system by the process library, with no program of the system's
+    started and no clock reckoned from."""
+    try:
+        return psutil.Process(int(pid)).create_time()
+    except (psutil.Error, OSError, OverflowError, ValueError):
+        return None
 
 
 def wrote(pid: int, note: Path) -> bool:
     """Whether the process behind ``pid`` is the one that wrote the note.
 
-    A service writes its note while it starts, so the process a note names
-    was there before the note was. A process that began after the note was
-    written has only inherited the number — the system hands the id of a
-    process that is gone on to a later one. Where the system does not say
-    when the process began, nothing is proven."""
+    A service writes into its note when its own process began. The system
+    hands the id of a process that is gone on to a later one, and that one
+    has begun at another time: only the process that began at the moment the
+    note names wrote it. A note that names no beginning proves nothing, and
+    neither does a system that does not say when the process began."""
+    claimed = read_beginning(note)
     start = began(pid)
-    if start is None:
+    if claimed is None or start is None:
         return False
-    try:
-        written = note.stat().st_mtime
-    except OSError:
-        return False
-    return start - AGE_RESOLUTION_SECONDS <= written
+    return abs(start - claimed) <= START_TOLERANCE_SECONDS
 
 
 def runs_here(said: Any) -> bool:
@@ -317,14 +300,13 @@ def runs_here(said: Any) -> bool:
 
     A service names its process in what it says about its health
     (``process``): the number the system gave it, and when that process
-    began. Only on the service's own machine does the process list know a
-    process of that number that began then. The number alone would prove
-    nothing — every machine counts its own, and hands the number of a
-    process that is gone on to a later one. The service read its beginning
-    from the process list as it is read here, so the two are two readings,
-    each exact to the second the list counts in: they may lie two of them
-    apart. A service that names no process, or one this machine's list
-    does not know, is a service elsewhere.
+    began. Only on the service's own machine does the system know a process
+    of that number that began then. The number alone would prove nothing —
+    every machine counts its own, and hands the number of a process that is
+    gone on to a later one. The service read its beginning as it is read here,
+    so the two readings may lie twice ``START_TOLERANCE_SECONDS`` apart. A service
+    that names no process, or one this machine does not know, is a service
+    elsewhere.
     """
     named = said.get("process") if isinstance(said, dict) else None
     if not isinstance(named, dict):
@@ -343,7 +325,7 @@ def runs_here(said: Any) -> bool:
     except OverflowError:
         # A whole number beyond any moment in time.
         return False
-    return apart <= 2 * AGE_RESOLUTION_SECONDS
+    return apart <= 2 * START_TOLERANCE_SECONDS
 
 
 def answering(host: str, port: int) -> bool:
@@ -405,14 +387,15 @@ def _stop_on_windows(host: str, port: int, pid: int) -> str:
     """Asks the service to end itself and waits for it; only a service that
     still answers after the wait is ended from outside, with its children."""
     request = request_file(port)
+    written = True
     try:
         request.parent.mkdir(parents=True, exist_ok=True)
         request.write_text("stop\n", encoding="utf-8")
     except OSError:
-        request = None
+        written = False
     if _wait_until_free(host, port, STOP_WAIT_SECONDS):
         return STOPPED
-    if request is not None:
+    if written:
         request.unlink(missing_ok=True)
     _end_tree(pid)
     if _wait_until_free(host, port, STOP_WAIT_SECONDS):
@@ -428,8 +411,8 @@ def stop(host: str, port: int) -> str:
     The note alone proves nothing — a service that was killed leaves it
     behind, and the system may have handed its number to a stranger since.
     So only a port that answers is a service to stop, and only the process
-    that wrote the note is asked to end: one that began after the note was
-    written is a stranger, and no process gets a signal. The request is a
+    that began at the moment the note names is asked to end: any other is a
+    stranger, and no process gets a signal. The request is a
     termination signal. On Windows, where the system knows no such signal —
     it would be the end of the process with no shutdown, and the servers the
     service started would stay behind — the service is asked through a

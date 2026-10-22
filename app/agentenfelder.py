@@ -34,12 +34,13 @@ FORMULAR_FELDER: tuple[str, ...] = (
     "max_minutes",
     "max_tokens",
     "reasoning_budget",
+    "reasoning_effort",
     "max_command_seconds",
 )
 
 # Fields that hold prose. Always written quoted: bare, a description that
 # reads "yes" or "42" would come back from YAML as a truth value or a number.
-_TEXT_FIELDS = frozenset({"description"})
+_TEXT_FIELDS = frozenset({"description", "reasoning_effort"})
 
 # A top-level YAML key at the start of a line. Everything indented below it
 # belongs to it; the next unindented key line ends its block.

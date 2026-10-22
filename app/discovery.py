@@ -27,6 +27,7 @@ from app import dialekterkennung, dialektverdacht
 from app.config import Config, EndpointConfig
 from app.db.connection import jetzt_iso
 from app.events import Ereignisse, EventBus
+from app.modellwahl import name_kuerzen
 from app.parameter import denklaenge_freigegeben, unterstuetzte
 from app.pfade import ist_pfad, pfad_zu_anzeigename
 from app.providers import Provider, provider_bauen
@@ -429,6 +430,9 @@ class EndpunktZustand:
     endpunkt: EndpointConfig
     provider: Provider
     erreichbar: bool = False
+    # What the provider said when it refused the last check, in its words;
+    # None while the endpoint is reachable and for silence.
+    grund: str | None = None
     # How many checks in a row went unanswered. Reset by the first answer.
     stille: int = 0
     # Whether this endpoint has ever answered at all. Only then is a silence
@@ -667,7 +671,9 @@ class EndpunktZustand:
             # is only the fallback when it says nothing.
             # What the server reports, then the entry in the configuration,
             # lastly the id. Nothing is invented.
-            "name": (
+            # Cut to the length the stored choice keeps a name at, so that
+            # a client following this name finds the stored one equal.
+            "name": name_kuerzen(
                 (pfad_zu_anzeigename(modell) if ist_pfad(modell) else modell)
                 if modell
                 else self.anzeigename
@@ -682,6 +688,7 @@ class EndpunktZustand:
             "dialekt": self.endpunkt.parameter_dialect,
             "reasoning_format": self.endpunkt.reasoning_format,
             "erreichbar": self.erreichbar,
+            "grund": self.grund,
             "zuletzt_geprueft": self.zuletzt_geprueft,
             "context_tokens": self.context_for(modell),
             # The number the CONFIGURATION carries, told apart from the one
@@ -922,6 +929,7 @@ class Discovery:
 
             vorher = zustand.erreichbar
             zustand.zuletzt_geprueft = jetzt_iso()
+            zustand.grund = None if erreichbar else zustand.provider.letzter_grund
 
             # An endpoint under the plain ``openai`` dialect may be an oMLX
             # server that only looks like one of the rest; then its thinking

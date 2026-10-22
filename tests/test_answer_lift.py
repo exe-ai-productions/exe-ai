@@ -18,9 +18,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.fensterquelle import WINDOW_SOURCE
 
 WURZEL = Path(__file__).resolve().parent.parent
-QUELLE = WURZEL / "frontend/src/App.svelte"
+QUELLE = WINDOW_SOURCE
 
 
 def _lift_answer() -> str:

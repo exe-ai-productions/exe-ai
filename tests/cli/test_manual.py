@@ -23,7 +23,7 @@ from cli.main import help_text
 from cli.texts import Texts
 
 ROOT = Path(__file__).resolve().parents[2]
-PAGES = {"en": ROOT / "static" / "hilfe" / "index.html", "de": ROOT / "static" / "hilfe" / "de" / "index.html"}
+PAGES = {"en": ROOT / "static" / "help" / "index.html", "de": ROOT / "static" / "help" / "de" / "index.html"}
 
 # How the page breaks a line inside a cell.
 LINE_BREAK = "<br>"
@@ -135,7 +135,7 @@ def test_a_sentence_of_two_lines_stands_in_the_chapter_with_both(language: str, 
         for command in registry.matching(name)
         if command.name == name and "\n" in registry.summary(command)
     }
-    assert set(two_lines) == {"/chats", "/rename", "/archive", "/project", "/ps", "/mcp", "/skills", "/image", "/server", "/download", "/provider", "/setup", "/theme", "/settings", "/agents", "/cron", "/tools", "/dir", "/compact", "/export"}
+    assert set(two_lines) == {"/chats", "/rename", "/archive", "/project", "/ps", "/mcp", "/skills", "/image", "/rollback", "/server", "/download", "/provider", "/setup", "/theme", "/settings", "/agents", "/cron", "/tools", "/dir", "/compact", "/export"}
     said = dict(_rows(language, "/"))
     for name, sentence in two_lines.items():
         first, second = sentence.split("\n")
@@ -180,4 +180,4 @@ def test_the_german_manual_calls_the_choice_of_appearance_by_one_word() -> None:
     that says "Look" for the same thing is a second word for it."""
     page = _page("de")
     assert not re.search(r"\bLooks?\b", page)
-    assert "fünf Erscheinungsbilder" in page
+    assert "sechs Erscheinungsbilder" in page

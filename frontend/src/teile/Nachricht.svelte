@@ -6,12 +6,14 @@
   import { lebendHtml } from '../lib/lebendhtml.js'
   import { maskieren } from '../lib/einfaerben.js'
   import { dateiFakten, dateizeichen, writingFacts } from '../lib/dateiarten.js'
+  import { deliveredLanguage, fileFacts } from '../lib/deliveredFile.js'
   import { api } from '../lib/api.js'
   import { drawingMakesVideo, melde, zustand } from '../lib/zustand.svelte.js'
   import { studioWithPicture } from '../lib/studio.svelte.js'
   import { t, teile as textPieces, texte } from '../lib/texte.svelte.js'
   import { stoppuhr } from '../lib/dauer.js'
   import { aufrufZahl, blockDot, buendeln, lastCall } from '../lib/werkzeugbuendel.js'
+  import { kurzargument } from '../lib/werkzeughistorie.js'
   import { makeTextFlow } from '../lib/textFlow.js'
   import { SWITCH_MS, reducedMotion } from '../lib/softSwitch.js'
   import { glideHeight } from '../lib/glide.js'
@@ -22,9 +24,11 @@
   import { skillAmAnfang } from '../lib/skills.svelte.js'
   import { bildZeigen } from '../lib/bildschau.svelte.js'
   import Leuchtpunkt from './Leuchtpunkt.svelte'
+  import { serverMark } from '../lib/serverlogo.svelte.js'
   import Wartezeile from './Wartezeile.svelte'
   import { terminal } from '../lib/terminalfenster.svelte.js'
   import { tabRemoveByAddress } from '../lib/vorschautabs.svelte.js'
+  import { addressOf } from '../lib/picturePreview.js'
   import { laufampel } from '../lib/laufampel.js'
   import { answerEnding } from '../lib/answerEnding.js'
   import { punktAtmet, punktPulsiert } from '../lib/meldewesen.svelte.js'
@@ -47,6 +51,10 @@
        lib/markdown.js): file names count across the whole chat, so a
        second answer's first document is not "markdown-1.md" again. */
     dateienVorher = 0,
+    /* A message still waiting in the line (Warteblasen.svelte): the same
+       bubble, dimmed, with the row that says it waits standing where the
+       copy button will stand once it is sent. */
+    waiting = false, waitRow = null,
   } = $props()
 
   /* Which sections are unfolded, by position in the drawn list — thinking
@@ -127,23 +135,17 @@
   const dokumentKarten = $derived(
     nachricht.dokumente?.length ? nachricht.dokumente : dokument ? [dokument] : [],
   )
+  /* Where a picture of the bubble is read from: a picture of a waiting message
+     (not uploaded yet) by the address of its preview (`blob:`); an upload that
+     was just sent by the same address, so the picture the waiting bubble drew
+     stays (lib/picturePreview.js); any other by its name from the service. */
+  const pictureSource = (name) =>
+    String(name).startsWith('blob:') ? name : (addressOf(name) ?? api.bildAdresse(name))
   const anhangBilder = $derived(
     nachricht.role === 'user'
       ? (nachricht.anhaenge?.length ? nachricht.anhaenge : nachricht.bild ? [nachricht.bild] : [])
       : [],
   )
-  /* What the file is, and stays: kind, size, pages — one page said as one. */
-  function pageCount(pages) {
-    if (!pages) return null
-    return pages === 1
-      ? t('nachricht.dokument_seiten_eins')
-      : t('nachricht.dokument_seiten', { zahl: pages })
-  }
-  function fileFacts(karte) {
-    return [(karte.typ || '').toUpperCase(), karte.kb ? `${karte.kb} KB` : null, pageCount(karte.seiten)]
-      .filter(Boolean)
-      .join(' · ')
-  }
   /* The card's line: those facts, and — only where there is one — the word
      that the document did not reach the model. */
   function faktenZeile(karte) {
@@ -266,10 +268,9 @@
   }
   const hatInhalt = $derived(Boolean((nachricht.content || '').trim()))
   /* While the answer's text is under way the line below it holds only the
-     mark: no word, no clock, no readings, no buttons. They would move down
-     with every new line of text. The footer keeps its height, invisible, so
-     that the end of the run lets nothing jump. Until the first word stands
-     the wait row speaks as it always did. */
+     mark: no word, no clock, no readings. They would move down with every
+     new line of text. Until the first word stands the wait row speaks as it
+     always did. */
   const markeRuhig = $derived(laeuft && hatInhalt)
   /* Markdown is rendered once per distinct text, not once per chunk.
 
@@ -387,6 +388,17 @@
      Its own field, because pointing at the answer-length setting would send
      the reader to a slider they never touched. */
   const anbietergrenze = $derived(!laeuft && stats.anbietergrenze === true)
+
+  /* The model declined to answer: its stream ended with the word for a
+     refusal on an ordinary success, often with no text at all. A reading of
+     its own beside the length ones — nothing was cut off, nothing is coming.
+     The explanation is the model maker's, word for word, where one was given. */
+  const abgelehnt = $derived(!laeuft && stats.abgelehnt === true)
+  const ablehnungErklaerung = $derived(
+    abgelehnt && typeof stats.ablehnung_erklaerung === 'string'
+      ? stats.ablehnung_erklaerung.trim()
+      : '',
+  )
 
   /* The thinking pass used up the whole answer length and left nothing
      visible. The field carries the catalogue key, because which of the two
@@ -576,11 +588,12 @@
   )
   /* The red line under an answer with no text: failed, silent, or stopped
      before ANYTHING came. Not an image answer (its text is empty by nature),
-     not one cut off at the ceiling (the line below says that), and not a
-     stopped answer that got somewhere — the foot says "abgebrochen". */
+     not one cut off at the ceiling or declined by the model (the lines
+     below say that), and not a stopped answer that got somewhere — the foot
+     says "abgebrochen". */
   const leereAntwort = $derived(
     !hatInhalt && !laeuft && !nachricht.bild && !nachricht.bildLaeuft && !abgeschnitten
-      && !(laufzustand === 'abgebrochen' && etwasKam),
+      && !abgelehnt && !(laufzustand === 'abgebrochen' && etwasKam),
   )
 
   /* An aborted or failed answer must not remain standing as an empty
@@ -963,8 +976,13 @@
   })
 
   /* A foretaste in the header, so you don't have to unfold every row to
-     see what was searched for. The first value suffices for that. */
+     see what was searched for. It is the argument the call is about — the
+     same one the terminal's row shows, chosen in one place — and, where the
+     arguments say nothing of that kind (only objects or lists), the start of
+     the first value. */
   function vorschau(argumente) {
+    const kurz = kurzargument(argumente)
+    if (kurz) return kurz
     const werte = Object.values(argumente ?? {})
     if (!werte.length) return ''
     const erster = typeof werte[0] === 'string' ? werte[0] : JSON.stringify(werte[0])
@@ -1051,21 +1069,29 @@
      reads, the word only names it. Both travel as one entry so the template
      can set them apart — the number in `--text`, the word in
      `--text-still`. */
+  const tempoLesung = $derived(
+    tempoWert === null
+      ? null
+      : { zahl: String(tempoWert), wort: t('nachricht.tps'), titel: tempoTitel },
+  )
+  const wartezeitLesung = $derived(
+    typeof stats.erstes_token_nach_sekunden === 'number'
+      ? {
+          zahl: `${zahl(stats.erstes_token_nach_sekunden)} s`,
+          wort: t('nachricht.ttft'),
+          titel: null,
+        }
+      : null,
+  )
+  /* The share of the cache never stands alone: beside neither the speed nor
+     the wait it says nothing a reader can place, and the line stays empty. */
   const messungen = $derived(
     [
-      tempoWert === null
-        ? null
-        : { zahl: String(tempoWert), wort: t('nachricht.tps'), titel: tempoTitel },
-      typeof stats.erstes_token_nach_sekunden === 'number'
-        ? {
-            zahl: `${zahl(stats.erstes_token_nach_sekunden)} s`,
-            wort: t('nachricht.ttft'),
-            titel: null,
-          }
+      tempoLesung,
+      wartezeitLesung,
+      cachePercent !== null && (tempoLesung || wartezeitLesung)
+        ? { zahl: `${cachePercent} %`, wort: t('nachricht.cache'), titel: null }
         : null,
-      cachePercent === null
-        ? null
-        : { zahl: `${cachePercent} %`, wort: t('nachricht.cache'), titel: null },
     ].filter(Boolean),
   )
   /* The row of readings keeps its place while the answer runs, once it has
@@ -1104,7 +1130,9 @@
      above said "aborted". */
   const hinweise = $derived(
     [
-      laufzustand === 'abgebrochen' ? t('nachricht.abgebrochen_kurz') : null,
+      /* Said once: an answer stopped before anything came already says so
+         on its line (`grund`). */
+      laufzustand === 'abgebrochen' && !leereAntwort ? t('nachricht.stopped_hint') : null,
       laufzustand === 'fehler' ? t('nachricht.fehler_kurz', { text: stats.fehler ?? '' }) : null,
     ].filter(Boolean),
   )
@@ -1142,7 +1170,7 @@
      picture's corners, now in the one menu every picture carries. */
   function anhangMenue(bildname) {
     const eintraege = [
-      { text: t('nachricht.bild_sichern'), href: api.bildAdresse(bildname), download: '' },
+      { text: t('nachricht.bild_sichern'), href: pictureSource(bildname), download: '' },
     ]
     if (echteZeile) {
       eintraege.push({ text: t('nachricht.anhang_entfernen'), action: () => bildAnhangWeg(bildname) })
@@ -1169,8 +1197,10 @@
   {@const werkzeug = teil.werkzeug}
   {@const stand = hintergrundStand(werkzeug)}
   {@const wzPunkt = werkzeugPunkt(werkzeug, stand)}
+  {@const mark = serverMark(werkzeug.server)}
   <!-- A call is one row in the block's window: a small dot in a column of its
-       own, the name, a background run's number and a foretaste of the
+       own, the logo of the server that ran it (a built-in tool has none),
+       the name, a background run's number and a foretaste of the
        arguments. Nothing stands at its end — no "running", no exit code, no
        "failed": the dot says it, and for somebody who does not see it the
        label says the word. A click opens the call in the terminal tool,
@@ -1192,10 +1222,19 @@
     <span class="call-column" aria-hidden="true">
       <Leuchtpunkt farbe={wzPunkt.farbe} groesse={6} atmet={wzPunkt.atmet} quiet />
     </span>
+    {#if mark}
+      <span class="call-logo" aria-hidden="true">
+        {#if mark.vector}
+          <svg viewBox={mark.vector.vb} width="14" height="14">{@html mark.vector.html}</svg>
+        {:else}
+          <img src={mark.image} width="14" height="14" alt="" />
+        {/if}
+      </span>
+    {/if}
     {#if werkzeug.written != null}
       {@render beingWritten(werkzeug)}
     {:else}
-      <span class="wz-name">{werkzeug.name}</span>
+      <span class="wz-name" title={werkzeug.name}>{werkzeug.name}</span>
     {/if}
     <!-- WHICH run this was. Only a background run has a number; every
          other call is one of one and would be told nothing by a "#1". -->
@@ -1297,16 +1336,20 @@
 {/snippet}
 
 <!-- One entry's dot on the answer's line. The house's own state dot
-     (Leuchtpunkt.svelte), small and quiet — six pixels, no standing glow —
+     (Leuchtpunkt.svelte), small and quiet — seven pixels, no standing glow —
      breathing while its entry is still going: the caller says so, as far as
      the pulse settings allow. The answer's own text wears an empty ring
-     instead: it is no state, it is what everything else led to. -->
+     instead: it is no state, it is what everything else led to. The odd
+     diameter is what lets the dot sit exactly on the middle of the one-pixel
+     line: its box (diameter + 2) is then odd as well and fits the odd dot
+     field with a whole-pixel offset, where an even diameter lands on half
+     pixels and draws a blurred edge on a scaled display. -->
 {#snippet punkt(farbe, atmet = false)}
   <span class="punkt" aria-hidden="true">
     {#if farbe === 'antwort'}
       <span class="ring"></span>
     {:else}
-      <Leuchtpunkt {farbe} groesse={6} {atmet} quiet />
+      <Leuchtpunkt {farbe} groesse={7} {atmet} quiet />
     {/if}
   </span>
 {/snippet}
@@ -1349,67 +1392,81 @@
     <div class="naht-text" transition:slide={{ duration: 200 }}>{nachricht.content}</div>
   {/if}
 {:else if istVonMir}
-  <div class="von-mir" class:mit-bild={anhangBilder.length} class:mit-dokument={dokumentKarten.length}>
-    {#if dokumentKarten.length}<div class="dok-reihe">{#each dokumentKarten as karte (karte.id || karte.name)}
-      <!-- Document (4.1): one card, the same one a written file uses
-           (Dateikarte.svelte) — the dog-ear is familiar from the Notion
-           tools. The ✕ removes this one attachment from the message and
-           stays outside the shared card, since it does not apply to a file
-           the model wrote itself. The text is fetched on the click that
-           opens the card rather than at mount (memoised above, so only the
-           first visit pays).
+  {#if anhangBilder.length || dokumentKarten.length}
+    <!-- The attachments stand above the bubble, outside it, on the side the
+         bubble stands on: the cards in a row that wraps, under them the
+         pictures in a grid of two columns across the whole text column, every
+         tile square. The text, if there is any, stands under them in the
+         ordinary bubble. -->
+    <div class="attachment-block" class:waiting>
+      {#if dokumentKarten.length}<div class="dok-reihe">{#each dokumentKarten as karte (karte.id || karte.name)}
+        <!-- Document (4.1): one card, the same one a written file uses
+             (Dateikarte.svelte) — the dog-ear is familiar from the Notion
+             tools. The ✕ removes this one attachment from the message and
+             stays outside the shared card, since it does not apply to a file
+             the model wrote itself. The text is fetched on the click that
+             opens the card rather than at mount (memoised above, so only the
+             first visit pays).
 
-           No `chatId` for a document that is text, deliberately: an
-           attachment is the USER'S document, not something the answer
-           produced — it has no business filing itself into the preview
-           rail. Without the prop the card files nothing (md used to slip
-           through as the one type with a recognised sprache). A PDF is the
-           exception: its pages can only be seen in a frame, so its card
-           carries the file's address and may stand in the rail. -->
-      <div class="dok-zeile">
-        <Dateikarte
-          zeichenHtml={DOK_ZEICHEN}
-          name={karte.name}
-          fakten={faktenZeile(karte)}
-          hinweis={getragen(karte)?.hinweis ?? null}
-          sprache={['md', 'markdown'].includes(karte.typ) ? 'md' : ''}
-          ladeInhalt={karte.id ? () => dokumentLesen(karte) : null}
-          fileAddress={isPdf(karte) ? fileAddressOf(karte) : null}
-          framed={isPdf(karte)}
-          fileFacts={fileFacts(karte)}
-          filePath={karte.pfad || ''}
-          chatId={isPdf(karte) ? chatId : null}
-        />
-        {#if echteZeile && karte.id}
-          <button class="anhang-weg" onclick={() => dokumentAnhangWeg(karte)}
-                  title={t('nachricht.anhang_entfernen')} aria-label={t('nachricht.anhang_entfernen')}>✕</button>
-        {/if}
-      </div>
-    {/each}</div>{/if}{#each anhangBilder as bildname (bildname)}
-      <!-- The attachment travels into the speech bubble (vision): the
-           picture alone, no frame and no edge — one click enlarges it,
-           and "···" in the corner offers to save it and, while the
-           message is still being written, to take it back. -->
-      <div class="bildrahmen">
-        <button class="bildknopf" onclick={() => bildZeigen(api.bildAdresse(bildname))}
-                aria-label={t('nachricht.bild_vergroessern')}>
-          <img class="bildanhang" src={api.bildAdresse(bildname)} alt="" loading="lazy" />
-        </button>
-        <PictureMenu entries={anhangMenue(bildname)} />
-      </div>
-    {/each}{#if anhangBilder.length || dokumentKarten.length}
-      {#if nachricht.content}<div class="bildtext">{@render eigenerText(nachricht.content)}</div>{/if}
-    {:else if skillTeil}
+             No `chatId` for a document that is text, deliberately: an
+             attachment is the USER'S document, not something the answer
+             produced — it has no business filing itself into the preview
+             rail. Without the prop the card files nothing (md used to slip
+             through as the one type with a recognised sprache). A PDF is the
+             exception: its pages can only be seen in a frame, so its card
+             carries the file's address and may stand in the rail. -->
+        <div class="dok-zeile">
+          <Dateikarte
+            zeichenHtml={DOK_ZEICHEN}
+            name={karte.name}
+            fakten={faktenZeile(karte)}
+            hinweis={getragen(karte)?.hinweis ?? null}
+            sprache={deliveredLanguage(karte.typ)}
+            ladeInhalt={karte.id ? () => dokumentLesen(karte) : null}
+            fileAddress={isPdf(karte) ? fileAddressOf(karte) : null}
+            framed={isPdf(karte)}
+            fileFacts={fileFacts(karte)}
+            filePath={karte.pfad || ''}
+            chatId={isPdf(karte) ? chatId : null}
+          />
+          {#if echteZeile && karte.id}
+            <button class="anhang-weg" onclick={() => dokumentAnhangWeg(karte)}
+                    title={t('nachricht.anhang_entfernen')} aria-label={t('nachricht.anhang_entfernen')}>✕</button>
+          {/if}
+        </div>
+      {/each}</div>{/if}
+      {#if anhangBilder.length}<div class="attachment-grid">{#each anhangBilder as bildname (bildname)}
+        <!-- The attachment travels into the speech bubble (vision): the
+             picture alone, no frame and no edge — one click enlarges it,
+             and "···" in the corner offers to save it and, while the
+             message is still being written, to take it back. -->
+        <div class="bildrahmen">
+          <button class="bildknopf" onclick={() => bildZeigen(pictureSource(bildname))}
+                  aria-label={t('nachricht.bild_vergroessern')}>
+            <img class="bildanhang" src={pictureSource(bildname)} alt="" loading="lazy" />
+          </button>
+          <PictureMenu entries={anhangMenue(bildname)} />
+        </div>
+      {/each}</div>{/if}
+    </div>
+  {/if}
+  {#if nachricht.content || !(anhangBilder.length || dokumentKarten.length)}
+  <div class="von-mir" class:waiting>
+    {#if anhangBilder.length || dokumentKarten.length}{@render eigenerText(nachricht.content)}{:else if skillTeil}
       <!-- Brightness only, no colour: which instruction was used is a fact
            about the message, not a state it is in. -->
       <span class="skillpille">/{skillTeil.name}</span>{#if ohneSkill}{' '}{@render eigenerText(ohneSkill)}{/if}
     {:else}{@render eigenerText(nachricht.content)}{/if}
   </div>
+  {/if}
   <!-- The same actions as under the answers, just under one's own
        bubble: copy, and send-again only on the last question — in the
        middle it would devalue the history after it. They show only while
        the pointer is on the bubble (or on them, or a key has reached them);
        otherwise nothing stands there. -->
+  {#if waitRow}
+    {@render waitRow()}
+  {:else}
   <div class="fuss meine">
     <button class="tat" title={t('nachricht.kopieren')} aria-label={t('nachricht.kopieren')} onclick={kopieren}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1427,6 +1484,7 @@
       </button>
     {/if}
   </div>
+  {/if}
 {:else}
   <div class="von-ki" style={`--bild-deckel:${bildDeckel}px`}>
     <!-- The line. Everything this answer did stands on it as an entry, in
@@ -1634,10 +1692,10 @@
             <div class="file-row">
               {#each deliveredFiles as karte (karte.id || karte.name)}
                 <Dateikarte
-                  zeichenHtml={DOK_ZEICHEN}
+                  zeichenHtml={deliveredLanguage(karte.typ) ? dateizeichen(deliveredLanguage(karte.typ)) : DOK_ZEICHEN}
                   name={karte.name}
                   fakten={faktenZeile(karte)}
-                  sprache={['md', 'markdown'].includes(karte.typ) ? 'md' : ''}
+                  sprache={deliveredLanguage(karte.typ)}
                   ladeInhalt={karte.id ? () => dokumentLesen(karte, true) : null}
                   fileAddress={fileAddressOf(karte)}
                   framed={isPdf(karte)}
@@ -1731,6 +1789,22 @@
         </div>
       {/if}
 
+      <!-- The model declined to answer. One sentence of the house that says
+           nothing is coming and what to do, and under it what the model's
+           maker gave as the reason, word for word, where it gave one. Before
+           this the answer stood empty or not at all. -->
+      {#if abgelehnt}
+        <div class="ereignis">
+          {@render punkt('rot')}
+          <div class="hinweis">
+            {t('nachricht.abgelehnt')}
+            {#if ablehnungErklaerung}
+              <div class="erklaerung">{ablehnungErklaerung}</div>
+            {/if}
+          </div>
+        </div>
+      {/if}
+
       <!-- Compaction failed twice in a row, so it is off for this chat until
            it earns one attempt back. Its own entry, under the one above
            rather than in place of it: the two above are alternatives, this
@@ -1767,7 +1841,7 @@
       {/if}
     </div>
 
-    <div class="fuss" class:ruhig={markeRuhig}>
+    <div class="fuss" class:ruhig={laeuft}>
       {#if laeuft && fussMessungen.length}
         {@render readings()}
       {/if}
@@ -1857,17 +1931,10 @@
     line-height: 1.35;
     white-space: nowrap;
   }
-  /* With a picture, the bubble drops its padding and ground: the picture
-     stands flush in it, and there is no second edge around the one the
-     picture brings itself. */
-  .von-mir.mit-bild {
-    padding: 0;
-    background: none;
-  }
-  /* Document bubble (4.1): the card carries the border, the bubble only
-     gives a narrow frame — same logic as with the image. */
-  .von-mir.mit-dokument {
-    padding: 6px;
+  /* Waiting in the line: the bubble it will become, dimmed as a whole; the
+     row under it is not part of the bubble and is not dimmed with it. */
+  .von-mir.waiting {
+    opacity: 0.6;
   }
   /* The card itself is Dateikarte.svelte now (shared with a file the model
      writes) — this row only places the ✕ beside it, and undoes the card's
@@ -1894,6 +1961,40 @@
     flex-wrap: wrap;
     gap: 6px;
     white-space: normal;
+    width: fit-content;
+    max-width: 100%;
+    position: relative;
+    /* The side of the bubble, by the bubble's own arithmetic (see `.von-mir`). */
+    left: calc(var(--blase-eigen-stelle, 1) * 100%);
+    transform: translateX(calc(var(--blase-eigen-stelle, 1) * -100%));
+  }
+  /* The attachments of one's own message: above the bubble and outside it,
+     across the whole text column. The cards stand in a row that wraps, the
+     pictures under them in a grid of two columns. */
+  .attachment-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    position: relative;
+  }
+  .attachment-block + .von-mir { margin-top: 6px; }
+  /* Waiting in the line, dimmed like the bubble beside it. */
+  .attachment-block.waiting { opacity: 0.6; }
+  /* Rows of two, every tile square and half the column less the gap, the
+     picture filling it. A row with one picture only has it on the side the
+     bubble stands on. */
+  .attachment-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    white-space: normal;
+  }
+  .attachment-grid > .bildrahmen:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+    width: calc(50% - 3px);
+    left: calc(var(--blase-eigen-stelle, 1) * 100%);
+    transform: translateX(calc(var(--blase-eigen-stelle, 1) * -100%));
   }
   .anhang-weg {
     border: none;
@@ -1910,32 +2011,26 @@
     background: var(--linie);
     color: var(--text);
   }
-  /* The picture alone: no frame and no edge, the box hugs the picture, and
-     the corner rides on the picture's own click face — not on the box, so
-     the "···" menu can hang out of the box (PictureMenu). A picture is
-     inline by default and then sits on a text baseline, which leaves a gap
-     of a few pixels under it; a picture set to `block` starts at the first
-     pixel instead. */
-  .bildrahmen + .bildrahmen { margin-top: 6px; }
+  /* A tile of the grid: the picture alone, no frame and no edge, square. The
+     corner rides on the picture's own click face — not on the tile, so the
+     "···" menu can hang out of it (PictureMenu). */
   .bildrahmen {
     position: relative;
-    /* Flex, so the whitespace between the picture and the dots generates
-       no line box of its own (a block box would grow by one line). */
-    display: flex;
-    width: fit-content;
-    /* The size cap sits here as well as on the picture: a picture wider
-       than the cap must not stretch the box to the bubble's whole width. */
-    max-width: min(100%, var(--bild-deckel, 540px));
+    display: block;
+    aspect-ratio: 1 / 1;
+    min-width: 0;
   }
   /* While a menu hangs out of the picture it must stay above the bubble
      next door — the same lift the picture window gives its tiles. Global
      on purpose: the dots live in PictureMenu, so a local selector would
      read as unused and be dropped. */
-  :global(.von-mir:has(.more[aria-expanded='true'])) {
+  :global(.attachment-block:has(.more[aria-expanded='true'])) {
     z-index: 3;
   }
   .bildknopf {
     display: block;
+    width: 100%;
+    height: 100%;
     border: none;
     background: none;
     padding: 0;
@@ -1953,33 +2048,14 @@
   }
   .bildanhang {
     display: block;
-    /* Larger preview (L): min() keeps it within the bubble on a narrow
-       window, so it grows on a wide screen but never overflows. The cap
-       itself comes from --bild-deckel (set on .von-ki, see bildDeckel) so
-       a generated picture without a known bildMasse yet — every one
-       loaded fresh from the server rather than just drawn — still lands
-       at the SAME size as a sibling still carrying its live-drawn one;
-       .von-mir never sets the variable, so an uploaded picture in a
-       user bubble keeps the plain 540px default regardless. */
-    max-width: min(var(--bild-deckel, 540px), 100%);
-    max-height: var(--bild-deckel, 540px);
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
     /* Square on purpose: the click face around it is what carries the
        corner and clips this to shape (.bildknopf above). */
     border-radius: 0;
   }
 
-  /* Standing under a picture without the bubble around it, the caption
-     needs its own quiet ground — otherwise it floats on the page. */
-  .bildtext {
-    margin-top: 6px;
-    padding: 7px 12px;
-    background: var(--blase);
-    /* The box wears the house bubble, so it needs the house ink — the
-       surrounding user bubble's ink follows the user's chosen ground and
-       can be dark on a light bubble, which made this text vanish. */
-    color: var(--text);
-    border-radius: 9px;
-  }
   /* The generated picture's frame: a one-pixel light edge (brighter at the
      top, as if lit from above) and the picture rounded into it.
      fit-content so the frame hugs the picture at whatever size it came
@@ -2297,7 +2373,6 @@
     white-space: nowrap;
     font: 12px var(--schrift-fest);
   }
-  .agent-step { color: var(--werkzeug); }
   .agent-state { font: 12.5px var(--schrift); color: var(--text-still); }
   .agent-state.wartet { color: var(--gelb-text); }
   /* A picture in an image run's grid is a tile, not an answer — no line
@@ -2404,6 +2479,9 @@
     cursor: pointer;
   }
   .aufruf:hover { background: var(--bg-hoch); }
+  /* A finger needs a row of a hand's height; on the phone page the rows of
+     the open block are as high as every other thing to tap. */
+  :global(html[data-phone]) .aufruf { min-height: 44px; }
   .aufruf:hover .wz-vorschau { color: var(--text-leise); }
   /* A call that has not begun has nothing to open. */
   .aufruf:disabled { cursor: default; }
@@ -2414,11 +2492,34 @@
     display: grid;
     place-items: center;
   }
+  /* The logo of the server: 14 px, no tile, as quiet as the row's text. */
+  .call-logo {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 14px;
+    height: 14px;
+    color: var(--text-neben);
+  }
+  .call-logo svg,
+  .call-logo img {
+    display: block;
+    width: 14px;
+    height: 14px;
+  }
   /* The name of a call in the block: the fixed face of the row, in the
-     block's colour and weight — the sand and the bold of `.werkzeugname`
-     (stil/global.css) stay where the terminal tab shows names. `flex: none`
-     keeps it whole — the preview beside it is the one built to give way. */
-  .aufruf .wz-name { flex: none; }
+     block's colour and weight — the bold of `.werkzeugname`
+     (stil/global.css) stays where the terminal tab shows names. The preview
+     beside it is the one built to give way first (it has no room of its
+     own); a name longer than the row ends with dots, so the run number
+     after it stays. */
+  .aufruf .wz-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .wz-writing .wz-name { font-family: var(--schrift-fest); }
   .aufruf .wz-vorschau {
     flex: 1;
@@ -2449,7 +2550,11 @@
     flex: none;
   }
 
+  /* The answer's box holds the bottom margin of its last list item, quote or
+     block: it is measured while the text flows (lib/glide.js) and must be the
+     same box when the entry stands free at the end of the run. */
   .antwort {
+    display: flow-root;
     line-height: 1.65;
   }
   /* A new character of the flowing text comes up in 280 ms; the span carries
@@ -2498,6 +2603,12 @@
     font-size: 12.5px;
     line-height: 19px;
     color: var(--text-still);
+  }
+  /* The reason a model maker gave, under the house's own sentence. */
+  .hinweis .erklaerung {
+    margin-top: 2px;
+    color: var(--text-leise);
+    overflow-wrap: anywhere;
   }
   /* The seam. The two rules across are the whole drawing: a hairline in
      the same colour every other divider in the program uses, parted around
@@ -2605,9 +2716,9 @@
   .messung {
     font-family: var(--schrift-fest);
   }
-  /* Under the running text only the mark stands: the footer keeps its
-     room and its place in the line, none of its ink and none of its
-     reach, so the end of the run changes no height. */
+  /* Under a running answer — with text and before its first word — the
+     footer keeps its room and its place in the line, none of its ink and
+     none of its reach, so the end of the run changes no height. */
   .fuss.ruhig {
     visibility: hidden;
   }
@@ -2636,16 +2747,34 @@
     transition: opacity 0.15s;
   }
   .von-mir:hover + .fuss.meine,
+  .attachment-block:hover ~ .fuss.meine,
   .fuss.meine:hover,
   .fuss.meine:focus-within {
     opacity: 1;
   }
-  @media (hover: none) {
+  @media (hover: none), (any-pointer: coarse) {
     .fuss.meine { opacity: 1; }
   }
   .fuss .tat:hover {
     background: var(--linie);
     color: var(--text);
+  }
+  /* The phone page. Where there is nothing to hover over, the buttons under
+     one's own bubble always stand, at its right edge; the foot of an answer
+     starts at the column of its text and not at the line, so it reads as
+     belonging to the answer above it. The buttons are a finger's size. */
+  :global(html[data-phone]) .fuss.meine {
+    opacity: 1;
+  }
+  :global(html[data-phone]) .von-ki > .fuss {
+    margin-left: 22px;
+  }
+  :global(html[data-phone]) .fuss .tat {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
   }
 
   /* Markdown output. :global, because the HTML comes into being at
@@ -2665,10 +2794,18 @@
   .antwort :global(h4), .antwort :global(h5) { font-size: 1em; font-weight: 600; margin: 1.2em 0 0.4em; }
   .antwort :global(ul), .antwort :global(ol) { margin: 0 0 0.85em; padding-left: 1.35em; }
   .antwort :global(li) { margin: 0.22em 0; }
+  /* A list inside an item sits in that item's own flow: the gap below a whole
+     list is for the block after it, not for the next item of the outer list. */
+  .antwort :global(li > ul), .antwort :global(li > ol) { margin: 0.22em 0 0; }
   .antwort :global(blockquote) {
     margin: 0 0 0.85em; padding: 0.1em 0 0.1em 0.9em;
     border-left: 2px solid var(--linie-stark); color: var(--text-leise);
   }
+  /* A quote of several blocks starts and ends flush, like the answer itself. */
+  .antwort :global(blockquote > :first-child) { margin-top: 0; }
+  .antwort :global(blockquote > :last-child) { margin-bottom: 0; }
+  /* The locked box of a task item: the browser's own, set in line with the text. */
+  .antwort :global(li > input[type='checkbox']) { margin: 0 0.45em 0 0; vertical-align: -0.1em; }
   .antwort :global(hr) { border: none; border-top: 1px solid var(--linie); margin: 1.4em 0; }
   /* A markdown image is at most as wide as the text it stands in. */
   .antwort :global(img.md-bild) { max-width: 100%; height: auto; }
@@ -2683,14 +2820,31 @@
   .file-row :global(.dateikarte) {
     margin: 0;
   }
-  /* A link has to read as one: the blue of the look, and the line under it
-     in the same blue (the colour the text itself wears). */
-  .antwort :global(a) { color: var(--blau); text-underline-offset: 3px; }
+  /* A link has to read as one: the colour of the text, and the line under it
+     in the same colour. Blue stays for what shows a state. */
+  .antwort :global(a) { color: var(--text); text-underline-offset: 3px; }
   /* The same link in one's own bubble. */
-  .eigenlink { color: var(--blau); text-underline-offset: 3px; }
+  .eigenlink { color: var(--text); text-underline-offset: 3px; }
   .antwort :global(table) {
     border-collapse: collapse; margin: 0 0 0.95em; font-size: 0.94em; display: block; overflow-x: auto;
   }
+  /* The house rule is no visible scrollbar. A table wider than the answer
+     scrolls on its own, and so that nobody has to guess it does, it shows a
+     thin bar while the pointer is over it — the same exception the code
+     block has (stil/codeblock.css), and no more. */
+  .antwort :global(table) {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 0.18s;
+  }
+  .antwort :global(table:hover) { scrollbar-color: var(--linie) transparent; }
+  .antwort :global(table::-webkit-scrollbar) { height: 8px; }
+  .antwort :global(table::-webkit-scrollbar-track) { background: transparent; }
+  .antwort :global(table::-webkit-scrollbar-thumb) {
+    background: transparent; border-radius: 9px; transition: background 0.18s;
+  }
+  .antwort :global(table:hover::-webkit-scrollbar-thumb) { background: var(--linie); }
+  .antwort :global(table::-webkit-scrollbar-thumb:hover) { background: var(--text-still); }
   /* No boxes: only a fine rule between the rows, and a half-bold head. */
   .antwort :global(th), .antwort :global(td) { border-bottom: 1px solid var(--linie); padding: 6px 11px; text-align: left; }
   /* A cell never breaks inside a word. The answer around it may

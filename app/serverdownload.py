@@ -147,6 +147,15 @@ def paketname(build: str = BUILD, variante: str | None = None) -> str | None:
     return form.format(build=build) if form else None
 
 
+def _windows_varianten() -> list[tuple[str, int]]:
+    """The variants of Windows on x64 with the size of what each one
+    downloads — CUDA with its runtime."""
+    return [
+        (variante, groesse + (_CUDART[1] if variante == "cuda12" else 0))
+        for variante, (_, groesse) in _PAKETE_WIN32.items()
+    ]
+
+
 def waehlbare_varianten() -> list[tuple[str, int]]:
     """The variants a picker could offer on THIS machine, with the size of
     what each one downloads — CUDA with its runtime. Empty everywhere but
@@ -154,10 +163,17 @@ def waehlbare_varianten() -> list[tuple[str, int]]:
     choose from."""
     if sys.platform != "win32" or _maschine() != "amd64":
         return []
-    return [
-        (variante, groesse + (_CUDART[1] if variante == "cuda12" else 0))
-        for variante, (_, groesse) in _PAKETE_WIN32.items()
-    ]
+    return _windows_varianten()
+
+
+def unavailable_variants() -> list[tuple[str, int]]:
+    """The variants a window lists greyed because this machine cannot run
+    them: on a Mac the four of Windows, with the sizes Windows would
+    download. Empty everywhere else — Windows offers them, and the other
+    systems list none."""
+    if sys.platform != "darwin":
+        return []
+    return _windows_varianten()
 
 
 def bauordner_name(build: str, variante: str | None = None) -> str:

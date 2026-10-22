@@ -27,6 +27,11 @@ def pruefen(wert: Any) -> str:
     return wert
 
 
+def stored_choice(repositories) -> str:
+    """The stored choice as it stands, whether or not its file is still there."""
+    return pruefen(repositories.einstellungen.zusammengefuehrt(SCHLUESSEL, vorgabe=""))
+
+
 def lesen(repositories, modelle: list[str]) -> str:
     """The chosen model while it is in the folder, or empty."""
     name = pruefen(repositories.einstellungen.zusammengefuehrt(SCHLUESSEL, vorgabe=""))

@@ -60,6 +60,10 @@
               answer (choose a folder, start a job). Three rows in a box of
               fixed height would stand mostly empty.
 
+       provider  594 wide, height follows the content — the mask that adds a
+              provider: a selection field over labelled fields, which need
+              more room than a question.
+
        liste  900 wide and a body of FIXED height — everything with a side
               list (settings, models, tools). They are opened one after the
               other and switched between, so any difference reads as a jump.
@@ -92,7 +96,7 @@
   // from it: a stage written here as a constant silently stops cancelling
   // the moment the stage changes) — no entry needed here.
   const BREITE = {
-    frage: '460px', liste: '1280px', vorschau: '1200px', galerie: '1040px',
+    frage: '460px', provider: '594px', liste: '1280px', vorschau: '1200px', galerie: '1040px',
     lesen: '500px', mcp: '740px',
   }
   /* `lesen` and `mcp` are the two kinds that also hold a HEIGHT. Every other

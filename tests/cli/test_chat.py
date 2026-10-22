@@ -19,14 +19,26 @@ from typing import Any
 import httpx
 import pytest
 
-from cli import chat, shell, themes
+from cli import chat, events, glyphs, shell, themes
 from cli.client import ServiceClient, ServiceUnreachable
 from cli.interfaces import Asker, CommandSet, Context
 from cli.texts import Texts
-from test_stream import ENTER, WAIT_SECONDS, Calls, Service, Step, context, recorded, run, where
+from test_stream import (
+    ENTER,
+    WAIT_SECONDS,
+    Calls,
+    Service,
+    Step,
+    context,
+    recorded,
+    run,
+    shown_text,
+    typed_line,
+    where,
+)
 
 from tests.cli.program import Run, run_client
-from tests.cli.stub_service import StubService, eventually
+from tests.cli.stub_service import StubService, eventually, this_process
 
 START: Step = {"typ": "start", "generation_id": "g1", "message_id": "m1"}
 DONE: Step = {"typ": "done", "message_id": "m1", "abgebrochen": False}
@@ -54,6 +66,251 @@ def test_a_second_message_during_an_answer_goes_out_after_it_and_is_not_dropped(
     assert sent == ["A first one.", "And a second one."]
     lines = shown.splitlines()
     assert where(lines, "First answer.") < where(lines, "Second answer.")
+
+
+STOPPED: Step = {"typ": "done", "message_id": "m1", "abgebrochen": True}
+A_CALL: Step = {
+    "typ": "tool_call", "name": "web_search", "server": "", "argumente": {}, "aufruf_id": "a1",
+}
+ITS_RESULT: Step = {
+    "typ": "tool_result", "name": "web_search", "aufruf_id": "a1", "fehlgeschlagen": False,
+    "text": "found", "dauer_sekunden": 0.1,
+}
+
+
+def _parts_of_the_run(parts: list[Context]) -> Callable[[Context], Any]:
+    """A replacement for the client's event builder that keeps the context
+    the run was built with: a script reads the screen from inside the stream."""
+    built = events.build_events
+
+    def remember(ctx: Context) -> Any:
+        parts.append(ctx)
+        return built(ctx)
+
+    return remember
+
+
+def _the_run_with_a_message_typed_meanwhile(
+    tmp_path: Path, service: Service, typing: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> str:
+    """Runs the client on "A first one." with the pipe handed to the script
+    and returns what the history showed, read back from an export."""
+    parts: list[Context] = typing.setdefault("parts", [])
+    monkeypatch.setattr(events, "build_events", _parts_of_the_run(parts))
+    assert (
+        run(
+            "A first one." + ENTER,
+            service=service,
+            tmp_path=tmp_path,
+            during=lambda pipe: typing.__setitem__("pipe", pipe),
+        )
+        == 0
+    )
+    target = tmp_path / "shown.html"
+    parts[0].screen.export(target)
+    return shown_text(target.read_text(encoding="utf-8"))
+
+
+def test_a_message_during_an_answer_stops_it_and_goes_out_at_once(tmp_path, monkeypatch):
+    service = Service()
+    typing: dict[str, Any] = {}
+
+    def type_the_second_message_and_wait_for_the_stop() -> None:
+        typing["pipe"].send_text("And a second one." + ENTER)
+        typing["stopped"] = service.stopped.wait(WAIT_SECONDS)
+
+    service.answers.append(
+        [
+            START,
+            {"typ": "content", "text": "Half an answer.\n"},
+            type_the_second_message_and_wait_for_the_stop,
+            STOPPED,
+        ]
+    )
+    service.answers.append([START, {"typ": "content", "text": "Second answer.\n"}, DONE])
+    shown = _the_run_with_a_message_typed_meanwhile(tmp_path, service, typing, monkeypatch)
+
+    # Without the fix the message only waited: no stop ever came.
+    assert typing["stopped"] is True
+    sent = [body["content"] for body in service.bodies("/api/v1/chat/completions")]
+    assert sent == ["A first one.", "And a second one."]
+    paths = service.paths()
+    stop = paths.index("POST /api/v1/chat/stop")
+    assert stop < len(paths) - 1 - paths[::-1].index("POST /api/v1/chat/completions")
+    lines = shown.splitlines()
+    # What had come of the first answer stays, and the second one stands below it.
+    first = where(lines, "Half an answer.")
+    second = where(lines, typed_line("And a second one."), after=first)
+    assert second < where(lines, "Second answer.")
+
+
+def test_a_message_during_a_tool_waits_in_the_hint_line_and_goes_after_its_result(
+    tmp_path, monkeypatch
+):
+    service = Service()
+    typing: dict[str, Any] = {}
+
+    def type_the_message_while_the_tool_runs() -> None:
+        typing["pipe"].send_text("Wait for it." + ENTER)
+        screen = typing["parts"][0].screen
+        deadline = time.monotonic() + WAIT_SECONDS
+        while "Wait for it." not in screen.hint_line() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        typing["hint"] = screen.hint_line()
+        # The tool is not cut off: no stop comes while it runs.
+        typing["stopped_early"] = service.stopped.wait(0.5)
+
+    def wait_for_the_stop_after_the_result() -> None:
+        typing["stopped_late"] = service.stopped.wait(WAIT_SECONDS)
+
+    service.answers.append(
+        [
+            START,
+            A_CALL,
+            type_the_message_while_the_tool_runs,
+            ITS_RESULT,
+            wait_for_the_stop_after_the_result,
+            STOPPED,
+        ]
+    )
+    service.answers.append([START, {"typ": "content", "text": "Second answer.\n"}, DONE])
+    _the_run_with_a_message_typed_meanwhile(tmp_path, service, typing, monkeypatch)
+
+    assert glyphs.glyph("waiting") + " Wait for it." in typing["hint"]
+    assert typing["stopped_early"] is False
+    assert typing["stopped_late"] is True
+    sent = [body["content"] for body in service.bodies("/api/v1/chat/completions")]
+    assert sent == ["A first one.", "Wait for it."]
+
+
+def test_the_answer_is_not_stopped_while_a_second_tool_still_runs(tmp_path, monkeypatch):
+    service = Service()
+    typing: dict[str, Any] = {}
+    second_call: Step = {**A_CALL, "aufruf_id": "a2"}
+    first_result: Step = dict(ITS_RESULT)
+    second_result: Step = {**ITS_RESULT, "aufruf_id": "a2"}
+
+    def type_the_message() -> None:
+        typing["pipe"].send_text("Wait for it." + ENTER)
+        screen = typing["parts"][0].screen
+        deadline = time.monotonic() + WAIT_SECONDS
+        while "Wait for it." not in screen.hint_line() and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+    def look_for_a_stop_between_the_results() -> None:
+        typing["stopped_between"] = service.stopped.wait(0.5)
+
+    def wait_for_the_stop() -> None:
+        typing["stopped_after"] = service.stopped.wait(WAIT_SECONDS)
+
+    service.answers.append(
+        [
+            START,
+            A_CALL,
+            second_call,
+            type_the_message,
+            first_result,
+            look_for_a_stop_between_the_results,
+            second_result,
+            wait_for_the_stop,
+            STOPPED,
+        ]
+    )
+    service.answers.append([START, DONE])
+    _the_run_with_a_message_typed_meanwhile(tmp_path, service, typing, monkeypatch)
+
+    # The result of one of two calls leaves the other one running.
+    assert typing["stopped_between"] is False
+    assert typing["stopped_after"] is True
+
+
+def test_two_waiting_messages_ask_for_one_stop_and_go_out_in_order(tmp_path, monkeypatch):
+    service = Service()
+    typing: dict[str, Any] = {}
+
+    def type_two_messages_and_wait_for_the_stop() -> None:
+        typing["pipe"].send_text("One." + ENTER)
+        typing["pipe"].send_text("Two." + ENTER)
+        screen = typing["parts"][0].screen
+        deadline = time.monotonic() + WAIT_SECONDS
+        while "Two." not in screen.hint_line() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        typing["stopped"] = service.stopped.wait(WAIT_SECONDS)
+
+    service.answers.append(
+        [START, {"typ": "content", "text": "Half.\n"}, type_two_messages_and_wait_for_the_stop, STOPPED]
+    )
+    service.answers.append([START, {"typ": "content", "text": "To one.\n"}, DONE])
+    service.answers.append([START, {"typ": "content", "text": "To two.\n"}, DONE])
+    _the_run_with_a_message_typed_meanwhile(tmp_path, service, typing, monkeypatch)
+
+    assert typing["stopped"] is True
+    sent = [body["content"] for body in service.bodies("/api/v1/chat/completions")]
+    assert sent == ["A first one.", "One.", "Two."]
+    # One stop for the answer they waited behind; the answer to the first of
+    # them is not cut short for the second.
+    assert service.paths().count("POST /api/v1/chat/stop") == 1
+
+
+def test_the_interrupt_key_takes_the_waiting_messages_back_instead_of_sending_them(
+    tmp_path, monkeypatch
+):
+    service = Service()
+    typing: dict[str, Any] = {}
+
+    def type_the_message_and_interrupt() -> None:
+        typing["pipe"].send_text("Wait for it." + ENTER)
+        screen = typing["parts"][0].screen
+        deadline = time.monotonic() + WAIT_SECONDS
+        while "Wait for it." not in screen.hint_line() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        typing["pipe"].send_text("\x03")
+        typing["stopped"] = service.stopped.wait(WAIT_SECONDS)
+        deadline = time.monotonic() + WAIT_SECONDS
+        while not screen._input.text and time.monotonic() < deadline:
+            time.sleep(0.02)
+        typing["field"] = screen._input.text
+        screen._input.buffer.reset()
+
+    service.answers.append([START, A_CALL, type_the_message_and_interrupt, ITS_RESULT, STOPPED])
+    _the_run_with_a_message_typed_meanwhile(tmp_path, service, typing, monkeypatch)
+
+    assert typing["stopped"] is True
+    assert typing["field"] == "Wait for it."
+    # The stop ended the answer, and the message was not sent into it.
+    assert [body["content"] for body in service.bodies("/api/v1/chat/completions")] == ["A first one."]
+
+
+def test_escape_takes_a_waiting_message_back_into_the_field(tmp_path, monkeypatch):
+    service = Service()
+    typing: dict[str, Any] = {}
+
+    def type_the_message_and_take_it_back() -> None:
+        typing["pipe"].send_text("Wait for it." + ENTER)
+        parts = typing["parts"]
+        screen = parts[0].screen
+        deadline = time.monotonic() + WAIT_SECONDS
+        while "Wait for it." not in screen.hint_line() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        typing["pipe"].send_text("\x1b")
+        deadline = time.monotonic() + WAIT_SECONDS
+        while "Wait for it." in screen.hint_line() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        typing["field"] = screen._input.text
+        typing["hint_after"] = screen.hint_line()
+        # The field is emptied again: the run ends by typing a command into it.
+        screen._input.buffer.reset()
+
+    service.answers.append(
+        [START, A_CALL, type_the_message_and_take_it_back, ITS_RESULT, {"typ": "content", "text": "Done.\n"}, DONE]
+    )
+    _the_run_with_a_message_typed_meanwhile(tmp_path, service, typing, monkeypatch)
+
+    assert typing["field"] == "Wait for it."
+    assert "Wait for it." not in typing["hint_after"]
+    # Nothing was stopped and nothing was sent but the first message.
+    assert not service.stopped.is_set()
+    assert [body["content"] for body in service.bodies("/api/v1/chat/completions")] == ["A first one."]
 
 
 class TwoCommands(CommandSet):
@@ -441,16 +698,23 @@ OWN_ADDRESS = "http://127.0.0.1:8123"
 CHAT_ONE = "/api/v1/chats/chat-1"
 
 
-def at_the_own_service(service: Service, renderer: Calls) -> Context:
-    """The parts of a client that talks to the service of this machine,
-    with a new chat open."""
+def at_the_service(service: Service, renderer: Calls, address: str) -> Context:
+    """The parts of a client that talks to the service at ``address``, with
+    a new chat open."""
     ctx = context(service, renderer=renderer)
     ctx.client = ServiceClient(
-        OWN_ADDRESS, "en", http=httpx.Client(transport=httpx.MockTransport(service))
+        address, "en", http=httpx.Client(transport=httpx.MockTransport(service))
     )
     ctx.client.connect()
     chat.new_chat(ctx)
     return ctx
+
+
+def at_the_own_service(service: Service, renderer: Calls) -> Context:
+    """The same at the service of this machine: the stand-in names the
+    process the test runs in as its own."""
+    service.process = lambda host: this_process()
+    return at_the_service(service, renderer, OWN_ADDRESS)
 
 
 def about_chats(service: Service) -> list[str]:
@@ -504,6 +768,24 @@ def test_silence_probe_no_folder_is_shared_from_the_windows_tab_or_with_a_servic
         monkeypatch.delenv(themes.WINDOW_VARIABLE, raising=False)
         ctx = context(service, renderer=Calls())
         chat.new_chat(ctx)
+
+    chat.send(ctx, "Hello")
+
+    assert service.bodies(CHAT_ONE) == [{"title": "Hello"}]
+    assert "working_dirs" not in service.chats["chat-1"]
+
+
+@pytest.mark.parametrize("name", ["127.0.0.1", "localhost", "[::1]"])
+def test_a_stand_in_under_a_name_of_this_machine_is_a_service_elsewhere_by_default(
+    name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Falls over where a stand-in names the process of the test under any
+    name of this machine: the client then took it for its own service and
+    shared the folder it stands in."""
+    monkeypatch.delenv(themes.WINDOW_VARIABLE, raising=False)
+    monkeypatch.chdir(tmp_path)
+    service = Service([[START, DONE]])
+    ctx = at_the_service(service, Calls(), f"http://{name}:8123")
 
     chat.send(ctx, "Hello")
 
@@ -617,6 +899,7 @@ def test_through_the_whole_client_every_new_chat_works_in_the_start_folder(
         eventually(lambda: not ctx.session.answering)
         type_in("/quit" + ENTER)
 
+    stub.process = lambda host: this_process()
     with stub.http() as http:
         done = run_client(http, tmp_path, monkeypatch, drive, address=OWN_ADDRESS)
 
@@ -661,6 +944,7 @@ def test_silence_probe_through_the_whole_client_an_opened_chat_keeps_its_folders
         type_in("/quit" + ENTER)
 
     arguments = ["--chat", "c-old"] if opened_with == "--chat" else []
+    stub.process = lambda host: this_process()
     with stub.http() as http:
         done = run_client(http, tmp_path, monkeypatch, drive, *arguments, address=OWN_ADDRESS)
 

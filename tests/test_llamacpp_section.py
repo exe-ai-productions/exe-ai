@@ -103,7 +103,19 @@ def test_the_check_for_updates_is_drawn_only_by_the_section_and_the_picture_serv
         if path.suffix in {".svelte", ".js"}
         and "bildserver.nach_updates_suchen" in path.read_text(encoding="utf-8")
     )
-    assert carriers == ["teile/Bildserver.svelte", "teile/LlamaCppSection.svelte"]
+    assert carriers == [
+        # The phone pages draw the same two buttons in their own shape.
+        "phone/servers/ImageServerView.svelte",
+        "phone/servers/ProgramSection.svelte",
+    ]
+    # The desktop draws the check as one sign, the piece both programs share.
+    updaters = sorted(
+        path.relative_to(SOURCE).as_posix()
+        for path in SOURCE.rglob("*")
+        if path.suffix in {".svelte", ".js"}
+        and "<UpdateButton" in path.read_text(encoding="utf-8")
+    )
+    assert updaters == ["teile/Bildserver.svelte", "teile/LlamaCppSection.svelte"]
 
 
 def test_the_section_stands_above_the_log_in_every_window():
@@ -118,7 +130,7 @@ def test_the_picture_servers_block_is_unchanged():
     source = (TEILE / "Bildserver.svelte").read_text(encoding="utf-8")
     assert 'titel="sd.cpp"' in source
     assert "LlamaCppSection" not in source
-    assert "bildserver.nach_updates_suchen" in source
+    assert "<UpdateButton" in source
 
 
 def test_a_window_reads_again_when_a_fetch_ends():

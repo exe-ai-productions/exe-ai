@@ -2,7 +2,7 @@
   "name": "exe-ai-terminal-fenster-electron",
   "productName": "Exe AI",
   "private": true,
-  "version": "0.6.14",
+  "version": "0.6.50-r1",
   "description": "The Electron window for the Exe AI service.",
   "main": "main.js",
   "scripts": {
@@ -19,7 +19,7 @@
     "node-pty": "1.1.0"
   },
   "devDependencies": {
-    "electron": "^33.0.0",
+    "electron": "^44.9.2",
     "electron-builder": "^25.1.8",
     "@electron/rebuild": "4.2.1"
   },
@@ -37,6 +37,8 @@
       "preload.js",
       "terminal.js",
       "dienstsuche.js",
+      "menueleiste.js",
+      "topbar.js",
       "thumbnail.js",
       "updater.js",
       "anzeige/**"

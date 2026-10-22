@@ -23,6 +23,7 @@ import pytest
 from tests.conftest import pdf_mit_seiten
 from tests.test_dokumentkarte import _catalogue, _markup, _rule, _tabs
 from tests.test_hintergrundmeldung import _node
+from tests.fensterquelle import WINDOW_SOURCE
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "frontend/src"
@@ -34,7 +35,7 @@ RAIL = SOURCE / "teile/ModulVorschau.svelte"
 FRAME = SOURCE / "teile/PdfFrame.svelte"
 MESSAGE = SOURCE / "teile/Nachricht.svelte"
 MEDIA = SOURCE / "lib/media.js"
-APP = SOURCE / "App.svelte"
+APP = WINDOW_SOURCE
 SHELL = ROOT / "fenster-electron/main.js"
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="no node on this machine")
@@ -166,6 +167,18 @@ def _function(source: str, name: str) -> str:
     return found.group(0)
 
 
+def _module_functions(*names: str) -> str:
+    """The same, from lib/deliveredFile.js, where the line of a card is built
+    for the message and for the tab of a delivered file alike."""
+    source = (SOURCE / "lib/deliveredFile.js").read_text(encoding="utf-8")
+    out = ""
+    for name in names:
+        found = re.search(rf"^(?:export )?function {name}\(\w*\) \{{\n(?:.*\n)*?\}}\n", source, flags=re.M)
+        assert found, f"no function {name}"
+        out += found.group(0).removeprefix("export ")
+    return out
+
+
 def _card_lines(language: str, cards: str) -> list:
     """The message's own line builders, run over the real catalogue."""
     texts = json.loads((ROOT / f"app/locales/{language}.json").read_text(encoding="utf-8"))["nachricht"]
@@ -173,7 +186,9 @@ def _card_lines(language: str, cards: str) -> list:
     script = (
         f"const texts = {json.dumps(texts)};\n"
         "const t = (key, values = {}) => texts[key.split('.')[1]].replace('{zahl}', values.zahl);\n"
-        + "".join(_function(source, name) for name in ("pageCount", "fileFacts", "faktenZeile", "getragen"))
+        + _catalogue()
+        + _module_functions("pageCount", "fileFacts")
+        + "".join(_function(source, name) for name in ("faktenZeile", "getragen"))
         + f"console.log(JSON.stringify({cards}.map((card) => "
         "[faktenZeile(card), fileFacts(card), getragen(card)?.hinweis ?? null])))"
     )
@@ -188,14 +203,14 @@ def test_the_line_of_an_uploaded_file_is_kind_size_and_pages():
     the file gets the same three facts."""
     one, many, plain = _card_lines(
         "de",
-        "[{typ: 'pdf', kb: 1, seiten: 1, getragen: 'ganz'}, {typ: 'pdf', kb: 140, seiten: 3, getragen: 'ganz'},"
-        " {typ: 'md', kb: 1}]",
+        "[{typ: 'pdf', size_bytes: 1024, seiten: 1, getragen: 'ganz'}, {typ: 'pdf', size_bytes: 143360, seiten: 3, getragen: 'ganz'},"
+        " {typ: 'md', size_bytes: 1024}]",
     )
     assert one[:2] == ["PDF · 1 KB · 1 Seite", "PDF · 1 KB · 1 Seite"]
     assert one[2] == "Vollständig im Kontext\nDas vollständige Dokument ist im Kontextfenster des Modells enthalten."
     assert many[:2] == ["PDF · 140 KB · 3 Seiten", "PDF · 140 KB · 3 Seiten"]
     assert plain == ["MD · 1 KB", "MD · 1 KB", None]
-    assert _card_lines("en", "[{typ: 'pdf', kb: 1, seiten: 1}, {typ: 'pdf', kb: 9, seiten: 2}]") == [
+    assert _card_lines("en", "[{typ: 'pdf', size_bytes: 1024, seiten: 1}, {typ: 'pdf', size_bytes: 9216, seiten: 2}]") == [
         ["PDF · 1 KB · 1 page", "PDF · 1 KB · 1 page", None],
         ["PDF · 9 KB · 2 pages", "PDF · 9 KB · 2 pages", None],
     ]
@@ -207,9 +222,9 @@ def test_a_document_that_did_not_reach_the_model_says_so_in_its_line():
     document was too large, so that word stays where it is read without a
     pointer — and it is no fact of the file, so the tab does not carry it."""
     for carried in ("kein_platz", "abgelehnt"):
-        line, facts, hint = _card_lines("de", f"[{{typ: 'pdf', kb: 2400, seiten: 300, getragen: '{carried}'}}]")[0]
-        assert line == "PDF · 2400 KB · 300 Seiten · Zu groß für den Kontext", carried
-        assert facts == "PDF · 2400 KB · 300 Seiten" and hint is None, carried
+        line, facts, hint = _card_lines("de", f"[{{typ: 'pdf', size_bytes: 2457600, seiten: 300, getragen: '{carried}'}}]")[0]
+        assert line == "PDF · 2.3 MB · 300 Seiten · Zu groß für den Kontext", carried
+        assert facts == "PDF · 2.3 MB · 300 Seiten" and hint is None, carried
 
 
 @needs_node
@@ -249,7 +264,8 @@ def test_the_field_of_the_rail_shows_the_path_or_else_the_name():
     its name, and no empty tooltip."""
     row = _markup(RAIL).split('<div class="adresse">', 1)[1].split("</div>", 1)[0]
     assert (
-        '<span class="adresse-name" title={offen?.pfad || null}><span>{offen?.pfad || offen?.name}</span></span>'
+        '<span class="adresse-name" title={offen?.pfad ? displayPath(offen.pfad) : null}>'
+        "<span>{displayPath(offen?.pfad || offen?.name)}</span></span>"
         in row
     )
     assert '<span class="fakten">{fakten}</span>' in row, "kind and size left the field"
@@ -290,7 +306,7 @@ def test_a_framed_card_opens_the_file_in_a_frame_and_holds_no_text():
     assert "download: fileAddress ? null : () => herunterladenText()," in text
     filing = source.split("function fileFramed() {", 1)[1].split("\n  }\n", 1)[0]
     assert "if (!chatId || chatId !== zustand.aktiverChat) return" in filing
-    assert "name, art: 'pdf', inhalt: ''," in filing
+    assert "name, art: framed ? 'pdf' : sprache, inhalt: ''," in filing
     assert "adresse: fileAddress, fakten: fileFacts," in filing
 
 
@@ -315,18 +331,17 @@ def test_a_framed_tab_carries_its_address_and_a_text_tab_none():
 
 @needs_node
 def test_the_rail_shows_a_framed_tab_in_a_frame_without_a_source_switch():
-    """A tab with an address is drawn by the browser's viewer: the frame of a
-    PDF on the address, first on the stage. That frame is not sandboxed — a
-    sandboxed frame may not load the viewer. A PDF is no kind of the
-    catalogue, so it has no second view and the source switch is not drawn."""
+    """A tab with an address is drawn by the page itself: PdfFrame on the
+    address, first on the stage. It draws with pdf.js and has no frame at
+    all. A PDF is no kind of the catalogue, so it has no second view and the
+    source switch is not drawn."""
     script = _script(RAIL)
-    assert "const isFramed = $derived(Boolean(offen?.adresse))" in script
+    assert "const isFramed = $derived(Boolean(offen?.adresse) && info?.kind === 'pdf')" in script
     stage = _markup(RAIL).split('<div class="buehne">', 1)[1]
     first = stage.split("{:else", 1)[0]
     assert "{#if isFramed}" in first, "the frame is not the first thing the stage decides"
     assert "<PdfFrame address={offen.adresse} title={offen.name} />" in first, "a framed tab has no frame"
-    frame = re.search(r"<iframe[^>]*>", _markup(FRAME))
-    assert frame and "sandbox" not in frame.group(0)
+    assert "<iframe" not in _markup(FRAME), "a PDF is no longer drawn by the browser's viewer in a frame"
     # The sandbox of the frame that draws the model's own page is untouched.
     assert 'sandbox="allow-scripts"' in stage.split("{:else", 1)[1]
     assert "{#if hasTwoViews}" in _markup(RAIL)
@@ -340,7 +355,7 @@ def test_saving_a_framed_tab_saves_the_file_itself():
     one link every save in the window clicks, the reader's included."""
     saving = _script(RAIL).split("function herunterladen() {", 1)[1].split("\n  }\n", 1)[0]
     framed, text = saving.split("dateiHerunterladen(", 1)
-    assert "if (isFramed) {" in framed
+    assert "if (offen.adresse) {" in framed
     assert "return" in framed.split("saveFromAddress(offen.name, offen.adresse)", 1)[1]
     assert text.startswith("offen.name, offen.inhalt, eintrag?.typ)")
     assert "saveFromAddress(bildschau.name, bildschau.adresse)" in _script(READER)
@@ -360,40 +375,29 @@ def test_saving_a_framed_tab_saves_the_file_itself():
 # --- The viewer inside the frame --------------------------------------------
 
 # No bar of the viewer's own, no strip of small pages, the page fitted to the width.
-VIEWER_SWITCHES = "#toolbar=0&navpanes=0&view=FitH"
-
-
 @needs_node
-def test_the_frame_of_a_pdf_asks_the_viewer_for_no_bar_and_the_width():
-    """The viewer draws a bar of its own over the pages unless the address of
-    the frame says otherwise. The rail and the reader show a PDF through one
-    frame, and that frame points at the file's address with the three
-    switches behind the hash — and at nothing while it has no address. The
-    expression is the component's own, run."""
-    found = re.search(r"const frameAddress = \$derived\(\s*(.+?),?\s*\)$", _script(FRAME), flags=re.M | re.S)
-    assert found, "the frame names no address for the viewer"
-    values = [
-        json.loads(_node(f"const address = {given}; console.log(JSON.stringify({found.group(1)}))"))
-        for given in ("'/file/1?schluessel=k'", "''", "undefined")
-    ]
-    assert values == [f"/file/1?schluessel=k{VIEWER_SWITCHES}", "", ""]
-    frames = re.findall(r"<iframe[^>]*>", _markup(FRAME))
-    assert len(frames) == 1 and "src={frameAddress}" in frames[0], frames
+def test_the_pdf_is_drawn_by_the_library_and_both_holders_show_it_through_one_component():
+    """The rail and the reader show a PDF through one component, and that
+    component asks the one place for pdf.js (lib/pdfDocument.js) for its
+    pages; it opens nothing in a frame and asks no viewer for a bar."""
+    script = _script(FRAME)
+    assert "from '../lib/pdfDocument.js'" in script
+    assert "<iframe" not in _markup(FRAME) and "toolbar" not in FRAME.read_text(encoding="utf-8")
     assert "<PdfFrame address={offen.adresse} title={offen.name} />" in _markup(RAIL)
     assert "<PdfFrame address={bildschau.adresse} title={bildschau.name} />" in _markup(READER)
     for component in (RAIL, READER):
         assert "import PdfFrame from './PdfFrame.svelte'" in _script(component), component.name
 
 
-def test_only_the_frame_carries_the_switches():
+def test_the_address_every_save_goes_by_stays_plain():
     """Silence probe. The address every save goes by stays plain — the helper
-    in api.js, the rail's save and the reader's — the switches stand once,
-    in the frame, and the frame that draws the model's own page has no
-    address at all: it keeps its `srcdoc` and its sandbox."""
+    in api.js, the rail's save and the reader's — and the frame that draws
+    the model's own page has no address at all: it keeps its `srcdoc` and
+    its sandbox."""
     assert "toolbar" not in API.read_text(encoding="utf-8")
     for component in (RAIL, READER):
         assert "toolbar" not in component.read_text(encoding="utf-8"), component.name
-    assert FRAME.read_text(encoding="utf-8").count(VIEWER_SWITCHES) == 1
+    assert "toolbar" not in FRAME.read_text(encoding="utf-8")
     assert "saveFromAddress(offen.name, offen.adresse)" in _script(RAIL)
     assert "saveFromAddress(bildschau.name, bildschau.adresse)" in _script(READER)
     frames = re.findall(r"<iframe[^>]*>", _markup(RAIL))
@@ -403,25 +407,13 @@ def test_only_the_frame_carries_the_switches():
 
 
 def test_the_sheet_of_a_pdf_keeps_the_corners_of_what_holds_it():
-    """The viewer lays a dark rim around the sheet it draws, and the rounding
-    of the page cut that rim instead of the sheet. The frame overhangs what
-    holds it by a share of the width — the same on both sides, less above —
-    and one layer cuts it at the holder's own rounding. Both holders are
-    positioned and carry the house's radius."""
-    cut = _rule(FRAME, ".cut")
-    for line in (
-        "position: absolute;", "inset: 0;", "overflow: hidden;", "border-radius: inherit;",
-        "container-type: inline-size;",
-    ):
-        assert line in cut, line
-    frame = _rule(FRAME, "iframe")
-    # Measured: the rim of a sheet of A4 fitted to the width, beside it and above it.
-    for line in (
-        "position: absolute;", "left: -0.63cqw;", "width: calc(100% + 1.26cqw);",
-        "top: -0.45cqw;", "height: calc(100% + 0.45cqw);", "border: none;",
-    ):
-        assert line in frame, line
-    assert '<div class="cut">' in _markup(FRAME)
+    """The pages roll in a layer that fills what holds it and carries its
+    rounding; the holders are positioned and carry the house's radius. The
+    layer's size and rounding are measured in a real browser
+    (tests/test_pdf_pages_chrome.py)."""
+    layer = _rule(FRAME, ".pdf")
+    for line in ("position: absolute;", "inset: 0;", "overflow-y: auto;", "border-radius: inherit;"):
+        assert line in layer, line
     assert '<div class="seite rahmen viewer">' in _markup(RAIL)
     for path, selector, page in ((RAIL, ".viewer", ".seite"), (READER, ".page.framed", ".page")):
         assert "position: relative;" in _rule(path, selector), path.name
@@ -445,7 +437,7 @@ def test_the_reader_draws_a_framed_page_in_a_frame_and_markdown_rendered():
     assert '<div class="page framed">' in framed
     assert "<PdfFrame address={bildschau.adresse} title={bildschau.name} />" in framed
     order = [
-        markup.index("{:else if text != null && isSource}"),
+        markup.index("{:else if text != null && isCode}"),
         markup.index("{:else if text != null && isMarkdown}"),
         markup.index("{:else if text != null}"),
     ]
@@ -454,7 +446,7 @@ def test_the_reader_draws_a_framed_page_in_a_frame_and_markdown_rendered():
     assert "{#each dateiTeile(text) as piece" in rendered and "{@html piece.wert}" in rendered
     script = _script(READER)
     assert "const MARKDOWN = new Set(['md', 'markdown'])" in script
-    assert "const isSource = $derived(Boolean(dateiart(bildschau.language)) && !isMarkdown)" in script
+    assert "info?.kind === 'code' || (info?.kind === 'doc' && !isMarkdown && !isSvg)" in script
 
 
 def test_the_sheet_has_the_shape_of_a_sheet_of_paper():
@@ -489,7 +481,8 @@ def test_an_answer_draws_the_card_of_every_document_it_carries():
     assert before.rstrip().endswith('<div class="file-row">')
     assert "{#if deliveredFiles.length}" in before[before.rindex("{#if") :], "the row is drawn for no document"
     card = after.split("/>", 1)[0]
-    assert "<Dateikarte" in card and "zeichenHtml={DOK_ZEICHEN}" in card
+    assert "<Dateikarte" in card and "DOK_ZEICHEN" in card
+    assert "dateizeichen(deliveredLanguage(karte.typ))" in card
     assert "fakten={faktenZeile(karte)}" in card and "fileFacts={fileFacts(karte)}" in card
     assert "{chatId}" in card, "a file of the answer does not reach the rail"
     assert "ladeInhalt={karte.id ? () => dokumentLesen(karte, true) : null}" in card
@@ -504,11 +497,11 @@ def test_a_running_answer_takes_its_documents_from_the_tool_result():
     shape a stored answer has — one as `dokument`, several as `dokumente`.
     An event without documents leaves what the answer holds alone."""
     source = APP.read_text(encoding="utf-8")
-    found = re.search(r"if \(Array\.isArray\(ereignis\.dokumente\)\) \{\n(?:.*\n){2}\s*\}", source)
+    found = re.search(r"if \(Array\.isArray\(ereignis\.dokumente\)\) \{\n(?:.*\n){2}", source)
     assert found, "the page no longer reads the documents of a tool result"
     script = (
         "const take = (ereignis, platzhalter) => {\n"
-        f"{found.group(0)}\n"
+        f"{found.group(0)}}}\n"
         "return platzhalter }\n"
         "const a = {id: 'a'}, b = {id: 'b'};\n"
         "console.log(JSON.stringify(["
@@ -662,7 +655,8 @@ def test_a_click_on_a_delivered_picture_opens_the_picture_under_its_name():
     }
     assert bare["name"] == "file"
     reader = _markup(READER)
-    assert '<img class="picture" src={bildschau.adresse} alt={bildschau.name} />' in reader
+    # The picture is shown under its name, on the stage that hears the fingers.
+    assert '<img class="picture" src={bildschau.adresse} alt={bildschau.name}' in reader
     assert "saveFromAddress(bildschau.name, bildschau.adresse)" in _script(READER)
 
 
@@ -682,6 +676,7 @@ def test_the_main_window_of_the_shell_loads_the_viewer_and_no_other_window_does(
         "contextIsolation: true,",
         "nodeIntegration: false,",
         "preload: path.join(__dirname, 'preload.js'),",
+        "additionalArguments: topbar.topBarArguments(process.platform),",
         "plugins: true,",
     ]
     assert len(re.findall(r"^\s*plugins:", source, flags=re.M)) == 1

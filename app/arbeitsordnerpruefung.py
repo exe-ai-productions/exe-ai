@@ -37,6 +37,25 @@ from fastapi import HTTPException
 from app import ordnerwissen
 from app.i18n import t
 
+
+def typed_path(raw: str) -> str:
+    """The path as it was meant: one pair of matching quotes around it is
+    taken off.
+
+    "Copy as path" in the Windows file manager puts the path in double
+    quotes, and a shell lets one paste a path in single quotes — both end up
+    in a path field as typed. The one place that takes them off is here, in
+    the service, because the command line client sends the path exactly as it
+    was typed too; the window in the interface takes nothing off itself.
+    Only a pair that encloses the whole text and is the same on both sides:
+    a lone quote, or one inside the path, is a character of the path.
+    """
+    text = raw.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'" and text[1:-1].strip():
+        return text[1:-1]
+    return raw
+
+
 def pruefen(
     rohe: list[str], sprache: str, bekannte: Sequence[str] = ()
 ) -> list[str]:
@@ -47,7 +66,8 @@ def pruefen(
     a new share and gets the full check.
     """
     gepruefte: list[str] = []
-    for eintrag in rohe:
+    for raw in rohe:
+        eintrag = typed_path(raw)
         if eintrag in bekannte:
             if eintrag not in gepruefte:
                 gepruefte.append(eintrag)

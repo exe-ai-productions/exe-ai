@@ -25,10 +25,12 @@ if nothing about it is shared.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 import httpx
 
 from app import runnerzustand
+from app.embedding_start_choice import BATCH_DEFAULT
 from app.modellrunner import Modellrunner
 
 log = logging.getLogger(__name__)
@@ -40,36 +42,48 @@ PID_DATEI = ".einbettungsserver.pid"
 # The environment variable this server's key travels in.
 SCHLUESSEL_VARIABLE = "EXE_EINBETTUNG_API_KEY"
 
-# What makes a llama-server an embedding server.
+# What makes a llama-server an embedding server: the one flag that turns the
+# answers into vectors. How it runs is chosen at the start and travels with it
+# (`start_flags`): the batch sizes and, where one is named, the pooling kind.
 #
-# `--pooling mean` is the one that matters: without it the server answers per
-# token, and there is nothing to compare a question against.
+# Without `--pooling` the model's own kind stands. A model that names none
+# answers per token, and there is nothing to compare a question against: the
+# window offers mean, cls and last for that case.
 #
-# The two batch sizes are the ones that make it USABLE. A server started
-# without them lands on 512, and every section of a real document is bigger
-# than that — the answer is then "input too large" on every single call, the
-# fast path falls back every time, and it costs a round trip to find that
-# out. Both numbers have to be given: with embeddings on, llama-server pulls
-# the larger one down to the smaller one.
-STAPEL = 2048
+# The two batch sizes are what makes it USABLE. A server started without them
+# lands on 512, and every section of a real document is bigger than that —
+# the answer is then "input too large" on every single call, the fast path
+# falls back every time, and it costs a round trip to find that out. Both
+# numbers have to be given: with embeddings on, llama-server pulls the larger
+# one down to the smaller one, so they are one number.
+STAPEL = BATCH_DEFAULT
 FLAGS = (
     "--embedding",
-    "--pooling", "mean",
-    "--batch-size", str(STAPEL),
-    "--ubatch-size", str(STAPEL),
     # The window is NOT set here. The runner writes `--ctx-size` itself from
     # what it is started with, and a second one from this list produced a
     # command line carrying the flag twice — llama.cpp takes the last, so it
     # worked by accident until somebody reordered something. It travels as a
-    # start value instead, see `starten` below.
+    # start value instead, see `starten` in the route.
 )
+
+
+def start_flags(stapel: int, pooling: str) -> tuple[str, ...]:
+    """The command line words that go with one start: both batch sizes, and
+    the pooling kind where one is named (no flag is the model's own)."""
+    zeile: tuple[str, ...] = ()
+    if pooling:
+        zeile += ("--pooling", pooling)
+    return zeile + ("--batch-size", str(stapel), "--ubatch-size", str(stapel))
+
 
 # Short on purpose. If the server does not answer in this time it is not
 # helping, and the one-shot path is right there.
 ZEITGRENZE = 20.0
 
 
-def runner_bauen(modellordner, programm: str | None, port: int) -> Modellrunner:
+def runner_bauen(
+    modellordner, programm: str | None, port: int, shared_with: Callable[[], int | None] | None = None
+) -> Modellrunner:
     """The embedding server's runner — the same class, another kind."""
     return Modellrunner(
         modellordner,
@@ -82,6 +96,7 @@ def runner_bauen(modellordner, programm: str | None, port: int) -> Modellrunner:
         # never handed a tool.
         sampling_flags=False,
         zustand_callback=runnerzustand.melder(runnerzustand.EMBEDDING),
+        shared_with=shared_with,
     )
 
 

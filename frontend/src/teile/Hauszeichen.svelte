@@ -16,7 +16,9 @@
      server and the row has no drawing of its own under that name, it
      hands the name here (Werkzeugzeichen.svelte).
 
-       werkzeug   calls tools (wrench)  raster     the catalog grid
+       werkzeug   calls tools (wrench)  raster     the local models grid
+       ranking_bars  the overview of the servers (a baseline, three bars)
+       handy      the web app (a phone)
        auge       sees images           server     a model server (racks)
        gluehbirne thinks first          wolke      memory
        blitz      the speed module      buch       skills
@@ -26,20 +28,38 @@
        dokument   a file (config, script)  dokument_pfeil  a raw list file
        dokument_zeilen  a page with lines (nothing to preview)
        ordner     a folder (models, projects)  bild  a picture server
+       folder_plus  the same folder with a plus (a new project)
        einbettung an embedding server   stoppuhr   the schedules (cronjobs)
        blatt_zeilen a report (sheet with lines)
        agent      the agent server      schloss_offen  auto mode's own risk —
                                                    the shackle open, not shut
        sprache_welle  the speech server
-       netzwerk   a network link (two plugs)  besen  clean-up, house style
+       netzwerk   the chip with a network     besen  clean-up, house style
        plus       adding something new        plug   an MCP server
        archive    the archive (a drawer)
        keyboard   the shortcuts       microphone  the microphone key
        sprechblase  a chat           puzzle      an add-on (accessories)
+       speech_bubble_dots  a chat with three dots (the instructions are on)
        download   a download (arrow onto a line)
        neu_laden  loading again (a clockwise arc with its tip at the end)
        ecken      the layout mode (two opposite corners)
        clapperboard  a video (the clapper above its board)
+       kamera     the camera (take a picture)  neu   a new chat (pencil on a line)
+       schild     how far tools may go (a shield)
+       hilfe      the manual (a question mark)
+       trash      remove (a bin)         info       an explanation (a circle with an i)
+       chevron_right  a way in (a right-pointing chevron)
+       chevron_left   a way back (a left-pointing chevron)
+       gear       the settings (a cog)   chip_bolt  a chip with a bolt
+       flag       a goal (a pennant on its pole)
+       play       play a recording (a triangle)   stop  stop (a rounded square)
+       clock      the time (a dial with its four quarter marks)
+       branch     a fork (a line that splits)
+       save       save (a floppy)        refresh    reload both ways (two arrows)
+       ellipsis   more (three dots)      settings_two  two sliders
+       update_available  a newer version (a circle fading out, an arrow up)
+       shrink     a smaller copy (four corners moving in)
+       speaker    a loudspeaker with sound waves (the test button of a notification)
 
      The three server kinds used to share the rack sign, which said "a
      server" three times and which of the three never. Now the rack stays
@@ -74,8 +94,11 @@
      three signs of the rail (measured: +7 image points against +2). The view
      travels down by the same 2 instead, which centres the mark without
      touching a single coordinate of the catalogue drawing. Sideways all four
-     already sit on one axis. */
-  const SICHTFELDER = { agent: '0 2 64 64', sprache_welle: '0 0 64 64', plug: '0 0 64 64', archive: '0 0 64 64', keyboard: '0 0 64 64', microphone: '0 0 64 64', dokument_zeilen: '0 0 64 64', palette: '0 0 64 64', stopwatch: '0 0 64 64', blatt_zeilen: '0 0 64 64', sprechblase: '0 0 64 64', puzzle: '0 0 64 64' }
+     already sit on one axis. The clapperboard hangs the same way: its flap
+     leans down and its drawing sits off the middle of the 24 grid, so the
+     view is cut to the drawing's own extent and the sign stands in the
+     middle of its box. */
+  const SICHTFELDER = { agent: '0 2 64 64', sprache_welle: '0 0 64 64', plug: '0 0 64 64', archive: '0 0 64 64', keyboard: '0 0 64 64', microphone: '0 0 64 64', dokument_zeilen: '0 0 64 64', palette: '0 0 64 64', server: '0 0 64 64', ranking_bars: '0 0 64 64', chip_bolt: '0 0 64 64', netzwerk: '0 0 64 64', clock: '0 0 64 64', clapperboard: '-1.15 -0.25 26.5 26.5', branch: '0 0 64 64', stopwatch: '0 0 64 64', blatt_zeilen: '0 0 64 64', sprechblase: '0 0 64 64', speech_bubble_dots: '0 0 64 64', puzzle: '0 0 64 64' }
   const sichtfeld = $derived(SICHTFELDER[zeichen] ?? '0 0 24 24')
 </script>
 
@@ -90,7 +113,11 @@
   stroke-linejoin="round"
   aria-hidden="true"
 >
-  {#if zeichen === 'werkzeug'}
+  {#if zeichen === 'handy'}
+    <!-- A phone: the body and the home dot. -->
+    <rect x="5" y="2" width="14" height="20" rx="2" />
+    <path d="M12 18h.01" />
+  {:else if zeichen === 'werkzeug'}
     <!-- The open-end wrench — it replaced the caret, which said
          "terminal" when it meant "calls tools". -->
     <path d="M7 10h3v-3l-3.5-3.5a6 6 0 0 1 8 8l6 6a2 2 0 0 1-3 3l-6-6a6 6 0 0 1-8-8l3.5 3.5" />
@@ -108,9 +135,20 @@
     <rect x="3.5" y="13" width="7.5" height="7.5" rx="2" />
     <rect x="13" y="13" width="7.5" height="7.5" rx="2" />
   {:else if zeichen === 'server'}
-    <rect x="3.5" y="4" width="17" height="7" rx="2.5" />
-    <rect x="3.5" y="13" width="17" height="7" rx="2.5" />
-    <path d="M7 7.5 h.01 M7 16.5 h.01" />
+    <!-- The house icon server-stack, verbatim on its own 64 grid: two racks,
+         each with its lamp and its slot. Every server of the program wears
+         this one drawing. -->
+    <rect x="12" y="13" width="40" height="17" rx="5.5" stroke-width="5" />
+    <rect x="12" y="34" width="40" height="17" rx="5.5" stroke-width="5" />
+    <circle cx="21" cy="21.5" r="1.4" stroke-width="4.2" />
+    <circle cx="21" cy="42.5" r="1.4" stroke-width="4.2" />
+    <path d="M36 21.5 H44 M36 42.5 H44" stroke-width="4.5" />
+  {:else if zeichen === 'ranking_bars'}
+    <!-- The house icon ranking-bars, verbatim on its own 64 grid: a baseline
+         and three bars of falling height. The overview of the servers wears
+         it. -->
+    <path d="M9 55 H55" stroke-width="4.5" />
+    <path d="M17 55 V19 M32 55 V29 M47 55 V39" stroke-width="5" />
   {:else if zeichen === 'wolke'}
     <path d="M6.3 17.5 h10.9 a3.3 3.3 0 0 0 .4-6.6 A5 5 0 0 0 7.9 9.6 A3.7 3.7 0 0 0 6.3 17.5 Z" />
   {:else if zeichen === 'buch'}
@@ -174,9 +212,13 @@
     <path d="M16 8 H38 L48 18 V56 H16 Z" stroke-width="5" />
     <path d="M38 8 V18 H48" stroke-width="4.5" />
     <path d="M25 34 H39 M25 44 H39" stroke-width="4.5" />
-  {:else if zeichen === 'ordner'}
+  {:else if zeichen === 'ordner' || zeichen === 'folder_plus'}
     <path d="M3.75 18 V6 H9.75 L11.63 8.25 H18 V11.25" />
     <path d="M3.75 18 H16.5 L20.25 11.25 H7.5 Z" />
+    {#if zeichen === 'folder_plus'}
+      <!-- The plus at the top right, a little finer than the folder. -->
+      <path d="M21 2.5v4M19 4.5h4" stroke-width="1.8" />
+    {/if}
   {:else if zeichen === 'auskoppeln'}
     <!-- Pop out: a frame with an arrow breaking out of its top-right corner,
          the sign for the same thing shown large in a window of its own. -->
@@ -213,6 +255,25 @@
     <path d="M46.5 25.5l4.5-4.5" stroke-width="5" />
     <path d="M32 39V27" stroke-width="5" />
     <path d="M32 39l6.5 4" stroke-width="5" />
+  {:else if zeichen === 'clock'}
+    <!-- The catalogue's clock with its four quarter marks (clock-marks.svg),
+         verbatim on its own 64 grid: the sign of the time. -->
+    <circle cx="32" cy="32" r="22" stroke-width="5" />
+    <path d="M32 12v4" stroke-width="5" />
+    <path d="M52 32h-4" stroke-width="5" />
+    <path d="M32 52v-4" stroke-width="5" />
+    <path d="M12 32h4" stroke-width="5" />
+    <path d="M32 32V21" stroke-width="5" />
+    <path d="M32 32h8" stroke-width="5" />
+  {:else if zeichen === 'flag'}
+    <!-- A pennant on its pole: the sign of a goal. -->
+    <path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528" />
+  {:else if zeichen === 'speaker'}
+    <!-- The catalogue's volume-2, verbatim: a loudspeaker and two sound
+         waves. The sign of a sound test. -->
+    <path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z" />
+    <path d="M16 9a5 5 0 0 1 0 6" />
+    <path d="M19.364 18.364a9 9 0 0 0 0-12.728" />
   {:else if zeichen === 'blatt_zeilen'}
     <!-- The catalogue's sheet with lines (sheet-lines.svg), verbatim on its
          own 64 grid: the sign of a report. -->
@@ -254,13 +315,14 @@
          64-grid: five bars of a level meter, tallest in the middle. -->
     <path d="M10 26 V38 M21 18 V46 M32 10 V54 M43 20 V44 M54 28 V36" stroke-width="5" />
   {:else if zeichen === 'netzwerk'}
-    <!-- A network link: a cable with a plug at each end, not a single jack —
-         this section is two machines talking, not one port. -->
-    <rect x="2.5" y="15.5" width="5.5" height="4.5" rx="1.3" />
-    <path d="M3.5 20 V22.5 M6.5 20 V22.5" />
-    <rect x="16" y="4" width="5.5" height="4.5" rx="1.3" />
-    <path d="M17 4 V1.5 M20 4 V1.5" />
-    <path d="M8 17.7 C11 15, 13 9, 16.5 6.3" />
+    <!-- The house icon chip-with-network, verbatim on its own 64 grid: a
+         chip with three nodes joined by lines. -->
+    <rect x="12" y="12" width="40" height="40" rx="7" stroke-width="5" />
+    <path d="M24 5 V12 M40 5 V12 M24 52 V59 M40 52 V59" stroke-width="4.5" />
+    <circle cx="32" cy="24" r="3.5" stroke-width="4.5" />
+    <circle cx="23" cy="40" r="3.5" stroke-width="4.5" />
+    <circle cx="41" cy="40" r="3.5" stroke-width="4.5" />
+    <path d="M30 27.5 L25 36.5 M34 27.5 L39 36.5 M26.5 40 H37.5" stroke-width="4.5" />
   {:else if zeichen === 'besen'}
     <!-- A broom, head at seven o'clock and canted rather than square to the
          handle — a tool caught mid-sweep, not standing at rest. -->
@@ -297,6 +359,13 @@
     <path d="M17 3l4 4L8 20l-5 1 1-5L17 3z" />
   {:else if zeichen === 'sprechblase'}
     <path d="M14 12 H50 A8 8 0 0 1 58 20 V38 A8 8 0 0 1 50 46 H32 L20 56 V46 H14 A8 8 0 0 1 6 38 V20 A8 8 0 0 1 14 12 Z" stroke-width="5" />
+  {:else if zeichen === 'speech_bubble_dots'}
+    <!-- The house icon speech-bubble-dots, verbatim on its own 64 grid: the
+         outline of the chat bubble and three dots in it. -->
+    <path d="M14 12 H50 A8 8 0 0 1 58 20 V38 A8 8 0 0 1 50 46 H32 L20 56 V46 H14 A8 8 0 0 1 6 38 V20 A8 8 0 0 1 14 12 Z" stroke-width="5" />
+    <circle cx="18" cy="29" r="2.75" fill="currentColor" stroke="none" />
+    <circle cx="32" cy="29" r="2.75" fill="currentColor" stroke="none" />
+    <circle cx="46" cy="29" r="2.75" fill="currentColor" stroke="none" />
   {:else if zeichen === 'puzzle'}
     <path d="M14 24 H24 C21.5 20 23.5 14 29 14 C34.5 14 36.5 20 34 24 H44 V34 C48 31.5 54 33.5 54 39 C54 44.5 48 46.5 44 44 V54 H14 Z" stroke-width="5" />
   {:else if zeichen === 'download'}
@@ -322,6 +391,85 @@
     <!-- The house icon corners, verbatim with its own stroke width. -->
     <path d="M10 4 H4 V10" stroke-width="2.5" />
     <path d="M14 20 H20 V14" stroke-width="2.5" />
+  {:else if zeichen === 'kamera'}
+    <path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" />
+    <circle cx="12" cy="13.5" r="3.5" />
+  {:else if zeichen === 'neu'}
+    <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+  {:else if zeichen === 'schild'}
+    <path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6Z" />
+  {:else if zeichen === 'hilfe'}
+    <!-- A question mark: the manual, the place a question about a setting
+         leads to. -->
+    <path d="M9.2 9a2.8 2.8 0 1 1 4 2.55c-.9.42-1.2 1.05-1.2 2.05v.4" />
+    <path d="M12 17.6 V17.7" />
+  {:else if zeichen === 'play'}
+    <!-- The house icon play, verbatim. -->
+    <path d="M8.5 6 L18.5 12 L8.5 18 Z" stroke-width="2.2" />
+  {:else if zeichen === 'stop'}
+    <!-- The house icon stop, verbatim. -->
+    <rect x="6.5" y="6.5" width="11" height="11" rx="2" stroke-width="2.2" />
+  {:else if zeichen === 'trash'}
+    <!-- The house icon trash, verbatim. -->
+    <path d="M3 6h18" />
+    <path d="M8 6V4h8v2" />
+    <path d="M6 6l1 14h10l1-14" />
+  {:else if zeichen === 'info'}
+    <!-- The house icon info-circle, with the letter i where the catalogue
+         has an exclamation mark: the sign says "an explanation", not "a
+         warning". -->
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 11v5M12 8h.01" />
+  {:else if zeichen === 'chevron_right'}
+    <path d="M9 6l6 6-6 6" stroke-width="2.5" />
+  {:else if zeichen === 'chevron_left'}
+    <!-- The house icon chevron-left, verbatim. -->
+    <path d="M15 5 8 12l7 7" stroke-width="2.2" />
+  {:else if zeichen === 'gear'}
+    <!-- The cog of the settings, drawn on the 24 grid. -->
+    <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" />
+    <circle cx="12" cy="12" r="3" />
+  {:else if zeichen === 'chip_bolt'}
+    <!-- The house icon chip-with-bolt, verbatim on its own 64 grid. -->
+    <rect x="14" y="14" width="36" height="36" rx="7" stroke-width="5" />
+    <path d="M24 6 V14 M40 6 V14 M24 50 V58 M40 50 V58 M6 24 H14 M6 40 H14 M50 24 H58 M50 40 H58" stroke-width="4.5" />
+    <path d="M35 21 L27 33 H37 L29 43" stroke-width="4.5" />
+  {:else if zeichen === 'branch'}
+    <!-- The house icon branch, verbatim on its own 64 grid. -->
+    <path d="M20 15 V49" stroke-width="5" />
+    <path d="M20 32 H33 C39 32 44 27 44 21" stroke-width="4.5" />
+    <circle cx="44" cy="16" r="4.5" stroke-width="4.5" />
+  {:else if zeichen === 'save'}
+    <path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
+    <path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" />
+    <path d="M7 3v4a1 1 0 0 0 1 1h7" />
+  {:else if zeichen === 'refresh'}
+    <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+    <path d="M21 3v5h-5" />
+    <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+    <path d="M8 16H3v5" />
+  {:else if zeichen === 'ellipsis'}
+    <circle cx="12" cy="12" r="1" />
+    <circle cx="19" cy="12" r="1" />
+    <circle cx="5" cy="12" r="1" />
+  {:else if zeichen === 'settings_two'}
+    <path d="M20 7h-9" />
+    <path d="M14 17H5" />
+    <circle cx="17" cy="17" r="3" />
+    <circle cx="7" cy="7" r="3" />
+  {:else if zeichen === 'shrink'}
+    <path d="m15 15 6 6m-6-6v4.8m0-4.8h4.8" />
+    <path d="M9 19.8V15m0 0H4.2M9 15l-6 6" />
+    <path d="M15 4.2V9m0 0h4.8M15 9l6-6" />
+    <path d="M9 4.2V9m0 0H4.2M9 9 3 3" />
+  {:else if zeichen === 'update_available'}
+    <path d="M12 2a10 10 0 0 1 7.38 16.75" />
+    <path d="m16 12-4-4-4 4" />
+    <path d="M12 16V8" />
+    <path d="M2.5 8.875a10 10 0 0 0-.5 3" />
+    <path d="M2.83 16a10 10 0 0 0 2.43 3.4" />
+    <path d="M4.636 5.235a10 10 0 0 1 .891-.857" />
+    <path d="M8.644 21.42a10 10 0 0 0 7.631-.38" />
   {/if}
 </svg>
 

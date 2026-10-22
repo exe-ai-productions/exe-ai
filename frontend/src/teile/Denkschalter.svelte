@@ -1,6 +1,6 @@
 <script>
   /* The thinking switch, left of the microphone: the bulb and one dot for
-     every stage that thinks, blue as far as the chosen stage reaches. No
+     every stage that thinks, in the text colour as far as the chosen stage reaches. No
      word in the bar — the dots say how much, and the list says which.
 
      What it offers is what the service reports for the chosen model
@@ -11,7 +11,9 @@
        schalter   a click turns thinking on or off
        immer/nie  the bulb stands still beside its word; nothing to click,
                   because a control that opens onto nothing lies about what
-                  it can do
+                  it can do. In the narrow form of the bar the word steps
+                  aside and the bulb stands alone: the word stays in the
+                  tooltip and for a screen reader.
 
      The stage belongs to the model and is stored by the caller
      (`denkenSetzen`, Eingabeleiste.svelte); this component only draws it and
@@ -24,7 +26,7 @@
 
   /* `denken` is the stage in force, as the caller works it out — the same
      value the request carries (Eingabeleiste.svelte, `denkStufe`). */
-  let { denkprofil = null, denken = null, denkenSetzen = () => {} } = $props()
+  let { denkprofil = null, denken = null, denkenSetzen = () => {}, narrow = false } = $props()
 
   const art = $derived(denkprofil?.art ?? 'nie')
   const stufen = $derived(denkprofil?.stufen ?? [])
@@ -193,7 +195,7 @@
 {:else}
   <span class="pille fest" class:an title={t(art === 'immer' ? 'denken.immer' : 'denken.nie')}>
     {@render birne(art !== 'immer')}
-    <span class="wort">{t(art === 'immer' ? 'denken.immer' : 'denken.nie')}</span>
+    <span class="wort" class:fort={narrow}>{t(art === 'immer' ? 'denken.immer' : 'denken.nie')}</span>
   </span>
 {/if}
 
@@ -254,9 +256,9 @@
   .pille:focus-visible { outline: 2px solid var(--linie-stark); outline-offset: -2px; }
   .birne { width: 16px; height: 16px; flex: none; overflow: visible; }
 
-  /* How much: one dot per thinking stage, blue as far as the chosen one.
-     Blue is the colour this program gives thinking — the same blue the
-     answer's line wears while the model thinks. */
+  /* How much: one dot per thinking stage, in the text colour as far as the
+     chosen one and quiet beyond it, in every look — the ring of the context
+     wears the same pair. */
   .punkte { display: inline-flex; gap: 3px; }
   .punkte i {
     width: 5px;
@@ -265,14 +267,23 @@
     background: var(--indicator-empty);
     transition: background 0.2s;
   }
-  .punkte i.voll { background: var(--blau); }
+  .punkte i.voll { background: var(--text); }
 
   /* The two models with nothing to set: a word beside the bulb, not a dead
      button. */
-  .pille.fest { cursor: default; }
+  .pille.fest { position: relative; cursor: default; }
   .pille.fest:hover { background: none; color: var(--text-still); }
   .pille.fest.an:hover { color: var(--text); }
   .wort { white-space: nowrap; }
+  /* The narrow form: out of the row and out of the sight, still in the
+     tree for a screen reader. */
+  .wort.fort {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
 
   .liste {
     position: fixed;
@@ -315,7 +326,7 @@
     height: 14px;
     flex: none;
     margin-left: auto;
-    color: var(--blau);
+    color: var(--text-leise);
     opacity: 0;
   }
   .eintrag[aria-checked='true'] .haken { opacity: 1; }

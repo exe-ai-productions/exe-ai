@@ -1,0 +1,11 @@
+# Keep line endings of bundled SVG and HTML files the same on every platform.
+# The build derives output names from the raw bytes of the files it reads, so a
+# checkout with CRLF would produce different file names than one with LF.
+# The same goes for scripts, components and style sheets, and a shell script
+# with CRLF line endings stops working altogether.
+*.svg    text eol=lf
+*.html   text eol=lf
+*.js     text eol=lf
+*.svelte text eol=lf
+*.css    text eol=lf
+*.sh     text eol=lf

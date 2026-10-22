@@ -10,9 +10,19 @@
   result hands the grown context back — each a fresh stretch even straight
   after the same activity). Without a time
   from the service, the moment of reading stands in.
+
+  A run this window joins in the middle (`taetigkeitUnbekannt`) has no
+  activity until the stream says which one it is in: claiming the first one
+  would put a reading-the-context line under an answer that is already
+  thinking or writing.
 */
 
 export function taetigkeitSetzen(zeile, art, seit, neu = false) {
   if (neu || zeile.taetigkeit !== art) zeile.taetigkeitSeit = seit ?? Date.now()
   zeile.taetigkeit = art
+}
+
+export function taetigkeitUnbekannt(zeile) {
+  zeile.taetigkeit = null
+  zeile.taetigkeitSeit = null
 }

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from app.config import config_file
 from app.agenten import (
     STANDARD_MINUTEN,
     STANDARD_RUNDEN,
@@ -881,7 +882,7 @@ def test_ein_erstes_sichern_legt_nichts_daneben(client):
 def test_die_dateirouten_legen_die_vorige_fassung_weiter_daneben(client):
     """The one way is shared: the configuration file still has its copy."""
     config = client.app.state.config
-    datei = config.pfad("./config.yaml")
+    datei = config_file(config)
     vorher = datei.read_bytes() if datei.exists() else None
     datei.write_text("app:\n  language: en\n", encoding="utf-8")
     try:

@@ -1,9 +1,10 @@
 """How wide a menu page is (`frontend/src/teile/Menueseite.svelte`).
 
-Every menu page stands in one column in the middle of the window: its head
-and its content share one rule, so the two cannot drift apart, and no page
-brings a width of its own. On a wide window a narrow column left the cards
-of a page as a strip with empty ground on both sides.
+Every menu page fills the frame it stands in: its head and its content share
+one rule, so the two cannot drift apart, and no page brings a width of its own.
+The content ends one side padding before the right edge of the frame, however
+wide the window is; a limit on the column left a wide window with an empty
+strip on its right and the cards of a page as a narrow band.
 
 What stands in the column fills it. A part with a limit of its own — the
 window panel of the server and cloud pages once had one — ends short of the
@@ -35,11 +36,11 @@ def _declarations(rule: str) -> dict[str, str]:
     return {name.strip(): value.strip() for name, value in pairs}
 
 
-def test_a_menu_page_is_1400_wide_at_most():
-    """And the note beside the number says what is left for the content:
-    the width less the two side paddings inside it."""
-    assert _declarations(_rules()[0])["max-width"] == "1400px"
-    assert "1336 of content" in _rules()[0]
+def test_a_menu_page_fills_the_width_of_its_frame():
+    """Head and content take the whole width of the frame less their side
+    paddings: no `max-width` on the shared rule, and none anywhere in the page."""
+    assert "max-width" not in _declarations(_rules()[0])
+    assert _width_limits(PAGE) == []
 
 
 def test_the_column_keeps_its_side_paddings_and_stands_in_the_middle():
@@ -59,10 +60,9 @@ def _width_limits(part: Path) -> list[str]:
     return re.findall(r"(?<!\()max-width\s*(?:=|:\s*[^;{})\"']+)", source)
 
 
-def test_no_page_brings_a_second_width():
-    """One width for every menu page: the file sets a `max-width` once, in
-    whatever unit, and the narrow-window rule only takes side room away."""
-    assert len(_width_limits(PAGE)) == 1
+def test_the_narrow_window_only_takes_side_room_away():
+    """Below the breakpoint the two paddings shrink to 16 px and nothing else
+    changes."""
     assert _declarations(_rules()[1]) == {"padding-left": "16px", "padding-right": "16px"}
 
 

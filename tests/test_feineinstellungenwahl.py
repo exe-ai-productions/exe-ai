@@ -30,21 +30,25 @@ def test_die_feineinstellungen_stehen_im_pruefer():
 def test_was_die_schublade_schickt_kommt_auch_an():
     geschickt = {
         "kv_cache": "q8_0",
-        "flash_attention": "auto",
+        "flash_attention": "on",
+        "chat_template": "file",
+        "chat_template_file": "/data/chat_templates/m.gguf.jinja",
         "faeden": 8,
         "moe_auf_cpu": True,
         "moe_schichten": 12,
         "festnageln": True,
         "parallel": 4,
         "kv_unified": False,
+        "idle_minutes": 10,
     }
     assert wahl.wahl_pruefen(geschickt) == geschickt
 
 
-def test_ein_gespeichertes_flash_off_wird_beim_pruefen_zu_auto():
-    """The stored leftovers of the old three-way switch normalize away on
-    the next write instead of surviving forever."""
-    assert wahl.wahl_pruefen({"flash_attention": "off"})["flash_attention"] == "auto"
+def test_a_stored_flash_off_stays_only_with_the_16_bit_cache():
+    """Off stands with the 16-bit cache; with a smaller one it is turned back
+    to Auto on the next write instead of surviving as a pair that cannot run."""
+    assert wahl.wahl_pruefen({"flash_attention": "off"})["flash_attention"] == "off"
+    assert wahl.wahl_pruefen({"kv_cache": "q8_0", "flash_attention": "off"})["flash_attention"] == "auto"
 
 
 # --- What comes back out --------------------------------------------------

@@ -1,0 +1,1532 @@
+{
+ "changes": [
+  {
+   "key": "chat.wartet_auf_dich",
+   "lang": "de",
+   "old": "Wartet auf dich",
+   "new": "Wartet auf Antwort"
+  },
+  {
+   "key": "project.move_to",
+   "lang": "de",
+   "old": "In Projekt",
+   "new": "In Projekt verschieben"
+  },
+  {
+   "key": "archive.restore",
+   "lang": "de",
+   "old": "Zurückholen",
+   "new": "Wiederherstellen"
+  },
+  {
+   "key": "menue.hilfe",
+   "lang": "de",
+   "old": "Help",
+   "new": "Hilfe"
+  },
+  {
+   "key": "menue.save_image",
+   "lang": "de",
+   "old": "Bild speichern unter…",
+   "new": "Bild speichern unter …"
+  },
+  {
+   "key": "kopf.speicher_titel",
+   "lang": "de",
+   "old": "Arbeitsspeicher in Benutzung",
+   "new": "Belegter Arbeitsspeicher"
+  },
+  {
+   "key": "eingabe.chat_gewechselt_waehrend_senden",
+   "lang": "de",
+   "old": "Du hast den Chat gewechselt, bevor die Nachricht gesendet wurde. Text und Anhänge stehen weiterhin im vorherigen Chat bereit.",
+   "new": "Der Chat wurde gewechselt, bevor die Nachricht gesendet wurde. Text und Anhänge stehen weiterhin im vorherigen Chat bereit."
+  },
+  {
+   "key": "eingabe.mtp_aus",
+   "lang": "de",
+   "old": "Tempo-Modul aus",
+   "new": "Tempo-Modul inaktiv"
+  },
+  {
+   "key": "eingabe.werkzeug_an",
+   "lang": "de",
+   "old": "Modell kann Werkzeuge rufen",
+   "new": "Modell kann Werkzeuge aufrufen"
+  },
+  {
+   "key": "eingabe.werkzeug_aus",
+   "lang": "de",
+   "old": "Dieses Modell kann keine Werkzeuge rufen",
+   "new": "Dieses Modell kann keine Werkzeuge aufrufen"
+  },
+  {
+   "key": "sprachserver.modell",
+   "lang": "de",
+   "old": "Sprach-Modell",
+   "new": "Sprachmodell"
+  },
+  {
+   "key": "sprachserver.bereinigung_putzmodell_leer",
+   "lang": "de",
+   "old": "Bereinigungs-Modell",
+   "new": "Bereinigungsmodell"
+  },
+  {
+   "key": "sprachserver.gruppe_gespraechsmodell",
+   "lang": "de",
+   "old": "Gesprächs-Modell",
+   "new": "Gesprächsmodell"
+  },
+  {
+   "key": "sprachserver.feld_automatik",
+   "lang": "de",
+   "old": "Diktat Automatik",
+   "new": "Diktat automatisch senden"
+  },
+  {
+   "key": "bereinigungsserver.modell",
+   "lang": "de",
+   "old": "Bereinigungs-Modell",
+   "new": "Bereinigungsmodell"
+  },
+  {
+   "key": "sprache.mikro_verweigert",
+   "lang": "de",
+   "old": "Der Mikrofonzugriff ist gesperrt. Erteile die Berechtigung in den Systemeinstellungen.",
+   "new": "Der Mikrofonzugriff ist gesperrt. Bitte die Berechtigung in den Systemeinstellungen erteilen."
+  },
+  {
+   "key": "sprache.server_aus",
+   "lang": "de",
+   "old": "Der Sprach-Server läuft nicht. Starte ihn über die Kachel „Sprach-Server“ unter „Server“.",
+   "new": "Der Sprach-Server läuft nicht. Bitte über die Kachel „Sprach-Server“ unter „Server“ starten."
+  },
+  {
+   "key": "bildserver.kein_modell_lang",
+   "lang": "de",
+   "old": "Lege ein Bildmodell im Ordner ab, damit der Probelauf ein Bild erzeugen kann.",
+   "new": "Bitte ein Bildmodell im Ordner ablegen, damit der Probelauf ein Bild erzeugen kann."
+  },
+  {
+   "key": "bildserver.generator_laedt",
+   "lang": "de",
+   "old": "Framework wird heruntergeladen…",
+   "new": "Framework wird heruntergeladen …"
+  },
+  {
+   "key": "bildserver.lade_varianten",
+   "lang": "de",
+   "old": "Lade Generator-Varianten…",
+   "new": "Generator-Varianten werden geladen …"
+  },
+  {
+   "key": "bildserver.imatrix_satz",
+   "lang": "de",
+   "old": "Um Daten für eine Imatrix-Quantisierung zu erhalten, zeichne zuerst mindestens fünf Bilder, bevor du nach GGUF umwandelst.",
+   "new": "Um Daten für eine Imatrix-Quantisierung zu erhalten, bitte vor dem Umwandeln nach GGUF mindestens fünf Bilder zeichnen."
+  },
+  {
+   "key": "bildserver.stand",
+   "lang": "de",
+   "old": "Stand",
+   "new": "Zustand"
+  },
+  {
+   "key": "bildserver.kein_standardmodell",
+   "lang": "de",
+   "old": "Kein Bildmodell ausgewählt. Wähle eines auf der Seite Bild-Server.",
+   "new": "Kein Bildmodell ausgewählt. Bitte eines auf der Seite „Bild-Server“ auswählen."
+  },
+  {
+   "key": "bild.lora_modus_at_runtime",
+   "lang": "de",
+   "old": "At runtime",
+   "new": "Zur Laufzeit"
+  },
+  {
+   "key": "bild.prompt_kein_modell",
+   "lang": "de",
+   "old": "Kein Sprachmodell erreichbar. Lade zuerst eines.",
+   "new": "Kein Sprachmodell erreichbar. Bitte zuerst eines laden."
+  },
+  {
+   "key": "bild.lauf_nr_zu_gross",
+   "lang": "de",
+   "old": "Die angeforderte Bildnummer überschreitet die Anzahl der Bilder dieses Durchlaufs.",
+   "new": "Die angeforderte Bildnummer überschreitet die Anzahl der Bilder dieses Laufs."
+  },
+  {
+   "key": "bild.prediction",
+   "lang": "de",
+   "old": "Prediction",
+   "new": "Vorhersage"
+  },
+  {
+   "key": "bild.split_mode_layer",
+   "lang": "de",
+   "old": "Ebene",
+   "new": "Schicht"
+  },
+  {
+   "key": "bild.photomaker",
+   "lang": "de",
+   "old": "Dein Gesicht",
+   "new": "Eigenes Gesicht"
+  },
+  {
+   "key": "bild.adetailer_keins",
+   "lang": "de",
+   "old": "Aus",
+   "new": "-"
+  },
+  {
+   "key": "bild.gruppe_masse",
+   "lang": "de",
+   "old": "Maße & Lauf",
+   "new": "Maße & Erzeugung"
+  },
+  {
+   "key": "bild.gruppe_gesicht",
+   "lang": "de",
+   "old": "Dein Gesicht",
+   "new": "Eigenes Gesicht"
+  },
+  {
+   "key": "bild.hires",
+   "lang": "de",
+   "old": "Hires-Fix",
+   "new": "Highres-Fix"
+  },
+  {
+   "key": "bild.hires_upscaler_vorgabe",
+   "lang": "de",
+   "old": "Vorgabe (Latent)",
+   "new": "Standard (Latent)"
+  },
+  {
+   "key": "bild.slg_scale",
+   "lang": "de",
+   "old": "Ebene überspringen",
+   "new": "Schicht überspringen"
+  },
+  {
+   "key": "bild.skip_layers",
+   "lang": "de",
+   "old": "Übersprungene Ebenen",
+   "new": "Übersprungene Schichten"
+  },
+  {
+   "key": "bild.turbo_aus",
+   "lang": "de",
+   "old": "Image-Turbo ist aus",
+   "new": "Image-Turbo ist inaktiv"
+  },
+  {
+   "key": "bild.als_eingabe",
+   "lang": "de",
+   "old": "Als Eingabe",
+   "new": "Als Eingabe verwenden"
+  },
+  {
+   "key": "bild.info_lora_modus",
+   "lang": "de",
+   "old": "Verfahren zur Anwendung einer LoRA. Auto wählt anhand der Modellgewichte.",
+   "new": "Verfahren zur Anwendung einer LoRA. Auto wählt das Verfahren anhand der Modellgewichte."
+  },
+  {
+   "key": "bild.info_photomaker",
+   "lang": "de",
+   "old": "Überträgt ein Gesicht aus deinen Fotos in das Bild.",
+   "new": "Überträgt ein Gesicht aus eigenen Fotos in das Bild."
+  },
+  {
+   "key": "bild.info_vram_limit",
+   "lang": "de",
+   "old": "Grafikspeicher für Gewichte und Rechenpuffer, in GiB. Ohne Angabe („auto“) wird der verfügbare Speicher genutzt.",
+   "new": "Obergrenze des Grafikspeichers für Gewichte und Rechenpuffer, in GiB. Ohne Angabe („auto“) wird der verfügbare Speicher genutzt."
+  },
+  {
+   "key": "bild.info_sw_sample_noise_clip_std",
+   "lang": "de",
+   "old": "LCM: Begrenzt das zusätzliche Rauschen auf diese Anzahl von Standardabweichungen.",
+   "new": "LCM: begrenzt das zusätzliche Rauschen auf diese Anzahl von Standardabweichungen."
+  },
+  {
+   "key": "bild.sw_sage_attn",
+   "lang": "de",
+   "old": "Sage-Attention",
+   "new": "SageAttention"
+  },
+  {
+   "key": "bild.info_sw_batched_cfg",
+   "lang": "de",
+   "old": "Berechnet den bedingten und den unbedingten Durchgang der Führung in einem Stapel, wo das Modell es zulässt. Der Generator hat es ab Werk an.",
+   "new": "Berechnet den bedingten und den unbedingten Durchgang der Führung in einem Stapel, wo das Modell es zulässt. Beim Generator ist es ab Werk aktiv."
+  },
+  {
+   "key": "bild.sw_clip_vision",
+   "lang": "de",
+   "old": "Bildversteher",
+   "new": "CLIP-Vision"
+  },
+  {
+   "key": "bild.sw_ad_dilate_erode",
+   "lang": "de",
+   "old": "Maske wachsen oder schrumpfen",
+   "new": "Maske vergrößern/verkleinern"
+  },
+  {
+   "key": "bild.video_unmoeglich",
+   "lang": "de",
+   "old": "Dieses Modell kann kein Video erzeugen. Verwende ein Videomodell oder ein SD-1.5-Modell mit Bewegungsmodul.",
+   "new": "Dieses Modell kann kein Video erzeugen. Bitte ein Videomodell oder ein SD-1.5-Modell mit Bewegungsmodul verwenden."
+  },
+  {
+   "key": "bild.steuervideo_fehlt",
+   "lang": "de",
+   "old": "Wähle zuerst ein Steuervideo.",
+   "new": "Bitte zuerst ein Steuervideo wählen."
+  },
+  {
+   "key": "nachricht.stopped_hint",
+   "lang": "de",
+   "old": "Die Antwort wurde angehalten. Schreib eine Nachricht, um weiterzumachen.",
+   "new": "Die Antwort wurde angehalten. Zum Fortsetzen bitte eine Nachricht senden."
+  },
+  {
+   "key": "nachricht.abgelehnt",
+   "lang": "de",
+   "old": "Das Modell hat die Antwort auf diese Nachricht abgelehnt. Weitere Nachrichten in diesem Chat werden ebenfalls abgelehnt. Starte einen neuen Chat.",
+   "new": "Das Modell hat die Antwort auf diese Nachricht abgelehnt. Weitere Nachrichten in diesem Chat werden ebenfalls abgelehnt. Bitte einen neuen Chat starten."
+  },
+  {
+   "key": "nachricht.neu_senden",
+   "lang": "de",
+   "old": "Nochmal senden",
+   "new": "Erneut senden"
+  },
+  {
+   "key": "nachricht.antwortlaenge_zu_gross",
+   "lang": "de",
+   "old": "Die eingestellte Antwortlänge überschreitet die Grenze dieses Modells. Verringere sie oder wähle Auto.",
+   "new": "Die eingestellte Antwortlänge überschreitet die Grenze dieses Modells. Bitte den Wert verringern oder Auto wählen."
+  },
+  {
+   "key": "werkzeug.antwort_kam_nicht_an",
+   "lang": "de",
+   "old": "Deine Antwort ist nicht angekommen. Bitte sende sie erneut.",
+   "new": "Die Antwort ist nicht angekommen. Bitte erneut senden."
+  },
+  {
+   "key": "werkzeug.grund_bestaetigung",
+   "lang": "de",
+   "old": "Erfordert vor der Ausführung deine Zustimmung",
+   "new": "Erfordert vor der Ausführung eine Zustimmung"
+  },
+  {
+   "key": "werkzeug.no_with_words",
+   "lang": "de",
+   "old": "Nein, und sag, was ich stattdessen tun soll …",
+   "new": "Nein, und sagen, was stattdessen zu tun ist …"
+  },
+  {
+   "key": "modell.vision_erklaerung",
+   "lang": "de",
+   "old": "Cloud-Anbieter melden nicht, ob ein Modell Bilder verarbeiten kann. Aktiviere diese Option, wenn dein Modell dies unterstützt. Sie bestimmt, ob Bilder angehängt werden können.",
+   "new": "Cloud-Anbieter melden nicht, ob ein Modell Bilder verarbeiten kann. Bitte diese Option aktivieren, wenn das Modell dies unterstützt. Sie bestimmt, ob Bilder angehängt werden können."
+  },
+  {
+   "key": "modell.denken_erklaerung",
+   "lang": "de",
+   "old": "Die meisten Cloud-Anbieter melden nicht, ob ein Modell Reasoning unterstützt. Aktiviere diese Option, wenn dein Modell dies unterstützt. Andernfalls bleibt die Einstellung für das Denken wirkungslos.",
+   "new": "Die meisten Cloud-Anbieter melden nicht, ob ein Modell Reasoning unterstützt. Bitte diese Option aktivieren, wenn das Modell dies unterstützt. Andernfalls bleibt die Einstellung für das Denken wirkungslos."
+  },
+  {
+   "key": "modell.keine_dateien",
+   "lang": "de",
+   "old": "Keine ladbare Datei in diesem Repository",
+   "new": "Keine Datei zum Download in diesem Repository"
+  },
+  {
+   "key": "modell.kein_modell_da",
+   "lang": "de",
+   "old": "Noch kein Modell im Ordner. Lade zuerst eines herunter.",
+   "new": "Noch kein Modell im Ordner. Bitte zuerst eines herunterladen."
+  },
+  {
+   "key": "modell.reise_start_satz",
+   "lang": "de",
+   "old": "Kontext, Schichten und Port sind voreingestellt. Starte den Server; sobald die Anzeige grün wird, steht das Modell im Chat zur Verfügung.",
+   "new": "Kontext, Schichten und Port sind voreingestellt. Bitte den Server starten; sobald die Anzeige grün wird, steht das Modell im Chat zur Verfügung."
+  },
+  {
+   "key": "modell.flash_inaktiv",
+   "lang": "de",
+   "old": "Aus",
+   "new": "Inaktiv"
+  },
+  {
+   "key": "parameter.locked.no_effect_at_openai",
+   "lang": "de",
+   "old": "Wirkt bei OpenAI nicht, wenn Werkzeuge oder Denken an sind.",
+   "new": "Wirkt bei OpenAI nicht, wenn Werkzeuge oder Denken aktiv sind."
+  },
+  {
+   "key": "fehler.modell_nicht_erreichbar",
+   "lang": "de",
+   "old": "Modell „{name}“ nicht erreichbar",
+   "new": "Modell „{name}“ ist gerade nicht erreichbar"
+  },
+  {
+   "key": "fehler.cronjob_pausiert",
+   "lang": "de",
+   "old": "Dieser Cronjob ist deaktiviert. Aktiviere ihn vor der Ausführung.",
+   "new": "Dieser Cronjob ist deaktiviert. Bitte vor der Ausführung aktivieren."
+  },
+  {
+   "key": "fehler.cronjob_laeuft_schon",
+   "lang": "de",
+   "old": "Für diesen Cronjob ist bereits ein Durchlauf aktiv.",
+   "new": "Für diesen Cronjob ist bereits ein Lauf aktiv."
+  },
+  {
+   "key": "fehler.cronjob_not_found",
+   "lang": "de",
+   "old": "Diesen Termin gibt es nicht",
+   "new": "Diesen Cronjob gibt es nicht"
+  },
+  {
+   "key": "fehler.skript_mit_pfad",
+   "lang": "de",
+   "old": "„script“ muss ein reiner Dateiname im Skript-Ordner sein - kein Pfad, kein „..“.",
+   "new": "„script“ muss ein reiner Dateiname im Skriptordner sein - kein Pfad, kein „..“."
+  },
+  {
+   "key": "fehler.skript_fehlt",
+   "lang": "de",
+   "old": "Im Skript-Ordner {ordner} gibt es kein Skript „{name}“.",
+   "new": "Im Skriptordner {ordner} gibt es kein Skript „{name}“."
+  },
+  {
+   "key": "fehler.skript_nicht_ausfuehrbar",
+   "lang": "de",
+   "old": "„{name}“ ist nicht ausführbar. Erteile der Datei im Skriptordner ({ordner}) eine Ausführungsberechtigung und versuche es erneut.",
+   "new": "„{name}“ ist nicht ausführbar. Bitte der Datei im Skriptordner ({ordner}) eine Ausführungsberechtigung erteilen und erneut versuchen."
+  },
+  {
+   "key": "fehler.script_needs_python",
+   "lang": "de",
+   "old": "„{name}“ lässt sich nicht starten, weil auf diesem Rechner kein Python gefunden wurde. Installiere Python von python.org und versuche es erneut.",
+   "new": "„{name}“ lässt sich nicht starten, weil auf diesem Rechner kein Python gefunden wurde. Bitte Python von python.org installieren und erneut versuchen."
+  },
+  {
+   "key": "fehler.auftrag_nicht_gefunden",
+   "lang": "de",
+   "old": "Aufgabe nicht gefunden",
+   "new": "Auftrag nicht gefunden"
+  },
+  {
+   "key": "fehler.auftrag_fragt_nicht",
+   "lang": "de",
+   "old": "Für diesen Durchlauf steht keine Frage aus.",
+   "new": "Für diesen Lauf steht keine Frage aus."
+  },
+  {
+   "key": "fehler.agent_name_ungueltig",
+   "lang": "de",
+   "old": "Agentenname darf nur Buchstaben, Zahlen, - und _ enthalten",
+   "new": "Der Agentenname darf nur Buchstaben, Ziffern, - und _ enthalten"
+  },
+  {
+   "key": "fehler.funktion_aus",
+   "lang": "de",
+   "old": "In der Konfiguration abgeschaltet",
+   "new": "In der Konfiguration deaktiviert"
+  },
+  {
+   "key": "fehler.ordnerdialog_fern",
+   "lang": "de",
+   "old": "Der Dialog zur Ordnerauswahl öffnet sich nur auf diesem Rechner. Bitte gib den Pfad ein.",
+   "new": "Der Dialog zur Ordnerauswahl öffnet sich nur auf diesem Rechner. Bitte den Pfad eingeben."
+  },
+  {
+   "key": "fehler.ordnerdialog_fehlt",
+   "lang": "de",
+   "old": "Auf diesem System ist kein Dialog zur Ordnerauswahl verfügbar. Bitte gib den Pfad ein.",
+   "new": "Auf diesem System ist kein Dialog zur Ordnerauswahl verfügbar. Bitte den Pfad eingeben."
+  },
+  {
+   "key": "fehler.runner_laeuft_schon",
+   "lang": "de",
+   "old": "Es läuft schon ein Modell-Server - halte ihn erst an",
+   "new": "Es läuft schon ein Modell-Server - bitte zuerst anhalten"
+  },
+  {
+   "key": "fehler.runner_port_belegt",
+   "lang": "de",
+   "old": "Der Port ist bereits belegt. Wähle einen anderen Port oder beende das Programm, das ihn verwendet.",
+   "new": "Der Port ist bereits belegt. Bitte einen anderen Port wählen oder das Programm beenden, das ihn verwendet."
+  },
+  {
+   "key": "fehler.runner_server_geteilt",
+   "lang": "de",
+   "old": "Ein anderer Exe-AI-Dienst nutzt diese Datenablage und hält ihre Server. Nutze seine Server oder beende diesen Dienst zuerst.",
+   "new": "Ein anderer Exe-AI-Dienst nutzt diese Datenablage und hält ihre Server. Bitte dessen Server nutzen oder diesen Dienst zuerst beenden."
+  },
+  {
+   "key": "fehler.login_limited",
+   "lang": "de",
+   "old": "Zu viele falsche Passwörter - versuche es später erneut",
+   "new": "Zu viele falsche Passwörter - bitte später erneut versuchen"
+  },
+  {
+   "key": "jobs.banner",
+   "lang": "de",
+   "old": "„{agent}“ wartet auf deine Antwort",
+   "new": "„{agent}“ wartet auf eine Antwort"
+  },
+  {
+   "key": "jobs.nicht_geladen",
+   "lang": "de",
+   "old": "Aufgaben ließen sich nicht laden",
+   "new": "Aufträge ließen sich nicht laden"
+  },
+  {
+   "key": "jobs.zustand.wartet",
+   "lang": "de",
+   "old": "wartet auf dich",
+   "new": "wartet auf Antwort"
+  },
+  {
+   "key": "jobs.grund.benutzer_abbruch",
+   "lang": "de",
+   "old": "von dir abgebrochen",
+   "new": "vom Nutzer abgebrochen"
+  },
+  {
+   "key": "jobs.grund.eltern_abbruch",
+   "lang": "de",
+   "old": "mit dem übergeordneten Durchlauf beendet",
+   "new": "mit dem übergeordneten Lauf beendet"
+  },
+  {
+   "key": "jobs.grund.frage_beantwortet",
+   "lang": "de",
+   "old": "nach deiner Antwort fortgesetzt",
+   "new": "nach der Antwort fortgesetzt"
+  },
+  {
+   "key": "jobs.grund.fehler_allgemein",
+   "lang": "de",
+   "old": "Lauf gescheitert",
+   "new": "Lauf fehlgeschlagen"
+  },
+  {
+   "key": "jobs.starten",
+   "lang": "de",
+   "old": "Neue Aufgabe",
+   "new": "Neuer Auftrag"
+  },
+  {
+   "key": "jobs.bestaetigen_hinweis",
+   "lang": "de",
+   "old": "Bearbeite hier die Aufgabe vor der Übergabe. Ausgeführt wird die von dir bestätigte Fassung.",
+   "new": "Den Auftrag hier vor der Übergabe bearbeiten. Ausgeführt wird die bestätigte Fassung."
+  },
+  {
+   "key": "jobs.loeschen_frage",
+   "lang": "de",
+   "old": "Diese Aufgabe löschen? Ihr Protokoll und ihr Bericht werden ebenfalls gelöscht.",
+   "new": "Diesen Auftrag löschen? Sein Protokoll und sein Bericht werden ebenfalls gelöscht."
+  },
+  {
+   "key": "jobs.geloescht",
+   "lang": "de",
+   "old": "Aufgabe gelöscht",
+   "new": "Auftrag gelöscht"
+  },
+  {
+   "key": "jobs.kind_gestartet",
+   "lang": "de",
+   "old": "Auftrag {id} ('{agent}') gestartet.",
+   "new": "Auftrag {id} („{agent}“) gestartet."
+  },
+  {
+   "key": "jobs.faltung_abgeschaltet",
+   "lang": "de",
+   "old": "Die automatische Komprimierung ist für diesen Durchlauf deaktiviert.",
+   "new": "Die automatische Komprimierung ist für diesen Lauf deaktiviert."
+  },
+  {
+   "key": "jobs.schleife_beendet",
+   "lang": "de",
+   "old": "'{werkzeug}' wurde {n}-mal hintereinander aus demselben Grund abgelehnt. Der Durchlauf wird beendet, damit die verbleibenden Runden nicht für weitere erfolglose Versuche verbraucht werden.",
+   "new": "„{werkzeug}“ wurde {n}-mal hintereinander aus demselben Grund abgelehnt. Der Lauf wird beendet, damit die verbleibenden Runden nicht für weitere erfolglose Versuche verbraucht werden."
+  },
+  {
+   "key": "jobs.komprimierung_gestoppt",
+   "lang": "de",
+   "old": "Die Komprimierung ist für diesen Durchlauf deaktiviert, weil der letzte Versuch den Verlauf nicht verkürzt hat.",
+   "new": "Die Komprimierung ist für diesen Lauf deaktiviert, weil der letzte Versuch den Verlauf nicht verkürzt hat."
+  },
+  {
+   "key": "jobs.keine_datei_geschrieben",
+   "lang": "de",
+   "old": "Dieser Durchlauf hat keine Datei geschrieben. Falls der Auftrag neu gestartet wurde, hat möglicherweise bereits ein früherer Durchlauf eine Datei geschrieben.",
+   "new": "Dieser Lauf hat keine Datei geschrieben. Falls der Auftrag neu gestartet wurde, hat möglicherweise bereits ein früherer Lauf eine Datei geschrieben."
+  },
+  {
+   "key": "jobs.kurzlauf",
+   "lang": "de",
+   "old": "Dieser Durchlauf meldete sich nach {runden} von {runden_erlaubt} erlaubten Runden und {minuten:.1f} von {minuten_erlaubt} erlaubten Minuten als abgeschlossen, deutlich unter dem üblichen Rahmen für einen regulären Abschluss.",
+   "new": "Dieser Lauf meldete sich nach {runden} von {runden_erlaubt} erlaubten Runden und {minuten:.1f} von {minuten_erlaubt} erlaubten Minuten als abgeschlossen, deutlich unter dem üblichen Rahmen für einen regulären Abschluss."
+  },
+  {
+   "key": "jobs.helper_limit",
+   "lang": "de",
+   "old": "Es wurde kein Helfer gestartet: Bereits {running} Helfer sind aktiv; höchstens {limit} dürfen gleichzeitig arbeiten. Warte, bis einer fertig ist, oder gib stattdessen einen Agenten an.",
+   "new": "Es wurde kein Helfer gestartet: Bereits {running} Helfer sind aktiv; höchstens {limit} dürfen gleichzeitig arbeiten. Bitte warten, bis einer fertig ist, oder stattdessen einen Agenten angeben."
+  },
+  {
+   "key": "jobs.helper_limit_running_one",
+   "lang": "de",
+   "old": "Es wurde kein Helfer gestartet: Bereits {running} Helfer ist aktiv; höchstens {limit} dürfen gleichzeitig arbeiten. Warte, bis einer fertig ist, oder gib stattdessen einen Agenten an.",
+   "new": "Es wurde kein Helfer gestartet: Bereits {running} Helfer ist aktiv; höchstens {limit} dürfen gleichzeitig arbeiten. Bitte warten, bis einer fertig ist, oder stattdessen einen Agenten angeben."
+  },
+  {
+   "key": "jobs.helper_limit_limit_one",
+   "lang": "de",
+   "old": "Es wurde kein Helfer gestartet: Bereits {running} Helfer sind aktiv; höchstens {limit} darf gleichzeitig arbeiten. Warte, bis einer fertig ist, oder gib stattdessen einen Agenten an.",
+   "new": "Es wurde kein Helfer gestartet: Bereits {running} Helfer sind aktiv; höchstens {limit} darf gleichzeitig arbeiten. Bitte warten, bis einer fertig ist, oder stattdessen einen Agenten angeben."
+  },
+  {
+   "key": "jobs.helper_limit_both_one",
+   "lang": "de",
+   "old": "Es wurde kein Helfer gestartet: Bereits {running} Helfer ist aktiv; höchstens {limit} darf gleichzeitig arbeiten. Warte, bis einer fertig ist, oder gib stattdessen einen Agenten an.",
+   "new": "Es wurde kein Helfer gestartet: Bereits {running} Helfer ist aktiv; höchstens {limit} darf gleichzeitig arbeiten. Bitte warten, bis einer fertig ist, oder stattdessen einen Agenten angeben."
+  },
+  {
+   "key": "agenten.abschnitt_aktiv",
+   "lang": "de",
+   "old": "Aktive Aufgaben",
+   "new": "Aktive Aufträge"
+  },
+  {
+   "key": "agenten.keine_agenten",
+   "lang": "de",
+   "old": "Noch keine Agenten vorhanden. Lege über die Plus-Schaltfläche oben einen an.",
+   "new": "Noch keine Agenten vorhanden. Bitte über die Plus-Schaltfläche oben einen anlegen."
+  },
+  {
+   "key": "erststart.satz",
+   "lang": "de",
+   "old": "Drei Einstellungen, mit denen du Exe AI auf dich abstimmst.",
+   "new": "Drei Einstellungen, um Exe AI anzupassen."
+  },
+  {
+   "key": "updates.download",
+   "lang": "de",
+   "old": "Laden",
+   "new": "Download"
+  },
+  {
+   "key": "updates.downloading",
+   "lang": "de",
+   "old": "Lädt … {percent} %",
+   "new": "Download … {percent} %"
+  },
+  {
+   "key": "updates.failed_download",
+   "lang": "de",
+   "old": "Laden nicht möglich: {reason}",
+   "new": "Download nicht möglich: {reason}"
+  },
+  {
+   "key": "editor.info_anrede_schalter",
+   "lang": "de",
+   "old": "Zeigt eine Begrüßung an und übermittelt dem Modell bei jeder Anfrage deinen Namen. Bei Cloud-Modellen wird dein Name an den jeweiligen Anbieter übertragen.",
+   "new": "Zeigt eine Begrüßung an und übermittelt dem Modell bei jeder Anfrage den Namen. Bei Cloud-Modellen wird der Name an den jeweiligen Anbieter übertragen."
+  },
+  {
+   "key": "webapp.title",
+   "lang": "de",
+   "old": "Web App",
+   "new": "Web-App"
+  },
+  {
+   "key": "webapp.phone",
+   "lang": "de",
+   "old": "Die Web App auf einem Handy",
+   "new": "Die Web-App auf einem Handy"
+  },
+  {
+   "key": "webapp.error_no_password",
+   "lang": "de",
+   "old": "Lege zuerst ein Passwort fest.",
+   "new": "Bitte zuerst ein Passwort festlegen."
+  },
+  {
+   "key": "webapp.error_port_taken",
+   "lang": "de",
+   "old": "Der Anschluss für die Web App ist schon belegt.",
+   "new": "Der Port für die Web-App ist schon belegt."
+  },
+  {
+   "key": "werkzeuge.abgeschaltet",
+   "lang": "de",
+   "old": "Werkzeuge sind abgeschaltet (features.mcp)",
+   "new": "Werkzeuge sind deaktiviert (features.mcp)"
+  },
+  {
+   "key": "werkzeuge.von_zahl",
+   "lang": "de",
+   "old": "{an} von {gesamt} an",
+   "new": "{an}/{gesamt} aktiv"
+  },
+  {
+   "key": "werkzeuge.ausgeschaltet",
+   "lang": "de",
+   "old": "Aus",
+   "new": "Inaktiv"
+  },
+  {
+   "key": "werkzeuge.eingebaut_satz.ask_user",
+   "lang": "de",
+   "old": "Fragt dich, wenn eine Entscheidung deine Eingabe erfordert.",
+   "new": "Fragt nach, wenn eine Entscheidung eine Eingabe erfordert."
+  },
+  {
+   "key": "werkzeuge.eingebaut_satz.memory_save",
+   "lang": "de",
+   "old": "Merkt sich über Gespräche hinweg Informationen über dich oder dein Projekt.",
+   "new": "Merkt sich über Gespräche hinweg Informationen über den Nutzer oder das Projekt."
+  },
+  {
+   "key": "werkzeuge.eingebaut_satz.cronjob",
+   "lang": "de",
+   "old": "Richtet einmalige oder wiederkehrende Erinnerungen ein, die eine Aufgabe zu fester Zeit auslösen.",
+   "new": "Richtet einmalige oder wiederkehrende Cronjobs ein, die zu fester Zeit einen Auftrag starten."
+  },
+  {
+   "key": "werkzeuge.eingebaut_satz.deliver_file",
+   "lang": "de",
+   "old": "Übergibt dir eine fertige Datei: im Chat erscheint sie in der Antwort, aus einer Aufgabe landet sie im Doc-Ordner.",
+   "new": "Übergibt eine fertige Datei: Im Chat erscheint sie in der Antwort, aus einem Auftrag landet sie im Doc-Ordner."
+  },
+  {
+   "key": "werkzeuge.eingebaut_satz.job",
+   "lang": "de",
+   "old": "Zeigt die Läufe, die dieser Chat im Hintergrund gestartet hat, und beendet auf Wunsch einen davon.",
+   "new": "Zeigt die Aufträge, die dieser Chat im Hintergrund gestartet hat, und beendet auf Wunsch einen davon."
+  },
+  {
+   "key": "werkzeuge.eingebaut_satz.goal",
+   "lang": "de",
+   "old": "Benachrichtigt dich, wenn ein Agent sein Ziel erreicht hat. Der Bericht wird dir unmittelbar als Nachricht zugestellt.",
+   "new": "Meldet, dass ein Agent sein Ziel erreicht hat. Der Bericht wird direkt als Benachrichtigung zugestellt."
+  },
+  {
+   "key": "werkzeuge.eingebaut_satz.cron_note",
+   "lang": "de",
+   "old": "Speichert zu einer geplanten Aufgabe eine kurze Notiz, die bei deren nächster Ausführung gelesen wird.",
+   "new": "Speichert zu einem Cronjob eine kurze Notiz, die bei dessen nächstem Lauf gelesen wird."
+  },
+  {
+   "key": "verbindungen.stand_aus",
+   "lang": "de",
+   "old": "Ausgeschaltet",
+   "new": "Inaktiv"
+  },
+  {
+   "key": "verbindungen.einleitung_kopf",
+   "lang": "de",
+   "old": "Deine Apps, direkt im Chat.",
+   "new": "Eigene Apps, direkt im Chat."
+  },
+  {
+   "key": "verbindungen.einleitung",
+   "lang": "de",
+   "old": "Verbinde Exe mit den Anwendungen, die du täglich nutzt.",
+   "new": "Exe mit den täglich genutzten Anwendungen verbinden."
+  },
+  {
+   "key": "verbindungen.zweck.github",
+   "lang": "de",
+   "old": "Programmcode, Aufgaben und Änderungsvorschläge.",
+   "new": "Code, Issues und Pull Requests."
+  },
+  {
+   "key": "verbindungen.zweck.trello",
+   "lang": "de",
+   "old": "Übersichtstafeln, Listen und Aufgabenkarten.",
+   "new": "Boards, Listen und Karten."
+  },
+  {
+   "key": "verbindungen.zweck.linear",
+   "lang": "de",
+   "old": "Aufgaben, Fehler und Projekte deiner Arbeitsgruppe.",
+   "new": "Aufgaben, Fehler und Projekte der Arbeitsgruppe."
+  },
+  {
+   "key": "verbindungen.zweck.searxng",
+   "lang": "de",
+   "old": "Mit deiner eigenen Suchmaschine im Internet suchen.",
+   "new": "Mit einer eigenen Suchmaschine im Internet suchen."
+  },
+  {
+   "key": "mcp.kopfzeile",
+   "lang": "de",
+   "old": "Kopfzeile",
+   "new": "Header"
+  },
+  {
+   "key": "mcp.rueckleitung",
+   "lang": "de",
+   "old": "Rückleitung",
+   "new": "Weiterleitungsadresse"
+  },
+  {
+   "key": "mcp.eigene_rueckleitung",
+   "lang": "de",
+   "old": "Eigene https-Rückleitung",
+   "new": "Eigene https-Weiterleitungsadresse"
+  },
+  {
+   "key": "mcp.needs_key_outside",
+   "lang": "de",
+   "old": "Der Server unter {url} braucht einen API-Schlüssel, und ein Schlüssel wird nicht in einen Befehl getippt. Nichts wurde eingetragen. Trage ihn mit exe mcp in einem Terminal ein oder unter Einstellungen → MCP-Server.",
+   "new": "Der Server unter {url} braucht einen API-Schlüssel, und ein Schlüssel wird nicht in einen Befehl getippt. Nichts wurde eingetragen. Bitte den Server mit exe mcp in einem Terminal eintragen oder unter Einstellungen → MCP-Server."
+  },
+  {
+   "key": "mcp.needs_sign_in_outside",
+   "lang": "de",
+   "old": "Der Server unter {url} braucht eine Anmeldung im Browser, und hier gibt es kein Terminal, das darauf wartet. Nichts wurde eingetragen. Trage ihn mit exe mcp in einem Terminal ein oder unter Einstellungen → MCP-Server.",
+   "new": "Der Server unter {url} braucht eine Anmeldung im Browser, und hier gibt es kein Terminal, das darauf wartet. Nichts wurde eingetragen. Bitte den Server mit exe mcp in einem Terminal eintragen oder unter Einstellungen → MCP-Server."
+  },
+  {
+   "key": "mcp_signin.no_registration",
+   "lang": "de",
+   "old": "Der Anbieter unterstützt keine automatische Registrierung. Trage die Kennung (client_id) manuell ein.",
+   "new": "Der Anbieter unterstützt keine automatische Registrierung. Bitte die Kennung (client_id) manuell eintragen."
+  },
+  {
+   "key": "mcp_signin.unknown_flow",
+   "lang": "de",
+   "old": "Dieser Anmeldevorgang ist unbekannt oder abgelaufen. Bitte versuche es erneut.",
+   "new": "Dieser Anmeldevorgang ist unbekannt oder abgelaufen. Bitte erneut versuchen."
+  },
+  {
+   "key": "mcp_signin.no_access",
+   "lang": "de",
+   "old": "Der Anbieter hat kein Anmeldetoken ausgestellt.",
+   "new": "Der Anbieter hat kein Zugriffstoken ausgestellt."
+  },
+  {
+   "key": "mcp_signin.redirect_https",
+   "lang": "de",
+   "old": "Die Rückleitung muss mit https:// beginnen.",
+   "new": "Die Weiterleitungsadresse muss mit https:// beginnen."
+  },
+  {
+   "key": "mcp_datei.timeout",
+   "lang": "de",
+   "old": "Server '{name}': 'timeout' muss eine Zahl von Sekunden über 0 sein.",
+   "new": "Server '{name}': 'timeout' muss eine Sekundenzahl größer als 0 sein."
+  },
+  {
+   "key": "mcp_datei.eintrag",
+   "lang": "de",
+   "old": "Server '{name}': der Eintrag muss ein Objekt sein",
+   "new": "Server '{name}': Der Eintrag muss ein Objekt sein"
+  },
+  {
+   "key": "arbeitsordner.pfad_platzhalter",
+   "lang": "de",
+   "old": "/Users/du/Projekte/website",
+   "new": "/Users/name/Projekte/website"
+  },
+  {
+   "key": "gedaechtnis.an_lokal",
+   "lang": "de",
+   "old": "Exe AI-Gedächtnis",
+   "new": "Exe-AI-Gedächtnis"
+  },
+  {
+   "key": "gedaechtnis.info_an_lokal",
+   "lang": "de",
+   "old": "Übermittelt dein Gedächtnis (Regeln und Fakten, die Exe AI über dich gespeichert hat) bei jeder Anfrage an lokale Modelle. Die Daten verbleiben auf diesem Computer.",
+   "new": "Übermittelt das Gedächtnis (Regeln und Fakten, die Exe AI über den Nutzer gespeichert hat) bei jeder Anfrage an lokale Modelle. Die Daten verbleiben auf diesem Computer."
+  },
+  {
+   "key": "gedaechtnis.info_an_cloud",
+   "lang": "de",
+   "old": "Sendet dein Gedächtnis ebenfalls bei Anfragen an Cloud-Modelle und eigene Server mit. In diesem Fall verlässt es den Computer.",
+   "new": "Sendet das Gedächtnis ebenfalls bei Anfragen an Cloud-Modelle und eigene Server mit. In diesem Fall verlässt es den Computer."
+  },
+  {
+   "key": "skills.fehler_kopfteil",
+   "lang": "de",
+   "old": "'{anzeige}': der Kopfteil zwischen zwei '---'-Zeilen fehlt",
+   "new": "'{anzeige}': Der Kopfteil zwischen zwei '---'-Zeilen fehlt"
+  },
+  {
+   "key": "skills.fehler_abschluss",
+   "lang": "de",
+   "old": "'{anzeige}': die schließende '---'-Zeile fehlt",
+   "new": "'{anzeige}': Die schließende '---'-Zeile fehlt"
+  },
+  {
+   "key": "skills.fehler_feldliste",
+   "lang": "de",
+   "old": "'{anzeige}': der Kopfteil ist keine Feldliste",
+   "new": "'{anzeige}': Der Kopfteil ist keine Feldliste"
+  },
+  {
+   "key": "skills.template_description",
+   "lang": "de",
+   "old": "description: Beschreibe, was dieser Skill tut und wann er anzuwenden ist.",
+   "new": "description: Was dieser Skill tut und wann er anzuwenden ist."
+  },
+  {
+   "key": "skills.template_instructions",
+   "lang": "de",
+   "old": "Schreibe hier die Anleitung. Wird dieser Skill ausgewählt, befolgt das Modell die nachstehenden Anweisungen.",
+   "new": "Bitte hier die Anleitung eintragen. Wird dieser Skill ausgewählt, befolgt das Modell die nachstehenden Anweisungen."
+  },
+  {
+   "key": "skills.info_selbst",
+   "lang": "de",
+   "old": "Ermöglicht dem Modell die automatische Auswahl von Skills, ohne dass du diese explizit benennst. Jeder verfügbare Skill fügt der Anfrage eine Zeile hinzu; ein direkter Aufruf per Name verursacht keinen Mehraufwand.",
+   "new": "Ermöglicht dem Modell die automatische Auswahl von Skills, ohne dass sie ausdrücklich aufgerufen werden. Jeder verfügbare Skill fügt der Anfrage eine Zeile hinzu; ein direkter Aufruf per Name verursacht keinen Mehraufwand."
+  },
+  {
+   "key": "cronjobs.aufgabe",
+   "lang": "de",
+   "old": "Aufgabe",
+   "new": "Auftrag"
+  },
+  {
+   "key": "cronjobs.naechste_faelligkeit",
+   "lang": "de",
+   "old": "Nächster Durchlauf: {wann}",
+   "new": "Nächster Lauf: {wann}"
+  },
+  {
+   "key": "cronjobs.form_change",
+   "lang": "de",
+   "old": "Zeitplan ändern",
+   "new": "Cronjob ändern"
+  },
+  {
+   "key": "cronjobs.repeat_custom",
+   "lang": "de",
+   "old": "Eigene",
+   "new": "Benutzerdefiniert"
+  },
+  {
+   "key": "cronjobs.changed",
+   "lang": "de",
+   "old": "Zeitplan geändert",
+   "new": "Cronjob geändert"
+  },
+  {
+   "key": "cronjobs.switch_off",
+   "lang": "de",
+   "old": "Ausschalten",
+   "new": "Deaktivieren"
+  },
+  {
+   "key": "cronjobs.nach_fehlversuchen_gestoppt",
+   "lang": "de",
+   "old": "{aufgabe} - nach {n} fehlgeschlagenen Durchläufen gestoppt",
+   "new": "{aufgabe} - nach {n} fehlgeschlagenen Läufen gestoppt"
+  },
+  {
+   "key": "cronjobs.nach_fehlversuchen_gestoppt_eins",
+   "lang": "de",
+   "old": "{aufgabe} - nach 1 fehlgeschlagenen Durchlauf gestoppt",
+   "new": "{aufgabe} - nach 1 fehlgeschlagenen Lauf gestoppt"
+  },
+  {
+   "key": "cronjobs.ohne_zielmeldung_seit",
+   "lang": "de",
+   "old": "{aufgabe} - nach {n} Durchläufen keine Meldung über das Erreichen des Ziels",
+   "new": "{aufgabe} - nach {n} Läufen keine Meldung über das Erreichen des Ziels"
+  },
+  {
+   "key": "cronjobs.ohne_zielmeldung_seit_eins",
+   "lang": "de",
+   "old": "{aufgabe} - nach 1 Durchlauf keine Meldung über das Erreichen des Ziels",
+   "new": "{aufgabe} - nach 1 Lauf keine Meldung über das Erreichen des Ziels"
+  },
+  {
+   "key": "cronjob_refusal.task_empty",
+   "lang": "de",
+   "old": "Die Aufgabe ist leer - es gibt nichts auszuführen.",
+   "new": "Der Auftrag ist leer - es gibt nichts auszuführen."
+  },
+  {
+   "key": "cronjob_refusal.stop_needs_goal",
+   "lang": "de",
+   "old": "Lege ein Ziel fest, bevor du das automatische Anhalten bei dessen Erreichen aktivierst.",
+   "new": "Bitte zuerst ein Ziel festlegen, dann das automatische Anhalten bei dessen Erreichen aktivieren."
+  },
+  {
+   "key": "cronjob_refusal.script_not_agent",
+   "lang": "de",
+   "old": "Ein Skripteintrag führt ein Skript statt eines Agenten aus. Agent und Aufgabe dürfen nicht angegeben werden.",
+   "new": "Ein Skripteintrag führt ein Skript statt eines Agenten aus. Agent und Auftrag dürfen nicht angegeben werden."
+  },
+  {
+   "key": "katalog.bausatz_textleser",
+   "lang": "de",
+   "old": "Textleser",
+   "new": "Text-Encoder"
+  },
+  {
+   "key": "katalog.keine_kuratierten",
+   "lang": "de",
+   "old": "Noch keine kuratierten Modelle dieser Art vorhanden. Verwende die Suche oben.",
+   "new": "Noch keine kuratierten Modelle dieser Art vorhanden. Bitte die Suche oben verwenden."
+  },
+  {
+   "key": "katalog.empfohlen_fuer",
+   "lang": "de",
+   "old": "Empfohlen für deine {gb} GB",
+   "new": "Empfohlen für {gb} GB"
+  },
+  {
+   "key": "katalog.passt_fuer",
+   "lang": "de",
+   "old": "Passt auf deine {gb} GB",
+   "new": "Passt in {gb} GB"
+  },
+  {
+   "key": "katalog.kann_winkel",
+   "lang": "de",
+   "old": "Ruft Werkzeuge",
+   "new": "Ruft Werkzeuge auf"
+  },
+  {
+   "key": "katalog.lang_gptoss",
+   "lang": "de",
+   "old": "Mixture of Experts von OpenAI: 21B Parameter, 3,6B aktiv pro Token, Reasoning immer an, Werkzeugaufrufe, 128K Kontext. Die V2-Fassung von SoAI lässt die veröffentlichten MXFP4-Gewichte unverändert, korrigiert die Chat-Vorlage für saubere Werkzeugaufrufe und ergänzt Bildeingabe über einen InternVL-Encoder.",
+   "new": "Mixture of Experts von OpenAI: 21B Parameter, 3,6B aktiv pro Token, Reasoning immer aktiv, Werkzeugaufrufe, 128K Kontext. Die V2-Fassung von SoAI lässt die veröffentlichten MXFP4-Gewichte unverändert, korrigiert die Chat-Vorlage für saubere Werkzeugaufrufe und ergänzt Bildeingabe über einen InternVL-Encoder."
+  },
+  {
+   "key": "meldewesen.quelle",
+   "lang": "de",
+   "old": "Meldungen",
+   "new": "Benachrichtigungen"
+  },
+  {
+   "key": "meldewesen.info_toene",
+   "lang": "de",
+   "old": "Schaltet alle Benachrichtigungstöne ein oder aus. In der Spalte „Ton“ unten legst du fest, bei welchen Ereignissen ein Ton abgespielt wird.",
+   "new": "Aktiviert oder deaktiviert alle Benachrichtigungstöne. In der Spalte „Ton“ unten wird festgelegt, bei welchen Ereignissen ein Ton abgespielt wird."
+  },
+  {
+   "key": "meldewesen.info_fertig",
+   "lang": "de",
+   "old": "Ein Chat hat seine Antwort fertiggestellt, während du in einem anderen Chat oder Programm aktiv warst.",
+   "new": "Ein Chat hat seine Antwort fertiggestellt, während ein anderer Chat oder ein anderes Programm aktiv war."
+  },
+  {
+   "key": "meldewesen.info_wartet",
+   "lang": "de",
+   "old": "Exe AI wartet auf deine Freigabe: eine Frage, ein zu bestätigender Werkzeugaufruf oder eine Agentenanfrage.",
+   "new": "Exe AI braucht Aufmerksamkeit: eine Frage, ein zu bestätigender Werkzeugaufruf oder eine Agentenanfrage."
+  },
+  {
+   "key": "meldewesen.info_fehler",
+   "lang": "de",
+   "old": "Ein Fehler ist aufgetreten: Ein Ausführungsprozess ist fehlgeschlagen oder wurde abgebrochen, oder Daten konnten nicht gespeichert bzw. geladen werden.",
+   "new": "Ein Fehler ist aufgetreten: Ein Lauf ist fehlgeschlagen oder wurde abgebrochen, oder Daten konnten nicht gespeichert bzw. geladen werden."
+  },
+  {
+   "key": "meldewesen.info_agent_cronjob",
+   "lang": "de",
+   "old": "Ein Agent- oder Cronjob-Lauf wurde erfolgreich beendet. Fehlgeschlagene Läufe werden als Fehler gewertet.",
+   "new": "Ein Agenten- oder Cronjob-Lauf wurde erfolgreich beendet. Fehlgeschlagene Läufe fallen unter „Fehler“."
+  },
+  {
+   "key": "meldewesen.info_punkt_agenten",
+   "lang": "de",
+   "old": "Lässt den Punkt am Agenten-Symbol pulsieren, wenn ein Lauf beendet ist, auf Eingaben wartet oder fehlgeschlagen ist. Im ausgeschalteten Zustand behält er seine Farbe und steht still.",
+   "new": "Lässt den Punkt am Agenten-Symbol pulsieren, wenn ein Lauf beendet ist, auf Eingaben wartet oder fehlgeschlagen ist. Im inaktiven Zustand behält er seine Farbe und steht still."
+  },
+  {
+   "key": "meldewesen.info_punkt_cronjob",
+   "lang": "de",
+   "old": "Lässt den Punkt am Cronjob-Symbol pulsieren, wenn ein Lauf beendet ist, auf Eingaben wartet oder fehlgeschlagen ist. Im ausgeschalteten Zustand behält er seine Farbe und steht still.",
+   "new": "Lässt den Punkt am Cronjob-Symbol pulsieren, wenn ein Lauf beendet ist, auf Eingaben wartet oder fehlgeschlagen ist. Im inaktiven Zustand behält er seine Farbe und steht still."
+  },
+  {
+   "key": "meldewesen.info_punkt_terminal",
+   "lang": "de",
+   "old": "Lässt die Terminal-Punkte pulsieren, wenn ein Befehl beendet ist, auf Eingaben wartet oder fehlgeschlagen ist. Im ausgeschalteten Zustand behalten sie ihre Farbe und stehen still.",
+   "new": "Lässt die Terminal-Punkte pulsieren, wenn ein Befehl beendet ist, auf Eingaben wartet oder fehlgeschlagen ist. Im inaktiven Zustand behalten sie ihre Farbe und stehen still."
+  },
+  {
+   "key": "meldewesen.info_punkt_chat",
+   "lang": "de",
+   "old": "Lässt die Punkte deiner Chats in der Liste sowie der Werkzeugaufrufe im Chat pulsieren. Im ausgeschalteten Zustand behalten sie ihre Farbe und stehen still.",
+   "new": "Lässt die Punkte der Chats in der Liste sowie der Werkzeugaufrufe im Chat pulsieren. Im inaktiven Zustand behalten sie ihre Farbe und stehen still."
+  },
+  {
+   "key": "benutzerfrage.frei",
+   "lang": "de",
+   "old": "Oder schreib deine eigene Antwort",
+   "new": "Oder eine eigene Antwort schreiben"
+  },
+  {
+   "key": "cli.modell_gewaehlt",
+   "lang": "de",
+   "old": "Verwendet jetzt {name}.",
+   "new": "Jetzt wird {name} verwendet."
+  },
+  {
+   "key": "cli.no_image_model",
+   "lang": "de",
+   "old": "Kein Bildmodell ausgewählt. Wähle eines mit /server image.",
+   "new": "Kein Bildmodell ausgewählt. Bitte mit /server image eines auswählen."
+  },
+  {
+   "key": "cli.cmd_agents",
+   "lang": "de",
+   "old": "Aufgaben für Agenten starten und verfolgen oder Agenten bearbeiten\nEine Aufgabe starten, zum Beispiel: /agents run researcher fasse die offenen Punkte zusammen. Einen Agenten mit /agents edit researcher bearbeiten.",
+   "new": "Aufträge für Agenten starten und verfolgen oder Agenten bearbeiten\nEinen Auftrag starten, zum Beispiel: /agents run researcher fasse die offenen Punkte zusammen. Einen Agenten mit /agents edit researcher bearbeiten."
+  },
+  {
+   "key": "cli.rollback_no_folder",
+   "lang": "de",
+   "old": "Dieser Chat teilt keinen Arbeitsordner.",
+   "new": "Dieser Chat gibt keinen Arbeitsordner frei."
+  },
+  {
+   "key": "cli.mode_auto",
+   "lang": "de",
+   "old": "Werkzeuge ohne Rückfrage ausführen",
+   "new": "Werkzeuge laufen ohne Rückfrage"
+  },
+  {
+   "key": "cli.install_denied",
+   "lang": "de",
+   "old": "Keine Berechtigung für {path}. Einmal mit Administratorrechten ausführen: sudo \"{program}\" install",
+   "new": "Keine Schreibberechtigung für {path}. Einmal mit Administratorrechten ausführen: sudo \"{program}\" install"
+  },
+  {
+   "key": "cli.window.browser",
+   "lang": "de",
+   "old": "Die Befehlszeile läuft im Exe-AI-Fenster.",
+   "new": "Die CLI läuft im Exe-AI-Fenster."
+  },
+  {
+   "key": "docfolder.by_you",
+   "lang": "de",
+   "old": "von dir",
+   "new": "vom Nutzer"
+  },
+  {
+   "key": "speicherorte.ueberschneidung",
+   "lang": "de",
+   "old": "Ordner wird schon von einem anderen Speicherort benutzt",
+   "new": "Dieser Ordner wird schon von einem anderen Speicherort benutzt"
+  },
+  {
+   "key": "berechtigungen.modus_agent_manuell",
+   "lang": "de",
+   "old": "Sandboxed",
+   "new": "In der Sandbox"
+  },
+  {
+   "key": "denken.stufe.off",
+   "lang": "de",
+   "old": "Aus",
+   "new": "Inaktiv"
+  },
+  {
+   "key": "denken.stufe.on",
+   "lang": "de",
+   "old": "An",
+   "new": "Aktiv"
+  },
+  {
+   "key": "agent_file.folders_full",
+   "lang": "de",
+   "old": "'folders' erfordert absolute Pfade. '{path}' ist kein absoluter Pfad. Gib den vollständigen Pfad an, etwa /Users/you/code",
+   "new": "'folders' erfordert absolute Pfade. '{path}' ist kein absoluter Pfad. Bitte den vollständigen Pfad angeben, etwa /Users/name/code"
+  },
+  {
+   "key": "layoutmodus.blase_ki",
+   "lang": "de",
+   "old": "Breite der Chatkachel (AI)",
+   "new": "Breite der Chatkachel (KI)"
+  },
+  {
+   "key": "layoutmodus.anker_ki",
+   "lang": "de",
+   "old": "Chat-Anker (AI)",
+   "new": "Chat-Anker (KI)"
+  },
+  {
+   "key": "studio.no_prompt",
+   "lang": "de",
+   "old": "Kein Prompt eingegeben. Beschreibe das gewünschte Bild in der Prompt-Leiste.",
+   "new": "Kein Prompt eingegeben. Bitte das gewünschte Bild in der Prompt-Leiste beschreiben."
+  },
+  {
+   "key": "studio.stil_text",
+   "lang": "de",
+   "old": "Text · {prompt} steht für deinen Prompt",
+   "new": "Text · {prompt} steht für den Prompt"
+  },
+  {
+   "key": "studio.bildserver_aus",
+   "lang": "de",
+   "old": "Bild-Server aus",
+   "new": "Bild-Server inaktiv"
+  },
+  {
+   "key": "eingabe.mtp_aus",
+   "lang": "en",
+   "old": "Speed module off",
+   "new": "Speed module inactive"
+  },
+  {
+   "key": "bild.abgebrochen",
+   "lang": "en",
+   "old": "Image generation cancelled",
+   "new": "Image generation canceled"
+  },
+  {
+   "key": "bild.adetailer_keins",
+   "lang": "en",
+   "old": "Off",
+   "new": "-"
+  },
+  {
+   "key": "bild.info_upscale_repeats",
+   "lang": "en",
+   "old": "How often the upscaler runs over the picture, from 1 to 4. Each run enlarges by the model's own factor.",
+   "new": "How often the upscaler runs over the image, from 1 to 4. Each run enlarges by the model's own factor."
+  },
+  {
+   "key": "bild.info_upscale_tile_size",
+   "lang": "en",
+   "old": "The size in pixels of the tiles the picture is enlarged in. Smaller tiles need less memory.",
+   "new": "The size in pixels of the tiles the image is enlarged in. Smaller tiles need less memory."
+  },
+  {
+   "key": "bild.turbo_aus",
+   "lang": "en",
+   "old": "Image-Turbo is off",
+   "new": "Image-Turbo is inactive"
+  },
+  {
+   "key": "bild.info_breite",
+   "lang": "en",
+   "old": "The width of the picture in pixels.",
+   "new": "The width of the image in pixels."
+  },
+  {
+   "key": "bild.info_hoehe",
+   "lang": "en",
+   "old": "The height of the picture in pixels.",
+   "new": "The height of the image in pixels."
+  },
+  {
+   "key": "bild.sw_ad_x_offset",
+   "lang": "en",
+   "old": "Mask shift across",
+   "new": "Horizontal mask shift"
+  },
+  {
+   "key": "bild.sw_audio",
+   "lang": "en",
+   "old": "Driving sound track",
+   "new": "Driving audio track"
+  },
+  {
+   "key": "nachricht.verdichtet",
+   "lang": "en",
+   "old": "{anzahl} compressed messages",
+   "new": "{anzahl} compacted messages"
+  },
+  {
+   "key": "nachricht.verdichtet_notfall",
+   "lang": "en",
+   "old": "Emergency compression · {anzahl} messages",
+   "new": "Emergency compaction · {anzahl} messages"
+  },
+  {
+   "key": "nachricht.verdichtet_notfall_ohne_zahl",
+   "lang": "en",
+   "old": "Emergency compression",
+   "new": "Emergency compaction"
+  },
+  {
+   "key": "modell.flash_inaktiv",
+   "lang": "en",
+   "old": "Off",
+   "new": "Inactive"
+  },
+  {
+   "key": "parameter.locked.no_effect_at_openai",
+   "lang": "en",
+   "old": "Has no effect with OpenAI when tools or thinking are on.",
+   "new": "Has no effect with OpenAI when tools or thinking are active."
+  },
+  {
+   "key": "fehler.auftrag_nicht_gefunden",
+   "lang": "en",
+   "old": "Task not found",
+   "new": "Job not found"
+  },
+  {
+   "key": "fehler.funktion_aus",
+   "lang": "en",
+   "old": "Switched off in the configuration",
+   "new": "Disabled in the configuration"
+  },
+  {
+   "key": "status.komprimiert",
+   "lang": "en",
+   "old": "Compressing history",
+   "new": "Compacting history"
+  },
+  {
+   "key": "jobs.nicht_geladen",
+   "lang": "en",
+   "old": "Tasks could not be loaded",
+   "new": "Jobs could not be loaded"
+  },
+  {
+   "key": "jobs.starten",
+   "lang": "en",
+   "old": "New task",
+   "new": "New job"
+  },
+  {
+   "key": "jobs.bestaetigen_hinweis",
+   "lang": "en",
+   "old": "Edit the task before submitting it. The confirmed version is the one that will run.",
+   "new": "Edit the job before submitting it. The confirmed version is the one that will run."
+  },
+  {
+   "key": "jobs.loeschen_frage",
+   "lang": "en",
+   "old": "Delete this task? Its log and report will also be deleted.",
+   "new": "Delete this job? Its log and report will also be deleted."
+  },
+  {
+   "key": "jobs.geloescht",
+   "lang": "en",
+   "old": "Task deleted",
+   "new": "Job deleted"
+  },
+  {
+   "key": "agenten.abschnitt_aktiv",
+   "lang": "en",
+   "old": "Active tasks",
+   "new": "Active jobs"
+  },
+  {
+   "key": "webapp.error_serve_failed",
+   "lang": "en",
+   "old": "Tailscale could not show the service.",
+   "new": "Tailscale could not share the service."
+  },
+  {
+   "key": "werkzeuge.abgeschaltet",
+   "lang": "en",
+   "old": "Tools are switched off (features.mcp)",
+   "new": "Tools are disabled (features.mcp)"
+  },
+  {
+   "key": "werkzeuge.von_zahl",
+   "lang": "en",
+   "old": "{an} of {gesamt} on",
+   "new": "{an}/{gesamt} active"
+  },
+  {
+   "key": "werkzeuge.verhalten",
+   "lang": "en",
+   "old": "Behaviour",
+   "new": "Behavior"
+  },
+  {
+   "key": "werkzeuge.ausgeschaltet",
+   "lang": "en",
+   "old": "Off",
+   "new": "Inactive"
+  },
+  {
+   "key": "werkzeuge.eingebaut_satz.cronjob",
+   "lang": "en",
+   "old": "Sets up one-off or repeating reminders that fire a task at a set time.",
+   "new": "Sets up one-off or repeating cronjobs that start a job at a set time."
+  },
+  {
+   "key": "werkzeuge.eingebaut_satz.deliver_file",
+   "lang": "en",
+   "old": "Hands you a finished file: in a chat it appears in the response, from a task it lands in the doc folder.",
+   "new": "Hands you a finished file: in a chat it appears in the response, from a job it lands in the Doc folder."
+  },
+  {
+   "key": "werkzeuge.eingebaut_satz.cron_note",
+   "lang": "en",
+   "old": "Saves a brief note for a scheduled task to read during its next run.",
+   "new": "Saves a brief note for a cronjob to read during its next run."
+  },
+  {
+   "key": "verbindungen.stand_aus",
+   "lang": "en",
+   "old": "Off",
+   "new": "Inactive"
+  },
+  {
+   "key": "mcp.needs_key_outside",
+   "lang": "en",
+   "old": "The server at {url} needs an API key, and a key is not typed in a command. Nothing was added. Add it with exe mcp in a terminal, or under Settings → MCP Servers.",
+   "new": "The server at {url} needs an API key, and keys are not typed into commands. Nothing was added. Add it with exe mcp in a terminal, or under Settings → MCP Servers."
+  },
+  {
+   "key": "cronjobs.aufgabe",
+   "lang": "en",
+   "old": "Task",
+   "new": "Job"
+  },
+  {
+   "key": "cronjobs.switch_off",
+   "lang": "en",
+   "old": "Switch off",
+   "new": "Deactivate"
+  },
+  {
+   "key": "cronjob_refusal.task_empty",
+   "lang": "en",
+   "old": "The task is empty - there is nothing to run.",
+   "new": "The job is empty - there is nothing to run."
+  },
+  {
+   "key": "cronjob_refusal.script_not_agent",
+   "lang": "en",
+   "old": "A script entry runs a script rather than an agent. Agent and task must be omitted.",
+   "new": "A script entry runs a script rather than an agent. Agent and job must be omitted."
+  },
+  {
+   "key": "katalog.lang_occamy",
+   "lang": "en",
+   "old": "Mixture-of-experts fine-tune of Qwen3.6 35B A3B by Accio for agentic work: 3B active parameters per token, tool calling, image input, reasoning, 262K context. APEX-I MiniPlus V2.1 quantisation by IsValorum.",
+   "new": "Mixture-of-experts fine-tune of Qwen3.6 35B A3B by Accio for agentic work: 3B active parameters per token, tool calling, image input, reasoning, 262K context. APEX-I MiniPlus V2.1 quantization by IsValorum."
+  },
+  {
+   "key": "katalog.satz_qwen38",
+   "lang": "en",
+   "old": "Qwen3.8 27B, quantised to IQ3_S by ISTA-DASLab (GSQ-RCO).",
+   "new": "Qwen3.8 27B, quantized to IQ3_S by ISTA-DASLab (GSQ-RCO)."
+  },
+  {
+   "key": "katalog.lang_qwen38",
+   "lang": "en",
+   "old": "Dense 27B multimodal model from Alibaba's Qwen team, quantised to IQ3_S by ISTA-DASLab using GSQ-RCO. Supports tool calls and image input, with a 262K context.",
+   "new": "Dense 27B multimodal model from Alibaba's Qwen team, quantized to IQ3_S by ISTA-DASLab using GSQ-RCO. Supports tool calls and image input, with a 262K context."
+  },
+  {
+   "key": "katalog.lang_ornith",
+   "lang": "en",
+   "old": "Dense 9B fine-tune of Qwen3.5 by Ornith AI, trained through self-improvement for coding and agent tasks. Supports tool calls and image input, with a 262K context. Q4_K_M quantisation.",
+   "new": "Dense 9B fine-tune of Qwen3.5 by Ornith AI, trained through self-improvement for coding and agent tasks. Supports tool calls and image input, with a 262K context. Q4_K_M quantization."
+  },
+  {
+   "key": "katalog.lang_spark",
+   "lang": "en",
+   "old": "Dense 4B model from SparkLLM with hybrid attention and a native 1M-token context, offering strong coding and agent performance for its size. Supports tool calls and reasoning. The Sharp-Spark version uses imatrix quantisation (Q6_K_XL) and a corrected chat template.",
+   "new": "Dense 4B model from SparkLLM with hybrid attention and a native 1M-token context, offering strong coding and agent performance for its size. Supports tool calls and reasoning. The Sharp-Spark version uses imatrix quantization (Q6_K_XL) and a corrected chat template."
+  },
+  {
+   "key": "katalog.lang_gemmae2b",
+   "lang": "en",
+   "old": "Google's smallest Gemma 4, trained with quantisation awareness and packaged by Unsloth for mobile hardware. Features 2-bit quantisation (UD-Q2_K_XL), tool calls, image input, an MTP drafter for faster responses, and a 128K context.",
+   "new": "Google's smallest Gemma 4, trained with quantization awareness and packaged by Unsloth for mobile hardware. Features 2-bit quantization (UD-Q2_K_XL), tool calls, image input, an MTP drafter for faster responses, and a 128K context."
+  },
+  {
+   "key": "cli.cmd_agents",
+   "lang": "en",
+   "old": "Start and follow tasks for agents, or edit agents\nStart a task, for example: /agents run researcher summarize the open issues. Edit an agent with /agents edit researcher.",
+   "new": "Start and follow jobs for agents, or edit agents\nStart a job, for example: /agents run researcher summarize the open issues. Edit an agent with /agents edit researcher."
+  },
+  {
+   "key": "docfolder.origin_cronjob",
+   "lang": "en",
+   "old": "Cron job",
+   "new": "Cronjob"
+  },
+  {
+   "key": "agent_file.color",
+   "lang": "en",
+   "old": "'color' must be a colour value of the form #a1b2c3",
+   "new": "'color' must be a color value of the form #a1b2c3"
+  },
+  {
+   "key": "studio.bildserver_aus",
+   "lang": "en",
+   "old": "Image server off",
+   "new": "Image server inactive"
+  }
+ ],
+ "kept": [
+  {
+   "key": "kopf.bereit",
+   "lang": "de",
+   "text": "idle"
+  },
+  {
+   "key": "kopf.server_active",
+   "lang": "de",
+   "text": "active"
+  },
+  {
+   "key": "modell.feld_kv_unified",
+   "lang": "de",
+   "text": "Dynamisches Kontextfenster"
+  },
+  {
+   "key": "nachricht.dokument_kein_platz",
+   "lang": "de",
+   "text": "Zu groß für den Kontext"
+  },
+  {
+   "key": "nachricht.dokument_abgelehnt",
+   "lang": "de",
+   "text": "Zu groß für den Kontext"
+  },
+  {
+   "key": "bild.art_txt2img",
+   "lang": "de",
+   "text": "Generieren"
+  },
+  {
+   "key": "agenten.farbe_entfernen",
+   "lang": "de",
+   "text": "Farbe löschen"
+  },
+  {
+   "key": "verbindungen.section_set_up",
+   "lang": "en",
+   "text": "Installed"
+  },
+  {
+   "key": "verbindungen.section_not_set_up",
+   "lang": "en",
+   "text": "Not installed"
+  },
+  {
+   "key": "menue.sign_open_window",
+   "lang": "en",
+   "text": "Open Window"
+  }
+ ]
+}

@@ -1,6 +1,6 @@
 <script>
   /* One storage location as a row: where it is, a button to open it, and the
-     catalogue's folder mark to move it. The same control wherever a folder
+     three dots to move it. The same control wherever a folder
      can be seen and changed — the pictures module and each of the three
      server panels — so "this is about a folder" reads the same everywhere,
      and there is one place to change how it works.
@@ -20,6 +20,7 @@
   import Hauszeichen from './Hauszeichen.svelte'
   import { t } from '../lib/texte.svelte.js'
   import { melde, frage } from '../lib/zustand.svelte.js'
+  import { displayPath } from '../lib/paths.js'
 
   /* `onopen` is for a row that at times stands for another folder than its
      named location — the doc folder inside a chat, where the files lie in
@@ -30,7 +31,7 @@
   } = $props()
 
   let pfad = $state('')
-  const shownPath = $derived(pathText ?? pfad)
+  const shownPath = $derived(displayPath(pathText ?? pfad))
 
   async function laden() {
     try {
@@ -77,16 +78,11 @@
             aria-label={t('speicherorte.oeffnen')}>
       <Hauszeichen zeichen="ordner" groesse="klein" />
     </button>
-    <button class="ordnerknopf" onclick={aendern} title={t('speicherorte.aendern')}
+    <button class="ordnerknopf dots" onclick={aendern} title={t('speicherorte.aendern')}
             aria-label={t('speicherorte.aendern')}>
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <!-- The house pencil, not a folder: this button does not open the
-             folder — the one beside it does — it CHANGES which folder is
-             meant. Two buttons wearing one sign taught two different lessons
-             in two different windows. -->
-        <path d="M17 3l4 4L8 20l-5 1 1-5L17 3z" />
-      </svg>
+      <!-- Three dots, low and centred: this button does not open the folder —
+           the one beside it does — it asks for ANOTHER folder. -->
+      <Hauszeichen zeichen="ellipsis" groesse="klein" />
     </button>
   </div>
 </div>
@@ -119,6 +115,10 @@
        end. */
     direction: rtl;
     text-align: left;
+    /* Room for the last character's ink, which can reach past its advance
+       (a wide letter, a bracket) and, at a fractional device scale, past the
+       box's edge: with none, the box clips it half away. */
+    padding-right: 2px;
     /* A path reads in the one face of the house, like every other datum. A
        server window's card sets it one step larger (Serverabschnitt.svelte). */
     font: 400 var(--pfad-schrift, 11px) var(--schrift);
@@ -159,4 +159,8 @@
     color: var(--text-leise);
   }
   .ordnerknopf:hover { background: var(--glass-hover); }
+  /* The dots stand low in the square, on the line a text ellipsis would. */
+  .ordnerknopf.dots {
+    padding-top: 10px;
+  }
 </style>

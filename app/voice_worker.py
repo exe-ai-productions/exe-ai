@@ -73,6 +73,16 @@ MAX_FRAMES = 3000
 # What the engine's own sampler chain starts from when nothing is set.
 PENALTY_WINDOW = 64
 RANDOM_SEED = 0xFFFFFFFF
+# What `llama-tts` of the same build takes for a value it is not given (read
+# from its own `--help`, llama.cpp b11429). A value left out of a request is
+# "Auto", and Auto is these.
+AUTO_SAMPLING = {
+    "temperature": 0.8,
+    "top_k": 40,
+    "top_p": 0.95,
+    "min_p": 0.05,
+    "repeat_penalty": 1.05,
+}
 OUT_TYPE_WAV = 1
 
 
@@ -358,13 +368,13 @@ class Voice:
     def _sampler_chain(self, sampling: dict[str, Any]) -> Any:
         llama = self.llama
         chain = llama.llama_sampler_chain_init(llama.llama_sampler_chain_default_params())
-        penalty = float(sampling.get("repeat_penalty", 1.0))
+        penalty = float(sampling.get("repeat_penalty", AUTO_SAMPLING["repeat_penalty"]))
         for stage in (
             llama.llama_sampler_init_penalties(PENALTY_WINDOW, penalty, 0.0, 0.0),
-            llama.llama_sampler_init_top_k(int(sampling.get("top_k", 50))),
-            llama.llama_sampler_init_top_p(float(sampling.get("top_p", 1.0)), 1),
-            llama.llama_sampler_init_min_p(float(sampling.get("min_p", 0.0)), 1),
-            llama.llama_sampler_init_temp(float(sampling.get("temperature", 0.9))),
+            llama.llama_sampler_init_top_k(int(sampling.get("top_k", AUTO_SAMPLING["top_k"]))),
+            llama.llama_sampler_init_top_p(float(sampling.get("top_p", AUTO_SAMPLING["top_p"])), 1),
+            llama.llama_sampler_init_min_p(float(sampling.get("min_p", AUTO_SAMPLING["min_p"])), 1),
+            llama.llama_sampler_init_temp(float(sampling.get("temperature", AUTO_SAMPLING["temperature"]))),
             llama.llama_sampler_init_dist(RANDOM_SEED),
         ):
             llama.llama_sampler_chain_add(chain, stage)
@@ -385,7 +395,8 @@ class Voice:
         mtmd.mtmd_helper_gen_audio_reset(self.generation)
         inp = GenerationInput(
             0, text, len(text), self.bitmap, language,
-            int(sampling.get("top_k", 50)), float(sampling.get("top_p", 1.0)),
+            int(sampling.get("top_k", AUTO_SAMPLING["top_k"])),
+            float(sampling.get("top_p", AUTO_SAMPLING["top_p"])),
             RANDOM_SEED, OUT_TYPE_WAV,
         )
         if mtmd.mtmd_helper_gen_audio_set_input(self.generation, byref(inp)) != 0:

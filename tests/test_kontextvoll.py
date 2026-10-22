@@ -1041,7 +1041,7 @@ def test_auftrag_scheitert_die_faltung_eine_anfrage_dann_kontext_voll(
     assert list(_schritte_mit_mitte_je_runde(schritte).values()) == [1]
     status = _status(daten)
     assert not [s for s in status if "Der Verlauf wurde komprimiert" in s]
-    assert status.count("Komprimierung fehlgeschlagen — der Verlauf bleibt unkomprimiert.") == 1
+    assert status.count("Komprimierung fehlgeschlagen - der Verlauf bleibt unkomprimiert.") == 1
 
 
 def test_auftrag_scheitert_die_faltung_vor_dem_senden_eine_anfrage_dann_kontext_voll(
@@ -1067,7 +1067,7 @@ def test_auftrag_scheitert_die_faltung_vor_dem_senden_eine_anfrage_dann_kontext_
     assert set(je_runde.values()) == {1}
     status = _status(daten)
     assert not [s for s in status if "Der Verlauf wurde komprimiert" in s]
-    assert status.count("Komprimierung fehlgeschlagen — der Verlauf bleibt unkomprimiert.") == 1
+    assert status.count("Komprimierung fehlgeschlagen - der Verlauf bleibt unkomprimiert.") == 1
 
 
 def test_auftrag_zwei_fehlschlaege_vor_dem_senden_schliessen_die_sperre_mit_hinweis(
@@ -1087,8 +1087,8 @@ def test_auftrag_zwei_fehlschlaege_vor_dem_senden_schliessen_die_sperre_mit_hinw
 
     assert provider.faltungen >= 2
     status = _status(daten)
-    assert status.count("Komprimierung fehlgeschlagen — der Verlauf bleibt unkomprimiert.") == provider.faltungen
-    assert status.count("Die automatische Komprimierung ist für diesen Durchlauf deaktiviert.") == 1
+    assert status.count("Komprimierung fehlgeschlagen - der Verlauf bleibt unkomprimiert.") == provider.faltungen
+    assert status.count("Die automatische Komprimierung ist für diesen Lauf deaktiviert.") == 1
 
 
 def test_auftrag_ohne_platz_fuer_die_zusammenfassung_ein_schritt_und_keine_zeile(
@@ -1158,7 +1158,7 @@ def test_auftrag_scheitert_die_faltung_am_rundenende_laeuft_der_lauf_weiter(conf
     ]
     assert len(faltungen) == 1
     status = _status(daten)
-    assert status.count("Komprimierung fehlgeschlagen — der Verlauf bleibt unkomprimiert.") == 1
+    assert status.count("Komprimierung fehlgeschlagen - der Verlauf bleibt unkomprimiert.") == 1
     assert "Der Verlauf wurde komprimiert, damit der Kontext nicht vollständig belegt wird." not in status
 
 

@@ -33,7 +33,7 @@ def _catalogue() -> dict:
     )
     try:
         run = subprocess.run(
-            ["node", driver.name], cwd=FRONTEND, capture_output=True, text=True, timeout=60,
+            ["node", driver.name], cwd=FRONTEND, capture_output=True, text=True, encoding="utf-8", timeout=60,
         )
     finally:
         driver.unlink(missing_ok=True)
@@ -65,7 +65,11 @@ def test_the_other_parts_of_an_accessory_and_the_picture_models_stay():
     accessory keeps its repository id, its file, its target name and its
     size next to the new name."""
     catalogue = _catalogue()
-    assert {v["name"] for e in catalogue["bild"] for v in e["fassungen"]} == {"safetensors"}
+    named = {e["id"]: {v["name"] for v in e["fassungen"]} for e in catalogue["bild"]}
+    for kept in ("cyberrealistic-xl", "juggernaut-xl", "animagine-xl"):
+        assert named[kept] == {"safetensors"}, kept
+    # A new picture model is named after the format of its own file.
+    assert named["qwen-image-21"] == {"4-Bit · Q4_K_M"}
     by_id = {e["id"]: e["fassungen"][0] for e in catalogue["zubehoer"]}
     mse = by_id["vae-mse-15"]
     assert mse["id"] == "stabilityai/sd-vae-ft-mse-original"

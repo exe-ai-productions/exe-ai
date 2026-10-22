@@ -37,6 +37,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from pathlib import Path
@@ -76,6 +77,28 @@ class MCPAnmeldeFehler(Exception):
 
     def text(self, language: str | None) -> str:
         return t(self.key, language, **self.values)
+
+
+def _https_address(address: str) -> str:
+    """An https address of the person's own, as it is used from then on —
+    the scheme and host in lower case. Anything else is refused: no other
+    scheme, no address without a host, no user name or password in it, no
+    fragment, no blank or control character, no bad port."""
+    try:
+        teile = urlsplit(address)
+        teile.port  # noqa: B018 - a bad port raises here
+    except ValueError:
+        raise MCPAnmeldeFehler("mcp_signin.redirect_https") from None
+    if (
+        teile.scheme != "https"
+        or not teile.hostname
+        or teile.username is not None
+        or teile.password is not None
+        or teile.fragment
+        or re.search(r"[\s\x00-\x1f\x7f]", address)
+    ):
+        raise MCPAnmeldeFehler("mcp_signin.redirect_https")
+    return teile.geturl()
 
 
 def _pkce_paar() -> tuple[str, str]:
@@ -222,7 +245,7 @@ class OAuthVermittler:
         return daten if isinstance(daten, dict) else None
 
     async def _registrieren(
-        self, http: httpx.AsyncClient, meta: dict[str, Any]
+        self, http: httpx.AsyncClient, meta: dict[str, Any], redirect_uri: str
     ) -> tuple[str, str | None]:
         """Dynamic registration (RFC 7591) — the reason a single click is
         enough in other programs."""
@@ -232,7 +255,7 @@ class OAuthVermittler:
             meta["registration_endpoint"],
             json={
                 "client_name": CLIENT_NAME,
-                "redirect_uris": [self.rueckleitung],
+                "redirect_uris": [redirect_uri],
                 "grant_types": ["authorization_code", "refresh_token"],
                 "response_types": ["code"],
                 "token_endpoint_auth_method": "none",
@@ -258,24 +281,36 @@ class OAuthVermittler:
         client_id: str | None = None,
         client_secret: str | None = None,
         language: str | None = None,
+        redirect_uri: str | None = None,
     ) -> str:
         """Prepares the flow and returns the address for the browser.
+
+        ``redirect_uri`` is an https address of the person's own that takes
+        the place of the one over 127.0.0.1 — registration, sign-in address
+        and exchange all carry it, and it stays with the client id. Left
+        out, the address over 127.0.0.1 is used as ever.
 
         ``language`` is the one the interface showed when the sign-in was
         started: it travels with the flow, so the page the browser comes
         back to can speak it — that request carries no word of the app's.
         """
+        if redirect_uri:
+            redirect_uri = _https_address(redirect_uri)
+        redirect = redirect_uri or self.rueckleitung
         async with self._http() as http:
             meta = await self._metadaten(http, mcp_url)
             gemerkt = self.speicher.eintrag(server) or {}
             if client_id:
                 # Entered by hand (the Google route) — beats everything.
                 kennung, geheimnis = client_id, client_secret
-            elif gemerkt.get("client_id"):
-                # Already registered once: reuse the same client id.
+            elif gemerkt.get("client_id") and (
+                gemerkt.get("redirect_uri") or self.rueckleitung
+            ) == redirect:
+                # Already registered once, for this very return address:
+                # reuse the same client id.
                 kennung, geheimnis = gemerkt["client_id"], gemerkt.get("client_secret")
             else:
-                kennung, geheimnis = await self._registrieren(http, meta)
+                kennung, geheimnis = await self._registrieren(http, meta, redirect)
 
         verifier, challenge = _pkce_paar()
         state = secrets.token_urlsafe(32)
@@ -287,6 +322,7 @@ class OAuthVermittler:
             "client_secret": geheimnis,
             "token_endpoint": meta["token_endpoint"],
             "resource": meta["resource"],
+            "redirect_uri": redirect,
             "language": language,
             "erstellt": time.monotonic(),
         }
@@ -294,7 +330,7 @@ class OAuthVermittler:
         anfrage = {
             "response_type": "code",
             "client_id": kennung,
-            "redirect_uri": self.rueckleitung,
+            "redirect_uri": redirect,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
             "state": state,
@@ -329,7 +365,7 @@ class OAuthVermittler:
         daten = {
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": self.rueckleitung,
+            "redirect_uri": vorgang["redirect_uri"],
             "client_id": vorgang["client_id"],
             "code_verifier": vorgang["verifier"],
             "resource": vorgang["resource"],
@@ -355,6 +391,7 @@ class OAuthVermittler:
             client_secret=vorgang["client_secret"],
             token_endpoint=vorgang["token_endpoint"],
             resource=vorgang["resource"],
+            redirect_uri=vorgang["redirect_uri"],
             mcp_url=vorgang["mcp_url"],
             access_token=zugang["access_token"],
             refresh_token=zugang.get("refresh_token"),
@@ -433,6 +470,14 @@ class OAuthVermittler:
             server: {
                 "verbunden": bool(eintrag.get("access_token")),
                 "laeuft_ab": eintrag.get("expires_at"),
+                # Only an https address of the person's own; the one over
+                # 127.0.0.1 is the default and stands in no field (and an
+                # old default of another port is not one of the person's).
+                "redirect_uri": (
+                    eintrag["redirect_uri"]
+                    if str(eintrag.get("redirect_uri") or "").startswith("https://")
+                    else None
+                ),
             }
             for server, eintrag in self.speicher.alle().items()
         }

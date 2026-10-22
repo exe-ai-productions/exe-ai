@@ -8,3 +8,9 @@ export const PREDICTIONEN = [
   'eps', 'v', 'edm_v', 'sd3_flow', 'flux_flow', 'sefi_flow',
   'minit2i_flow', 'sensenova_u1_flow',
 ]
+
+/* What a tiny autoencoder (TAE) of the `taesd` folder is called where a VAE is
+   chosen: its file name behind this word (app/bildbausatz.py, TAE_PREFIX), so
+   a name of one folder is never taken for a name of the other. */
+export const TAE_PREFIX = 'taesd:'
+export const istTae = (name) => typeof name === 'string' && name.startsWith(TAE_PREFIX)

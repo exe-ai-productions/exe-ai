@@ -62,6 +62,21 @@ export function ausreihen(job) {
   if (stelle !== -1) downloads.warteschlange.splice(stelle, 1)
 }
 
+/* Asks the service once what it is fetching right now, for a window that has
+   just started: the service goes on loading across a reload, the list here
+   does not remember it. Only a download that still runs is taken up; a
+   finished, cancelled or failed one from before the reload shows nothing and
+   is not made a receipt here. The catalogue's poll takes over from here and
+   ends it. */
+export async function readRunning() {
+  try {
+    const stand = await api.modellHolenStand()
+    if (stand && !stand.fertig && !stand.fehler && !downloads.laufend) downloads.laufend = stand
+  } catch {
+    // The service does not answer: everything stays as it is.
+  }
+}
+
 export function fertigMerken(datei, groesse) {
   if (!datei || downloads.fertig.some((f) => f.datei === datei)) return
   downloads.fertig.push({ datei, groesse })

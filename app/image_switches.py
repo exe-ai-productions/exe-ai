@@ -165,10 +165,15 @@ SWITCHES: tuple[Switch, ...] = (
     Switch("scm_policy", "choice", "memory", flag="--scm-policy",
            choices=("dynamic", "static"), body="scm_policy_dynamic", needs="cache_mode"),
     Switch("conditioning_cache_size", "int", "memory", flag="--conditioning-cache-size", low=0),
-    Switch("fa", "bool", "memory", flag="--fa", machine=True),
+    # Flash attention and direct convolution take `auto`, `on`, `off` or one
+    # value per module (`diffusion=on,te=off`), written the way
+    # `--params-backend` is; sd.cpp reads the text itself and says what it
+    # cannot read.
+    Switch("flash_attn", "text", "memory", flag="--flash-attn", machine=True),
     Switch("sage_attn", "bool", "memory", flag="--sage-attn", machine=True),
-    Switch("diffusion_conv_direct", "bool", "memory", flag="--diffusion-conv-direct", machine=True),
-    Switch("vae_conv_direct", "bool", "memory", flag="--vae-conv-direct", machine=True),
+    Switch("conv_direct", "text", "memory", flag="--conv-direct", machine=True),
+    Switch("batched_cfg", "choice", "memory", flag="--batched-cfg", choices=("on", "off"),
+           machine=True),
     Switch("linear_scale", "float", "memory", flag="--linear-scale"),
     Switch("attn_scale", "float", "memory", flag="--attn-scale"),
     # ---- Memory ----

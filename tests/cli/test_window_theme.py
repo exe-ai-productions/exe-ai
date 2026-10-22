@@ -20,13 +20,14 @@ from tests.cli.program import (
     ENTER,
     FULL_COLOURS,
     Run,
+    EMPTIED,
     in_full_colours,
     run_client,
+    taped_history,
     terminal,
 )
 from tests.cli.stub_service import StubService, eventually
 
-EMPTIED = "\x1b[2J"
 ASKED = "What grows in the shade"
 ANSWERED = "Hello."
 
@@ -48,23 +49,25 @@ def after_one_exchange_announced(
     in_window: bool = True,
 ) -> str:
     """Runs the client, has one message answered, lets the service announce
-    each of ``announcements`` in turn and returns what the terminal was sent
-    from then on. The client is told to run in the window's tab unless
-    ``in_window`` is False."""
+    each of ``announcements`` in turn and returns what was written into the
+    field of the history from then on, an emptying marked by ``EMPTIED``.
+    The client is told to run in the window's tab unless ``in_window`` is
+    False."""
     if in_window:
         monkeypatch.setenv(themes.WINDOW_VARIABLE, "1")
     else:
         monkeypatch.delenv(themes.WINDOW_VARIABLE, raising=False)
     sent, output = terminal(monkeypatch, FULL_COLOURS)
-    since: list[int] = []
+    tape = taped_history(monkeypatch)
+    since = [0]
 
     def drive(run: Run, type_in: Callable[[str], None]) -> None:
         ctx = run.parts()
         eventually(lambda: stub.watchers == 1)
         type_in(ASKED + ENTER)
-        eventually(lambda: ANSWERED in sent.getvalue())
+        eventually(lambda: ANSWERED in tape.getvalue())
         eventually(lambda: stub.running() == 0 and not ctx.session.answering)
-        since.append(len(sent.getvalue()))
+        since[0] = len(tape.getvalue())
         for fields in announcements:
             stub.announce("window_theme", **fields)
         # The stream is read by one thread, in order: once a server's word
@@ -75,7 +78,7 @@ def after_one_exchange_announced(
         type_in("/quit" + ENTER)
 
     assert run_client(http, tmp_path, monkeypatch, drive, output=output).code == 0
-    return sent.getvalue()[since[0] :]
+    return tape.getvalue()[since[0] :]
 
 
 def test_in_the_window_the_client_follows_the_look_the_page_shows(
@@ -85,10 +88,10 @@ def test_in_the_window_the_client_follows_the_look_the_page_shows(
         stub, stub_http, tmp_path, monkeypatch, [{"theme": "pearl"}]
     )
     assert themes.current().name == "pearl"
-    # The window is emptied — at once, and again in the turn that writes the
+    # The field is emptied — at once, and again in the turn that writes the
     # history, as for every redraw asked for from outside the client's own
-    # turn — and what stands after the last emptying is the whole exchange,
-    # once, in the new ink.
+    # turn — and what stands in it after the last emptying is the whole
+    # exchange, once, in the new ink.
     assert shown.count(EMPTIED) >= 1
     again = shown.split(EMPTIED)[-1]
     assert ASKED in again and again.count(ANSWERED) == 1
@@ -104,8 +107,8 @@ def test_the_same_name_again_draws_nothing_new(
     shown = after_one_exchange_announced(
         stub, stub_http, tmp_path, monkeypatch, [{"theme": "pearl"}, {"theme": "pearl"}]
     )
-    # Once more would be a second history on the same window: what stands
-    # after the last emptying is the same exchange, written once.
+    # Once more would be a second history in the same field: what stands in
+    # it after the last emptying is the same exchange, written once.
     assert shown.split(EMPTIED)[-1].count(ANSWERED) == 1
     assert shown.count(EMPTIED) == 2
 

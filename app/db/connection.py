@@ -24,7 +24,7 @@ _letzter_stempel = ""
 _stempel_sperre = threading.Lock()
 
 SCHEMA_DATEI = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 42
+SCHEMA_VERSION = 43
 
 # What a locked database at startup means to a person, not to SQLite: the raw
 # "database is locked" names no cause anybody could act on, while this does.
@@ -773,6 +773,24 @@ MIGRATIONEN: list[tuple[int, list[str]]] = [
             # the old answer named, the cleanup does what the stop does.
             # Every row that exists names none.
             "ALTER TABLE messages ADD COLUMN replaces_id TEXT",
+        ],
+    ),
+    (
+        43,
+        [
+            # The memory travels to cloud models and custom servers from the
+            # start now. A stored "cloud": false was written by an earlier
+            # default as much as by a hand — the window wrote both keys on
+            # every switch — so the two cannot be told apart, and every such
+            # value, in every scope, is set to true once. "lokal" stays.
+            # After this step what the user switches is what stands.
+            """
+            UPDATE einstellungen
+            SET wert_json = json_set(wert_json, '$.cloud', json('true'))
+            WHERE schluessel = 'gedaechtnis'
+              AND json_valid(wert_json)
+              AND json_extract(wert_json, '$.cloud') = 0
+            """,
         ],
     ),
 ]

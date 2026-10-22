@@ -503,7 +503,9 @@ def test_the_header_is_read_once_per_file_state(tmp_path, monkeypatch):
     for _ in range(2):
         assert dateiart(path) == MODELL
         assert traegt_eingebettetes_mtp(path) is True
-        assert bildinhalt.sorte(path) == bildinhalt.UNBEKANNT
+        # A Qwen3.5 language model is a text encoder for the picture side now
+        # (MOSS-Image reads one), like every other LLM architecture it lists.
+        assert bildinhalt.sorte(path) == bildinhalt.TEXTVERSTEHER
         assert bildinhalt.tensors(path) is not None
     assert len(walks) == 2
     path.write_bytes(_model_with_tensors() + b"\0")

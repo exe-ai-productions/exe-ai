@@ -661,6 +661,23 @@ def config_laden(pfad: str | Path | None = None) -> Config:
     return config
 
 
+def config_file(config: Config) -> Path:
+    """The file the running service reads its configuration from.
+
+    The same rule ``config_laden`` follows: ``EXE_AI_CONFIG`` names a file
+    of its own (a test service with data of its own does exactly that),
+    otherwise it is the ``config.yaml`` in the data folder. Everything that
+    shows or writes that file asks here — a page or a route that took the
+    default location would show a file nobody reads, and a save there would
+    change a file that belongs to somebody else's setup. The ``.env`` is not
+    part of this: it always lives in the data folder.
+    """
+    named = os.getenv("EXE_AI_CONFIG")
+    if named:
+        return Path(named)
+    return config.pfad("./config.yaml")
+
+
 @lru_cache(maxsize=1)
 def get_config() -> Config:
     """Cached configuration for the running process."""

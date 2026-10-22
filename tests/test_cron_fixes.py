@@ -297,8 +297,10 @@ def _entry(repos, **fields):
 
 
 def _limit(n: int, language: str | None = None) -> str:
-    """The limit's own sentence, as the catalogue has it."""
-    return t("cronjobs.nach_fehlversuchen_gestoppt", language, aufgabe=TASK, n=n)
+    """The limit's own sentence, as the catalogue has it: one failed run has
+    a sentence of its own, from two on the count stands in it."""
+    key = "cronjobs.nach_fehlversuchen_gestoppt" + ("_eins" if n == 1 else "")
+    return t(key, language, aufgabe=TASK, n=n)
 
 
 @pytest.mark.parametrize("language", ["en", "de"])
@@ -318,7 +320,7 @@ async def test_the_failure_limit_names_the_reason_of_the_last_run(repos, announc
     assert (first, second) == (False, True)
     reason = t("jobs.grund.anbieter_ausfall", language)
     assert reason != "jobs.grund.anbieter_ausfall"
-    assert announced == [(f"{_limit(2, language)} — {reason}", False)]
+    assert announced == [(f"{_limit(2, language)} - {reason}", False)]
     assert repos.cronjobs.holen(entry.id).aktiv is False
 
 
@@ -332,7 +334,7 @@ async def test_the_reason_stands_behind_the_limits_sentence(repos, announced):
     )
 
     assert announced == [
-        ("Check the inbox — stopped after 1 failed runs — time limit reached", False)
+        ("Check the inbox - stopped after 1 failed run - time limit reached", False)
     ]
 
 
@@ -361,7 +363,7 @@ async def test_a_reason_without_a_catalogue_entry_shows_itself(repos, announced)
         sprache="en",
     )
 
-    assert announced == [(f"{_limit(1, 'en')} — fehler: connection reset", False)]
+    assert announced == [(f"{_limit(1, 'en')} - fehler: connection reset", False)]
 
 
 async def test_the_origin_speaks_with_the_reason_of_the_chains_run(repos, announced):
@@ -380,7 +382,7 @@ async def test_the_origin_speaks_with_the_reason_of_the_chains_run(repos, announ
 
     assert said is True
     assert announced == [
-        (f"{_limit(1, 'en')} — {t('jobs.grund.anbieter_ausfall', 'en')}", False)
+        (f"{_limit(1, 'en')} - {t('jobs.grund.anbieter_ausfall', 'en')}", False)
     ]
 
 

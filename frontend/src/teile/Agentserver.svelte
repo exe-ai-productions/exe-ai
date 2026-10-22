@@ -30,9 +30,15 @@
      its own starts a process, which is why the form below it stands quiet
      for the other two. */
   import { api } from '../lib/api.js'
+  import { pollWithoutOverlap } from '../lib/pollWithoutOverlap.js'
   import { t } from '../lib/texte.svelte.js'
+  import { entryMark, entrySize, idMark } from '../lib/modelEntry.js'
   import { katalogOeffnen, melde, modelleLaden, zustand } from '../lib/zustand.svelte.js'
-  import { isEightBitCache, serverAnteil } from '../lib/speicherschaetzung.js'
+  import {
+    editTemplate, revealTemplate, templateChosen,
+    resetTemplate,
+  } from '../lib/chatTemplate.js'
+  import { kvShare, serverAnteil } from '../lib/speicherschaetzung.js'
   import { nurGeaendert } from '../lib/nurgeaendert.js'
   import {
     HAUPTMODELL,
@@ -46,9 +52,10 @@
     waehlen as agentenmodellWaehlen,
     werteSetzen,
   } from '../lib/agentenserver.svelte.js'
+  import ChatTemplateRow from './ChatTemplateRow.svelte'
   import Servertafel from './Servertafel.svelte'
+  import { serverHead } from '../lib/serverHead.svelte.js'
   import Serverregler from './Serverregler.svelte'
-  import Startknopf from './Startknopf.svelte'
   import Serverreihe from './Serverreihe.svelte'
   import Startfehler from './Startfehler.svelte'
   import Serverlogkopf from './Serverlogkopf.svelte'
@@ -58,6 +65,10 @@
     oeffneProtokoll,
     setzeProtokollZeilen,
   } from '../lib/protokollfenster.svelte.js'
+
+  /* What this page hands up to the page head (ModelleLokal.svelte), which draws
+     it: the start button, the short line beside the name and the port. */
+  let { head = $bindable(null) } = $props()
 
   let auskunft = $state(null)
   let protokoll = $state([])
@@ -106,7 +117,10 @@
      off, a count means that many layers. */
   let moeSchichten = $state(null)
   let parallel = $state(null)
-  let fein = $state({ kv_cache: 'f16', moe_auf_cpu: false, festnageln: false, kv_unified: true })
+  let fein = $state({
+    kv_cache: 'f16', flash_attention: 'auto', chat_template: 'model', chat_template_file: '',
+    moe_auf_cpu: false, festnageln: false, kv_unified: true, idle_minutes: null,
+  })
 
   const feindaten = $derived({
     ...fein,
@@ -181,9 +195,13 @@
   const drafterauswahl = $derived([
     { wert: '', text: t('modell.drafter_keiner') },
     ...(drafter && !drafterKandidaten.some((m) => m.name === drafter)
-      ? [{ wert: drafter, text: drafter }]
+      ? [{ wert: drafter, text: drafter, ...entryMark(drafter) }]
       : []),
-    ...drafterKandidaten.map((m) => ({ wert: m.name, text: `${m.name} · ${m.groesse_gb} GB` })),
+    ...drafterKandidaten.map((m) => ({
+      wert: m.name,
+      text: `${m.name} · ${entrySize(m.groesse_gb)}`,
+      ...entryMark(m.name),
+    })),
   ])
 
   /* Every projector in the vision folder, "without" first — not narrowed by
@@ -191,7 +209,7 @@
      point of the row is the companion the name heuristic cannot pair. */
   const visionauswahl = $derived([
     { wert: '', text: t('modell.vision_keiner') },
-    ...(auskunft?.mmproj ?? []).map((name) => ({ wert: name, text: name })),
+    ...(auskunft?.mmproj ?? []).map((name) => ({ wert: name, text: name, ...entryMark(name) })),
   ])
 
   /* The one field's list: one list, three kinds of answer, no second switch.
@@ -218,7 +236,8 @@
     { wert: HAUPTMODELL_WAHL, text: t('modell.agentenmodell_hauptmodell') },
     ...(auskunft?.modelle ?? []).map((m) => ({
       wert: `slot:${m.name}`,
-      text: `${m.name} · ${m.groesse_gb} GB`,
+      text: `${m.name} · ${entrySize(m.groesse_gb)}`,
+      ...entryMark(m.name),
     })),
     /* Everything the discovery knows. The slot itself is left out: while it
        runs it IS one of these entries, and offering it twice would let
@@ -235,7 +254,7 @@
     ...zustand.modelle
       .filter((m) => !String(m.id).startsWith('agentenmodell'))
       .filter((m) => `kennung:${String(m.id).split(':')[0]}` !== HAUPTMODELL_WAHL)
-      .map((m) => ({ wert: `kennung:${m.id}`, text: m.id })),
+      .map((m) => ({ wert: `kennung:${m.id}`, text: m.id, ...idMark(m.id) })),
   ])
 
   const schaetzung = $derived(
@@ -244,50 +263,34 @@
           modell: agentenmodell.wert,
           kontext,
           drafter,
-          eightBit: isEightBitCache(fein.kv_cache),
+          kvShare: kvShare(fein.kv_cache),
           vision,
           projectors: auskunft?.projector_size_gb,
         })
       : null,
   )
-  /* This server's own entry in the head's figure — its own, not the model
-     server's, because both processes are up at once and the head shows what
-     they cost TOGETHER. Live while this page is open; handed back when it
-     goes away, and the head then works it out from the stored field.
-
-     While it RUNS, what the process actually holds — see the same note in
-     Modellserver.svelte. A running server counting as nothing is exactly how
-     the pair that does not fit looked affordable. */
-  $effect(() => {
-    zustand.serverPlan.agent = laeuft
-      ? (auskunft?.belegt_gb ? { gesamt: auskunft.belegt_gb, gemessen: true } : null)
-      : schaetzung
-    return () => (zustand.serverPlan.agent = null)
-  })
-
   /* What the panel is doing, as the head card's one line — the same facts
      the model server's card carries, about the other process. */
   const laufzeile = $derived.by(() => {
     if (!laeuft || !auskunft) return ''
-    const teile = [
-      t('modell.laeuft_port', { port: auskunft.port }),
-      t('modell.kontext_kurz', { n: kurzK(auskunft.kontext) }),
-    ]
+    const teile = [t('modell.kontext_kurz', { n: kurzK(auskunft.kontext) })]
     if (auskunft.drafter) teile.push(`${t('modell.mtp_label')}: ${auskunft.drafter}`)
     if (auskunft.belegt_gb) teile.push(t('modell.im_speicher', { gb: auskunft.belegt_gb }))
     return teile.join(' · ')
   })
 
-  /* The window's one deed, handed to the modules group's head line, the same
-     way the model server's page does it. It travels with the slot's own
-     sheet: without a slot there is no group to put it in, and nothing this
-     program would start. */
+  /* The server's one deed. The page head (ModelleLokal.svelte) draws its
+     button; the page keeps what the button says and does. */
   const tat = $derived({
     text: laeuft ? t('modell.server_anhalten') : t('modell.server_starten'),
     punkt: laeuft ? 'gruen' : 'still',
     gesperrt: arbeitet || agentenmodell.laedt || (!laeuft && !istSlot),
     onTat: laeuft ? anhalten : starten,
   })
+
+  serverHead('agent', (value) => (head = value), () => ({
+    tat, line: laufzeile, port: laeuft ? auskunft.port : null,
+  }))
 
   /* The two module rows: the remembered choice first — including a
      remembered "none" — and only then the pairing the folder manifest
@@ -325,13 +328,14 @@
     moduleUebernehmen()
     const f = agentenmodell.fein ?? v.fein ?? {}
     fein = {
-      /* The step an older version offered maps to the surviving saving step,
-         exactly as the model server maps it — whoever stored q4_0 was saving
-         memory on purpose. */
-      kv_cache: f.kv_cache === 'q4_0' ? 'q8_0' : (f.kv_cache ?? 'f16'),
+      kv_cache: f.kv_cache ?? 'f16',
+      flash_attention: f.flash_attention ?? 'auto',
+      chat_template: f.chat_template ?? 'model',
+      chat_template_file: f.chat_template_file ?? '',
       moe_auf_cpu: Boolean(f.moe_auf_cpu),
       festnageln: Boolean(f.festnageln),
       kv_unified: f.kv_unified !== false,
+      idle_minutes: f.idle_minutes ?? null,
     }
     faeden = f.faeden || 0
     /* The stored kinds of "all experts on the CPU": the older switch
@@ -476,8 +480,7 @@
 
   $effect(() => {
     laden()
-    const takt = setInterval(laden, 2000)
-    return () => clearInterval(takt)
+    return pollWithoutOverlap(laden, 2000)
   })
 
   /* Written when the levers come to rest, not on every drag of a slider —
@@ -551,6 +554,8 @@
          over from the file before and brings back what was chosen for this
          one: the rows are read again below. */
       await agentenmodellWaehlen(wahl)
+      // The copy of a template was made of the file before.
+      resetTemplate(fein)
       /* Another file, so the rows are read again: what the manifest declares
          is declared for a file, and the file has just changed. */
       moduleUebernehmen()
@@ -610,12 +615,8 @@
      the model server: models beside the modules, storage beside the
      advanced drawer, the log at the foot. -->
 <Servertafel
-  titel={t('agentserver.titel')}
-  zeichen="agent"
-  unter={laufzeile}
-  standfarbe={laeuft ? 'gruen' : 'still'}
-  standtext={laeuft ? t('status.aktiv') : t('status.inaktiv')}
   modelle={modellauswahl}
+  throughput="agent"
   bind:gewaehlt={wahl}
   modellBeschriftung={t('modell.feld_agentenmodell')}
   modellGesperrt={laeuft}
@@ -623,7 +624,20 @@
   leerText={t('modell.kein_modell_da')}
   katalogTat={() => katalogOeffnen('chat')}
   speicherort="models"
+  modellGewicht={istSlot ? 3 : 2}
 >
+  {#snippet belowModel()}
+    {#if istSlot}
+      <ChatTemplateRow
+        modell={agentenmodell.wert}
+        bind:wert={fein.chat_template}
+        gesperrt={reglerGesperrt}
+        onchoose={(neu) => templateChosen(neu, fein, agentenmodell.wert, api.agentenmodellChatTemplateEdit)}
+        onedit={() => editTemplate(fein, agentenmodell.wert, api.agentenmodellChatTemplateEdit)}
+        onreveal={() => revealTemplate(agentenmodell.wert, api.agentenmodellChatTemplateReveal)}
+      />
+    {/if}
+  {/snippet}
   {#snippet inhalt(modellkarte)}
     <!-- The same levers the model server's page carries, from the same
          component, always in view. Locked while the field points at something
@@ -643,11 +657,7 @@
           bind:vision
           {visionauswahl}
           {visionGewaehlt}
-        >
-          {#snippet kopfrechts()}
-            <Startknopf text={tat.text} punkt={tat.punkt} gesperrt={tat.gesperrt} onTat={tat.onTat} />
-          {/snippet}
-        </Serverregler>
+        />
       {/snippet}
     </Serverreihe>
     <Serverreihe>
@@ -676,9 +686,12 @@
           teil="fein"
           gesperrt={reglerGesperrt}
           bind:vorladen
+          useForRuns={agentenmodell.use_for_runs ?? auskunft?.vorgaben?.use_for_runs ?? true}
+          onuseforruns={(neu) => werteSetzen({ use_for_runs: neu }).catch(() => {})}
           bind:fein
           bind:parallel
           maxParallel={MAX_PARALLEL}
+          bind:idle={fein.idle_minutes}
           bind:port
         />
       {/snippet}
@@ -691,7 +704,7 @@
                      onumschalten={() => (protokollAuf = !protokollAuf)}
                      onauskoppeln={() => oeffneProtokoll(t('agentserver.protokoll_titel'))} />
       {#if protokollAuf}
-        <pre class="protokoll" use:rollfade bind:this={protokollKasten}>{protokoll.join('\n') || '—'}</pre>
+        <pre class="protokoll" use:rollfade bind:this={protokollKasten}>{protokoll.join('\n') || '-'}</pre>
       {/if}
     </div>
   {/snippet}

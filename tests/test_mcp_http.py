@@ -30,9 +30,21 @@ class EchoServer:
     that an expired session gets re-initialized.
     """
 
-    def __init__(self, schluessel: str | None = None, als_sse: bool = False) -> None:
+    def __init__(
+        self,
+        schluessel: str | None = None,
+        als_sse: bool = False,
+        kopf: tuple[str, str] | None = None,
+        abweisen: int | None = None,
+    ) -> None:
         self.schluessel = schluessel
         self.als_sse = als_sse
+        # A header the server wants instead of Authorization: (name, value).
+        self.kopf = kopf
+        # Turns every request away with this status: a server that wants a
+        # sign-in the caller does not have.
+        self.abweisen = abweisen
+        self.gesehene_koepfe: list[dict[str, str]] = []
         self.einmal_404 = False
         self.initialisierungen = 0
         self.gesehene_protokollversionen: list[str | None] = []
@@ -45,6 +57,11 @@ class EchoServer:
         return f"sitzung-{self.initialisierungen}"
 
     async def mcp(self, request: Request) -> Response:
+        self.gesehene_koepfe.append(dict(request.headers))
+        if self.abweisen is not None:
+            return Response(status_code=self.abweisen)
+        if self.kopf is not None and request.headers.get(self.kopf[0].lower()) != self.kopf[1]:
+            return Response(status_code=401)
         if self.schluessel is not None:
             if request.headers.get("authorization") != f"Bearer {self.schluessel}":
                 return Response(status_code=401)
@@ -333,7 +350,7 @@ def test_registry_baut_http_client(monkeypatch):
         )
     )
     assert isinstance(client, MCPHttpClient)
-    assert client.api_key == "geheim"
+    assert client.headers == {"Authorization": "Bearer geheim"}
 
 
 def test_registry_ueberspringt_http_ohne_gesetzten_schluessel(monkeypatch):
@@ -358,6 +375,115 @@ def test_registry_ueberspringt_http_ohne_url():
 def test_registry_ueberspringt_unbekannten_typ():
     registry = WerkzeugRegistry([])
     assert registry._client_bauen(ServerEintrag(name="fremd", type="websocket")) is None
+
+
+def _registry_against(
+    server: EchoServer, eintrag: ServerEintrag, monkeypatch, oauth=None
+) -> WerkzeugRegistry:
+    """A registry whose hosted client talks to ``server`` in this process."""
+    from app.tools import registry as registry_modul
+
+    transport = httpx.ASGITransport(app=server.app())
+
+    class ImProzess(MCPHttpClient):
+        def __init__(self, **felder):
+            super().__init__(transport=transport, **felder)
+
+    monkeypatch.setattr(registry_modul, "MCPHttpClient", ImProzess)
+    return WerkzeugRegistry([eintrag], oauth=oauth)
+
+
+def _hosted(**felder) -> ServerEintrag:
+    return ServerEintrag(name="gehostet", type="http", url="http://testserver/mcp", **felder)
+
+
+async def test_a_header_carries_the_key_from_the_environment(monkeypatch):
+    monkeypatch.setenv("TEST_KEY", "geheim")
+    server = EchoServer(kopf=("X-Test-Key", "geheim"))
+    registry = _registry_against(
+        server, _hosted(headers={"X-Test-Key": "${TEST_KEY}"}), monkeypatch
+    )
+    await registry.starten()
+    try:
+        assert "gehostet" in registry.clients
+        assert await registry.ausfuehren("mcp__gehostet__echo", {"text": "hi"}) == "echo: hi"
+        # The key travels in the header the entry names — not as a Bearer.
+        assert all("authorization" not in k for k in server.gesehene_koepfe)
+    finally:
+        await registry.stoppen()
+
+
+async def test_a_header_variable_that_is_not_set_keeps_the_server_from_starting(monkeypatch):
+    monkeypatch.delenv("TEST_KEY", raising=False)
+    server = EchoServer(kopf=("X-Test-Key", "geheim"))
+    registry = _registry_against(
+        server, _hosted(headers={"X-Test-Key": "${TEST_KEY}"}), monkeypatch
+    )
+    await registry.starten()
+    assert registry.clients == {}
+    assert server.gesehene_koepfe == []
+
+
+async def test_an_old_entry_with_api_key_env_sends_a_bearer(monkeypatch):
+    monkeypatch.setenv("TEST_KEY", "geheim")
+    server = EchoServer(schluessel="geheim")
+    registry = _registry_against(server, _hosted(api_key_env="TEST_KEY"), monkeypatch)
+    await registry.starten()
+    try:
+        assert "gehostet" in registry.clients
+        assert {k["authorization"] for k in server.gesehene_koepfe} == {"Bearer geheim"}
+    finally:
+        await registry.stoppen()
+
+
+async def test_without_headers_the_client_sends_no_foreign_ones(monkeypatch):
+    server = EchoServer()
+    registry = _registry_against(server, _hosted(), monkeypatch)
+    await registry.starten()
+    try:
+        assert "gehostet" in registry.clients
+        for koepfe in server.gesehene_koepfe:
+            assert not {k for k in koepfe if k.startswith("x-") or k == "authorization"}
+    finally:
+        await registry.stoppen()
+
+
+async def test_an_own_authorization_header_replaces_the_bearer_of_an_old_entry(
+    monkeypatch,
+):
+    monkeypatch.setenv("TEST_KEY", "alt")
+    monkeypatch.setenv("TEST_TOKEN", "neu")
+    server = EchoServer(schluessel="neu")
+    registry = _registry_against(
+        server,
+        _hosted(api_key_env="TEST_KEY", headers={"authorization": "Bearer ${TEST_TOKEN}"}),
+        monkeypatch,
+    )
+    await registry.starten()
+    try:
+        assert "gehostet" in registry.clients
+    finally:
+        await registry.stoppen()
+
+
+async def test_a_header_in_another_case_is_never_sent_twice(monkeypatch):
+    server = EchoServer()
+    k = MCPHttpClient(
+        name="test",
+        url="http://testserver/mcp",
+        headers={"accept": "text/plain", "authorization": "Basic alt", "X-Eigen": "ja"},
+        api_key="neu",
+        transport=httpx.ASGITransport(app=server.app()),
+    )
+    await k.starten()
+    try:
+        koepfe = k._koepfe()
+        assert [n for n in koepfe if n.lower() == "accept"] == ["Accept"]
+        assert koepfe["Authorization"] == "Bearer neu"
+        assert [n for n in koepfe if n.lower() == "authorization"] == ["Authorization"]
+        assert koepfe["X-Eigen"] == "ja"
+    finally:
+        await k.stoppen()
 
 
 # --- The form validation knows the new fields ------------------------------
@@ -391,3 +517,34 @@ def test_pruefung_meldet_falsche_feldarten():
         _konfig({"type": "http", "url": "https://x.invalid", "api_key_env": 5}), "de"
     )
     assert meldung is not None and "'api_key_env'" in meldung
+
+
+def test_the_check_allows_auth_and_headers():
+    text = _konfig(
+        {
+            "type": "http",
+            "url": "https://beispiel.invalid/mcp",
+            "auth": "oauth",
+            "headers": {"X-Goog-Api-Key": "${GOOGLE_MAPS_KEY}"},
+        }
+    )
+    assert konfiguration_pruefen(text, "en") is None
+
+
+@pytest.mark.parametrize("auth", ["browser", 5, ["oauth"]])
+def test_the_check_refuses_an_unknown_auth(auth):
+    meldung = konfiguration_pruefen(
+        _konfig({"type": "http", "url": "https://x.invalid", "auth": auth}), "en"
+    )
+    assert meldung is not None and "'auth'" in meldung
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [["X-Key"], {"X-Key": 5}, {"X Key": "v"}, {"X-Key": "a\r\nX-Evil: 1"}, {"": "v"}],
+)
+def test_the_check_refuses_broken_headers(headers):
+    meldung = konfiguration_pruefen(
+        _konfig({"type": "http", "url": "https://x.invalid", "headers": headers}), "en"
+    )
+    assert meldung is not None and "'headers'" in meldung

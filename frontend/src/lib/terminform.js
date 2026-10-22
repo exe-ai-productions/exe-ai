@@ -12,7 +12,26 @@
 */
 
 export const TAEGLICH = /^([01]\d|2[0-3]):([0-5]\d)$/
+const TYPED_TIME = /^\s*(\d{1,2})[:.](\d{2})\s*$/
 export const ZEITPUNKT = /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d)$/
+
+/** The times of day the form's list offers, every quarter of an hour from
+ *  00:00 to 23:45. A list to pick from, not a limit: any other time is typed. */
+export const TIMES = Array.from({ length: 96 }, (_, i) =>
+  `${String(Math.floor(i / 4)).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}`)
+
+/** A typed time of day as the schedule stores it, "HH:MM" — "9:07" and
+ *  "09.07" both read as "09:07" — or null where it is no time of day
+ *  ("25:00", "9:60", words). */
+export function readTime(text) {
+  const typed = TYPED_TIME.exec(String(text ?? ''))
+  if (!typed) return null
+  const hour = Number(typed[1])
+  const minute = Number(typed[2])
+  return hour < 24 && minute < 60
+    ? `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+    : null
+}
 
 /** The time of day a schedule leads with, "HH:MM" — for a daily time and a
  *  fixed moment; a cron expression has none of its own. */

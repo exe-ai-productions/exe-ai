@@ -168,7 +168,14 @@ def test_the_page_sends_exactly_the_words_the_shell_knows():
     another name would stay English without anybody noticing."""
     page = (WURZEL / "frontend" / "src" / "lib" / "shellWords.js").read_text(encoding="utf-8")
     sent = re.findall(r"^\s+(\w+): 'menue\.\w+',$", page, flags=re.MULTILINE)
-    assert sorted(sent) == sorted(_lauf()["words"])
+    # The right-click entries and the three entries of the sign in the menu bar.
+    sign = subprocess.run(
+        ["node", "-e", "console.log(JSON.stringify(Object.keys(require(process.argv[1]).WORDS)))",
+         str(WURZEL / "fenster-electron" / "menueleiste.js")],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    sign_words = [name for name in json.loads(sign) if name != "tip"]
+    assert sorted(sent) == sorted([*_lauf()["words"], *sign_words])
 
 
 @node_da

@@ -1,5 +1,264 @@
 # Patch notes
 
+## 0.6.50-r1 — Major Feature & Bugfix Update | + Smartphone Web App
+
+### New
+
+- Added a phone view: on a phone or tablet, or in a window narrower than 600 pixels, Exe AI shows a page made for touch, with sign-in, the chat list as a drawer, notices, questions, the first start and the designs Exe and Pearl.
+- Added a sign in the menu bar, on Windows in the notification area: Exe AI keeps running after its window closes, the sign shows whether the service answers, and its menu offers "Open Window", "Stop Service" and "Quit Exe AI" in the language of the interface.
+- Added a message when the service cannot be stopped from the sign in the menu bar.
+- Added dictation from the keyboard shortcut while Exe AI runs only in the menu bar: a new window opens and the dictation begins in it.
+- Added stopping a running answer by sending a new message: the answer stops and keeps its text so far, and your message goes out at once; while a tool runs, it first waits for the tool's result.
+- Added a sound of its own for a finished agent or schedule, and for every kind of notice a switch for its sound and one for its popup.
+- We improved the sounds, which are now soft synth tones.
+- Added the settings page "Web App": it sets up access from your phone through Tailscale over https, with a QR code to scan, and every request that comes that way asks for the password; the password needs at least eight characters, and the page says so before you type.
+- Added the settings page "Overview" under Servers: state, port and chosen model of the six local servers, with start and stop, the wired memory measured against the limit of the system, and the MCP connections as a table.
+- Added the field "Idle TTL" to the six server pages: after that many minutes without a request, a server frees its model; the image server ends itself and starts again with the next picture, and the speech server uses it only while "Keep model loaded" is off.
+- Added "list" and "stop" to the model's job tool: the model sees the helpers it started, including one that handed its work on to a continuation, and can stop them; its report comes into the chat marked as stopped.
+- Added a watchdog for helpers started from a chat: a run that shows no sign of life for 450 seconds is ended as failed, and its report comes into the chat.
+- Added PDF pages drawn by Exe AI itself: in the panel beside the chat, in the large view with the pages one under another, and as the first page in the tiles of the Doc folder.
+- Added the voices of the system to the speech server: the field "Voice" lists them with name and language after the voice models, and from the start Exe AI speaks with Anna on the Mac and Microsoft Katja on Windows, without loading a voice model.
+- Added any voice model in GGUF format to the speech server: the language and the five voice values can stay on "Auto", and a model without a language list speaks without one.
+- Added the white design Snow; "Auto" now shows Snow on a light computer, and a first start follows the appearance of the computer and opens the right column on the CLI tab.
+- Added a preview for every kind of file, beside the chat and in the large view: code with colors and line numbers, text, pictures, SVG drawings, video and sound with their controls, and Word, Excel and PowerPoint files.
+- Added the block "Performance" to the pages of the model, agent, cleanup and speech servers: tokens per second right now, the average of the last five minutes and its course as a line.
+- Added the tab "Video" to the catalog; every kind now shows ten cards and every kind of accessory six.
+
+### Phone
+
+- Added the chat to the phone view: the history, the input bar, the sheets for attachments (Camera, Photos, Files) and models, the tool approval card, and a history that follows the end of the answer.
+- Added the button "Tools" to the head of the phone view; it opens six tools of the desktop column and shows a dot while one of them works.
+- Added models and servers to the phone view: the servers with their state, start and stop, the cloud providers, the catalog search, downloads with their progress, and the tools.
+- Added the curated cards and the model detail to the catalog of the phone view, and every field of the speech server window to its page there.
+- Added the Images area, swiping through the pictures of the viewer, the large server log, the job windows and the manual to the phone view.
+- Added the settings to the phone view: a grouped list with a page behind each row.
+- Added the terminal to the phone view, which opens as a sheet over the chat when you tap a tool call.
+- We improved the Images area on the phone, which now has a page of its own, a mask page where one finger paints and two fingers move, and pinch, double tap and swipe for the pictures.
+- We improved the head of the phone view, which shows the house mark and, on every inner page, the way back with the name of the page before.
+- We improved the plus sheet of the phone chat, which now holds the model choice; the green dot before the model shows only while the model is reachable.
+- We improved the labels of the phone pages, which say every word once: a server names its state once, its memory under Memory and its port under Network, and a cloud provider shows its key in one line.
+- We improved the catalog on the phone, which lists its kinds as rows and names Hugging Face once.
+- We improved schedules on the phone: the form opens as a sheet from the bottom edge, the details stand two by two, and the buttons are full width, 44 pixels high and visible in every design.
+- We improved the input bar on the phone: its controls line up, and the new chat buttons are dimmed while they would change nothing.
+- We improved the buttons of the phone view: the head carries a plus, Cancel and Save are two signs, and the pause switch has no color of its own.
+- Fixed an issue where the phone view did not attach to an answer that was still being written.
+- We improved the approval card on the phone, which now shows the file a tool call is about instead of its content.
+- Added Snow to the phone view; "Auto" shows Snow on a light phone.
+- Fixed an issue where the field for the bubble color kept the color of the old design when a phone on "Auto" turned light or dark.
+- Added the three steps "Add to Home Screen" with pictures to the settings page "Web App".
+- We improved the row "Web App" in the settings list, which now shows the version of the web app.
+- We improved the settings page "Web App", which now stands in three columns with the QR code large in a tile of its own.
+
+### Chat
+
+- We improved waiting messages: a message typed during an answer now looks like its sent bubble, dimmed, with its pictures and documents, and on a touch screen a tap on its word shows the hint.
+- We improved stopping an answer by hand: messages that wait come back into the input field, in front of what you have typed since, and the cross on a waiting bubble does the same for one message.
+- We improved a message the service turns away, which now stays in line and goes out once the chat is free.
+- Fixed an issue where a chat jumped while attached pictures loaded; their room is now kept from the start.
+- Added a round button that takes you back to the end of the chat after you scrolled up.
+- Fixed an issue where scrolling back down during a running answer never made the chat follow again; close to the end, it now follows again.
+- Fixed an issue where the end of a running answer dipped at every new line and sprang back.
+- We improved the foot of a running answer, which stays quiet until the first word appears.
+- We improved the text of answers, which now shows nested lists, the start number of a list, continuation lines and task lists with boxes.
+- We improved headings, quotes and code in answers: headings go down to the sixth level, quotes run over several paragraphs, code stays as written, and a wide table shows a thin scroll bar under the pointer.
+- We improved the tool call rows of a chat, which now also carry the logo of the server that ran them and the name of the file the call is about.
+- We improved long file names, which now wrap at slashes, hyphens, underscores and dots.
+- We improved the model name in the input bar, which now uses the room the bar has left; in the narrow input bar the fixed thinking pill shows only the bulb, with the word in its tooltip.
+- Added a sign in the head of the chat while a download runs; it stays after the window is reloaded.
+- Fixed an issue where an answer that was attached again showed an activity before the stream named one.
+- Fixed an issue where the cache share stood alone under an answer; a stopped answer now shows no speed and shows its line right after the stop.
+- Fixed an issue where the dot on the line beside an answer sat off center, and the ring around today in the calendar was blurred on scaled displays.
+- We improved the chat on touch screens, where buttons that otherwise show only under the pointer are now visible.
+- We improved the chat by keyboard: the cross of a reference and the context ring can now be reached with the keyboard, and long names end with dots.
+- We improved the notice card of a finished chat, which now shows its name and the beginning of its answer.
+- We improved notices, which now begin under the head of the open page and under the bars of the Images area.
+- Added a switch "Disable popups" that hides every notice card; the sound trial is now a loudspeaker button and the waiting notice is called "Waiting".
+- Fixed an issue where a message on the empty start page was refused with "A response is already being generated" while another chat answered; chats now answer side by side.
+- Added the switch for suspending your instructions to the plus menu of the input bar, where it can be set before the first message; it left the instructions page.
+- Fixed an issue where a refusal of Claude showed as an empty answer; the chat and the CLI now say that the model declined, with the explanation of its maker where there is one.
+- We improved the line under a stopped answer, which now says "This answer was stopped. Send a message to continue."
+- Added a tick to the copy button of a code block: it shows for a second after the text is copied, also while the answer is still being written.
+- We improved notices: a long sentence shows on two lines, every notice has the copy button of the code blocks, and a notice stays while the pointer is over it.
+- We improved the files the model delivers: a page, a document or a code file now opens as a tab in the preview, and its card shows its kind.
+- Added SVG files to the input bar: they can be dropped in as a document and opened from their card.
+- Fixed an issue where a file card in the chat showed another size than the preview beside it.
+- We improved the approval card of a command: the reason stands as one quiet line under the command, and the path it is about is marked in the command, in the window, on the phone and in the CLI.
+- We improved the colors of the interface: links, the tick of the chosen model, chosen rows, the GGUF tag, the agent name in a report and the context bar now wear the text color of the design, and blue stays for states.
+- We improved the focus ring, which now stands in the text color of the design.
+- We improved the greeting on the start page, which now changes with every start.
+- Added a grid for attached pictures: two or more stand two to a row across the chat column, and document cards stand in a row above your message.
+- We improved the chat layout: it now starts with a 900 pixel column, 16 pixel text, 24 pixels between messages and pictures up to 512 pixels; code grows with the text, and the input bar is as wide as the column. Values you set yourself stay as they are.
+- We improved your own messages in the design Exe, which now stand in a medium gray with light text.
+
+### Context and models
+
+- We improved the settings page "Local models", which now has a server head with the start button and its own port, the wired memory bar, the quick pick table and the parameters in two cards.
+- We improved the head of local models, which shows the maker's logo of the chosen model and the count of the quick pick beside the title.
+- We improved the server pages, which now each have one head with the start button and the server's own port; the second memory figure in the head is gone.
+- We improved every memory card, which now shows the row "Wired Memory" with what the server's own model needs; for the speech model the projector is counted and named as at its start.
+- Added the maker's logo, or the first letter, before each model file in the choice fields of the servers; sizes and speed use the decimal sign of the language, and Occamy files carry the Accio logo.
+- Added the block "Voice sample" to the speech server page: record, play and delete; the parameters are folded.
+- Fixed an issue where the embedding server did not start with its stored context, batch size, pooling, layers, threads, memory lock and parallel requests; its page now has a memory card and an advanced card with "Pooling" and "Batch size".
+- Fixed an issue where a server page emptied when reading it failed; it now keeps its last answer and says why once.
+- Fixed an issue where the model server page offered the setup before the service had answered; it now says "Loading" until then.
+- Removed the sentence that said which chats the parameters of a model apply to.
+- We improved the model's knowledge of Exe AI: it knows the storage folders and the folder each kind of file belongs in, can add an MCP server with the command line client, asks before a command starts that client, and loads the help skill first for a question about the program.
+- We improved the memory, which now travels to cloud models and custom servers from the start, saves, changes and deletes without asking, and holds at most 3,575 characters.
+- Added the fields "Wait for speech input" and "Speech input rounds" to the conversation settings of the speech server; a conversation that hears nothing now ends after the rounds you set.
+- Fixed an issue where the server pages of a second Exe AI service on the same data folder showed its running servers as off; they now show them with port and model, and start and stop say "Another Exe AI service uses this data folder and holds its servers."
+- Fixed an issue where a second Exe AI service on the same data folder ended the model servers of the first at its start.
+- Fixed an issue where a cloud provider that refused the check said only "Saved, but not reachable"; the save mask, the table, the card and the phone page now show the provider's own reason.
+- Fixed an issue where the heading of the provider list stood lower than the heading beside it on the cloud providers page.
+- Added dropdowns for the KV cache, flash attention and the chat template on the chat server pages.
+
+### Images and video
+
+- We improved the image server, which now runs sd.cpp build 975 with the switches "Flash attention", "Direct convolution" and "Batched CFG"; an older sd.cpp is replaced by itself when Exe AI starts.
+- Fixed an issue where SD 1.5 and SDXL drew a plain white picture on the Mac with sd.cpp build 975, and the SDXL Lightning LoRA drew noise; "Batched CFG" now starts switched off.
+- Added FLUX.3 Klein, MOSS-Image and Iris-3B: they are recognized and get their kit and their start values.
+- We improved Qwen-Image 2.1 Turbo, which now also starts with the sigma schedule of its documentation.
+- We improved the live preview, which the image server now draws itself; only the noisy preview and a preview drawn by a tiny autoencoder alone still go through sd-cli.
+- Added the tiny autoencoders to the VAE choice, only those of the model's own family, with the label "TAE (fast)"; the finished picture is decoded with the chosen one.
+- Added "Repeats" and "Tile size" to upscaling, and "Final size", which says how large the picture will be before you start; only upscalers sd.cpp can read are offered, and a result over 8192 pixels goes through sd-cli.
+- We improved enlarged pictures, which keep their factor and their new size with their values; the infos card shows both under "Upscaled".
+- Fixed an issue where a picture that came into the Images area changed the chosen mode; now only the strength is set.
+- We improved the image server page, which follows the order of its drawing; the values of a model sit in two cards, "Parameters" and "Model", and "Parts · n" counts its parts.
+- Added a button that saves a model's values on the image server page, and a question before unsaved changes are thrown away.
+- Added the block "Convert to GGUF" to the image server page, with an Imatrix switch that is stored and on from the start, and a table of the model files in the folder with their state.
+- We improved the block for the image model, with its choice and a button to the catalog, and the folder under it.
+- Added the tab "FP16" to the conversion block of the image server page: a model file whose weights are mostly BF16 is written again as FP16, with a progress bar and a cross to cancel.
+- We improved converting to GGUF: a progress bar with a cross to cancel shows while a file is converted, the GGUF tag stands on the new file, and the model choices of the page list it at once.
+- We improved the image server page: the values of a model stand at the top with a choice of the folder's models, the list of files is folded, and the maker's mark stands before every file.
+- Added the marks of the picture and video makers to the list of files, the model choice and the catalog.
+- We improved the studio's model choice, which offers only models whose parts are all there and names the missing part of the default model.
+- Added "Frames" and "Frames per second" to the parameters of a video model; Wan 2.2 S2V shows only "Frames", since its rate is fixed.
+- Added every part of the video families: the audio VAE and the connectors of LTX-2.3, the audio VAE of MiniMax-H3, "CLIP vision" for Wan 2.1 I2V and FLF2V and the audio encoder of Wan 2.2 S2V; they come with the download and are set from the folder.
+- We improved the Wan models, which show and send a part only where the model takes it.
+- Fixed an issue where an LTX-2.3 checkpoint without its own text encoder did not start; it now starts with Gemma and the parts of its folder.
+- Fixed an issue where the studio started a family chosen by hand with the values of the family instead of those of its variant, such as Qwen-Image 2.1 Turbo with 20 steps instead of 8.
+- Fixed an issue where a crashed image server left only a general sentence; the studio now shows the reason from its log, without progress bars.
+- Fixed an issue where a saved part whose file was gone made every drawing fail; the field now shows "-" and the picture is drawn without it, and the upscaler can be set back to "-".
+- Fixed an issue where a picture given to the model in the chat was painted over completely; it now goes out at the strength of the studio.
+- Fixed an issue where draw_image drew silently with another sampler or scheduler when the model sent an unknown name; it now refuses and lists the valid names.
+- Fixed an issue where the brush bar and the rows over the generation area ran under the zoom and the row of pictures in a narrow window.
+- Fixed an issue where a long prompt let the prompt bar grow over the generation area; its fields now scroll inside.
+- Fixed an issue where the search field of the studio's model choice covered the first entry of the list.
+- We improved the head of a studio group, which stays on one line; the last seed is a button beside the dice.
+
+### Model catalog and downloads
+
+- We improved the catalog, where the maker's logo or picture now stands before every hit, accessory and card.
+- Fixed an issue where catalog cards lost their facts and stretched while they loaded; a waiting download now shows in the file rows and the cards.
+- We improved the catalog, which now calls the machine's memory "memory" instead of "VRAM".
+- We improved the downloads page, which now shows the maker's logo, the download row of the catalog and a small Hugging Face mark.
+- Fixed an issue where the catalog and the downloads said "empty" or "downloaded" before the service had answered.
+- We improved the version rows of llama.cpp and sd.cpp: the builds stand as rows with a download button, "Installed" stands in green, and a failed download says why in red on the card and in the list of builds.
+- Added an update sign to the version row of llama.cpp and sd.cpp: the first click only checks, the sign turns yellow when a newer build exists, and the second click downloads it.
+- Fixed an issue where the download size of the sd.cpp build "cuda12" left out the CUDA runtime.
+- Fixed an issue where the first row of the list stood higher than the head of the page beside it in the catalog and the downloads.
+- We improved the server pages, where the lowest card of a column reaches the foot of the column.
+- Added speaking models to the speech tab of the model search.
+
+### Agents, jobs and schedules
+
+- Fixed an issue where the background service played a sound for schedules, reminders and reached goals even with sounds switched off; it now follows the same switches and volume as the window.
+- Fixed an issue where the agent sign stayed red after its notice was closed; closing the notice now counts as seen, and a run that still needs a look carries a red dot in the agents window.
+- Fixed an issue where words were cut and buttons ran out of the schedule view in a narrow pane; its facts and buttons now wrap to its width.
+- We improved the notifications of a schedule, whose parts are now joined by a hyphen.
+- We improved the agents page: descriptions, sign buttons, tool marks, a form in two columns, a warning for command and web access, and "Delete" on the red button with a red question before it.
+- We improved the cronjobs page: the month with its name, the choice of the day as a pop-up, and the scripts as tiles.
+- We improved the agents and cronjobs pages, which lay themselves out by their own width; their bars stand in one column at every width.
+- Fixed an issue where a single failed run was named in the plural in the sentence about a stopped schedule.
+- We improved an unseen failure in the agents column, which now shows a red bar and a strong title, and the list opens down to it.
+- We improved the head of a report, which shows the tile on top and the task in two lines with a fold.
+- Fixed an issue where the first entry of the new task window did not mean the model of the field "Model for agents & cronjobs"; the window now shows only once the list of agents and the answers are there.
+- We improved the schedule form, whose day opens a month to pick from and whose time of day opens a list of times; a typed time is read, and a wrong one is marked.
+- We improved the month of cron jobs in the left bar, which now shows the calendar week.
+- Added a thinking stage to agent files: an agent can name its own stage, and it runs through the chat's thinking switch.
+- Added a fallback for runs: a run can switch to a cloud model you marked "Use for agents".
+
+### Tools, files and MCP
+
+- Added one sheet with every way to connect an MCP server: a key in a header, a sign-in through the browser or "Own app", with the redirect address shown to copy.
+- Added the field "Own https redirect address" for providers that accept only an https address.
+- Added hosted MCP servers without a sign-in, and keys sent in any header the server asks for.
+- We improved the tools in the MCP sheet, which now read "active", "asks" or "inactive".
+- We improved the MCP servers page: installed servers are cards and the others tiles under "Not installed", and a card names the keys that are missing.
+- We improved the MCP sheet, whose buttons stand under both columns, and the question before removing a server, which names its card.
+- Fixed an issue where a custom server that wants a sign-in through the browser looked connected; it now shows as disconnected.
+- We improved the tools page, which follows its design: every built-in tool has its own mark, list_dir and create_folder show an open folder, and list and chosen source end on one line.
+- We improved tools, which no longer have a color of their own: their marks and names stand in the text color of the design.
+- We improved the tools file page: under "Keys" it shows only ".env", with a tick or a cross for each key written as ${NAME}, and the live list shows one row for each server with its tools as pills.
+- Added a warning box over the field of a configuration or tools file that has an error.
+- We improved the file pages: the fields run down to the foot of the page, and the answer after saving stands in the footer beside the two signs instead of above the chat.
+- Fixed an issue where commands, scripts and MCP servers started by the model received the API keys of every provider; a server gets only the keys its entry names.
+- Fixed an issue where a command of the model could speak to Exe AI's own service; such a command is now refused.
+- Fixed an issue where a search for a word like "shutdown" or "systemctl" was refused as dangerous; these words now stop a command only where a command begins.
+- Fixed an issue where the web search answered as if nothing was found when every search engine was down; it now says that the search did not run and why.
+- We improved the manual and the help skill, which now describe the program as it is today: the settings groups, the signs of both bars, the storage locations, the keys, snapshots, standing permissions, agent limits and pictures in the chat.
+- We improved the start of MCP servers: they start side by side behind the service, so the built-in tools are ready at once and each server's tools follow when it is ready.
+- Fixed an issue where a preview document could not run eval, WebAssembly or blob workers.
+
+### Settings and layout
+
+- We improved empty values and an empty choice, which now show a hyphen, and the texts of the interface no longer use a long dash.
+- We improved the settings sidebar, which is now one searchable list with a dot for each server, and says "No matches" when a search finds nothing.
+- We improved the pages of local models, servers, the catalog, downloads and cloud providers, which now show the same settings list beside them.
+- We improved the page "Appearance", which is now a row of design cards, and switches, which stand in white and gray.
+- We improved the left sidebar, which opens 285 pixels wide; its foot holds five signs, the settings sign is a cog and the new project sign a plus.
+- We improved the head of every settings page, with the page's sign in a box and the title in the normal weight.
+- We improved the controls: parameters stand in two cards, every slider shows its whole track, large text fields have the frame of the other fields, and state words and error sentences stay readable in the light designs.
+- Added an info mark with a sentence that explains the switches of notifications, skills, instructions and memory, and the cronjobs page.
+- We improved the instructions page, which is reordered; "Cancel" and "Save" are two signs.
+- We improved the memory switches, which are now called "Exe AI Memory" and "Send to cloud models and custom servers".
+- We improved the skills page: sign buttons, the switch "Load skills automatically", a red question before deleting, and a changed shipped skill marked "User".
+- We improved the shipped skill that explains Exe AI, which is now called help instead of hilfe, and the manual, which is called "Help" in the German settings list too.
+- We improved the cloud providers page: a button in the head, a table of the providers, a card with the parameters and a pop-up to add a provider.
+- We improved the catalog of a cloud provider, which now shows its models as rows with a search and a green tick for each model you use.
+- We improved a cloud provider that does not answer, which now shows a quiet dot and "Not responding".
+- We improved the wording of the interface, where texts now follow one list of words in both languages.
+- We improved small details: large fields use the glass of the cards, the Hugging Face token field fills its row, the overview has a sign of its own, and the answer of an update check stands in its row.
+- Added number fields to the sliders of the layout mode, so a value can be typed exactly.
+- We improved the page of notifications: the group of sounds is called "Notification sounds", the test button is a loudspeaker, and the popup switches stand in a block of their own.
+- We improved six settings pages (Appearance, Keyboard shortcuts, Instructions, Memory, Embedding server and Cleanup server), which now use the width of the window in columns of equal height.
+- We improved the menu pages, which now fill their frame; the catalog shows five cards in a row, all of one height.
+
+### App, updates and Windows
+
+- We improved stopping the background service, which no longer needs the system tools ps or PowerShell.
+- Fixed an issue where the window stopped reloading after the service had been restarted several times in a short while.
+- Fixed an issue where the window kept playing the old sounds for hours after an update.
+- Fixed an issue where the service left its servers running when the system asked it to end.
+- Fixed an issue where a relative storage location was taken; it is now refused before anything is created, with "Enter an absolute folder path".
+- Fixed an issue where a path in quotation marks was refused; every path in the interface is now shown with forward slashes.
+- Fixed an issue on Windows where the voice answered "llama-tts not found" although the program lay beside the server.
+- Fixed an issue on Windows where an orphaned server, the image server too, was never ended.
+- We improved the fonts on Windows: code blocks and the terminal use the fixed-width font of the house; the manual shows Ctrl K beside its search.
+- We improved the app window, which now runs on Electron 44.
+- Fixed an issue where a web page in the browser could read the interface of Exe AI through another host name; the interface now answers only to the names of this computer.
+- We improved the window on the Mac: the gray bar of the system is gone, and the three window buttons sit in the first row of the sidebar.
+
+### CLI (still in development)
+
+- Added /rollback, which restores files the model changed from snapshots of the working folder and keeps your own later changes apart; snapshots are switched on with /settings global.checkpoints.enabled true.
+- We improved the speed of snapshots, which now read only the files that changed.
+- Added /download image, which downloads image models together with their kit.
+- Added the choice of the default image model to /server image; /image now says where to choose one when none is set.
+- Added stopping a running answer by typing a new message in the CLI; while a tool runs, the message waits in the hint line, and Escape takes it back.
+- We improved the light themes of the CLI, which are now readable at a contrast of at least 4.5:1, and the automatic theme now asks the Mac for its appearance.
+- Fixed an issue where a file mentioned with @ at the end of a sentence was sent under the wrong name on Windows, so a picture could arrive as a document.
+- Fixed an issue where a model with a very long name was found missing at every start of the CLI.
+- Fixed an issue where the CLI did not name the text editor it could not start.
+- Fixed an issue where the CLI tab in the window held back what you typed when it ran a program other than the Exe AI client.
+- Fixed an issue where the CLI tab started before its box had its size.
+- We improved the CLI tab, which keeps the Ctrl shortcuts of the page; outside the Mac, copy and paste stay with the browser. In the Images area on Windows, Ctrl+Y steps forward.
+- We improved the tool lines of the CLI, which show the argument the call touches, in the text color of the theme.
+- Fixed an issue where the CLI kept waiting for a service whose interface was missing; it now ends it and says why.
+- We improved the CLI, which now runs full screen: the history scrolls alone above a fixed block, and a click on an address opens it.
+- We improved the CLI tab in the window, which shows Exe AI in block letters also when it is too narrow for the whole mark.
+- We improved snapshots, which are now also taken before tee, find -delete, rsync with a deleting option and scripts.
+- Fixed an issue where exe without a command waited until its time limit when it had no terminal; it now ends at once and says why.
+
 ## 0.6.14 — Feature Update
 
 ### New
