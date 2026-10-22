@@ -96,6 +96,14 @@ async def _wait_for(condition, seconds: float = 15.0) -> None:
         await asyncio.sleep(0.05)
 
 
+async def _wait_until_gone(pid: int) -> None:
+    # On Windows a process number stays visible for a moment after the
+    # process has ended: until the event loop has seen its pipes close and
+    # let go of the process handle. A process that really lives on still
+    # fails here, once the time is up.
+    await _wait_for(lambda: not psutil.pid_exists(pid))
+
+
 async def test_the_service_is_ready_while_a_server_still_starts(hanging_entries):
     registry = WerkzeugRegistry([hanging_entries[0]])
     began = time.monotonic()
@@ -134,7 +142,7 @@ async def test_a_hanging_server_names_its_reason_and_its_process_is_ended(
     assert "stuck_a" in line
     assert "tools/list" in line
     assert "1 seconds" in line
-    assert not psutil.pid_exists(_pid(tmp_path, "stuck_a"))
+    await _wait_until_gone(_pid(tmp_path, "stuck_a"))
     assert registry.clients == {}
 
 
@@ -146,7 +154,7 @@ async def test_two_hanging_servers_cost_one_time_limit(hanging_entries, monkeypa
     elapsed = time.monotonic() - began
     assert 2.0 <= elapsed < 3.6, "side by side, not one after the other"
     for entry in hanging_entries:
-        assert not psutil.pid_exists(_pid(tmp_path, entry.name))
+        await _wait_until_gone(_pid(tmp_path, entry.name))
 
 
 async def test_ending_the_service_ends_the_servers_still_starting(hanging_entries, tmp_path):
@@ -163,7 +171,7 @@ async def test_ending_the_service_ends_the_servers_still_starting(hanging_entrie
     assert time.monotonic() - began < 8.0
     assert task.done()
     for pid in pids:
-        assert not psutil.pid_exists(pid)
+        await _wait_until_gone(pid)
 
 
 async def test_an_answering_server_stands_in_the_offer_as_before(answering_entry):
